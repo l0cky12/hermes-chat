@@ -1,7 +1,9 @@
-// Markdown with highlighted, copyable code blocks. Ported from the prototype.
+// Markdown with highlighted, copyable code blocks. Ported from the prototype. Single newlines are kept as line
+// breaks, since replies often put one item per line.
 import { memo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 import rehypeHighlight from "rehype-highlight";
 import { Check, Copy } from "lucide-react";
 
@@ -41,7 +43,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkBreaks]}
       rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
       components={{ pre: ({ children }) => <CodeBlock>{children}</CodeBlock> }}
     >

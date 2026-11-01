@@ -37,6 +37,8 @@ export type Chat = {
   settled: boolean;
   updatedAt: number;
   items: Item[];
+  /** Its stored history is on the way (`Hermes.open`). */
+  loading?: boolean;
   running?: boolean;
 };
 

@@ -216,7 +216,7 @@ describe("Active is Hermes's pinned flag", () => {
     await hermes.sync();
     await hermes.send("tg", "follow up");
 
-    expect(server.last("session.resume")!.params).toEqual({ session_id: "tg", profile: "default" });
+    expect(server.last("session.resume")!.params).toEqual({ session_id: "tg", profile: "default", inline_images: false });
     const runtimeId = server.runtimeIdOf("tg")!;
     expect(server.last("prompt.submit")!.params).toEqual({ session_id: runtimeId, profile: "default", text: "follow up" });
     expect(chat("tg")).toMatchObject({ settled: false, runtimeId, source: "telegram" });

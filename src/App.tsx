@@ -82,6 +82,11 @@ function Main({ hermes, where }: { hermes: Hermes; where: string }) {
     await hermes.send(id, text);
   };
 
+  // An opened chat shows its stored history; a chat already open on this connection is left as it is.
+  useEffect(() => {
+    if (selectedId) void hermes.open(selectedId);
+  }, [hermes, selectedId]);
+
   useEffect(() => {
     void hermes.sync();
     const timer = setInterval(() => void hermes.sync(), SYNC_EVERY_MS);

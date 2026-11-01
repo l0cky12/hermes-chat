@@ -20,6 +20,23 @@ export type SessionRow = {
   archived: boolean;
 };
 
+/**
+ * One history row as legacy `session.resume` returns it (`tui_gateway/session_history.py` `_history_to_messages`
+ * at the deployed `bf0203a`). Tool rows carry name, args and an 80-char `context`; only edit tools keep `content`.
+ */
+export type TranscriptMessage = {
+  role: "user" | "assistant" | "tool" | "system";
+  text?: string;
+  content?: unknown;
+  tool_call_id?: string;
+  name?: string;
+  context?: string;
+  args?: Record<string, unknown>;
+  timestamp?: number;
+  display_kind?: string;
+  reasoning?: string;
+};
+
 const DAY = 86_400;
 const now = () => Date.now() / 1000;
 
@@ -36,6 +53,8 @@ export class FakeHermes {
   readyPayload: Record<string, unknown> = { skin: {}, change_events: true, heartbeat: true, replay_epoch: "e1" };
   /** The profile's stored sessions. A chat started over the WS gets a row on its first prompt. */
   sessions: SessionRow[] = [];
+  /** Stored session id -> its history, as `session.resume` projects it (`_history_to_messages`). */
+  transcripts: Record<string, TranscriptMessage[]> = {};
   /** runtime session id -> stored session id, for every session.create / session.resume. */
   readonly runtime = new Map<string, string>();
   private created = new Map<string, string>(); // runtime id -> source, until the first prompt stores it
@@ -55,7 +74,8 @@ export class FakeHermes {
       if (!this.sessions.some((s) => s.id === stored)) return this.fail(r.id, 4007, `session not found: ${stored}`);
       const runtimeId = `rt-r${this.runtime.size + 1}`;
       this.runtime.set(runtimeId, stored);
-      this.respond(r.id, { session_id: runtimeId, stored_session_id: stored, message_count: 2, messages: [], info: {}, running: false });
+      const messages = this.transcripts[stored] ?? [];
+      this.respond(r.id, { session_id: runtimeId, stored_session_id: stored, message_count: messages.length, messages, info: {}, running: false });
     },
     "prompt.submit": (r) => {
       const runtimeId = String(r.params.session_id);

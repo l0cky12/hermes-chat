@@ -61,7 +61,12 @@ export function ChatPane({ chat, offline, onSend }: { chat: Chat; offline: boole
               Active.
             </div>
           )}
-          {blocks.length === 0 && <div className="empty-chat">What should Hermes work on?</div>}
+          {chat.loading && blocks.length === 0 && (
+            <div className="loading-chat">
+              <Spinner /> Loading chat
+            </div>
+          )}
+          {!chat.loading && blocks.length === 0 && <div className="empty-chat">What should Hermes work on?</div>}
           {blocks.map((b) => {
             if (b.kind === "user")
               return (
@@ -121,8 +126,13 @@ function ToolRow({ t }: { t: ToolItem }) {
         <div className="tool-body">
           <div className="tool-label">Arguments</div>
           <pre>{JSON.stringify(t.args ?? {}, null, 2)}</pre>
-          <div className="tool-label">Result</div>
-          <pre>{t.status === "running" ? "…" : t.result || "(empty)"}</pre>
+          {/* Stored history keeps no result for most tools. */}
+          {(t.status === "running" || t.result !== undefined) && (
+            <>
+              <div className="tool-label">Result</div>
+              <pre>{t.status === "running" ? "…" : t.result || "(empty)"}</pre>
+            </>
+          )}
         </div>
       )}
     </div>

@@ -31,6 +31,17 @@ type SessionRow = {
 };
 type SessionPage = { sessions: SessionRow[]; total: number };
 
+/** A history row from legacy `session.resume` (research doc §5, `TranscriptMessage`). Tool rows carry the call's
+ * name, args and an 80-char `context`; Hermes keeps the result (`content`) only for edit tools. */
+type TranscriptMessage = {
+  role: string;
+  text?: string | null;
+  content?: unknown;
+  name?: string | null;
+  context?: string | null;
+  args?: Record<string, unknown> | null;
+};
+
 type RpcFrame = {
   jsonrpc: "2.0";
   id?: number | string | null;
@@ -95,6 +106,8 @@ export class Hermes {
   private snapshot: Snapshot;
   /** Chats this app made Active that Hermes hasn't stored as pinned yet (ADR 0002). */
   private awaitingPin = new Set<string>();
+  /** Resumes in flight, so opening a chat and replying in it share one. */
+  private resuming = new Map<string, Promise<string>>();
   private syncing?: Promise<void>;
   private syncAgain = false;
   private background = new Set<Promise<unknown>>();
@@ -137,6 +150,22 @@ export class Hermes {
     return chat.id;
   }
 
+  /**
+   * Opens a chat: one this connection hasn't resumed yet is resumed now and shows its stored history. If that
+   * fails the chat shows why, and the next open tries again.
+   */
+  async open(chatId: string): Promise<void> {
+    if (!this.snapshot.chats.some((c) => c.id === chatId)) return;
+    try {
+      await this.resume(chatId);
+    } catch (e) {
+      // A reply sent meanwhile shares this resume and reports the failure itself.
+      this.patchChat(chatId, (c) =>
+        c.running ? c : { ...c, items: [...withoutLoadError(c.items), { kind: "error", id: LOAD_ERROR_ID, text: `Couldn't load this chat: ${(e as Error).message}` }] },
+      );
+    }
+  }
+
   /** Sends a message. A chat not yet open on this connection is resumed first; a Settled one becomes Active. */
   async send(chatId: string, text: string): Promise<void> {
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
@@ -152,7 +181,7 @@ export class Hermes {
       items: [...c.items, { kind: "user", id: `u-${c.items.length}`, text }],
     }));
     try {
-      const runtimeId = chat.runtimeId ?? (await this.resume(chatId));
+      const runtimeId = await this.resume(chatId);
       await this.request("prompt.submit", { session_id: runtimeId, profile: this.profile, text });
       // Pin now if Hermes has stored the session; a new chat may not have its row yet, so the end of the turn
       // tries again.
@@ -245,10 +274,34 @@ export class Hermes {
     if (type === "message.complete" && this.awaitingPin.has(chat.id)) this.track(this.pin(chat.id));
   }
 
-  private async resume(chatId: string): Promise<string> {
-    const res = (await this.request("session.resume", { session_id: chatId, profile: this.profile })) as { session_id: string };
-    this.patchChat(chatId, (c) => ({ ...c, runtimeId: res.session_id }));
-    return res.session_id;
+  /** The chat's runtime id on this connection, resuming it first if needed. The history goes before anything sent
+   * meanwhile. */
+  private resume(chatId: string): Promise<string> {
+    const known = this.snapshot.chats.find((c) => c.id === chatId)?.runtimeId;
+    if (known) return Promise.resolve(known);
+    let resuming = this.resuming.get(chatId);
+    if (resuming) return resuming;
+    this.patchChat(chatId, (c) => ({ ...c, loading: true }));
+    resuming = (async () => {
+      try {
+        const res = (await this.request("session.resume", { session_id: chatId, profile: this.profile, inline_images: false })) as {
+          session_id: string;
+          messages?: TranscriptMessage[];
+        };
+        const history = historyItems(res.messages ?? []);
+        this.patchChat(chatId, (c) => ({
+          ...c,
+          runtimeId: res.session_id,
+          items: [...history, ...withoutLoadError(c.items)],
+        }));
+        return res.session_id;
+      } finally {
+        this.resuming.delete(chatId);
+        this.patchChat(chatId, (c) => ({ ...c, loading: false }));
+      }
+    })();
+    this.resuming.set(chatId, resuming);
+    return resuming;
   }
 
   private async pin(chatId: string, { quiet = false } = {}) {
@@ -365,6 +418,32 @@ function toSource(source = ""): Source {
     default:
       return "other";
   }
+}
+
+const LOAD_ERROR_ID = "load-error";
+const withoutLoadError = (items: Item[]) => items.filter((i) => i.id !== LOAD_ERROR_ID);
+
+/** Stored history as transcript items. Hermes doesn't keep tool results, except for edit tools. */
+function historyItems(messages: TranscriptMessage[]): Item[] {
+  return messages.flatMap((m, i): Item[] => {
+    const id = `h-${i}`;
+    if (m.role === "tool")
+      return [
+        {
+          kind: "tool",
+          id,
+          name: m.name || "tool",
+          args: m.args ?? undefined,
+          preview: m.context || undefined,
+          status: "done",
+          result: typeof m.content === "string" ? m.content : undefined,
+        },
+      ];
+    // Assistant rows can be reasoning only; system rows are timeline notes this app doesn't show yet.
+    if (!m.text?.trim()) return [];
+    if (m.role === "user" || m.role === "assistant") return [{ kind: m.role, id, text: m.text }];
+    return [];
+  });
 }
 
 function errorItem(c: Chat, text: string): Item {
