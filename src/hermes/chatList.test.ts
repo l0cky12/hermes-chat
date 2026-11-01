@@ -5,7 +5,7 @@ import { type ChatCache, connect } from "./transport";
 
 function memoryCache(initial: Record<string, Chat[]> = {}): ChatCache & { saved: Record<string, Chat[]> } {
   const saved = { ...initial };
-  return { saved, load: (p) => saved[p] ?? [], save: (p, chats) => void (saved[p] = chats) };
+  return { saved, load: (p) => saved[p] ?? [], save: (p, chats) => void (saved[p] = chats), lastProfile: () => undefined, rememberProfile: () => {} };
 }
 
 async function signedIn(server = new FakeHermes(), cache?: ChatCache) {

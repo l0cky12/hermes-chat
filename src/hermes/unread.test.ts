@@ -5,11 +5,12 @@ import type { Chat } from "./model";
 
 async function listed(rows: ReturnType<typeof row>[], profile = "default", cache?: ChatCache) {
   const server = new FakeHermes();
-  server.sessions = rows;
+  if (profile === "default") server.sessions = rows;
+  else server.otherProfiles[profile] = rows;
   const hermes = await connect(server.openPipe, profile, cache);
   await hermes.sync();
   const chat = (id: string) => hermes.getSnapshot().chats.find((c) => c.id === id)!;
-  const stored = (id: string) => server.sessions.find((s) => s.id === id)!;
+  const stored = (id: string) => server.store(profile)!.find((s) => s.id === id)!;
   return { server, hermes, chat, stored };
 }
 
@@ -144,7 +145,12 @@ describe("The unread dot", () => {
 
   it("is kept with the cached list, so it shows at the next launch", async () => {
     const saved: Record<string, Chat[]> = {};
-    const cache: ChatCache = { load: (p) => saved[p] ?? [], save: (p, chats) => void (saved[p] = chats) };
+    const cache: ChatCache = {
+      load: (p) => saved[p] ?? [],
+      save: (p, chats) => void (saved[p] = chats),
+      lastProfile: () => undefined,
+      rememberProfile: () => {},
+    };
     await listed([row("a", 1, { last_read_at: 0 })], "default", cache);
     const server = new FakeHermes();
     const hermes = await connect(server.openPipe, "default", cache);

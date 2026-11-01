@@ -16,7 +16,7 @@ async function signedIn() {
 describe("Hermes transport", () => {
   it("connects once gateway.ready arrives", async () => {
     const { hermes } = await signedIn();
-    expect(hermes.getSnapshot()).toEqual({ chats: [], status: "connected", route: { kind: "ssh", target: "liam@hermes" }, unsecure: false });
+    expect(hermes.getSnapshot()).toEqual({ profile: "default", chats: [], status: "connected", route: { kind: "ssh", target: "liam@hermes" }, unsecure: false });
   });
 
   it("refuses a server that speaks the canonical protocol", async () => {

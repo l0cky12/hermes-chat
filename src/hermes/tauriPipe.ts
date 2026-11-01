@@ -12,10 +12,10 @@ export type SignInDetails = { mode: "ssh" | "url"; sshTarget: string; url: strin
 
 export function tauriPipe(d: SignInDetails): OpenPipe {
   const target = d.mode === "ssh" ? { kind: "ssh", target: d.sshTarget } : { kind: "url", url: d.url };
-  return async (onEvent) => {
+  return async (onEvent, profile) => {
     const channel = new Channel<PipeEvent>();
     channel.onmessage = onEvent;
-    const route = await invoke<Route>("hermes_connect", { target, username: d.username, password: d.password, onEvent: channel }).catch(asError);
+    const route = await invoke<Route>("hermes_connect", { target, username: d.username, password: d.password, profile, onEvent: channel }).catch(asError);
     return {
       route,
       send: (frame) => invoke("hermes_send", { frame }),

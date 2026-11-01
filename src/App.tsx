@@ -7,7 +7,6 @@ import { ChatList, Rail } from "./ui/Sidebar";
 import { ChatPane } from "./ui/ChatPane";
 import { SignIn } from "./ui/SignIn";
 
-const PROFILE = "default";
 const SAVED = "hermes-chat.sign-in"; // Everything but the password.
 // Hermes also announces store changes over the socket; the poll catches anything it misses.
 const SYNC_EVERY_MS = 60_000;
@@ -37,7 +36,7 @@ export default function App() {
         onSignIn={async (d) => {
           setError(undefined);
           try {
-            const h = await connect(tauriPipe(d), PROFILE, localChatCache);
+            const h = await connect(tauriPipe(d), undefined, localChatCache);
             const { password: _, ...saved } = d;
             localStorage.setItem(SAVED, JSON.stringify(saved));
             setHermes(h);
@@ -51,7 +50,7 @@ export default function App() {
 }
 
 function Main({ hermes }: { hermes: Hermes }) {
-  const { chats, status, route, unsecure, closedReason, syncError } = useSyncExternalStore(hermes.subscribe, hermes.getSnapshot);
+  const { profile, chats, status, route, unsecure, closedReason, syncError } = useSyncExternalStore(hermes.subscribe, hermes.getSnapshot);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [listOpen, setListOpen] = useState(true);
   const [draftError, setDraftError] = useState<string>();
@@ -85,6 +84,13 @@ function Main({ hermes }: { hermes: Hermes }) {
       setSelectedId(id);
     }
     await hermes.send(id, text, attachments);
+  };
+
+  // The other profile's chats replace the list, so the pane starts a fresh draft.
+  const switchProfile = (name: string) => {
+    newChat();
+    setToast(null);
+    void hermes.switchProfile(name);
   };
 
   // Undo sends the opposite change, not a stored copy, so it also works once the list has refreshed.
@@ -151,12 +157,14 @@ function Main({ hermes }: { hermes: Hermes }) {
       />
       {listOpen && (
         <ChatList
-          profile={hermes.profile}
+          profile={profile}
           chats={chats}
           syncError={syncError}
           selectedId={selectedId}
           onOpen={setSelectedId}
           onSettle={setSettled}
+          onListProfiles={() => hermes.profiles()}
+          onSwitchProfile={switchProfile}
         />
       )}
       <main className="main">

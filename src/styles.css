@@ -266,7 +266,29 @@ code, pre, kbd { font-family: var(--mono); }
 /* ---------- added for the real app ---------- */
 .rail-bottom { gap: 10px; margin-top: auto; }
 .rail-brand { cursor: pointer; }
-.profile-name { font-weight: 600; letter-spacing: -0.01em; font-size: 15px; }
+.profile-name { font-weight: 600; letter-spacing: -0.01em; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-switch { position: relative; min-width: 0; }
+.profile-btn { display: flex; align-items: center; gap: 4px; max-width: 220px; padding: 3px 6px; margin-left: -6px; border-radius: 7px; }
+.profile-btn:hover, .profile-btn[aria-expanded="true"] { background: var(--raised-2); }
+.profile-chev { color: var(--muted); flex: none; }
+.profile-menu {
+  position: absolute; top: calc(100% + 6px); left: -6px; width: 232px; z-index: 20; background: var(--raised); border: 1px solid var(--line-2);
+  border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45); padding: 6px; display: flex; flex-direction: column; gap: 4px;
+}
+.profile-filter {
+  background: var(--bg); border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 9px; outline: none; font-size: 13px;
+}
+.profile-filter:focus { border-color: rgba(255, 255, 255, 0.25); }
+.profile-options { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; }
+.profile-option {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; padding: 6px 8px; border-radius: 6px;
+  font-size: 13px; color: #d0d0d5; min-width: 0;
+}
+.profile-option:hover { background: var(--raised-2); color: var(--text); }
+.profile-option.on { color: var(--text); font-weight: 500; }
+.profile-option svg { color: var(--accent); flex: none; }
+.profile-hint { font-size: 12px; color: var(--faint); padding: 6px 8px; }
+.profile-hint.err { color: var(--bad); }
 .msg.error {
   font-size: 13px; color: var(--bad); background: rgba(248, 113, 113, 0.08); border: 1px solid rgba(248, 113, 113, 0.2);
   border-radius: 10px; padding: 8px 12px;

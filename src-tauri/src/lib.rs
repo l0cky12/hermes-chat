@@ -44,6 +44,7 @@ async fn hermes_connect(
     target: Target,
     username: String,
     password: String,
+    profile: String,
     on_event: Channel<PipeEvent>,
 ) -> Result<Route, String> {
     let mut slot = state.0.lock().await;
@@ -62,7 +63,7 @@ async fn hermes_connect(
     };
     let dashboard = Dashboard::sign_in(&base, &SignIn { username, password }).await.map_err(|e| e.to_string())?;
     let pipe = dashboard
-        .open_pipe(move |e| {
+        .open_pipe(&profile, move |e| {
             let _ = on_event.send(e);
         })
         .await

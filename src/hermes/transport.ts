@@ -3,6 +3,7 @@
 // "SSH tunnel, Host header and protocol generation". Only the legacy verbs are used (ADR 0003).
 // The chat list comes from dashboard REST, because the legacy `session.list` has no last-activity field.
 // Attachments: research doc §7. A dropped connection is reconnected on its own; keepalive: research doc §1.
+// One profile's chats show at a time; switching opens the connection again for the new profile.
 import type { AttachCheck, Attachment, Chat, ConnectionStatus, Item, Source } from "./model";
 import type { OpenPipe, Pipe, PipeEvent, Route } from "./pipe";
 import { isUnsecure } from "./unsecure";
@@ -34,9 +35,14 @@ const IMAGE_ONLY_PROMPT = "What do you see in this image?";
 /** Stands in for a file's base64 in a frame; the pipe swaps the bytes in. JSON can't hold a raw NUL. */
 const FILE_MARK = "\u0000file\u0000";
 
-/** Where each profile's last synced chat list is kept between launches. */
-export type ChatCache = { load(profile: string): Chat[]; save(profile: string, chats: Chat[]): void };
-const noCache: ChatCache = { load: () => [], save: () => {} };
+/** Where each profile's last synced chat list, and the profile shown last, are kept between launches. */
+export type ChatCache = {
+  load(profile: string): Chat[];
+  save(profile: string, chats: Chat[]): void;
+  lastProfile(): string | undefined;
+  rememberProfile(profile: string): void;
+};
+const noCache: ChatCache = { load: () => [], save: () => {}, lastProfile: () => undefined, rememberProfile: () => {} };
 
 /** A row of dashboard REST `GET /api/sessions`; times are Unix seconds. */
 type SessionRow = {
@@ -52,6 +58,8 @@ type SessionRow = {
   unread?: boolean;
 };
 type SessionPage = { sessions: SessionRow[]; total: number };
+/** Dashboard REST `GET /api/profiles` (`web_routers/profiles.py`), as far as this app reads it. */
+type ProfileList = { profiles: { name: string }[] };
 
 /** A history row from legacy `session.resume` (research doc §5, `TranscriptMessage`). Tool rows carry the call's
  * name, args and an 80-char `context`; Hermes keeps the result (`content`) only for edit tools. */
@@ -96,10 +104,12 @@ export class RpcError extends Error {
 }
 
 /**
- * `route`: how the latest connection reached the dashboard. `unsecure`: its traffic isn't encrypted (unsecure.ts).
- * `closedReason`: why the connection dropped, or why the last try to reconnect failed.
+ * `profile`: the profile whose chats are shown. `route`: how the latest connection reached the dashboard. `unsecure`:
+ * its traffic isn't encrypted (unsecure.ts). `closedReason`: why the connection dropped, or why the last try to
+ * reconnect failed.
  */
 export type Snapshot = {
+  profile: string;
   chats: Chat[];
   status: ConnectionStatus;
   route?: Route;
@@ -108,15 +118,20 @@ export type Snapshot = {
   syncError?: string;
 };
 
-/** Connects to Hermes; rejects if the first connection fails. Later drops are reconnected by the returned Hermes. */
-export async function connect(openPipe: OpenPipe, profile = "default", cache: ChatCache = noCache): Promise<Hermes> {
-  const hermes = new Hermes(openPipe, profile, cache);
+/**
+ * Connects to Hermes for `profile`, by default the one shown last; rejects if the first connection fails. Later drops
+ * are reconnected by the returned Hermes.
+ */
+export async function connect(openPipe: OpenPipe, profile?: string, cache: ChatCache = noCache): Promise<Hermes> {
+  const hermes = new Hermes(openPipe, profile ?? cache.lastProfile() ?? "default", cache);
   await hermes.dial();
   return hermes;
 }
 
 export class Hermes {
   private pipe?: Pipe;
+  /** The profile the pipe's `/api/ws` was opened for. */
+  private pipeProfile?: string;
   /** Counts pipes opened; events from an older pipe than the current one are ignored. */
   private generation = 0;
   /** The pipe being opened is waiting for `gateway.ready`. */
@@ -162,10 +177,15 @@ export class Hermes {
 
   constructor(
     private openPipe: OpenPipe,
-    readonly profile: string,
+    profile: string,
     private cache: ChatCache = noCache,
   ) {
-    this.snapshot = { chats: cache.load(profile), status: "offline", unsecure: false };
+    this.snapshot = { profile, chats: cache.load(profile), status: "offline", unsecure: false };
+  }
+
+  /** The profile whose chats are shown. */
+  get profile(): string {
+    return this.snapshot.profile;
   }
 
   /**
@@ -183,12 +203,13 @@ export class Hermes {
     let up = false;
     let pipe: Pipe | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const profile = this.profile;
     try {
       pipe = await this.openPipe((e) => {
         if (gen !== this.generation) return;
         if (e.kind === "closed" && !up) this.abortDial?.(new Error(`The connection closed before Hermes was ready: ${e.reason}`));
         else this.handle(e);
-      });
+      }, profile);
       const payload = await Promise.race([
         ready,
         failed,
@@ -208,6 +229,7 @@ export class Hermes {
     }
     up = true;
     this.pipe = pipe;
+    this.pipeProfile = profile;
     this.lastHeard = Date.now();
     this.heartbeat = setInterval(() => this.beat(), PING_EVERY_MS);
     this.update({ status: "connected", closedReason: undefined, route: pipe.route, unsecure: isUnsecure(pipe.route) });
@@ -217,6 +239,31 @@ export class Hermes {
   reconnect(): Promise<void> {
     if (!this.redialing) this.failedTries = 0;
     return this.redial();
+  }
+
+  /** The server's profiles by name, as dashboard REST lists them. One sign-in covers them all (research doc). */
+  async profiles(): Promise<string[]> {
+    const res = (await this.rest("GET", "api/profiles")) as ProfileList;
+    return res.profiles.map((p) => p.name);
+  }
+
+  /**
+   * Shows another profile's chats: its last synced list at once, then a fresh one once the connection is open again
+   * for that profile. The profile is remembered for the next sign-in. Settling or marking read that the owner did in
+   * the old profile still goes to it.
+   */
+  async switchProfile(name: string): Promise<void> {
+    if (name === this.profile) return;
+    this.viewing = undefined;
+    this.staleItems.clear();
+    this.cache.rememberProfile(name);
+    this.update({ profile: name, chats: this.cache.load(name), syncError: undefined });
+    // A reconnect under way may be opening the old profile's socket.
+    await this.redialing;
+    if (this.profile !== name || this.closing) return;
+    if (this.pipe && this.pipeProfile === name) return void this.sync();
+    if (this.pipe) this.detach(`Switching to the ${name} profile.`);
+    await this.reconnect();
   }
 
   subscribe = (fn: () => void) => {
@@ -297,6 +344,7 @@ export class Hermes {
   async send(chatId: string, text: string, attachments: Attachment[] = []): Promise<void> {
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
     if (!chat) return;
+    const profile = this.profile;
     const activating = chat.settled;
     const wantedBefore = this.pinWanted.get(chatId);
     if (activating) this.pinWanted.set(chatId, true);
@@ -321,7 +369,7 @@ export class Hermes {
       }
       // Pin now if Hermes has stored the session; a new chat may not have its row yet, so the end of the turn
       // tries again.
-      if (this.pinWanted.get(chatId)) this.track(this.writePin(chatId));
+      if (this.pinWanted.get(chatId)) this.track(this.writePin(chatId, profile));
     } catch (e) {
       if (activating) {
         if (wantedBefore === undefined) this.pinWanted.delete(chatId);
@@ -462,11 +510,17 @@ export class Hermes {
     if (type === "message.complete" && chat.id === this.viewing) this.markRead(chat.id);
   }
 
-  /**
-   * The connection has dropped: requests in flight fail, replies stop running, and reconnecting starts. Closing a
-   * connection detaches its runtime sessions, so each chat resumed on it resumes again when next opened.
-   */
+  /** The connection has dropped, and reconnecting starts. */
   private dropped(reason: string) {
+    this.detach(reason);
+    this.retryLater();
+  }
+
+  /**
+   * Lets go of the connection: requests in flight fail and replies stop running. Closing a connection detaches its
+   * runtime sessions, so each chat resumed on it resumes again when next opened.
+   */
+  private detach(reason: string) {
     const pipe = this.pipe;
     this.pipe = undefined;
     this.generation++;
@@ -481,7 +535,6 @@ export class Hermes {
       closedReason: reason,
       chats: this.snapshot.chats.map((c) => (c.runtimeId || c.running ? { ...c, runtimeId: undefined, running: false, stopping: false } : c)),
     });
-    this.retryLater();
   }
 
   private retryLater() {
@@ -595,15 +648,16 @@ export class Hermes {
    * Writes the chat's wanted pinned flag once any earlier write for it is done. Each write reads the flag as it goes
    * out, so a quick Undo leaves the server where the owner left the chat. A failed write stays wanted: the chat stays
    * where the owner put it here, and the next finished turn or refresh tries again. A chat with a turn running may
-   * not be stored yet, so its failure isn't reported until the end of the turn.
+   * not be stored yet, so its failure isn't reported until the end of the turn. `profile` is the chat's, which the
+   * owner may have switched away from by the time the write goes out.
    */
-  private writePin(chatId: string): Promise<void> {
+  private writePin(chatId: string, profile = this.profile): Promise<void> {
     const write = (this.pinWrites.get(chatId) ?? Promise.resolve()).then(async () => {
       const pinned = this.pinWanted.get(chatId);
       if (pinned === undefined) return;
       const running = this.snapshot.chats.find((c) => c.id === chatId)?.running;
       try {
-        await this.rest("PATCH", `api/sessions/${encodeURIComponent(chatId)}`, { pinned, profile: this.profile });
+        await this.rest("PATCH", `api/sessions/${encodeURIComponent(chatId)}`, { pinned, profile });
         this.pinnedSinceListRead.add(chatId);
         if (this.pinWanted.get(chatId) === pinned) this.pinWanted.delete(chatId);
       } catch (e) {
@@ -631,6 +685,7 @@ export class Hermes {
   }
 
   private async syncOnce() {
+    const profile = this.profile;
     const cutoff = Date.now() - LIST_WINDOW_MS;
     this.pinnedSinceListRead.clear();
     this.readSinceListRead.clear();
@@ -639,7 +694,7 @@ export class Hermes {
       for (let page = 0; page < MAX_PAGES; page++) {
         const offset = page * PAGE_SIZE;
         const query = new URLSearchParams({
-          profile: this.profile,
+          profile,
           order: "recent",
           limit: String(PAGE_SIZE),
           offset: String(offset),
@@ -652,9 +707,11 @@ export class Hermes {
         if (passedCutoff || res.sessions.length === 0 || offset + PAGE_SIZE >= res.total) break;
       }
     } catch (e) {
-      this.update({ syncError: `Couldn't refresh the chat list: ${(e as Error).message}` });
+      if (this.profile === profile) this.update({ syncError: `Couldn't refresh the chat list: ${(e as Error).message}` });
       return;
     }
+    // The owner switched profile meanwhile; the switch syncs the new one.
+    if (this.profile !== profile) return;
 
     const known = new Map(this.snapshot.chats.map((c) => [c.id, c]));
     let readOnScreen = false;
@@ -692,7 +749,7 @@ export class Hermes {
     this.update({ chats, syncError: undefined });
     if (readOnScreen) this.markRead(this.viewing!);
     this.cache.save(
-      this.profile,
+      profile,
       chats.map(({ id, title, source, settled, updatedAt, unread }) => ({ id, title, source, settled, updatedAt, unread, items: [] })),
     );
   }

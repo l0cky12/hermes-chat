@@ -210,9 +210,9 @@ impl Dashboard {
         Ok(dashboard)
     }
 
-    /// Mint a WS ticket and open `/api/ws`. Every frame the server sends, starting with
+    /// Mint a WS ticket and open `/api/ws` for `profile`. Every frame the server sends, starting with
     /// `gateway.ready`, goes to `on_event`.
-    pub async fn open_pipe(&self, on_event: impl Fn(PipeEvent) + Send + 'static) -> Result<Pipe, TransportError> {
+    pub async fn open_pipe(&self, profile: &str, on_event: impl Fn(PipeEvent) + Send + 'static) -> Result<Pipe, TransportError> {
         let ticket = self
             .http
             .post(endpoint(&self.base, "api/auth/ws-ticket"))
@@ -237,7 +237,7 @@ impl Dashboard {
         ws_url
             .set_scheme(if self.base.scheme() == "https" { "wss" } else { "ws" })
             .expect("http(s) URLs map to ws(s)");
-        ws_url.query_pairs_mut().append_pair("ticket", ticket);
+        ws_url.query_pairs_mut().append_pair("ticket", ticket).append_pair("profile", profile);
         let (ws, _) = tokio_tungstenite::connect_async(ws_url.as_str())
             .await
             .map_err(|e| TransportError::WebSocket(e.to_string()))?;

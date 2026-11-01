@@ -1,7 +1,7 @@
-// Icon rail beside a chat list (ADR 0001), ported from the prototype's variants C and A.
-// Search, Settings and the profile switcher come in later tickets.
-import { useState } from "react";
-import { ChevronRight, LockOpen, SquarePen } from "lucide-react";
+// Icon rail beside a chat list (ADR 0001), ported from the prototype's variants C and A. The list's header is the
+// profile switcher. Search and Settings come in later tickets.
+import { useEffect, useRef, useState } from "react";
+import { Check, ChevronDown, ChevronRight, LockOpen, SquarePen } from "lucide-react";
 import type { Chat, ConnectionStatus } from "../hermes/model";
 import { SOURCE_LABEL } from "../hermes/model";
 import type { Route } from "../hermes/pipe";
@@ -86,6 +86,84 @@ function ChatRow({
   );
 }
 
+/**
+ * The current profile's name with a ▾, which opens the server's profiles with a filter box (ADR 0001). Enter picks
+ * the first match; Escape or a click outside closes it.
+ */
+function ProfileSwitcher({
+  profile,
+  onListProfiles,
+  onSwitch,
+}: {
+  profile: string;
+  onListProfiles: () => Promise<string[]>;
+  onSwitch: (name: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [profiles, setProfiles] = useState<string[]>();
+  const [error, setError] = useState<string>();
+  const [filter, setFilter] = useState("");
+  const box = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let current = true;
+    setFilter("");
+    setError(undefined);
+    onListProfiles().then(
+      (names) => current && setProfiles(names),
+      (e) => current && setError(`Couldn't list profiles: ${e instanceof Error ? e.message : String(e)}`),
+    );
+    const onDown = (e: MouseEvent) => box.current?.contains(e.target as Node) || setOpen(false);
+    window.addEventListener("mousedown", onDown);
+    return () => {
+      current = false;
+      window.removeEventListener("mousedown", onDown);
+    };
+  }, [open]);
+
+  const shown = (profiles ?? [profile]).filter((p) => p.toLowerCase().includes(filter.trim().toLowerCase()));
+  const pick = (name: string) => {
+    setOpen(false);
+    if (name !== profile) onSwitch(name);
+  };
+
+  return (
+    <div className="profile-switch" ref={box}>
+      <button className="profile-btn" title="Switch profile" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <span className="profile-name">{profile}</span>
+        <ChevronDown size={14} className="profile-chev" />
+      </button>
+      {open && (
+        <div className="profile-menu" role="listbox" aria-label="Profiles">
+          <input
+            className="profile-filter"
+            autoFocus
+            placeholder="Filter profiles"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setOpen(false);
+              else if (e.key === "Enter" && shown[0]) pick(shown[0]);
+            }}
+          />
+          <div className="profile-options">
+            {shown.map((p) => (
+              <button key={p} role="option" aria-selected={p === profile} className={`profile-option ${p === profile ? "on" : ""}`} onClick={() => pick(p)}>
+                <span className="row-title">{p}</span>
+                {p === profile && <Check size={14} />}
+              </button>
+            ))}
+            {!profiles && !error && <div className="profile-hint">Loading profiles…</div>}
+            {profiles && shown.length === 0 && <div className="profile-hint">No profile matches.</div>}
+            {error && <div className="profile-hint err">{error}</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ChatList({
   profile,
   chats,
@@ -93,6 +171,8 @@ export function ChatList({
   selectedId,
   onOpen,
   onSettle,
+  onListProfiles,
+  onSwitchProfile,
 }: {
   profile: string;
   chats: Chat[];
@@ -100,6 +180,8 @@ export function ChatList({
   selectedId: string | null;
   onOpen: (id: string) => void;
   onSettle: (id: string, settled: boolean) => void;
+  onListProfiles: () => Promise<string[]>;
+  onSwitchProfile: (name: string) => void;
 }) {
   const [settledOpen, setSettledOpen] = useState(false);
   const active = chats.filter((c) => !c.settled).sort(byRecent);
@@ -111,7 +193,7 @@ export function ChatList({
   return (
     <aside className="sidebar">
       <div className="sb-head">
-        <span className="profile-name">{profile}</span>
+        <ProfileSwitcher profile={profile} onListProfiles={onListProfiles} onSwitch={onSwitchProfile} />
       </div>
       <div className="sb-scroll">
         {syncError && (

@@ -92,8 +92,8 @@ describe("Reconnecting", () => {
 
   it("fails to connect if the connection closes just after gateway.ready", async () => {
     const server = new FakeHermes();
-    const closesAfterReady: OpenPipe = async (onEvent) => {
-      const pipe = await server.openPipe(onEvent);
+    const closesAfterReady: OpenPipe = async (onEvent, profile) => {
+      const pipe = await server.openPipe(onEvent, profile);
       onEvent({ kind: "closed", reason: "closed by the server (1011 )" });
       return pipe;
     };
@@ -103,8 +103,8 @@ describe("Reconnecting", () => {
   it("lets the dropped pipe finish closing before opening the next", async () => {
     const server = new FakeHermes();
     let finishClosing!: () => void;
-    const slowToClose: OpenPipe = async (onEvent) => {
-      const pipe = await server.openPipe(onEvent);
+    const slowToClose: OpenPipe = async (onEvent, profile) => {
+      const pipe = await server.openPipe(onEvent, profile);
       return { ...pipe, close: () => new Promise<void>((res) => (finishClosing = res)) };
     };
     const hermes = await connect(slowToClose);
@@ -122,7 +122,7 @@ describe("Reconnecting", () => {
   it("gives up a reconnect under way when the app closes the connection", async () => {
     const server = new FakeHermes();
     let silent = false;
-    const hermes = await connect(async (onEvent) => server.openPipe((e) => !silent && onEvent(e)));
+    const hermes = await connect(async (onEvent, profile) => server.openPipe((e) => !silent && onEvent(e), profile));
     server.drop();
     silent = true; // The next pipe never sends gateway.ready.
     await vi.advanceTimersByTimeAsync(1_000);

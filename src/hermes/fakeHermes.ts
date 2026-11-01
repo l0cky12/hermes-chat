@@ -63,15 +63,19 @@ export class FakeHermes {
   refuse?: string;
   /** How many pipes have been opened. */
   opened = 0;
-  /** The profile's stored sessions. A chat started over the WS gets a row on its first prompt. */
+  /** The `default` profile's stored sessions. A chat started over the WS gets a row on its first prompt. */
   sessions: SessionRow[] = [];
+  /** Every other profile's stored sessions, by profile name. Each profile has its own store (research doc §5). */
+  otherProfiles: Record<string, SessionRow[]> = {};
+  /** The `?profile=` each `/api/ws` connection was opened with, in order. */
+  readonly wsProfiles: string[] = [];
   /** Stored session id -> its history, as `session.resume` projects it (`_history_to_messages`). */
   transcripts: Record<string, TranscriptMessage[]> = {};
   /** The owner's local disk, by path, for attachments. */
   files: Record<string, FakeFile> = {};
   /** runtime session id -> stored session id, for every session.create / session.resume. */
   readonly runtime = new Map<string, string>();
-  private created = new Map<string, string>(); // runtime id -> source, until the first prompt stores it
+  private created = new Map<string, { source: string; profile?: string }>(); // runtime id, until the first prompt stores it
 
   /** Per-method behaviour; tests override entries. Unhandled methods get no answer. */
   readonly handlers: Record<string, Handler> = {
@@ -80,12 +84,12 @@ export class FakeHermes {
       const runtimeId = `rt-${n}`;
       const stored = `20261031_12000${n}_abc123`;
       this.runtime.set(runtimeId, stored);
-      this.created.set(runtimeId, String(r.params.source ?? "tui"));
+      this.created.set(runtimeId, { source: String(r.params.source ?? "tui"), profile: r.params.profile as string | undefined });
       this.respond(r.id, { session_id: runtimeId, stored_session_id: stored, message_count: 0, messages: [], info: {} });
     },
     "session.resume": (r) => {
       const stored = String(r.params.session_id);
-      if (!this.sessions.some((s) => s.id === stored)) return this.fail(r.id, 4007, `session not found: ${stored}`);
+      if (!this.store(r.params.profile as string | undefined)?.some((s) => s.id === stored)) return this.fail(r.id, 4007, `session not found: ${stored}`);
       const runtimeId = `rt-r${++this.resumed}`;
       this.runtime.set(runtimeId, stored);
       const messages = this.transcripts[stored] ?? [];
@@ -93,10 +97,11 @@ export class FakeHermes {
     },
     "prompt.submit": (r) => {
       const runtimeId = String(r.params.session_id);
-      const source = this.created.get(runtimeId);
-      if (source) {
+      const created = this.created.get(runtimeId);
+      if (created) {
         this.created.delete(runtimeId);
-        this.sessions.push(row(this.runtime.get(runtimeId)!, 0, { source, title: null, preview: String(r.params.text), message_count: 1 }));
+        const stored = row(this.runtime.get(runtimeId)!, 0, { source: created.source, title: null, preview: String(r.params.text), message_count: 1 });
+        this.store(created.profile)?.push(stored);
       }
       this.respond(r.id, { status: "streaming" });
     },
@@ -133,7 +138,7 @@ export class FakeHermes {
     "GET /api/sessions": ({ query }) => {
       // order=recent, archived=exclude, then every pinned row not already on the page (list_sessions_rich).
       const excluded = (query.get("exclude_sources") ?? "").split(",").filter(Boolean);
-      const visible = this.sessions.filter((s) => !excluded.includes(s.source));
+      const visible = this.storeOrFail(query.get("profile")).filter((s) => !excluded.includes(s.source));
       const recent = visible.filter((s) => !s.archived).sort((a, b) => (b.last_active ?? b.started_at) - (a.last_active ?? a.started_at));
       const offset = Number(query.get("offset") ?? 0);
       const limit = Number(query.get("limit") ?? 20);
@@ -141,6 +146,18 @@ export class FakeHermes {
       const pinned = visible.filter((s) => s.pinned && !page.includes(s));
       return { sessions: [...page, ...pinned].map((s) => ({ ...s, unread: unread(s) })), total: recent.length, limit, offset, storage: {} };
     },
+    // `hermes_cli/web_routers/profiles.py` `_profile_to_dict` at the deployed `bf0203a`, trimmed to what matters here.
+    "GET /api/profiles": () => ({
+      profiles: ["default", ...Object.keys(this.otherProfiles)].map((name) => ({
+        name,
+        path: name === "default" ? "/home/liam/.hermes" : `/home/liam/.hermes/profiles/${name}`,
+        is_default: name === "default",
+        model: null,
+        provider: null,
+        description: "",
+        display_name: "",
+      })),
+    }),
   };
 
   private onEvent?: (e: PipeEvent) => void;
@@ -148,9 +165,10 @@ export class FakeHermes {
   private resumed = 0;
   closed = false;
 
-  openPipe: OpenPipe = async (onEvent) => {
+  openPipe: OpenPipe = async (onEvent, profile) => {
     if (this.refuse !== undefined) throw new Error(this.refuse);
     this.opened++;
+    this.wsProfiles.push(profile);
     this.closed = false;
     // Runtime sessions belong to the connection that started them; closing it detaches them (research doc §5).
     this.runtime.clear();
@@ -228,8 +246,19 @@ export class FakeHermes {
     return { path, name, size: typeof f === "string" ? f.length : f.size };
   }
 
+  /** A profile's stored sessions; no profile means the default one. Undefined for a profile the server doesn't have. */
+  store(profile?: string | null): SessionRow[] | undefined {
+    return !profile || profile === "default" ? this.sessions : this.otherProfiles[profile];
+  }
+
+  private storeOrFail(profile?: string | null): SessionRow[] {
+    const store = this.store(profile);
+    if (!store) throw new Error(`The dashboard answered 404: {"detail":"Profile '${profile}' not found"}`);
+    return store;
+  }
+
   private patchSession(id: string, body: Record<string, unknown>) {
-    const s = this.sessions.find((r) => r.id === id);
+    const s = this.storeOrFail(body.profile as string | undefined).find((r) => r.id === id);
     if (!s) throw new Error(`The dashboard answered 404: {"detail":"Session not found"}`);
     if (typeof body.pinned === "boolean") s.pinned = body.pinned;
     if (typeof body.unread === "boolean") s.last_read_at = body.unread ? 0 : now();

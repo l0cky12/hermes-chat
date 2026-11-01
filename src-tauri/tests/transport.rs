@@ -79,12 +79,13 @@ async fn api_ws(ws: WebSocketUpgrade, Query(q): Query<HashMap<String, String>>) 
     if q.get("ticket").map(String::as_str) != Some("TICKET-1") {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    ws.on_upgrade(session)
+    let profile = q.get("profile").cloned();
+    ws.on_upgrade(move |ws| session(ws, profile))
 }
 
 /// Sends `gateway.ready`, then answers `echo` requests, splits a `pair` request into two frames in one
-/// WS message, and closes on `bye`.
-async fn session(mut ws: WebSocket) {
+/// WS message, says which `?profile=` the socket was opened with on `profile`, and closes on `bye`.
+async fn session(mut ws: WebSocket, profile: Option<String>) {
     ws.send(Message::text(READY)).await.unwrap();
     while let Some(Ok(Message::Text(text))) = ws.recv().await {
         let req: Value = serde_json::from_str(&text).unwrap();
@@ -98,6 +99,10 @@ async fn session(mut ws: WebSocket) {
                 let a = json!({"jsonrpc": "2.0", "id": id, "result": {"n": 1}});
                 let b = json!({"jsonrpc": "2.0", "method": "event", "params": {"type": "message.start", "session_id": "s1", "payload": {}}});
                 ws.send(Message::text(format!("{a}\n{b}\n"))).await.unwrap();
+            }
+            Some("profile") => {
+                let reply = json!({"jsonrpc": "2.0", "id": id, "result": {"profile": profile}});
+                ws.send(Message::text(reply.to_string())).await.unwrap();
             }
             Some("bye") => {
                 let _ = ws.send(Message::Close(None)).await;
@@ -144,10 +149,14 @@ async fn signed_in() -> Dashboard {
 }
 
 async fn open_stub() -> (transport::Pipe, mpsc::UnboundedReceiver<PipeEvent>) {
+    open_stub_for("default").await
+}
+
+async fn open_stub_for(profile: &str) -> (transport::Pipe, mpsc::UnboundedReceiver<PipeEvent>) {
     let (tx, rx) = mpsc::unbounded_channel();
     let pipe = signed_in()
         .await
-        .open_pipe(move |e| {
+        .open_pipe(profile, move |e| {
             let _ = tx.send(e);
         })
         .await
@@ -180,6 +189,14 @@ async fn splits_newline_delimited_messages_into_frames() {
     pipe.send(json!({"jsonrpc": "2.0", "id": 1, "method": "pair"}).to_string()).unwrap();
     assert_eq!(frame(next(&mut rx).await)["result"], json!({"n": 1}));
     assert_eq!(frame(next(&mut rx).await)["params"]["type"], "message.start");
+}
+
+#[tokio::test]
+async fn opens_the_socket_for_the_profile() {
+    let (pipe, mut rx) = open_stub_for("work email").await;
+    next(&mut rx).await;
+    pipe.send(json!({"jsonrpc": "2.0", "id": 1, "method": "profile"}).to_string()).unwrap();
+    assert_eq!(frame(next(&mut rx).await)["result"], json!({"profile": "work email"}));
 }
 
 #[tokio::test]
@@ -355,7 +372,7 @@ async fn a_direct_ws_url_is_signed_in_to_over_http() {
     assert_eq!(direct.base, base);
     let (tx, mut rx) = mpsc::unbounded_channel();
     let dashboard = Dashboard::sign_in(&direct.base, &sign_in("hunter2")).await.expect("signed in");
-    let _pipe = dashboard.open_pipe(move |e| drop(tx.send(e))).await.expect("pipe open");
+    let _pipe = dashboard.open_pipe("default", move |e| drop(tx.send(e))).await.expect("pipe open");
     assert_eq!(frame(next(&mut rx).await)["params"]["type"], "gateway.ready");
 
     let secure = transport::resolve_direct("wss://127.0.0.1/hermes/").await.expect("parsed");
