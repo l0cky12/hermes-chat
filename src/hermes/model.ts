@@ -13,14 +13,16 @@ export const SOURCE_LABEL: Record<Source, string> = {
 
 export type Item =
   | { kind: "user"; id: string; text: string }
-  | { kind: "assistant"; id: string; text: string }
+  /** `interrupted`: the owner, or another Hermes client, stopped this reply before it finished. */
+  | { kind: "assistant"; id: string; text: string; interrupted?: boolean }
   | {
       kind: "tool";
       id: string;
       name: string;
       args?: Record<string, unknown>;
       preview?: string;
-      status: "running" | "done";
+      /** `stopped`: the reply was interrupted while the tool call was running. */
+      status: "running" | "done" | "stopped";
       durationS?: number;
       result?: string;
       summary?: string;
@@ -40,6 +42,8 @@ export type Chat = {
   /** Its stored history is on the way (`Hermes.open`). */
   loading?: boolean;
   running?: boolean;
+  /** Stop was asked for; the reply keeps running until Hermes ends the turn (`Hermes.stop`). */
+  stopping?: boolean;
 };
 
 export type ConnectionStatus = "connected" | "offline";

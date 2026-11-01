@@ -42,6 +42,9 @@ type TranscriptMessage = {
   args?: Record<string, unknown> | null;
 };
 
+/** Legacy `session.interrupt` result (research doc §8). `not_interrupted` needs `expected_hosted_task_id`. */
+type InterruptResult = { status: "interrupted" | "not_interrupted" };
+
 type RpcFrame = {
   jsonrpc: "2.0";
   id?: number | string | null;
@@ -108,6 +111,8 @@ export class Hermes {
   private awaitingPin = new Set<string>();
   /** Resumes in flight, so opening a chat and replying in it share one. */
   private resuming = new Map<string, Promise<string>>();
+  /** Messages Hermes hasn't accepted yet, so a Stop waits for the turn it stops. */
+  private submitting = new Map<string, Promise<unknown>>();
   private syncing?: Promise<void>;
   private syncAgain = false;
   private background = new Set<Promise<unknown>>();
@@ -181,8 +186,15 @@ export class Hermes {
       items: [...c.items, { kind: "user", id: `u-${c.items.length}`, text }],
     }));
     try {
-      const runtimeId = await this.resume(chatId);
-      await this.request("prompt.submit", { session_id: runtimeId, profile: this.profile, text });
+      const submitting = this.resume(chatId).then((runtimeId) =>
+        this.request("prompt.submit", { session_id: runtimeId, profile: this.profile, text }),
+      );
+      this.submitting.set(chatId, submitting);
+      try {
+        await submitting;
+      } finally {
+        if (this.submitting.get(chatId) === submitting) this.submitting.delete(chatId);
+      }
       // Pin now if Hermes has stored the session; a new chat may not have its row yet, so the end of the turn
       // tries again.
       if (this.awaitingPin.has(chatId)) this.track(this.pin(chatId, { quiet: true }));
@@ -194,6 +206,37 @@ export class Hermes {
         settled: activating || c.settled,
         items: [...c.items, errorItem(c, (e as Error).message)],
       }));
+    }
+  }
+
+  /**
+   * Stops the chat's reply with legacy `session.interrupt`, once Hermes has accepted the message it answers. Hermes
+   * answers before the agent has stopped, so the chat is `stopping` until the turn's `message.complete`, which
+   * marks the reply interrupted and its running tool calls stopped. If Hermes can't stop it, the chat says so and
+   * the reply keeps running.
+   */
+  async stop(chatId: string): Promise<void> {
+    const stoppable = () => {
+      const c = this.snapshot.chats.find((c) => c.id === chatId);
+      return c?.running && !c.stopping ? c : undefined;
+    };
+    if (!stoppable()) return;
+    try {
+      await this.submitting.get(chatId);
+    } catch {
+      return; // send() has shown why the message didn't go.
+    }
+    const chat = stoppable();
+    if (!chat?.runtimeId) return;
+    this.patchChat(chatId, (c) => ({ ...c, stopping: true }));
+    try {
+      const res = (await this.request("session.interrupt", { session_id: chat.runtimeId })) as InterruptResult;
+      if (res.status !== "interrupted") this.patchChat(chatId, (c) => ({ ...c, stopping: false }));
+    } catch (e) {
+      // A turn that has already ended, or a dropped connection, needs no error.
+      this.patchChat(chatId, (c) =>
+        c.stopping ? { ...c, stopping: false, items: [...c.items, errorItem(c, `Couldn't stop the reply: ${(e as Error).message}`)] } : c,
+      );
     }
   }
 
@@ -237,7 +280,7 @@ export class Hermes {
       this.update({
         status: "offline",
         closedReason: e.reason,
-        chats: this.snapshot.chats.map((c) => (c.running ? { ...c, running: false } : c)),
+        chats: this.snapshot.chats.map((c) => (c.running ? { ...c, running: false, stopping: false } : c)),
       });
       return;
     }
@@ -450,6 +493,22 @@ function errorItem(c: Chat, text: string): Item {
   return { kind: "error", id: `e-${c.items.length}`, text };
 }
 
+/** Ends a turn's tool calls that were still running when it ended. */
+const endRunningTools = (items: Item[], status: "done" | "stopped") =>
+  items.map((i): Item => (i.kind === "tool" && i.status === "running" ? { ...i, status } : i));
+
+/**
+ * Marks the last reply interrupted and its running tool calls stopped. A reply stopped before it said anything gets
+ * an empty one, so the transcript still shows the stop.
+ */
+function markInterrupted(items: Item[]): Item[] {
+  const out = endRunningTools(items, "stopped");
+  const last = out[out.length - 1];
+  if (last?.kind === "assistant") out[out.length - 1] = { ...last, interrupted: true };
+  else out.push({ kind: "assistant", id: `a-${out.length}`, text: "", interrupted: true });
+  return out;
+}
+
 // Fold one session event into a chat. Text deltas extend the trailing assistant item, or start a new one
 // after a tool call.
 function applyEvent(c: Chat, type: string, p: Record<string, unknown>): Chat {
@@ -495,18 +554,16 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>): Chat {
       const lastUser = items.map((i) => i.kind).lastIndexOf("user");
       const answered = items.slice(lastUser + 1).some((i) => i.kind === "assistant");
       if (!answered && typeof p.text === "string" && p.text) items.push({ kind: "assistant", id: `a-${items.length}`, text: p.text });
+      const end = { ...c, running: false, stopping: false, updatedAt: Date.now() };
+      // Stopped here or from another Hermes client.
+      if (p.status === "interrupted") return { ...end, items: markInterrupted(items) };
       const failure = p.error ?? (p.status === "error" ? p.failure_reason ?? "The turn failed." : undefined);
       if (failure) items.push(errorItem({ ...c, items }, String(failure)));
-      return {
-        ...c,
-        running: false,
-        updatedAt: Date.now(),
-        items: items.map((i) => (i.kind === "tool" && i.status === "running" ? { ...i, status: "done" } : i)),
-      };
+      return { ...end, items: endRunningTools(items, "done") };
     }
     case "error":
       items.push(errorItem(c, String(p.message ?? "Hermes reported an error.")));
-      return { ...c, items, running: false };
+      return { ...c, items, running: false, stopping: false };
     default:
       return c;
   }

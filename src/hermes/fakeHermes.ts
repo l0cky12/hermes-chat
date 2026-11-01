@@ -86,6 +86,12 @@ export class FakeHermes {
       }
       this.respond(r.id, { status: "streaming" });
     },
+    // Legacy `session.interrupt` (tui_gateway/methods_session_interrupt.py). The turn then ends with a
+    // `message.complete` whose status is "interrupted"; tests send that themselves.
+    "session.interrupt": (r) => {
+      if (!this.runtime.has(String(r.params.session_id))) return this.fail(r.id, 4001, "session not found");
+      this.respond(r.id, { status: "interrupted" });
+    },
   };
 
   /** Per-route REST behaviour, keyed `METHOD /path`. A handler throws to fail the request. */

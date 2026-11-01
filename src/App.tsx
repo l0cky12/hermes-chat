@@ -116,7 +116,13 @@ function Main({ hermes, where }: { hermes: Hermes; where: string }) {
         <ChatList profile={hermes.profile} chats={chats} syncError={syncError} selectedId={selectedId} onOpen={setSelectedId} />
       )}
       <main className="main">
-        <ChatPane key={selected.id} chat={selected} offline={status === "offline"} onSend={send} />
+        <ChatPane
+          key={selected.id}
+          chat={selected}
+          offline={status === "offline"}
+          onSend={send}
+          onStop={() => void hermes.stop(selected.id)}
+        />
       </main>
     </div>
   );

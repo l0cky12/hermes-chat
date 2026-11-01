@@ -1,7 +1,7 @@
 // Transcript, tool-call groups and composer, ported from the prototype. Find-in-chat, approvals,
-// attachments, Stop and settling come in later tickets.
+// attachments and settling come in later tickets.
 import { useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, ChevronRight, Wrench } from "lucide-react";
+import { ArrowUp, ChevronRight, Square, Wrench } from "lucide-react";
 import type { Chat, Item } from "../hermes/model";
 import { SOURCE_LABEL } from "../hermes/model";
 import { Markdown } from "./Markdown";
@@ -23,7 +23,17 @@ function toBlocks(items: Item[]): Block[] {
   return out;
 }
 
-export function ChatPane({ chat, offline, onSend }: { chat: Chat; offline: boolean; onSend: (text: string) => void }) {
+export function ChatPane({
+  chat,
+  offline,
+  onSend,
+  onStop,
+}: {
+  chat: Chat;
+  offline: boolean;
+  onSend: (text: string) => void;
+  onStop: () => void;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
 
@@ -79,6 +89,7 @@ export function ChatPane({ chat, offline, onSend }: { chat: Chat; offline: boole
                 <div key={b.id} className="msg assistant">
                   <Markdown text={b.text} />
                   {chat.running && b === last && <span className="cursor" />}
+                  {b.interrupted && <div className="stopped">Stopped</div>}
                 </div>
               );
             if (b.kind === "error")
@@ -100,12 +111,15 @@ export function ChatPane({ chat, offline, onSend }: { chat: Chat; offline: boole
       </div>
 
       <Composer
-        disabled={!!chat.running || offline}
+        offline={offline}
+        running={!!chat.running}
+        stopping={!!chat.stopping}
         note={offline ? "Offline. Sign in again to keep chatting." : undefined}
         onSend={(t) => {
           stickToBottom.current = true;
           onSend(t);
         }}
+        onStop={onStop}
       />
     </div>
   );
@@ -113,13 +127,14 @@ export function ChatPane({ chat, offline, onSend }: { chat: Chat; offline: boole
 
 function ToolRow({ t }: { t: ToolItem }) {
   const [open, setOpen] = useState(false);
+  const summary = t.status === "stopped" ? "stopped" : t.summary;
   return (
     <div className={`tool ${open ? "open" : ""}`}>
       <button className="tool-line" onClick={() => setOpen((o) => !o)}>
         {t.status === "running" ? <Spinner /> : <ChevronRight size={13} className={`chev ${open ? "open" : ""}`} />}
         <span className="tool-name">{t.name}</span>
         <span className="tool-preview">{t.preview}</span>
-        {t.summary && <span className="tool-summary">{t.summary}</span>}
+        {summary && <span className="tool-summary">{summary}</span>}
         {t.durationS != null && <span className="tool-dur">{t.durationS}s</span>}
       </button>
       {open && (
@@ -168,7 +183,21 @@ function ToolGroup({ tools }: { tools: ToolItem[] }) {
   );
 }
 
-function Composer({ disabled, note, onSend }: { disabled: boolean; note?: string; onSend: (text: string) => void }) {
+function Composer({
+  offline,
+  running,
+  stopping,
+  note,
+  onSend,
+  onStop,
+}: {
+  offline: boolean;
+  running: boolean;
+  stopping: boolean;
+  note?: string;
+  onSend: (text: string) => void;
+  onStop: () => void;
+}) {
   const [text, setText] = useState("");
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -180,7 +209,7 @@ function Composer({ disabled, note, onSend }: { disabled: boolean; note?: string
   }, [text]);
 
   const send = () => {
-    if (disabled || !text.trim()) return;
+    if (offline || running || !text.trim()) return;
     onSend(text.trim());
     setText("");
   };
@@ -205,9 +234,15 @@ function Composer({ disabled, note, onSend }: { disabled: boolean; note?: string
         />
         <div className="composer-bar">
           <span className="composer-keys">Enter to send · Shift+Enter for a new line</span>
-          <button className="send" title="Send" disabled={disabled || !text.trim()} onClick={send}>
-            <ArrowUp size={16} />
-          </button>
+          {running ? (
+            <button className="send stop" title={stopping ? "Stopping" : "Stop"} disabled={offline || stopping} onClick={onStop}>
+              <Square size={12} fill="currentColor" />
+            </button>
+          ) : (
+            <button className="send" title="Send" disabled={offline || !text.trim()} onClick={send}>
+              <ArrowUp size={16} />
+            </button>
+          )}
         </div>
       </div>
     </div>
