@@ -16,7 +16,7 @@ async function signedIn() {
 describe("Hermes transport", () => {
   it("connects once gateway.ready arrives", async () => {
     const { hermes } = await signedIn();
-    expect(hermes.getSnapshot()).toEqual({ chats: [], status: "connected" });
+    expect(hermes.getSnapshot()).toEqual({ chats: [], status: "connected", route: { kind: "ssh", target: "liam@hermes" }, unsecure: false });
   });
 
   it("refuses a server that speaks the canonical protocol", async () => {
@@ -105,13 +105,13 @@ describe("Hermes transport", () => {
     expect(hermes.getSnapshot()).toBe(before);
   });
 
-  it("goes offline when the connection drops mid-reply", async () => {
+  it("starts reconnecting when the connection drops mid-reply", async () => {
     const { server, hermes, chat, runtime } = await signedIn();
     const id = await hermes.newChat();
     await hermes.send(id, "hi");
     server.event(runtime(id), "message.start");
     server.drop("closed by the server (1006 )");
-    expect(hermes.getSnapshot()).toMatchObject({ status: "offline", closedReason: "closed by the server (1006 )" });
+    expect(hermes.getSnapshot()).toMatchObject({ status: "reconnecting", closedReason: "closed by the server (1006 )" });
     expect(chat(id).running).toBe(false);
     await expect(hermes.newChat()).rejects.toThrow("Not connected");
   });
@@ -120,7 +120,7 @@ describe("Hermes transport", () => {
     await expect(
       connect(async (onEvent) => {
         onEvent({ kind: "closed", reason: "closed by the server (4401 )" });
-        return { send: async () => {}, request: async () => "", statFiles: async () => [], sendFile: async () => {}, close: async () => {} };
+        return { route: { kind: "ssh", target: "liam@hermes" }, send: async () => {}, request: async () => "", statFiles: async () => [], sendFile: async () => {}, close: async () => {} };
       }),
     ).rejects.toThrow("4401");
   });

@@ -7,7 +7,7 @@ The dashboard is bound to `0.0.0.0`, and its auth gate depends on the bind addre
 ## Considered options
 
 - **Spawn an isolated loopback `hermes serve` over SSH, as the official app's SSH mode does** (`--ssh-session-token-file`, no password). Rejected for now: it runs a second Hermes backend on a server whose disk is about 95% full, and the reuse, lockfile and cleanup lifecycle is more code than the tracer bullet needs.
-- **Connect straight to `http://hermes:9119`.** Not pursued: the plan is to sign in over SSH. Plain `http://` is encrypted only while Tailscale carries it, and the app would have to label it Unsecure.
+- **Connect straight to `http://hermes:9119`.** Not pursued: the plan is to sign in over SSH. Plain `http://` is encrypted only while Tailscale carries it, and the app would have to label it Unsecure. Later added as a second way to sign in, alongside SSH (ADR 0004).
 
 ## Consequences
 

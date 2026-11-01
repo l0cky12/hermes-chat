@@ -1,25 +1,44 @@
 // Icon rail beside a chat list (ADR 0001), ported from the prototype's variants C and A.
 // Search, Settings, settling and the profile switcher come in later tickets.
 import { useState } from "react";
-import { ChevronRight, SquarePen } from "lucide-react";
+import { ChevronRight, LockOpen, SquarePen } from "lucide-react";
 import type { Chat, ConnectionStatus } from "../hermes/model";
 import { SOURCE_LABEL } from "../hermes/model";
+import type { Route } from "../hermes/pipe";
 import { SourceIcon, Spinner, relTime } from "./bits";
 
 const byRecent = (a: Chat, b: Chat) => b.updatedAt - a.updatedAt;
 
+const STATUS_LABEL: Record<ConnectionStatus, string> = { connected: "Connected", reconnecting: "Reconnecting…", offline: "Offline" };
+
 export function Rail({
   status,
-  where,
+  route,
+  unsecure,
+  closedReason,
+  onReconnect,
   onToggleList,
   onNew,
 }: {
   status: ConnectionStatus;
-  where: string;
+  route?: Route;
+  unsecure: boolean;
+  closedReason?: string;
+  onReconnect: () => void;
   onToggleList: () => void;
   onNew: () => void;
 }) {
-  const label = status === "connected" ? "Connected" : "Offline";
+  const where = route?.kind === "ssh" ? `ssh://${route.target}` : route?.url;
+  // The full wording lives only in the tooltip (ADR 0001).
+  const tip = [
+    STATUS_LABEL[status],
+    where,
+    unsecure && "Unsecure: traffic to the server isn't encrypted",
+    status !== "connected" && closedReason,
+    status !== "connected" && "Click to reconnect",
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <aside className="rail">
       <div className="rail-top">
@@ -31,7 +50,10 @@ export function Rail({
         </button>
       </div>
       <div className="rail-bottom">
-        <span className={`conn-dot ${status}`} title={`${label} · ${where}`} />
+        <button className="conn-btn" title={tip} aria-label={tip} onClick={() => status !== "connected" && onReconnect()}>
+          <span className={`conn-dot ${status} ${unsecure ? "unsecure" : ""}`} />
+          {unsecure && <LockOpen className="conn-lock" size={9} strokeWidth={2.8} />}
+        </button>
       </div>
     </aside>
   );

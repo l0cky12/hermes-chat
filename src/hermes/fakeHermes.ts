@@ -1,6 +1,6 @@
 // A fake Hermes dashboard for tests: it sits where the Rust pipe does and speaks wire-shaped legacy
 // JSON-RPC frames and dashboard REST bodies (shapes from the deployed contracts, see the research doc).
-import type { LocalFile, OpenPipe, PipeEvent } from "./pipe";
+import type { LocalFile, OpenPipe, PipeEvent, Route } from "./pipe";
 
 type Request = { jsonrpc: "2.0"; id: number; method: string; params: Record<string, unknown> };
 type Handler = (req: Request) => void;
@@ -55,6 +55,12 @@ export class FakeHermes {
   readonly requests: Request[] = [];
   readonly restRequests: RestRequest[] = [];
   readyPayload: Record<string, unknown> = { skin: {}, change_events: true, heartbeat: true, replay_epoch: "e1" };
+  /** How the pipe reaches this server, as the Rust side reports it. */
+  route: Route = { kind: "ssh", target: "liam@hermes" };
+  /** While set, opening a pipe fails with this message, as the Rust side does when the server can't be reached. */
+  refuse?: string;
+  /** How many pipes have been opened. */
+  opened = 0;
   /** The profile's stored sessions. A chat started over the WS gets a row on its first prompt. */
   sessions: SessionRow[] = [];
   /** Stored session id -> its history, as `session.resume` projects it (`_history_to_messages`). */
@@ -78,7 +84,7 @@ export class FakeHermes {
     "session.resume": (r) => {
       const stored = String(r.params.session_id);
       if (!this.sessions.some((s) => s.id === stored)) return this.fail(r.id, 4007, `session not found: ${stored}`);
-      const runtimeId = `rt-r${this.runtime.size + 1}`;
+      const runtimeId = `rt-r${++this.resumed}`;
       this.runtime.set(runtimeId, stored);
       const messages = this.transcripts[stored] ?? [];
       this.respond(r.id, { session_id: runtimeId, stored_session_id: stored, message_count: messages.length, messages, info: {}, running: false });
@@ -116,6 +122,8 @@ export class FakeHermes {
       if (!this.runtime.has(String(r.params.session_id))) return this.fail(r.id, 4001, "session not found");
       this.respond(r.id, { status: "interrupted" });
     },
+    // Keepalive, answered by the WS layer in either protocol generation (research doc §1).
+    "gateway.ping": (r) => this.respond(r.id, { ok: true }),
   };
 
   /** Per-route REST behaviour, keyed `METHOD /path`. A handler throws to fail the request. */
@@ -135,9 +143,15 @@ export class FakeHermes {
 
   private onEvent?: (e: PipeEvent) => void;
   private imagesStaged = 0;
+  private resumed = 0;
   closed = false;
 
   openPipe: OpenPipe = async (onEvent) => {
+    if (this.refuse !== undefined) throw new Error(this.refuse);
+    this.opened++;
+    this.closed = false;
+    // Runtime sessions belong to the connection that started them; closing it detaches them (research doc §5).
+    this.runtime.clear();
     this.onEvent = onEvent;
     // The server writes gateway.ready as soon as the socket is accepted.
     this.frame({ jsonrpc: "2.0", method: "event", params: { type: "gateway.ready", payload: this.readyPayload } });
@@ -147,6 +161,7 @@ export class FakeHermes {
       this.handlers[req.method]?.(req);
     };
     return {
+      route: this.route,
       send,
       // Mirrors the Rust side (src-tauri/src/transport.rs): sizes from the disk, and a size check before sending.
       statFiles: async (paths) => paths.map((path) => this.stat(path)),

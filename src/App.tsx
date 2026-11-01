@@ -8,21 +8,21 @@ import { ChatPane } from "./ui/ChatPane";
 import { SignIn } from "./ui/SignIn";
 
 const PROFILE = "default";
-const SAVED = "hermes-chat.sign-in"; // SSH target and username only; never the password.
+const SAVED = "hermes-chat.sign-in"; // Everything but the password.
 // Hermes also announces store changes over the socket; the poll catches anything it misses.
 const SYNC_EVERY_MS = 60_000;
 
 function savedSignIn(): Omit<SignInDetails, "password"> {
+  const blank = { mode: "ssh" as const, sshTarget: "", url: "", username: "" };
   try {
-    return { sshTarget: "", username: "", ...JSON.parse(localStorage.getItem(SAVED) ?? "{}") };
+    return { ...blank, ...JSON.parse(localStorage.getItem(SAVED) ?? "{}") };
   } catch {
-    return { sshTarget: "", username: "" };
+    return blank;
   }
 }
 
 export default function App() {
   const [hermes, setHermes] = useState<Hermes | null>(null);
-  const [where, setWhere] = useState("");
   const [error, setError] = useState<string>();
 
   if (!hermes)
@@ -34,8 +34,8 @@ export default function App() {
           setError(undefined);
           try {
             const h = await connect(tauriPipe(d), PROFILE, localChatCache);
-            localStorage.setItem(SAVED, JSON.stringify({ sshTarget: d.sshTarget, username: d.username }));
-            setWhere(`ssh://${d.sshTarget}`);
+            const { password: _, ...saved } = d;
+            localStorage.setItem(SAVED, JSON.stringify(saved));
             setHermes(h);
           } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
@@ -43,11 +43,11 @@ export default function App() {
         }}
       />
     );
-  return <Main hermes={hermes} where={where} />;
+  return <Main hermes={hermes} />;
 }
 
-function Main({ hermes, where }: { hermes: Hermes; where: string }) {
-  const { chats, status, syncError } = useSyncExternalStore(hermes.subscribe, hermes.getSnapshot);
+function Main({ hermes }: { hermes: Hermes }) {
+  const { chats, status, route, unsecure, closedReason, syncError } = useSyncExternalStore(hermes.subscribe, hermes.getSnapshot);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [listOpen, setListOpen] = useState(true);
   const [draftError, setDraftError] = useState<string>();
@@ -82,10 +82,18 @@ function Main({ hermes, where }: { hermes: Hermes; where: string }) {
     await hermes.send(id, text, attachments);
   };
 
-  // An opened chat shows its stored history; a chat already open on this connection is left as it is.
+  // An opened chat shows its stored history; a chat already open on this connection is left as it is. After a
+  // reconnect the chat on screen loads again.
   useEffect(() => {
-    if (selectedId) void hermes.open(selectedId);
-  }, [hermes, selectedId]);
+    if (selectedId && status === "connected") void hermes.open(selectedId);
+  }, [hermes, selectedId, status]);
+
+  // Back on the network: don't wait for the next retry, or for the owner if it gave up.
+  useEffect(() => {
+    const onOnline = () => void hermes.reconnect();
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, [hermes]);
 
   useEffect(() => {
     void hermes.sync();
@@ -111,7 +119,15 @@ function Main({ hermes, where }: { hermes: Hermes; where: string }) {
 
   return (
     <div className="app">
-      <Rail status={status} where={where} onToggleList={() => setListOpen((o) => !o)} onNew={newChat} />
+      <Rail
+        status={status}
+        route={route}
+        unsecure={unsecure}
+        closedReason={closedReason}
+        onReconnect={() => void hermes.reconnect()}
+        onToggleList={() => setListOpen((o) => !o)}
+        onNew={newChat}
+      />
       {listOpen && (
         <ChatList profile={hermes.profile} chats={chats} syncError={syncError} selectedId={selectedId} onOpen={setSelectedId} />
       )}
@@ -119,7 +135,7 @@ function Main({ hermes, where }: { hermes: Hermes; where: string }) {
         <ChatPane
           key={selected.id}
           chat={selected}
-          offline={status === "offline"}
+          status={status}
           onAttach={(paths) => hermes.checkAttachments(paths)}
           onSend={send}
           onStop={() => void hermes.stop(selected.id)}

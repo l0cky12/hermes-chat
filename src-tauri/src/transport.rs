@@ -3,13 +3,15 @@
 //! The webview speaks the protocol; this side never parses it (ADR 0003). Wire details:
 //! docs/research/hermes-gateway-api.md §2, §5 and "Password login and profiles".
 //! It also reads the files the owner attaches, so their bytes go from disk to Hermes without passing
-//! through the webview (§7).
+//! through the webview (§7). For a direct connection it resolves the host name in the URL the owner typed, so
+//! the webview can tell whether the connection is Unsecure.
 
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{header, Method, StatusCode};
 use serde::Serialize;
 use serde_json::json;
+use std::net::IpAddr;
 use std::sync::Mutex;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
@@ -27,6 +29,8 @@ pub struct SignIn {
 
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
+    #[error("Enter the dashboard's URL, starting with http:// or https://, such as http://hermes:9119. Put the username and password in their own fields.")]
+    BadUrl,
     #[error("Can't reach the Hermes dashboard: {0}")]
     Unreachable(String),
     #[error("Wrong username or password.")]
@@ -50,6 +54,48 @@ pub enum TransportError {
 }
 
 const MIB: u64 = 1024 * 1024;
+
+/// A dashboard to sign in to directly, without the SSH tunnel: its root, and the IP addresses its host name
+/// resolves to (none when the host is an IP address).
+#[derive(Debug)]
+pub struct DirectUrl {
+    pub base: Url,
+    pub addresses: Vec<IpAddr>,
+}
+
+/// Reads the URL the owner typed: `http(s)://` or `ws(s)://` (taken as `http(s)://`), with an optional path
+/// prefix, then resolves its host name. A URL with a username or password in it is refused, since the app saves
+/// and shows the URL.
+pub async fn resolve_direct(raw: &str) -> Result<DirectUrl, TransportError> {
+    let mut base = Url::parse(raw.trim()).map_err(|_| TransportError::BadUrl)?;
+    if !base.username().is_empty() || base.password().is_some() {
+        return Err(TransportError::BadUrl);
+    }
+    let scheme = match base.scheme() {
+        "http" | "ws" => "http",
+        "https" | "wss" => "https",
+        _ => return Err(TransportError::BadUrl),
+    };
+    base.set_scheme(scheme).expect("ws(s) URLs map to http(s)");
+    base.set_query(None);
+    base.set_fragment(None);
+    let addresses = match base.host() {
+        Some(url::Host::Domain(name)) => {
+            let port = base.port_or_known_default().expect("http(s) has a default port");
+            let mut found: Vec<IpAddr> = tokio::net::lookup_host((name, port))
+                .await
+                .map_err(|e| TransportError::Unreachable(format!("couldn't look up {name}: {e}")))?
+                .map(|a| a.ip())
+                .collect();
+            found.sort();
+            found.dedup();
+            found
+        }
+        Some(_) => vec![],
+        None => return Err(TransportError::BadUrl),
+    };
+    Ok(DirectUrl { base, addresses })
+}
 
 /// A local file the owner wants to attach: its size, or why it can't be attached.
 #[derive(Debug, Clone, PartialEq, Serialize)]

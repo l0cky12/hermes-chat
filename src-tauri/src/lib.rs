@@ -1,6 +1,7 @@
 pub mod transport;
 pub mod tunnel;
 
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri::State;
@@ -15,7 +16,23 @@ const DASHBOARD_PORT: u16 = 9119;
 struct Connection {
     dashboard: Arc<Dashboard>,
     pipe: Arc<Pipe>,
-    _tunnel: Tunnel,
+    _tunnel: Option<Tunnel>,
+}
+
+/// Where the owner signs in: through an SSH tunnel (ADR 0003), or straight to a dashboard URL.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum Target {
+    Ssh { target: String },
+    Url { url: String },
+}
+
+/// How the connection reached the dashboard, for the webview to show and to decide whether it is Unsecure.
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum Route {
+    Ssh { target: String },
+    Url { url: String, addresses: Vec<String> },
 }
 
 #[derive(Default)]
@@ -24,15 +41,25 @@ struct AppState(Mutex<Option<Connection>>);
 #[tauri::command]
 async fn hermes_connect(
     state: State<'_, AppState>,
-    ssh_target: String,
+    target: Target,
     username: String,
     password: String,
     on_event: Channel<PipeEvent>,
-) -> Result<(), String> {
+) -> Result<Route, String> {
     let mut slot = state.0.lock().await;
     *slot = None;
-    let tunnel = tunnel::open(&ssh_target, DASHBOARD_PORT).await.map_err(|e| e.to_string())?;
-    let base = url::Url::parse(&format!("http://127.0.0.1:{}/", tunnel.local_port)).expect("valid URL");
+    let (base, tunnel, route) = match target {
+        Target::Ssh { target } => {
+            let tunnel = tunnel::open(&target, DASHBOARD_PORT).await.map_err(|e| e.to_string())?;
+            let base = url::Url::parse(&format!("http://127.0.0.1:{}/", tunnel.local_port)).expect("valid URL");
+            (base, Some(tunnel), Route::Ssh { target: target.trim().to_owned() })
+        }
+        Target::Url { url } => {
+            let direct = transport::resolve_direct(&url).await.map_err(|e| e.to_string())?;
+            let addresses = direct.addresses.iter().map(ToString::to_string).collect();
+            (direct.base, None, Route::Url { url: url.trim().to_owned(), addresses })
+        }
+    };
     let dashboard = Dashboard::sign_in(&base, &SignIn { username, password }).await.map_err(|e| e.to_string())?;
     let pipe = dashboard
         .open_pipe(move |e| {
@@ -41,7 +68,7 @@ async fn hermes_connect(
         .await
         .map_err(|e| e.to_string())?;
     *slot = Some(Connection { dashboard: Arc::new(dashboard), pipe: Arc::new(pipe), _tunnel: tunnel });
-    Ok(())
+    Ok(route)
 }
 
 #[tauri::command]

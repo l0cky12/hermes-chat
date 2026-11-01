@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, ChevronRight, Paperclip, Square, Wrench, X } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import type { AttachCheck, Attachment, Chat, Item } from "../hermes/model";
+import type { AttachCheck, Attachment, Chat, ConnectionStatus, Item } from "../hermes/model";
 import { SOURCE_LABEL } from "../hermes/model";
 import { Markdown } from "./Markdown";
 import { SourceIcon, Spinner } from "./bits";
@@ -25,15 +25,21 @@ function toBlocks(items: Item[]): Block[] {
   return out;
 }
 
+const STATUS_NOTE: Record<ConnectionStatus, string | undefined> = {
+  connected: undefined,
+  reconnecting: "Reconnecting to Hermes…",
+  offline: "Offline. Click the status dot to reconnect.",
+};
+
 export function ChatPane({
   chat,
-  offline,
+  status,
   onAttach,
   onSend,
   onStop,
 }: {
   chat: Chat;
-  offline: boolean;
+  status: ConnectionStatus;
   onAttach: (paths: string[]) => Promise<AttachCheck>;
   onSend: (text: string, attachments: Attachment[]) => void;
   onStop: () => void;
@@ -125,10 +131,10 @@ export function ChatPane({
       </div>
 
       <Composer
-        offline={offline}
+        offline={status !== "connected"}
         running={!!chat.running}
         stopping={!!chat.stopping}
-        note={offline ? "Offline. Sign in again to keep chatting." : undefined}
+        note={STATUS_NOTE[status]}
         onAttach={onAttach}
         onSend={(t, attachments) => {
           stickToBottom.current = true;

@@ -53,4 +53,4 @@ export type Chat = {
   stopping?: boolean;
 };
 
-export type ConnectionStatus = "connected" | "offline";
+export type ConnectionStatus = "connected" | "reconnecting" | "offline";

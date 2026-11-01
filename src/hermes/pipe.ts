@@ -7,7 +7,14 @@ export type LocalFile = { path: string; name: string; size?: number; error?: str
 
 export type PipeEvent = { kind: "frame"; text: string } | { kind: "closed"; reason: string };
 
+/**
+ * How the pipe reaches the dashboard: through an SSH tunnel, or straight to the URL the owner typed. For a URL whose
+ * host is a name, `addresses` are the IP addresses Rust resolved it to.
+ */
+export type Route = { kind: "ssh"; target: string } | { kind: "url"; url: string; addresses: string[] };
+
 export interface Pipe {
+  readonly route: Route;
   send(frame: string): Promise<void>;
   /**
    * One dashboard REST call with the sign-in cookies, e.g. `request("GET", "api/sessions?order=recent")`.
@@ -23,5 +30,8 @@ export interface Pipe {
   close(): Promise<void>;
 }
 
-/** Opens the pipe. Frames may arrive on `onEvent` before the returned promise resolves. */
+/**
+ * Opens the pipe. Frames may arrive on `onEvent` before the returned promise resolves. It can be called again after
+ * the pipe closes, to reconnect.
+ */
 export type OpenPipe = (onEvent: (e: PipeEvent) => void) => Promise<Pipe>;

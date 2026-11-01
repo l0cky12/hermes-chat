@@ -2,13 +2,21 @@
 // the server's frames into Chats. Wire shapes: docs/research/hermes-gateway-api.md §3d, §4, §5 and
 // "SSH tunnel, Host header and protocol generation". Only the legacy verbs are used (ADR 0003).
 // The chat list comes from dashboard REST, because the legacy `session.list` has no last-activity field.
-// Attachments: research doc §7.
+// Attachments: research doc §7. A dropped connection is reconnected on its own; keepalive: research doc §1.
 import type { AttachCheck, Attachment, Chat, ConnectionStatus, Item, Source } from "./model";
-import type { OpenPipe, Pipe, PipeEvent } from "./pipe";
+import type { OpenPipe, Pipe, PipeEvent, Route } from "./pipe";
+import { isUnsecure } from "./unsecure";
 
 /** The `source` this app stamps on chats it starts. Legacy `session.create` stores any string as-is. */
 export const APP_SOURCE = "hermes-chat";
 const READY_TIMEOUT_MS = 15_000;
+/** Waits before each try to reconnect a dropped connection. When the last try fails the app is Offline until the
+ * owner asks to reconnect, so a wrong password isn't retried for ever. */
+const RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
+/** A `gateway.ping` goes out this often. A connection that has sent nothing for longer than the official client's
+ * heartbeat deadline is dropped. */
+const PING_EVERY_MS = 15_000;
+const SILENCE_LIMIT_MS = 45_000;
 /** The list shows chats active in the past month. */
 const LIST_WINDOW_MS = 30 * 86_400_000;
 /** Dashboard REST caps `GET /api/sessions` pages at 100. */
@@ -85,40 +93,46 @@ export class RpcError extends Error {
   }
 }
 
-export type Snapshot = { chats: Chat[]; status: ConnectionStatus; closedReason?: string; syncError?: string };
+/**
+ * `route`: how the latest connection reached the dashboard. `unsecure`: its traffic isn't encrypted (unsecure.ts).
+ * `closedReason`: why the connection dropped, or why the last try to reconnect failed.
+ */
+export type Snapshot = {
+  chats: Chat[];
+  status: ConnectionStatus;
+  route?: Route;
+  unsecure: boolean;
+  closedReason?: string;
+  syncError?: string;
+};
 
+/** Connects to Hermes; rejects if the first connection fails. Later drops are reconnected by the returned Hermes. */
 export async function connect(openPipe: OpenPipe, profile = "default", cache: ChatCache = noCache): Promise<Hermes> {
-  const hermes = new Hermes(profile, cache);
-  let ready!: (payload: Record<string, unknown>) => void;
-  let failed!: (e: Error) => void;
-  const readyPayload = new Promise<Record<string, unknown>>((res, rej) => ((ready = res), (failed = rej)));
-  hermes.onReady = ready;
-  hermes.onClosedBeforeReady = (reason) => failed(new Error(`The connection closed before Hermes was ready: ${reason}`));
-  const pipe = await openPipe((e) => hermes.handle(e));
-  hermes.attach(pipe);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const payload = await Promise.race([
-      readyPayload,
-      new Promise<never>((_, rej) => {
-        timer = setTimeout(() => rej(new Error("Hermes didn't send gateway.ready in time.")), READY_TIMEOUT_MS);
-      }),
-    ]);
-    if (payload.session_authority) throw new ProtocolMismatchError();
-  } catch (e) {
-    await hermes.close();
-    throw e;
-  } finally {
-    clearTimeout(timer);
-  }
+  const hermes = new Hermes(openPipe, profile, cache);
+  await hermes.dial();
   return hermes;
 }
 
 export class Hermes {
-  onReady?: (payload: Record<string, unknown>) => void;
-  onClosedBeforeReady?: (reason: string) => void;
-
   private pipe?: Pipe;
+  /** Counts pipes opened; events from an older pipe than the current one are ignored. */
+  private generation = 0;
+  /** The pipe being opened is waiting for `gateway.ready`. */
+  private onReady?: (payload: Record<string, unknown>) => void;
+  /** Ends the dial under way with this error. */
+  private abortDial?: (e: Error) => void;
+  /** The dropped pipe, until the Rust side has closed it. Opening the next one waits, because Rust holds a single
+   * connection and closing drops whichever it holds. */
+  private droppedClosing?: Promise<void>;
+  private redialing?: Promise<void>;
+  private failedTries = 0;
+  private retryTimer?: ReturnType<typeof setTimeout>;
+  private heartbeat?: ReturnType<typeof setInterval>;
+  private lastHeard = 0;
+  private closing = false;
+  /** Chats resumed on a connection that has since dropped: how many of their items the next resume replaces with the
+   * stored history. */
+  private staleItems = new Map<string, number>();
   private nextId = 1;
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private listeners = new Set<() => void>();
@@ -134,14 +148,62 @@ export class Hermes {
   private background = new Set<Promise<unknown>>();
 
   constructor(
+    private openPipe: OpenPipe,
     readonly profile: string,
     private cache: ChatCache = noCache,
   ) {
-    this.snapshot = { chats: cache.load(profile), status: "connected" };
+    this.snapshot = { chats: cache.load(profile), status: "offline", unsecure: false };
   }
 
-  attach(pipe: Pipe) {
+  /**
+   * Opens a pipe and waits for `gateway.ready`. Used by `connect` and to reconnect; on failure the pipe is closed and
+   * the error thrown.
+   */
+  async dial(): Promise<void> {
+    await this.droppedClosing;
+    const gen = ++this.generation;
+    const ready = new Promise<Record<string, unknown>>((resolve) => (this.onReady = resolve));
+    // Set as soon as the pipe closes or the app gives up, even after gateway.ready has arrived.
+    let failure: Error | undefined;
+    const failed = new Promise<never>((_, reject) => (this.abortDial = (e) => reject((failure ??= e))));
+    failed.catch(() => {}); // Raced below, once the pipe is open.
+    let up = false;
+    let pipe: Pipe | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      pipe = await this.openPipe((e) => {
+        if (gen !== this.generation) return;
+        if (e.kind === "closed" && !up) this.abortDial?.(new Error(`The connection closed before Hermes was ready: ${e.reason}`));
+        else this.handle(e);
+      });
+      const payload = await Promise.race([
+        ready,
+        failed,
+        new Promise<never>((_, rej) => {
+          timer = setTimeout(() => rej(new Error("Hermes didn't send gateway.ready in time.")), READY_TIMEOUT_MS);
+        }),
+      ]);
+      if (failure) throw failure;
+      if (payload.session_authority) throw new ProtocolMismatchError();
+    } catch (e) {
+      this.generation++;
+      await pipe?.close().catch(() => {});
+      throw e;
+    } finally {
+      clearTimeout(timer);
+      this.onReady = this.abortDial = undefined;
+    }
+    up = true;
     this.pipe = pipe;
+    this.lastHeard = Date.now();
+    this.heartbeat = setInterval(() => this.beat(), PING_EVERY_MS);
+    this.update({ status: "connected", closedReason: undefined, route: pipe.route, unsecure: isUnsecure(pipe.route) });
+  }
+
+  /** Tries to connect again now, after a drop or from Offline, and keeps retrying on its own if that fails. */
+  reconnect(): Promise<void> {
+    if (!this.redialing) this.failedTries = 0;
+    return this.redial();
   }
 
   subscribe = (fn: () => void) => {
@@ -284,6 +346,7 @@ export class Hermes {
    * pinned. A call while a sync is running asks for one more pass and resolves with it.
    */
   sync(): Promise<void> {
+    if (this.snapshot.status !== "connected") return Promise.resolve(); // Reconnecting syncs again.
     if (this.syncing) {
       this.syncAgain = true;
       return this.syncing;
@@ -308,21 +371,17 @@ export class Hermes {
   }
 
   async close() {
+    this.closing = true;
+    this.abortDial?.(new Error("Closed by the app."));
+    this.generation++;
+    clearTimeout(this.retryTimer);
+    clearInterval(this.heartbeat);
     await this.pipe?.close();
   }
 
-  handle(e: PipeEvent) {
-    if (e.kind === "closed") {
-      this.onClosedBeforeReady?.(e.reason);
-      for (const p of this.pending.values()) p.reject(new Error(`Connection closed: ${e.reason}`));
-      this.pending.clear();
-      this.update({
-        status: "offline",
-        closedReason: e.reason,
-        chats: this.snapshot.chats.map((c) => (c.running ? { ...c, running: false, stopping: false } : c)),
-      });
-      return;
-    }
+  private handle(e: PipeEvent) {
+    if (e.kind === "closed") return this.dropped(e.reason);
+    this.lastHeard = Date.now();
     let frame: RpcFrame;
     try {
       frame = JSON.parse(e.text);
@@ -340,7 +399,6 @@ export class Hermes {
     if (frame.method !== "event" || !frame.params?.type) return;
     const { type, session_id, payload = {} } = frame.params;
     if (type === "gateway.ready") {
-      this.onClosedBeforeReady = undefined;
       this.onReady?.(payload);
       return;
     }
@@ -354,6 +412,63 @@ export class Hermes {
     this.patchChat(chat.id, (c) => applyEvent(c, type, payload));
     // By the end of a turn Hermes has stored the session, so a pin that failed earlier can succeed.
     if (type === "message.complete" && this.awaitingPin.has(chat.id)) this.track(this.pin(chat.id));
+  }
+
+  /**
+   * The connection has dropped: requests in flight fail, replies stop running, and reconnecting starts. Closing a
+   * connection detaches its runtime sessions, so each chat resumed on it resumes again when next opened.
+   */
+  private dropped(reason: string) {
+    const pipe = this.pipe;
+    this.pipe = undefined;
+    this.generation++;
+    clearInterval(this.heartbeat);
+    // Lets the Rust side end the tunnel.
+    if (pipe) this.droppedClosing = pipe.close().catch(() => {}).finally(() => (this.droppedClosing = undefined));
+    for (const p of this.pending.values()) p.reject(new Error(`Connection closed: ${reason}`));
+    this.pending.clear();
+    for (const c of this.snapshot.chats) if (c.runtimeId) this.staleItems.set(c.id, c.items.length);
+    this.update({
+      status: "reconnecting",
+      closedReason: reason,
+      chats: this.snapshot.chats.map((c) => (c.runtimeId || c.running ? { ...c, runtimeId: undefined, running: false, stopping: false } : c)),
+    });
+    this.retryLater();
+  }
+
+  private retryLater() {
+    const wait = RETRY_DELAYS_MS[this.failedTries];
+    if (wait === undefined) return this.update({ status: "offline" });
+    this.retryTimer = setTimeout(() => void this.redial(), wait);
+  }
+
+  private redial(): Promise<void> {
+    if (this.closing || this.snapshot.status === "connected") return Promise.resolve();
+    this.redialing ??= (async () => {
+      clearTimeout(this.retryTimer);
+      this.update({ status: "reconnecting" });
+      try {
+        await this.dial();
+        this.failedTries = 0;
+        void this.sync();
+      } catch (e) {
+        if (this.closing) return;
+        this.failedTries++;
+        this.update({ closedReason: (e as Error).message });
+        // A server that changed protocol won't change back on its own.
+        if (e instanceof ProtocolMismatchError) this.update({ status: "offline" });
+        else this.retryLater();
+      } finally {
+        this.redialing = undefined;
+      }
+    })();
+    return this.redialing;
+  }
+
+  /** Pings Hermes, or drops the connection if it has gone quiet; any frame counts as an answer. */
+  private beat() {
+    if (Date.now() - this.lastHeard > SILENCE_LIMIT_MS) return this.dropped("Hermes stopped answering.");
+    this.request("gateway.ping", {}).catch(() => {});
   }
 
   /**
@@ -403,10 +518,12 @@ export class Hermes {
           messages?: TranscriptMessage[];
         };
         const history = historyItems(res.messages ?? []);
+        const stale = this.staleItems.get(chatId) ?? 0;
+        this.staleItems.delete(chatId);
         this.patchChat(chatId, (c) => ({
           ...c,
           runtimeId: res.session_id,
-          items: [...history, ...withoutLoadError(c.items)],
+          items: [...history, ...withoutLoadError(c.items.slice(stale))],
         }));
         return res.session_id;
       } finally {
@@ -493,7 +610,7 @@ export class Hermes {
   /** One JSON-RPC request. With a `file`, the pipe swaps its base64 in for the `FILE_MARK` in `params`. */
   private request(method: string, params: Record<string, unknown>, file?: { path: string; maxBytes: number }): Promise<unknown> {
     const pipe = this.pipe;
-    if (!pipe || this.snapshot.status === "offline") return Promise.reject(new Error("Not connected to Hermes."));
+    if (!pipe || this.snapshot.status !== "connected") return Promise.reject(new Error("Not connected to Hermes."));
     const id = this.nextId++;
     const done = new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
     const frame = JSON.stringify({ jsonrpc: "2.0", id, method, params });

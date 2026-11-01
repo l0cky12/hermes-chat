@@ -99,6 +99,7 @@ code, pre, kbd { font-family: var(--mono); }
 .conn-dot.connected { background: var(--ok); box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.12); }
 .conn-dot.reconnecting { background: var(--warn); animation: pulse 1s ease-in-out infinite; }
 .conn-dot.offline { background: var(--faint); }
+.conn-dot.unsecure { outline: 2px solid var(--warn); outline-offset: 3px; }
 @keyframes pulse { 50% { opacity: 0.35; } }
 
 /* ---------- icon rail (ADR 0001) ---------- */
@@ -278,3 +279,12 @@ code, pre, kbd { font-family: var(--mono); }
 .chip button:hover { background: var(--line-2); color: var(--text); }
 .attach-note { font-size: 12px; color: var(--muted); padding: 0 6px 8px; }
 .offline-note { font-size: 12px; color: var(--muted); padding: 0 6px 8px; }
+.conn-btn { position: relative; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; }
+.conn-btn:hover { background: var(--raised-2); }
+.conn-lock { position: absolute; right: 1px; bottom: 1px; color: var(--warn); }
+.seg { display: flex; background: var(--raised); border-radius: 9px; padding: 3px; gap: 2px; }
+.seg button {
+  flex: 1; height: 28px; border-radius: 7px; color: var(--muted); font-size: 13px; display: flex; align-items: center;
+  justify-content: center;
+}
+.seg button.on { background: var(--raised-2); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3); }

@@ -9,6 +9,7 @@ use axum::{Json, Router};
 use hermes_chat::transport::{self, Dashboard, LocalFile, PipeEvent, SignIn, TransportError};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -329,4 +330,49 @@ async fn reports_a_file_that_is_gone() {
     next(&mut rx).await;
     let err = pipe.send_file("", &path_of(&dir.join("gone.txt")), "", 1024).await.err().unwrap();
     assert_eq!(err.to_string(), "No such file or directory (os error 2)");
+}
+
+#[tokio::test]
+async fn resolves_the_host_name_of_a_direct_url() {
+    let direct = transport::resolve_direct("http://localhost:9119").await.expect("resolved");
+    assert_eq!(direct.base.as_str(), "http://localhost:9119/");
+    assert!(!direct.addresses.is_empty());
+    assert!(direct.addresses.iter().all(IpAddr::is_loopback), "{:?}", direct.addresses);
+}
+
+#[tokio::test]
+async fn a_direct_url_to_an_ip_address_needs_no_lookup() {
+    let direct = transport::resolve_direct(" http://100.100.64.121:9119/ ").await.expect("parsed");
+    assert_eq!(direct.base.as_str(), "http://100.100.64.121:9119/");
+    assert!(direct.addresses.is_empty());
+}
+
+#[tokio::test]
+async fn a_direct_ws_url_is_signed_in_to_over_http() {
+    let base = stub().await;
+    let typed = format!("ws://{}:{}/?ignored=1", base.host_str().unwrap(), base.port().unwrap());
+    let direct = transport::resolve_direct(&typed).await.expect("parsed");
+    assert_eq!(direct.base, base);
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let dashboard = Dashboard::sign_in(&direct.base, &sign_in("hunter2")).await.expect("signed in");
+    let _pipe = dashboard.open_pipe(move |e| drop(tx.send(e))).await.expect("pipe open");
+    assert_eq!(frame(next(&mut rx).await)["params"]["type"], "gateway.ready");
+
+    let secure = transport::resolve_direct("wss://127.0.0.1/hermes/").await.expect("parsed");
+    assert_eq!(secure.base.as_str(), "https://127.0.0.1/hermes/");
+}
+
+#[tokio::test]
+async fn refuses_a_direct_url_that_is_not_http_or_ws() {
+    // A user or password in the URL would be saved and shown; the password field is for that.
+    for typed in ["hermes:9119", "liam@hermes", "ftp://hermes/", "file:///etc/passwd", "", "http://liam:hunter2@hermes:9119"] {
+        let err = transport::resolve_direct(typed).await.err().unwrap();
+        assert!(matches!(err, TransportError::BadUrl), "{typed}: {err:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_direct_url_whose_name_does_not_resolve_is_unreachable() {
+    let err = transport::resolve_direct("http://no-such-host.invalid:9119").await.err().unwrap();
+    assert!(matches!(err, TransportError::Unreachable(_)), "{err:?}");
 }
