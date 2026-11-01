@@ -1,5 +1,5 @@
 // Small shared UI bits, ported from the prototype.
-import { Globe, Monitor, Send, Terminal } from "lucide-react";
+import { Archive, ArchiveRestore, Globe, Monitor, Send, Terminal } from "lucide-react";
 import type { Source } from "../hermes/model";
 import { SOURCE_LABEL } from "../hermes/model";
 
@@ -30,6 +30,32 @@ export function SourceIcon({ source, size = 12 }: { source: Source; size?: numbe
     <span className={`src src-${source}`} title={`Imported from ${SOURCE_LABEL[source]}`}>
       {icon}
     </span>
+  );
+}
+
+/** Settles an Active chat, or moves a Settled one to Active. */
+export function SettleButton({
+  settled,
+  size,
+  className,
+  onSettle,
+}: {
+  settled: boolean;
+  size: number;
+  className: string;
+  onSettle: (settled: boolean) => void;
+}) {
+  return (
+    <button
+      className={className}
+      title={settled ? "Move to Active" : "Settle"}
+      onClick={(e) => {
+        e.stopPropagation();
+        onSettle(!settled);
+      }}
+    >
+      {settled ? <ArchiveRestore size={size} /> : <Archive size={size} />}
+    </button>
   );
 }
 

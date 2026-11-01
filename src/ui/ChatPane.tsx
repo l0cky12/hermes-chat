@@ -1,13 +1,13 @@
-// Transcript, tool-call groups and composer, ported from the prototype. Find-in-chat, approvals and
-// settling come in later tickets.
+// Transcript, tool-call groups, composer and the Settle button, ported from the prototype. Find-in-chat and
+// approvals come in later tickets.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, ChevronRight, Paperclip, Square, Wrench, X } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import type { AttachCheck, Attachment, Chat, ConnectionStatus, Item } from "../hermes/model";
+import type { AttachCheck, Attachment, Chat, ConnectionStatus, Item, Source } from "../hermes/model";
 import { SOURCE_LABEL } from "../hermes/model";
 import { Markdown } from "./Markdown";
-import { SourceIcon, Spinner } from "./bits";
+import { SettleButton, SourceIcon, Spinner } from "./bits";
 
 type ToolItem = Extract<Item, { kind: "tool" }>;
 type Block = { kind: "tools"; id: string; tools: ToolItem[] } | Exclude<Item, ToolItem>;
@@ -31,18 +31,26 @@ const STATUS_NOTE: Record<ConnectionStatus, string | undefined> = {
   offline: "Offline. Click the status dot to reconnect.",
 };
 
+/**
+ * `alsoPostsIn`: the Telegram or Discord chat Hermes will also post its replies in. `onSettle` is left out for a chat
+ * not started yet.
+ */
 export function ChatPane({
   chat,
   status,
+  alsoPostsIn,
   onAttach,
   onSend,
   onStop,
+  onSettle,
 }: {
   chat: Chat;
   status: ConnectionStatus;
+  alsoPostsIn?: Source;
   onAttach: (paths: string[]) => Promise<AttachCheck>;
   onSend: (text: string, attachments: Attachment[]) => void;
   onStop: () => void;
+  onSettle?: (settled: boolean) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -64,6 +72,11 @@ export function ChatPane({
           <span>{chat.title}</span>
           {chat.settled && <span className="badge">Settled</span>}
         </div>
+        {onSettle && (
+          <div className="chat-head-actions">
+            <SettleButton settled={chat.settled} size={16} className="icon-btn" onSettle={onSettle} />
+          </div>
+        )}
       </header>
 
       <div
@@ -77,8 +90,8 @@ export function ChatPane({
         <div className="transcript-inner">
           {chat.source !== "app" && (
             <div className="imported-note">
-              <SourceIcon source={chat.source} /> Imported from {SOURCE_LABEL[chat.source]}. Replying here moves it to
-              Active.
+              <SourceIcon source={chat.source} /> Imported from {SOURCE_LABEL[chat.source]}.
+              {chat.settled && " Replying here moves it to Active."}
             </div>
           )}
           {chat.loading && blocks.length === 0 && (
@@ -135,6 +148,7 @@ export function ChatPane({
         running={!!chat.running}
         stopping={!!chat.stopping}
         note={STATUS_NOTE[status]}
+        alsoPostsIn={alsoPostsIn}
         onAttach={onAttach}
         onSend={(t, attachments) => {
           stickToBottom.current = true;
@@ -209,6 +223,7 @@ function Composer({
   running,
   stopping,
   note,
+  alsoPostsIn,
   onAttach,
   onSend,
   onStop,
@@ -217,6 +232,7 @@ function Composer({
   running: boolean;
   stopping: boolean;
   note?: string;
+  alsoPostsIn?: Source;
   onAttach: (paths: string[]) => Promise<AttachCheck>;
   onSend: (text: string, attachments: Attachment[]) => void;
   onStop: () => void;
@@ -280,6 +296,11 @@ function Composer({
   return (
     <div className="composer-wrap">
       {note && <div className="offline-note">{note}</div>}
+      {alsoPostsIn && (
+        <div className="platform-note">
+          <SourceIcon source={alsoPostsIn} /> Hermes also posts its replies in this {SOURCE_LABEL[alsoPostsIn]} chat.
+        </div>
+      )}
       {refused.map((r, i) => (
         <div key={i} className="attach-note" role="alert">
           {r}

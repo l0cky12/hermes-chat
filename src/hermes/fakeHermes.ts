@@ -180,7 +180,7 @@ export class FakeHermes {
         const patch = /^\/api\/sessions\/([^/]+)$/.exec(req.path);
         const handler = this.rest[`${method} ${req.path}`] ?? (method === "PATCH" && patch ? () => this.patchSession(patch[1], req.body!) : undefined);
         if (!handler) throw new Error(`The dashboard answered 404: {"detail":"Not Found"}`);
-        return JSON.stringify(handler(req));
+        return JSON.stringify(await handler(req));
       },
       close: async () => {
         this.closed = true;

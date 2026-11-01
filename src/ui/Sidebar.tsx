@@ -1,11 +1,11 @@
 // Icon rail beside a chat list (ADR 0001), ported from the prototype's variants C and A.
-// Search, Settings, settling and the profile switcher come in later tickets.
+// Search, Settings and the profile switcher come in later tickets.
 import { useState } from "react";
 import { ChevronRight, LockOpen, SquarePen } from "lucide-react";
 import type { Chat, ConnectionStatus } from "../hermes/model";
 import { SOURCE_LABEL } from "../hermes/model";
 import type { Route } from "../hermes/pipe";
-import { SourceIcon, Spinner, relTime } from "./bits";
+import { SettleButton, SourceIcon, Spinner, relTime } from "./bits";
 
 const byRecent = (a: Chat, b: Chat) => b.updatedAt - a.updatedAt;
 
@@ -59,7 +59,17 @@ export function Rail({
   );
 }
 
-function ChatRow({ chat, selected, onOpen }: { chat: Chat; selected: boolean; onOpen: () => void }) {
+function ChatRow({
+  chat,
+  selected,
+  onOpen,
+  onSettle,
+}: {
+  chat: Chat;
+  selected: boolean;
+  onOpen: () => void;
+  onSettle: (settled: boolean) => void;
+}) {
   return (
     <div
       className={`row ${selected ? "sel" : ""}`}
@@ -69,6 +79,7 @@ function ChatRow({ chat, selected, onOpen }: { chat: Chat; selected: boolean; on
       {chat.source !== "app" && <SourceIcon source={chat.source} />}
       <span className="row-title">{chat.title}</span>
       <span className="row-meta">{chat.running ? <Spinner /> : relTime(chat.updatedAt)}</span>
+      <SettleButton settled={chat.settled} size={14} className="row-action" onSettle={onSettle} />
     </div>
   );
 }
@@ -79,17 +90,21 @@ export function ChatList({
   syncError,
   selectedId,
   onOpen,
+  onSettle,
 }: {
   profile: string;
   chats: Chat[];
   syncError?: string;
   selectedId: string | null;
   onOpen: (id: string) => void;
+  onSettle: (id: string, settled: boolean) => void;
 }) {
   const [settledOpen, setSettledOpen] = useState(false);
   const active = chats.filter((c) => !c.settled).sort(byRecent);
   const settled = chats.filter((c) => c.settled).sort(byRecent);
-  const row = (c: Chat) => <ChatRow key={c.id} chat={c} selected={c.id === selectedId} onOpen={() => onOpen(c.id)} />;
+  const row = (c: Chat) => (
+    <ChatRow key={c.id} chat={c} selected={c.id === selectedId} onOpen={() => onOpen(c.id)} onSettle={(s) => onSettle(c.id, s)} />
+  );
   return (
     <aside className="sidebar">
       <div className="sb-head">

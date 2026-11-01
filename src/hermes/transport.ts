@@ -137,8 +137,13 @@ export class Hermes {
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private listeners = new Set<() => void>();
   private snapshot: Snapshot;
-  /** Chats this app made Active that Hermes hasn't stored as pinned yet (ADR 0002). */
-  private awaitingPin = new Set<string>();
+  /** Chats this app moved between Active and Settled that Hermes hasn't stored yet: the `pinned` flag each should
+   * have (ADR 0002). While a chat is here, this flag beats the one the server lists. */
+  private pinWanted = new Map<string, boolean>();
+  /** The latest write of each chat's pinned flag, so a chat's writes go out one at a time, in order. */
+  private pinWrites = new Map<string, Promise<void>>();
+  /** Chats whose pinned flag was written since the list sync under way read the list, which may predate the write. */
+  private pinnedSinceListRead = new Set<string>();
   /** Resumes in flight, so opening a chat and replying in it share one. */
   private resuming = new Map<string, Promise<string>>();
   /** Messages Hermes hasn't accepted yet, so a Stop waits for the turn it stops. */
@@ -228,7 +233,7 @@ export class Hermes {
       updatedAt: Date.now(),
       items: [],
     };
-    this.awaitingPin.add(chat.id);
+    this.pinWanted.set(chat.id, true);
     this.update({ chats: [chat, ...this.snapshot.chats] });
     return chat.id;
   }
@@ -276,7 +281,8 @@ export class Hermes {
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
     if (!chat) return;
     const activating = chat.settled;
-    if (activating) this.awaitingPin.add(chatId);
+    const wantedBefore = this.pinWanted.get(chatId);
+    if (activating) this.pinWanted.set(chatId, true);
     this.patchChat(chatId, (c) => ({
       ...c,
       settled: false,
@@ -298,9 +304,12 @@ export class Hermes {
       }
       // Pin now if Hermes has stored the session; a new chat may not have its row yet, so the end of the turn
       // tries again.
-      if (this.awaitingPin.has(chatId)) this.track(this.pin(chatId, { quiet: true }));
+      if (this.pinWanted.get(chatId)) this.track(this.writePin(chatId));
     } catch (e) {
-      if (activating) this.awaitingPin.delete(chatId);
+      if (activating) {
+        if (wantedBefore === undefined) this.pinWanted.delete(chatId);
+        else this.pinWanted.set(chatId, wantedBefore);
+      }
       this.patchChat(chatId, (c) => ({
         ...c,
         running: false,
@@ -308,6 +317,26 @@ export class Hermes {
         items: [...c.items, errorItem(c, (e as Error).message)],
       }));
     }
+  }
+
+  /** Moves a chat to Settled here at once, and unpins it on the server (ADR 0002). `unsettle` undoes it. */
+  settle(chatId: string): Promise<void> {
+    return this.setSettled(chatId, true);
+  }
+
+  /** Moves a chat to Active here at once, and pins it on the server. `settle` undoes it. */
+  unsettle(chatId: string): Promise<void> {
+    return this.setSettled(chatId, false);
+  }
+
+  /**
+   * Where else Hermes posts its replies in this chat, besides Hermes clients. On the canonical protocol, a reply in a
+   * chat started in Telegram or Discord also goes to that platform chat, unless the platform chat has since moved to
+   * another session. This app speaks only the legacy protocol, where replies stay in Hermes clients (research doc
+   * §5), so there is nowhere else yet.
+   */
+  alsoPostsIn(_chatId: string): Source | undefined {
+    return undefined;
   }
 
   /**
@@ -411,7 +440,7 @@ export class Hermes {
     if (!chat) return;
     this.patchChat(chat.id, (c) => applyEvent(c, type, payload));
     // By the end of a turn Hermes has stored the session, so a pin that failed earlier can succeed.
-    if (type === "message.complete" && this.awaitingPin.has(chat.id)) this.track(this.pin(chat.id));
+    if (type === "message.complete" && this.pinWanted.has(chat.id)) this.track(this.writePin(chat.id));
   }
 
   /**
@@ -535,18 +564,41 @@ export class Hermes {
     return resuming;
   }
 
-  private async pin(chatId: string, { quiet = false } = {}) {
-    try {
-      await this.rest("PATCH", `api/sessions/${encodeURIComponent(chatId)}`, { pinned: true, profile: this.profile });
-      this.awaitingPin.delete(chatId);
-    } catch (e) {
-      // Stays pending: the chat is still Active here, and the next finished turn tries again.
-      if (!quiet) this.update({ syncError: `Couldn't keep a chat Active on the server: ${(e as Error).message}` });
-    }
+  private setSettled(chatId: string, settled: boolean): Promise<void> {
+    const chat = this.snapshot.chats.find((c) => c.id === chatId);
+    if (!chat || chat.settled === settled) return Promise.resolve();
+    this.pinWanted.set(chatId, !settled);
+    this.patchChat(chatId, (c) => ({ ...c, settled }));
+    return this.writePin(chatId);
+  }
+
+  /**
+   * Writes the chat's wanted pinned flag once any earlier write for it is done. Each write reads the flag as it goes
+   * out, so a quick Undo leaves the server where the owner left the chat. A failed write stays wanted: the chat stays
+   * where the owner put it here, and the next finished turn or refresh tries again. A chat with a turn running may
+   * not be stored yet, so its failure isn't reported until the end of the turn.
+   */
+  private writePin(chatId: string): Promise<void> {
+    const write = (this.pinWrites.get(chatId) ?? Promise.resolve()).then(async () => {
+      const pinned = this.pinWanted.get(chatId);
+      if (pinned === undefined) return;
+      const running = this.snapshot.chats.find((c) => c.id === chatId)?.running;
+      try {
+        await this.rest("PATCH", `api/sessions/${encodeURIComponent(chatId)}`, { pinned, profile: this.profile });
+        this.pinnedSinceListRead.add(chatId);
+        if (this.pinWanted.get(chatId) === pinned) this.pinWanted.delete(chatId);
+      } catch (e) {
+        if (!running) this.update({ syncError: `Couldn't keep a chat ${pinned ? "Active" : "Settled"} on the server: ${(e as Error).message}` });
+      }
+    });
+    this.pinWrites.set(chatId, write);
+    void write.finally(() => this.pinWrites.get(chatId) === write && this.pinWrites.delete(chatId));
+    return write;
   }
 
   private async syncOnce() {
     const cutoff = Date.now() - LIST_WINDOW_MS;
+    this.pinnedSinceListRead.clear();
     const rows = new Map<string, SessionRow>();
     try {
       for (let page = 0; page < MAX_PAGES; page++) {
@@ -574,14 +626,21 @@ export class Hermes {
       .filter((r) => !r.archived && lastActive(r) >= cutoff)
       .map((r): Chat => {
         const c = known.get(r.id);
-        if (r.pinned) this.awaitingPin.delete(r.id);
+        // A row read before this app's latest write is stale; the chat stays where the owner put it until the next sync.
+        const wanted = this.pinWanted.get(r.id) ?? (c && this.pinnedSinceListRead.has(r.id) ? !c.settled : undefined);
+        // A write under way may still change the flag, so only an idle chat's flag can confirm it or need a retry. A
+        // message still on the way may fail, and the chat then goes back to Settled, so it isn't pinned before then.
+        if (this.pinWanted.has(r.id) && !this.pinWrites.has(r.id) && !this.pinnedSinceListRead.has(r.id)) {
+          if (wanted === !!r.pinned) this.pinWanted.delete(r.id);
+          else if (!this.submitting.has(r.id)) this.track(this.writePin(r.id));
+        }
         return {
           items: [],
           ...c,
           id: r.id,
           title: r.title || r.preview || c?.title || "Untitled chat",
           source: toSource(r.source),
-          settled: !r.pinned && !this.awaitingPin.has(r.id),
+          settled: !(wanted ?? r.pinned),
           updatedAt: Math.max(c?.updatedAt ?? 0, lastActive(r)),
         };
       });

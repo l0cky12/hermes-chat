@@ -9,7 +9,8 @@ Every chat is either Active or Settled. Only the owner moves it: settling and un
 
 ## Consequences
 
+- Settle and Undo write the flag straight away, one write at a time per chat, so a quick Undo leaves the server where the owner left the chat. A write that fails is reported and tried again on the next refresh, and the chat stays where the owner put it.
 - Pinning or unpinning a chat in the official Hermes app changes whether it is Active here, and the other way round. On first launch, chats the owner had already pinned elsewhere show up as Active.
 - The unread dot uses Hermes's shared unread flag (`last_read_at`). Opening a chat on either machine clears it everywhere, the same way the official app does.
-- Replying to an imported Telegram/Discord chat makes it Active like any other chat. When the server will also post Hermes's answer in the original Telegram or Discord chat, a note above the composer says so. This routing comes from reading the source and hasn't been tested on the live server (no Telegram or Discord adapter was connected on 2026-10-31).
+- Replying to an imported Telegram/Discord chat makes it Active like any other chat. When the server will also post Hermes's answer in the original Telegram or Discord chat, a note above the composer says so. That happens only on the canonical protocol. On the legacy protocol this app speaks, replies stay in Hermes clients, so the note doesn't show yet (`Hermes.alsoPostsIn`). This routing comes from reading the source and hasn't been tested on the live server (no Telegram or Discord adapter was connected on 2026-10-31).
 - Both flags are stored per profile, because each Hermes profile has its own chat database.
