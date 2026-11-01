@@ -120,7 +120,7 @@ describe("Hermes transport", () => {
     await expect(
       connect(async (onEvent) => {
         onEvent({ kind: "closed", reason: "closed by the server (4401 )" });
-        return { send: async () => {}, request: async () => "", close: async () => {} };
+        return { send: async () => {}, request: async () => "", statFiles: async () => [], sendFile: async () => {}, close: async () => {} };
       }),
     ).rejects.toThrow("4401");
   });

@@ -2,7 +2,8 @@
 // the server's frames into Chats. Wire shapes: docs/research/hermes-gateway-api.md §3d, §4, §5 and
 // "SSH tunnel, Host header and protocol generation". Only the legacy verbs are used (ADR 0003).
 // The chat list comes from dashboard REST, because the legacy `session.list` has no last-activity field.
-import type { Chat, ConnectionStatus, Item, Source } from "./model";
+// Attachments: research doc §7.
+import type { AttachCheck, Attachment, Chat, ConnectionStatus, Item, Source } from "./model";
 import type { OpenPipe, Pipe, PipeEvent } from "./pipe";
 
 /** The `source` this app stamps on chats it starts. Legacy `session.create` stores any string as-is. */
@@ -13,6 +14,17 @@ const LIST_WINDOW_MS = 30 * 86_400_000;
 /** Dashboard REST caps `GET /api/sessions` pages at 100. */
 const PAGE_SIZE = 100;
 const MAX_PAGES = 20;
+
+const MiB = 1024 * 1024;
+/** The most legacy `image.attach_bytes` and `file.attach` take (research doc §7). PDFs go as files: `pdf.attach`
+ * needs `pdftoppm`, which the live server doesn't have. */
+const LIMITS = { image: { bytes: 25 * MiB, what: "images" }, file: { bytes: 256 * MiB, what: "files" } };
+/** The images Hermes looks at (`cli._IMAGE_EXTENSIONS`); anything else is staged as a file. */
+const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp)$/i;
+/** What the official desktop app asks when an image is sent with no text. */
+const IMAGE_ONLY_PROMPT = "What do you see in this image?";
+/** Stands in for a file's base64 in a frame; the pipe swaps the bytes in. JSON can't hold a raw NUL. */
+const FILE_MARK = "\u0000file\u0000";
 
 /** Where each profile's last synced chat list is kept between launches. */
 export type ChatCache = { load(profile: string): Chat[]; save(profile: string, chats: Chat[]): void };
@@ -41,6 +53,10 @@ type TranscriptMessage = {
   context?: string | null;
   args?: Record<string, unknown> | null;
 };
+
+/** Legacy `image.attach_bytes` and `file.attach` results (research doc §7), as far as this app reads them. */
+type ImageAttached = { path: string };
+type FileAttached = { ref_text: string };
 
 /** Legacy `session.interrupt` result (research doc §8). `not_interrupted` needs `expected_hosted_task_id`. */
 type InterruptResult = { status: "interrupted" | "not_interrupted" };
@@ -171,8 +187,30 @@ export class Hermes {
     }
   }
 
-  /** Sends a message. A chat not yet open on this connection is resumed first; a Settled one becomes Active. */
-  async send(chatId: string, text: string): Promise<void> {
+  /** Checks local files the owner wants to attach: images up to 25 MB, other files up to 256 MB. */
+  async checkAttachments(paths: string[]): Promise<AttachCheck> {
+    if (!this.pipe) throw new Error("Not connected to Hermes.");
+    const attachments: Attachment[] = [];
+    const refused: string[] = [];
+    for (const f of await this.pipe.statFiles(paths)) {
+      if (f.size === undefined) {
+        refused.push(`Couldn't attach ${f.name}: ${f.error}`);
+        continue;
+      }
+      const kind = IMAGE_EXTENSIONS.test(f.name) ? "image" : "file";
+      const limit = LIMITS[kind];
+      if (f.size > limit.bytes)
+        refused.push(`${f.name} is ${(f.size / MiB).toFixed(1)} MB. Hermes takes ${limit.what} up to ${limit.bytes / MiB} MB.`);
+      else attachments.push({ path: f.path, name: f.name, size: f.size, kind });
+    }
+    return { attachments, refused };
+  }
+
+  /**
+   * Sends a message and its attachments. A chat not yet open on this connection is resumed first; a Settled one
+   * becomes Active.
+   */
+  async send(chatId: string, text: string, attachments: Attachment[] = []): Promise<void> {
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
     if (!chat) return;
     const activating = chat.settled;
@@ -182,13 +220,14 @@ export class Hermes {
       settled: false,
       running: true,
       updatedAt: Date.now(),
-      title: c.items.length === 0 && c.runtimeId ? text.slice(0, 48) : c.title,
-      items: [...c.items, { kind: "user", id: `u-${c.items.length}`, text }],
+      title: c.items.length === 0 && c.runtimeId ? (text || attachments[0]?.name || c.title).slice(0, 48) : c.title,
+      items: [
+        ...c.items,
+        { kind: "user", id: `u-${c.items.length}`, text, ...(attachments.length && { attachments: attachments.map((a) => a.name) }) },
+      ],
     }));
     try {
-      const submitting = this.resume(chatId).then((runtimeId) =>
-        this.request("prompt.submit", { session_id: runtimeId, profile: this.profile, text }),
-      );
+      const submitting = this.resume(chatId).then((runtimeId) => this.submit(runtimeId, text, attachments));
       this.submitting.set(chatId, submitting);
       try {
         await submitting;
@@ -317,6 +356,38 @@ export class Hermes {
     if (type === "message.complete" && this.awaitingPin.has(chat.id)) this.track(this.pin(chat.id));
   }
 
+  /**
+   * Stages the attachments for the session's next turn, then submits the message. Images are queued server-side;
+   * other files are staged in the session's workspace and their `@file:` refs go before the text, as the official
+   * desktop app does. If anything fails the message isn't sent, and images already queued are taken back so they
+   * don't ride along with the next one.
+   */
+  private async submit(runtimeId: string, text: string, attachments: Attachment[]) {
+    const queued: string[] = [];
+    const refs: string[] = [];
+    try {
+      for (const a of attachments) {
+        const file = { path: a.path, maxBytes: LIMITS[a.kind].bytes };
+        try {
+          if (a.kind === "image") {
+            const params = { session_id: runtimeId, filename: a.name, content_base64: FILE_MARK };
+            queued.push(((await this.request("image.attach_bytes", params, file)) as ImageAttached).path);
+          } else {
+            const params = { session_id: runtimeId, name: a.name, data_url: `data:application/octet-stream;base64,${FILE_MARK}` };
+            refs.push(((await this.request("file.attach", params, file)) as FileAttached).ref_text);
+          }
+        } catch (e) {
+          throw new Error(`Couldn't attach ${a.name}: ${(e as Error).message}`);
+        }
+      }
+      const prompt = [refs.join("\n"), text].filter(Boolean).join("\n\n") || (queued.length ? IMAGE_ONLY_PROMPT : "");
+      return await this.request("prompt.submit", { session_id: runtimeId, profile: this.profile, text: prompt });
+    } catch (e) {
+      for (const path of queued) this.track(this.request("image.detach", { session_id: runtimeId, path }));
+      throw e;
+    }
+  }
+
   /** The chat's runtime id on this connection, resuming it first if needed. The history goes before anything sent
    * meanwhile. */
   private resume(chatId: string): Promise<string> {
@@ -419,12 +490,21 @@ export class Hermes {
     this.background.add(done);
   }
 
-  private request(method: string, params: Record<string, unknown>): Promise<unknown> {
-    if (!this.pipe || this.snapshot.status === "offline") return Promise.reject(new Error("Not connected to Hermes."));
+  /** One JSON-RPC request. With a `file`, the pipe swaps its base64 in for the `FILE_MARK` in `params`. */
+  private request(method: string, params: Record<string, unknown>, file?: { path: string; maxBytes: number }): Promise<unknown> {
+    const pipe = this.pipe;
+    if (!pipe || this.snapshot.status === "offline") return Promise.reject(new Error("Not connected to Hermes."));
     const id = this.nextId++;
     const done = new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
-    this.pipe.send(JSON.stringify({ jsonrpc: "2.0", id, method, params })).catch((err) => {
-      this.pending.get(id)?.reject(new Error(String(err)));
+    const frame = JSON.stringify({ jsonrpc: "2.0", id, method, params });
+    const [head, tail, ...rest] = frame.split(JSON.stringify(FILE_MARK).slice(1, -1));
+    const sent = !file
+      ? pipe.send(frame)
+      : rest.length === 0 && tail !== undefined
+        ? pipe.sendFile(head, file.path, tail, file.maxBytes)
+        : Promise.reject(new Error("the request has no single place for the file"));
+    sent.catch((err) => {
+      this.pending.get(id)?.reject(err instanceof Error ? err : new Error(String(err)));
       this.pending.delete(id);
     });
     return done;

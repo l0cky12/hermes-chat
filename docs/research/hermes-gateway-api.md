@@ -233,6 +233,17 @@ All stage the attachment server-side for the next turn of a session (`tui_gatewa
 - `image.detach {path}`, `clipboard.paste` (lines 110-116, 202-212).
 - Canonical `prompt.submit` carries `attachments: [{path, mime}]` directly (`canonical_sessions.py` `CanonicalAttachment`, `CanonicalSubmitParams.attachments`).
 
+### At the deployed `bf0203a` (checked over SSH, 2026-10-31)
+
+- The legacy `image.attach_bytes`, `pdf.attach` and `file.attach` contracts match the ones above (`tui_gateway/contracts/prompt_voice.py:86-199`). Results: `image.attach_bytes` -> `{attached, path, name, count, remainder, text, bytes, ...}`; `file.attach` -> `{attached, name, path, ref_path, ref_text, uploaded}`. `image.detach {session_id, path}` takes back a queued image (`methods_prompt.py:1133-1145`).
+- Caps: `_ATTACH_BYTES_MAX_BYTES = 25 MiB` and `_PDF_ATTACH_MAX_BYTES = 50 MiB` / 25 pages (`tui_gateway/prompt_attachments.py:17-19`); over the cap is error 4018. **There is no data-URL cap for `file.attach` here**: the 256 MiB constant above is newer than `bf0203a`. The dashboard's WS takes frames up to `_DESKTOP_ATTACHMENT_WS_MAX_BYTES = 384 MiB` (`hermes_cli/web_server_boundary.py:26`, used as uvicorn `ws_max_size` in `web_server.py:1027`), so a 256 MiB file (about 342 MiB as base64) still fits in one frame.
+- Images are `.png .jpg .jpeg .gif .webp .bmp` (`cli._IMAGE_EXTENSIONS`); `image.attach_bytes` refuses other extensions with 4016.
+- **`pdftoppm` isn't installed on the live server**, so `pdf.attach` fails with 5028. Send PDFs with `file.attach`.
+- `file.attach` quotes a `ref_path` that has whitespace, brackets or quotes, trying `` ` ``, then `"`, then `'` (`_format_ref_value`, `prompt_attachments.py:174-181`). The client puts `ref_text` in the prompt as-is.
+- The official desktop app, in remote mode, sends images with `image.attach_bytes` and other files with `file.attach {data_url, name}`. It prepends the `@file:` refs, one per line, then a blank line, then the text. An image sent with no text gets the prompt "What do you see in this image?" (`apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts:280-302`).
+
+Hermes Chat follows the desktop app (T12). Images go up to 25 MiB and other files, PDFs included, up to 256 MiB. Rust reads each file from its real path (from Tauri's native drop event or the file picker) and splices its base64 into the frame, so the bytes never pass through the webview.
+
 ### Dashboard REST (browser path)
 
 `POST /api/chat/file-upload` multipart `file=` (+`?profile=`) stages a file under `$HERMES_HOME/uploads` and returns `{ok, path, size, staged_upload}` for a following `file.attach` (`hermes_cli/web_routers/uploads.py:22-55`); cap `WEBAPP_ATTACHMENT_MAX_BYTES = 16 MiB` (`hermes_constants.py:29`), returning HTTP 413 when exceeded (`uploads.py:36-41`).

@@ -2,12 +2,16 @@
 //! between `/api/ws` and the webview, and relay its dashboard REST calls with the sign-in cookies.
 //! The webview speaks the protocol; this side never parses it (ADR 0003). Wire details:
 //! docs/research/hermes-gateway-api.md §2, §5 and "Password login and profiles".
+//! It also reads the files the owner attaches, so their bytes go from disk to Hermes without passing
+//! through the webview (§7).
 
+use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{header, Method, StatusCode};
 use serde::Serialize;
 use serde_json::json;
 use std::sync::Mutex;
+use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
@@ -39,6 +43,44 @@ pub enum TransportError {
     SignedOut,
     #[error("Hermes Chat doesn't relay {0}.")]
     NotRelayed(String),
+    #[error("it's {:.1} MB now, over the {} MB limit", *.size as f64 / MIB as f64, .max / MIB)]
+    FileTooLarge { size: u64, max: u64 },
+    #[error("{0}")]
+    File(String),
+}
+
+const MIB: u64 = 1024 * 1024;
+
+/// A local file the owner wants to attach: its size, or why it can't be attached.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LocalFile {
+    pub path: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+pub async fn stat_files(paths: &[String]) -> Vec<LocalFile> {
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let name = std::path::Path::new(path).file_name().map_or(path.clone(), |n| n.to_string_lossy().into_owned());
+        let (size, error) = match file_size(path).await {
+            Ok(size) => (Some(size), None),
+            Err(e) => (None, Some(e.to_string())),
+        };
+        out.push(LocalFile { path: path.clone(), name, size, error });
+    }
+    out
+}
+
+async fn file_size(path: &str) -> Result<u64, TransportError> {
+    let meta = tokio::fs::metadata(path).await.map_err(|e| TransportError::File(e.to_string()))?;
+    if meta.is_dir() {
+        return Err(TransportError::File("it's a folder".into()));
+    }
+    Ok(meta.len())
 }
 
 /// What the pipe reports to the webview. One `Frame` per JSON-RPC message.
@@ -58,6 +100,28 @@ pub struct Pipe {
 impl Pipe {
     pub fn send(&self, text: String) -> Result<(), TransportError> {
         self.outgoing.send(text).map_err(|_| TransportError::Closed)
+    }
+
+    /// Send one frame: `head`, the file at `path` as base64, then `tail`. Refuses a file over
+    /// `max_bytes` without sending anything; the size is checked again after reading, in case it grew.
+    pub async fn send_file(&self, head: &str, path: &str, tail: &str, max_bytes: u64) -> Result<(), TransportError> {
+        let too_large = |size| TransportError::FileTooLarge { size, max: max_bytes };
+        let size = file_size(path).await?;
+        if size > max_bytes {
+            return Err(too_large(size));
+        }
+        // Read at most one byte past the limit, so a file that grew can't fill memory.
+        let mut bytes = Vec::with_capacity(size as usize);
+        let file = tokio::fs::File::open(path).await.map_err(|e| TransportError::File(e.to_string()))?;
+        file.take(max_bytes + 1).read_to_end(&mut bytes).await.map_err(|e| TransportError::File(e.to_string()))?;
+        if bytes.len() as u64 > max_bytes {
+            return Err(too_large(bytes.len() as u64));
+        }
+        let mut frame = String::with_capacity(head.len() + bytes.len().div_ceil(3) * 4 + tail.len());
+        frame.push_str(head);
+        base64::engine::general_purpose::STANDARD.encode_string(&bytes, &mut frame);
+        frame.push_str(tail);
+        self.send(frame)
     }
 }
 

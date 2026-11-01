@@ -1,6 +1,6 @@
 // A fake Hermes dashboard for tests: it sits where the Rust pipe does and speaks wire-shaped legacy
 // JSON-RPC frames and dashboard REST bodies (shapes from the deployed contracts, see the research doc).
-import type { OpenPipe, PipeEvent } from "./pipe";
+import type { LocalFile, OpenPipe, PipeEvent } from "./pipe";
 
 type Request = { jsonrpc: "2.0"; id: number; method: string; params: Record<string, unknown> };
 type Handler = (req: Request) => void;
@@ -37,7 +37,11 @@ export type TranscriptMessage = {
   reasoning?: string;
 };
 
+/** A file on the owner's disk: its bytes as a string, a size alone for a file too big to make, or a folder. */
+export type FakeFile = string | { size: number } | { dir: true };
+
 const DAY = 86_400;
+const MiB = 1024 * 1024;
 const now = () => Date.now() / 1000;
 
 /** A stored session `daysAgo` days old, unpinned and from this app unless overridden. */
@@ -55,6 +59,8 @@ export class FakeHermes {
   sessions: SessionRow[] = [];
   /** Stored session id -> its history, as `session.resume` projects it (`_history_to_messages`). */
   transcripts: Record<string, TranscriptMessage[]> = {};
+  /** The owner's local disk, by path, for attachments. */
+  files: Record<string, FakeFile> = {};
   /** runtime session id -> stored session id, for every session.create / session.resume. */
   readonly runtime = new Map<string, string>();
   private created = new Map<string, string>(); // runtime id -> source, until the first prompt stores it
@@ -86,6 +92,24 @@ export class FakeHermes {
       }
       this.respond(r.id, { status: "streaming" });
     },
+    // Attachments stage server-side for the session's next turn (research doc §7; `tui_gateway/methods_prompt.py`
+    // at the deployed `bf0203a`). Images join `attached_images`; other files land in the session's
+    // `attachments/` and the client puts the `@file:` ref in the prompt text.
+    "image.attach_bytes": (r) => {
+      const n = ++this.imagesStaged;
+      const name = `upload_${n}.png`;
+      const bytes = atob(String(r.params.content_base64)).length;
+      this.respond(r.id, { attached: true, path: `/hermes/images/${name}`, name, count: n, remainder: "", text: `[User attached image: ${name}]`, bytes });
+    },
+    "file.attach": (r) => {
+      const name = String(r.params.name);
+      const refPath = `attachments/${name}`;
+      this.respond(r.id, { attached: true, name, path: `/hermes/workspace/${refPath}`, ref_path: refPath, ref_text: `@file:${formatRefValue(refPath)}`, uploaded: true });
+    },
+    "image.detach": (r) => {
+      this.imagesStaged--;
+      this.respond(r.id, { detached: true, count: this.imagesStaged });
+    },
     // Legacy `session.interrupt` (tui_gateway/methods_session_interrupt.py). The turn then ends with a
     // `message.complete` whose status is "interrupted"; tests send that themselves.
     "session.interrupt": (r) => {
@@ -110,17 +134,29 @@ export class FakeHermes {
   };
 
   private onEvent?: (e: PipeEvent) => void;
+  private imagesStaged = 0;
   closed = false;
 
   openPipe: OpenPipe = async (onEvent) => {
     this.onEvent = onEvent;
     // The server writes gateway.ready as soon as the socket is accepted.
     this.frame({ jsonrpc: "2.0", method: "event", params: { type: "gateway.ready", payload: this.readyPayload } });
+    const send = async (text: string) => {
+      const req = JSON.parse(text) as Request;
+      this.requests.push(req);
+      this.handlers[req.method]?.(req);
+    };
     return {
-      send: async (text) => {
-        const req = JSON.parse(text) as Request;
-        this.requests.push(req);
-        this.handlers[req.method]?.(req);
+      send,
+      // Mirrors the Rust side (src-tauri/src/transport.rs): sizes from the disk, and a size check before sending.
+      statFiles: async (paths) => paths.map((path) => this.stat(path)),
+      sendFile: async (head, path, tail, maxBytes) => {
+        const f = this.stat(path);
+        if (f.error) throw new Error(f.error);
+        if (f.size! > maxBytes) throw new Error(`it's ${(f.size! / MiB).toFixed(1)} MB now, over the ${maxBytes / MiB} MB limit`);
+        const bytes = this.files[path];
+        if (typeof bytes !== "string") throw new Error(`the fake has only a size for ${path}, no bytes to send`);
+        await send(head + btoa(bytes) + tail);
       },
       request: async (method, pathAndQuery, body) => {
         const url = new URL(pathAndQuery, "http://dashboard/");
@@ -167,6 +203,14 @@ export class FakeHermes {
     return [...this.runtime].reverse().find(([, s]) => s === stored)?.[0];
   }
 
+  private stat(path: string): LocalFile {
+    const name = path.split("/").pop()!;
+    const f = this.files[path];
+    if (f === undefined) return { path, name, error: "No such file or directory (os error 2)" };
+    if (typeof f === "object" && "dir" in f) return { path, name, error: "it's a folder" };
+    return { path, name, size: typeof f === "string" ? f.length : f.size };
+  }
+
   private patchSession(id: string, body: Record<string, unknown>) {
     const s = this.sessions.find((r) => r.id === id);
     if (!s) throw new Error(`The dashboard answered 404: {"detail":"Session not found"}`);
@@ -177,4 +221,11 @@ export class FakeHermes {
   private frame(f: unknown) {
     this.onEvent?.({ kind: "frame", text: JSON.stringify(f) });
   }
+}
+
+/** `tui_gateway/prompt_attachments.py::_format_ref_value`: quote a ref with whitespace, brackets or quotes. */
+function formatRefValue(value: string): string {
+  if (!/[\s()[\]{}<>"'`]/.test(value)) return value;
+  const q = ["`", '"', "'"].find((q) => !value.includes(q));
+  return q ? `${q}${value}${q}` : value;
 }

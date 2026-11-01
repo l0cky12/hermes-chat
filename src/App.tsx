@@ -2,7 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { connect, type Hermes } from "./hermes/transport";
 import { localChatCache } from "./hermes/chatCache";
 import { tauriPipe, type SignInDetails } from "./hermes/tauriPipe";
-import type { Chat } from "./hermes/model";
+import type { Attachment, Chat } from "./hermes/model";
 import { ChatList, Rail } from "./ui/Sidebar";
 import { ChatPane } from "./ui/ChatPane";
 import { SignIn } from "./ui/SignIn";
@@ -68,7 +68,7 @@ function Main({ hermes, where }: { hermes: Hermes; where: string }) {
     setDraftError(undefined);
   };
 
-  const send = async (text: string) => {
+  const send = async (text: string, attachments: Attachment[]) => {
     let id = selectedId;
     if (!id) {
       try {
@@ -79,7 +79,7 @@ function Main({ hermes, where }: { hermes: Hermes; where: string }) {
       }
       setSelectedId(id);
     }
-    await hermes.send(id, text);
+    await hermes.send(id, text, attachments);
   };
 
   // An opened chat shows its stored history; a chat already open on this connection is left as it is.
@@ -120,6 +120,7 @@ function Main({ hermes, where }: { hermes: Hermes; where: string }) {
           key={selected.id}
           chat={selected}
           offline={status === "offline"}
+          onAttach={(paths) => hermes.checkAttachments(paths)}
           onSend={send}
           onStop={() => void hermes.stop(selected.id)}
         />

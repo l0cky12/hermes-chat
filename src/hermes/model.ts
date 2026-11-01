@@ -11,8 +11,15 @@ export const SOURCE_LABEL: Record<Source, string> = {
   other: "another Hermes platform",
 };
 
+/** A local file the owner is sending with a message: an image Hermes looks at, or any other file. */
+export type Attachment = { path: string; name: string; size: number; kind: "image" | "file" };
+
+/** Local files checked for attaching: the ones Hermes takes, and why each of the others can't go. */
+export type AttachCheck = { attachments: Attachment[]; refused: string[] };
+
 export type Item =
-  | { kind: "user"; id: string; text: string }
+  /** `attachments`: the names of the files sent with the message. */
+  | { kind: "user"; id: string; text: string; attachments?: string[] }
   /** `interrupted`: the owner, or another Hermes client, stopped this reply before it finished. */
   | { kind: "assistant"; id: string; text: string; interrupted?: boolean }
   | {

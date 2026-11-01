@@ -6,9 +6,10 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{AppendHeaders, IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
-use hermes_chat::transport::{self, Dashboard, PipeEvent, SignIn, TransportError};
+use hermes_chat::transport::{self, Dashboard, LocalFile, PipeEvent, SignIn, TransportError};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use url::Url;
@@ -255,4 +256,77 @@ async fn relays_only_get_and_patch_under_api() {
         let err = dashboard.request(method, path, None).await.err().unwrap();
         assert!(matches!(err, TransportError::NotRelayed(_)), "{method} {path}: {err:?}");
     }
+}
+
+/// A fresh folder under the system temp dir for one test's files.
+fn scratch(test: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("hermes-chat-{test}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn path_of(p: &PathBuf) -> String {
+    p.to_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn stats_files_to_attach() {
+    let dir = scratch("stat");
+    let png = dir.join("rack.png");
+    std::fs::write(&png, b"\x89PNG fake").unwrap();
+    let got = transport::stat_files(&[path_of(&png), path_of(&dir), path_of(&dir.join("gone.txt"))]).await;
+    let name = dir.file_name().unwrap().to_str().unwrap().to_owned();
+    assert_eq!(
+        got,
+        vec![
+            LocalFile { path: path_of(&png), name: "rack.png".into(), size: Some(9), error: None },
+            LocalFile { path: path_of(&dir), name, size: None, error: Some("it's a folder".into()) },
+            LocalFile {
+                path: path_of(&dir.join("gone.txt")),
+                name: "gone.txt".into(),
+                size: None,
+                error: Some("No such file or directory (os error 2)".into()),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn sends_a_file_as_base64_inside_one_frame() {
+    let dir = scratch("send");
+    let file = dir.join("notes.txt");
+    std::fs::write(&file, b"sda 92%").unwrap();
+    let (pipe, mut rx) = open_stub().await;
+    next(&mut rx).await;
+    let head = r#"{"jsonrpc":"2.0","id":3,"method":"echo","params":{"name":"notes.txt","data_url":"data:application/octet-stream;base64,"#;
+    pipe.send_file(head, &path_of(&file), r#""}}"#, 1024).await.unwrap();
+    assert_eq!(
+        frame(next(&mut rx).await)["result"],
+        json!({"name": "notes.txt", "data_url": "data:application/octet-stream;base64,c2RhIDkyJQ=="})
+    );
+}
+
+#[tokio::test]
+async fn refuses_to_send_a_file_over_the_limit() {
+    let dir = scratch("too-big");
+    let file = dir.join("big.png");
+    std::fs::write(&file, vec![0u8; 3 * 1024 * 1024 / 2]).unwrap();
+    let (pipe, mut rx) = open_stub().await;
+    next(&mut rx).await;
+    let err = pipe.send_file(r#"{"id":1,"method":"echo","params":{"b":""#, &path_of(&file), r#""}}"#, 1024 * 1024).await.err().unwrap();
+    assert_eq!(err.to_string(), "it's 1.5 MB now, over the 1 MB limit");
+
+    // Nothing went out: the next frame back answers the next request.
+    pipe.send(json!({"jsonrpc": "2.0", "id": 2, "method": "echo", "params": {}}).to_string()).unwrap();
+    assert_eq!(frame(next(&mut rx).await)["id"], 2);
+}
+
+#[tokio::test]
+async fn reports_a_file_that_is_gone() {
+    let dir = scratch("gone");
+    let (pipe, mut rx) = open_stub().await;
+    next(&mut rx).await;
+    let err = pipe.send_file("", &path_of(&dir.join("gone.txt")), "", 1024).await.err().unwrap();
+    assert_eq!(err.to_string(), "No such file or directory (os error 2)");
 }

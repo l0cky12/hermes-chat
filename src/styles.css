@@ -214,6 +214,11 @@ code, pre, kbd { font-family: var(--mono); }
   position: relative; transition: border-color 0.15s;
 }
 .composer:focus-within { border-color: rgba(255, 255, 255, 0.2); }
+.composer.dragging { border-color: var(--accent); border-style: dashed; }
+.drop-overlay {
+  position: absolute; inset: 0; border-radius: 16px; background: rgba(22, 22, 24, 0.85); display: grid; place-items: center;
+  color: var(--accent); font-size: 13px; z-index: 2; pointer-events: none;
+}
 .composer textarea {
   width: 100%; background: none; border: 0; outline: none; resize: none; font-size: 14.5px; line-height: 1.5;
   padding: 4px 0; max-height: 240px;
@@ -260,4 +265,16 @@ code, pre, kbd { font-family: var(--mono); }
   border-radius: 10px; padding: 8px 12px;
 }
 .sign-in-error { font-size: 12.5px; color: var(--bad); line-height: 1.5; white-space: pre-wrap; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; background: var(--raised-2); border-radius: 8px; padding: 4px 6px 4px 9px;
+  font-size: 12.5px; color: #d0d0d5; max-width: 260px;
+}
+.chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-files { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.msg-files .chip { padding-right: 9px; }
+.chip-size { color: var(--faint); font-size: 11.5px; }
+.chip button { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; color: var(--muted); }
+.chip button:hover { background: var(--line-2); color: var(--text); }
+.attach-note { font-size: 12px; color: var(--muted); padding: 0 6px 8px; }
 .offline-note { font-size: 12px; color: var(--muted); padding: 0 6px 8px; }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri::State;
 use tokio::sync::Mutex;
-use transport::{Dashboard, Pipe, PipeEvent, SignIn};
+use transport::{Dashboard, LocalFile, Pipe, PipeEvent, SignIn};
 use tunnel::Tunnel;
 
 /// The owner's `hermes dashboard` port on the server's loopback (research doc, "SSH tunnel, Host header
@@ -14,7 +14,7 @@ const DASHBOARD_PORT: u16 = 9119;
 
 struct Connection {
     dashboard: Arc<Dashboard>,
-    pipe: Pipe,
+    pipe: Arc<Pipe>,
     _tunnel: Tunnel,
 }
 
@@ -40,7 +40,7 @@ async fn hermes_connect(
         })
         .await
         .map_err(|e| e.to_string())?;
-    *slot = Some(Connection { dashboard: Arc::new(dashboard), pipe, _tunnel: tunnel });
+    *slot = Some(Connection { dashboard: Arc::new(dashboard), pipe: Arc::new(pipe), _tunnel: tunnel });
     Ok(())
 }
 
@@ -50,6 +50,27 @@ async fn hermes_send(state: State<'_, AppState>, frame: String) -> Result<(), St
         Some(conn) => conn.pipe.send(frame).map_err(|e| e.to_string()),
         None => Err(transport::TransportError::Closed.to_string()),
     }
+}
+
+#[tauri::command]
+async fn hermes_send_file(
+    state: State<'_, AppState>,
+    head: String,
+    path: String,
+    tail: String,
+    max_bytes: u64,
+) -> Result<(), String> {
+    // Reading a big file takes a while; don't hold the lock, so a Stop can still go out.
+    let pipe = match &*state.0.lock().await {
+        Some(conn) => conn.pipe.clone(),
+        None => return Err(transport::TransportError::Closed.to_string()),
+    };
+    pipe.send_file(&head, &path, &tail, max_bytes).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn hermes_stat_files(paths: Vec<String>) -> Vec<LocalFile> {
+    transport::stat_files(&paths).await
 }
 
 #[tauri::command]
@@ -75,8 +96,16 @@ async fn hermes_disconnect(state: State<'_, AppState>) -> Result<(), String> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![hermes_connect, hermes_send, hermes_request, hermes_disconnect])
+        .invoke_handler(tauri::generate_handler![
+            hermes_connect,
+            hermes_send,
+            hermes_send_file,
+            hermes_stat_files,
+            hermes_request,
+            hermes_disconnect
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
