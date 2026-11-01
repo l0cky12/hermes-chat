@@ -3,6 +3,10 @@
 import type { LocalFile, OpenPipe, PipeEvent, Route } from "./pipe";
 
 type Request = { jsonrpc: "2.0"; id: number; method: string; params: Record<string, unknown> };
+/** The client's answer to a server→client request (`tui_gateway/server_requests.py`). */
+type Response = { jsonrpc: "2.0"; id: string; result?: Record<string, unknown>; error?: { code: number; message: string } };
+/** A server→client request still waiting for its answer. `stored`: its session, which outlives the connection. */
+type OpenRequest = { sid: string; stored: string; method: string; params: Record<string, unknown> };
 type Handler = (req: Request) => void;
 export type RestRequest = { method: string; path: string; query: URLSearchParams; body?: Record<string, unknown> };
 type RestHandler = (req: RestRequest) => unknown;
@@ -73,6 +77,12 @@ export class FakeHermes {
   transcripts: Record<string, TranscriptMessage[]> = {};
   /** The owner's local disk, by path, for attachments. */
   files: Record<string, FakeFile> = {};
+  /** Whether this connection sent `client.capabilities {server_requests: true}`. */
+  answersRequests = false;
+  /** Server→client requests nobody has answered yet, by id. */
+  readonly openRequests = new Map<string, OpenRequest>();
+  /** The client's answers to server→client requests, in order. */
+  readonly responses: Response[] = [];
   /** runtime session id -> stored session id, for every session.create / session.resume. */
   readonly runtime = new Map<string, string>();
   private created = new Map<string, { source: string; profile?: string }>(); // runtime id, until the first prompt stores it
@@ -90,6 +100,16 @@ export class FakeHermes {
     "session.resume": (r) => {
       const stored = String(r.params.session_id);
       if (!this.store(r.params.profile as string | undefined)?.some((s) => s.id === stored)) return this.fail(r.id, 4007, `session not found: ${stored}`);
+      // A session waiting on the owner is still live after its connection dropped: the resume reattaches it, with
+      // the requests still open (`_resume_reuse_live`, `_live_session_payload` at the deployed `bf0203a`).
+      const open = [...this.openRequests].filter(([, q]) => q.stored === stored);
+      if (open.length) {
+        const sid = open[0][1].sid;
+        this.runtime.set(sid, stored);
+        const messages = this.transcripts[stored] ?? [];
+        const open_requests = open.map(([id, q]) => ({ id, method: q.method, params: { session_id: sid, ...q.params } }));
+        return this.respond(r.id, { session_id: sid, stored_session_id: stored, message_count: messages.length, messages, info: {}, running: true, open_requests });
+      }
       const runtimeId = `rt-r${++this.resumed}`;
       this.runtime.set(runtimeId, stored);
       const messages = this.transcripts[stored] ?? [];
@@ -126,8 +146,21 @@ export class FakeHermes {
     // Legacy `session.interrupt` (tui_gateway/methods_session_interrupt.py). The turn then ends with a
     // `message.complete` whose status is "interrupted"; tests send that themselves.
     "session.interrupt": (r) => {
-      if (!this.runtime.has(String(r.params.session_id))) return this.fail(r.id, 4001, "session not found");
+      const sid = String(r.params.session_id);
+      if (!this.runtime.has(sid)) return this.fail(r.id, 4001, "session not found");
       this.respond(r.id, { status: "interrupted" });
+      // The interrupt withdraws whatever the session was waiting on.
+      for (const [id, q] of this.openRequests) if (q.sid === sid) this.cancelRequest(id, "interrupted");
+    },
+    // `tui_gateway/methods_voice.py` at the deployed `bf0203a`: lists the server→client request kinds it knows.
+    "client.capabilities": (r) => {
+      if ("server_requests" in r.params) this.answersRequests = !!r.params.server_requests;
+      this.respond(r.id, { server_requests: ["approval", "clarify", "secret", "sudo"], declines_not_shown: true });
+    },
+    // `tui_gateway/methods_prompt.py` at the deployed `bf0203a`: records that a client has the card on screen.
+    "approval.received": (r) => {
+      const pending = [...this.openRequests.values()].some((q) => q.sid === r.params.session_id && q.params.request_id === r.params.request_id);
+      this.respond(r.id, { acknowledged: pending });
     },
     // Keepalive, answered by the WS layer in either protocol generation (research doc §1).
     "gateway.ping": (r) => this.respond(r.id, { ok: true }),
@@ -200,6 +233,7 @@ export class FakeHermes {
   private onEvent?: (e: PipeEvent) => void;
   private imagesStaged = 0;
   private resumed = 0;
+  private asked = 0;
   closed = false;
 
   openPipe: OpenPipe = async (onEvent, profile) => {
@@ -212,8 +246,15 @@ export class FakeHermes {
     this.onEvent = onEvent;
     // The server writes gateway.ready as soon as the socket is accepted.
     this.frame({ jsonrpc: "2.0", method: "event", params: { type: "gateway.ready", payload: this.readyPayload } });
+    // A new connection hasn't said yet whether it answers server→client requests.
+    this.answersRequests = false;
     const send = async (text: string) => {
-      const req = JSON.parse(text) as Request;
+      const req = JSON.parse(text) as Request | Response;
+      if (!("method" in req)) {
+        this.responses.push(req);
+        this.openRequests.delete(req.id);
+        return;
+      }
       this.requests.push(req);
       this.handlers[req.method]?.(req);
     };
@@ -260,6 +301,42 @@ export class FakeHermes {
   /** A session-less broadcast such as `sessions.changed` (tui_gateway `_broadcast_global_event`). */
   broadcast(type: string, payload: Record<string, unknown> = {}) {
     this.event("", type, payload);
+  }
+
+  /**
+   * Asks the client something (`server_requests.send_async`) and returns the request's id. A connection that never
+   * said it answers such requests is sent nothing, and the request fails at once. A request asked while the
+   * connection is down stays open for the next resume.
+   */
+  ask(sid: string, method: string, params: Record<string, unknown>): string | undefined {
+    if (!this.answersRequests) return undefined;
+    const id = `srq-${(++this.asked).toString(16).padStart(12, "0")}`;
+    this.openRequests.set(id, { sid, stored: this.runtime.get(sid)!, method, params });
+    this.frame({ jsonrpc: "2.0", id, method, params: { session_id: sid, ...params } });
+    return id;
+  }
+
+  /** An `approval` request as `server._approval_request_payload` renders it: the command redacted, the choices set. */
+  askApproval(sid: string, over: Record<string, unknown> = {}) {
+    const params = {
+      request_id: `apr-${this.asked + 1}`,
+      command: "rm -rf /var/log/old",
+      description: "recursive delete",
+      allow_session: true,
+      allow_permanent: true,
+      tool_name: "terminal",
+      choices: ["once", "session", "always", "deny"],
+      ...over,
+    };
+    return { id: this.ask(sid, "approval", params), requestId: params.request_id };
+  }
+
+  /** Hermes stops waiting for an answer (timeout, interrupt, answered elsewhere) and withdraws the request. */
+  cancelRequest(id: string, reason: string) {
+    const q = this.openRequests.get(id);
+    if (!q) return;
+    this.openRequests.delete(id);
+    this.event(q.sid, "request.cancel", { id, method: q.method, reason });
   }
 
   drop(reason = "closed by the server (1006 )") {

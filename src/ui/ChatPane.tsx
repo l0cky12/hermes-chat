@@ -1,11 +1,10 @@
-// Transcript, tool-call groups, find bar, composer and the Settle button, ported from the prototype. Approvals come
-// in a later ticket.
+// Transcript, tool-call groups, Approval cards, find bar, composer and the Settle button, ported from the prototype.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, ChevronDown, ChevronRight, ChevronUp, Paperclip, Search, Square, Wrench, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronRight, ChevronUp, Paperclip, Search, ShieldAlert, Square, Wrench, X } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import type { AttachCheck, Attachment, Chat, ConnectionStatus, Item, Source } from "../hermes/model";
-import { SOURCE_LABEL } from "../hermes/model";
+import type { ApprovalChoice, ApprovalItem, AttachCheck, Attachment, Chat, ConnectionStatus, Item, Source } from "../hermes/model";
+import { SOURCE_LABEL, isWaiting } from "../hermes/model";
 import { Markdown } from "./Markdown";
 import { SettleButton, SourceIcon, Spinner, highlight } from "./bits";
 
@@ -38,8 +37,8 @@ const STATUS_NOTE: Record<ConnectionStatus, string | undefined> = {
 };
 
 /**
- * `alsoPostsIn`: the Telegram or Discord chat Hermes will also post its replies in. `onSettle` is left out for a chat
- * not started yet. Ctrl+F opens the find bar.
+ * `alsoPostsIn`: the Telegram or Discord chat Hermes will also post its replies in. `onAnswer` answers an Approval card.
+ * `onSettle` is left out for a chat not started yet. Ctrl+F opens the find bar.
  */
 export function ChatPane({
   chat,
@@ -49,6 +48,7 @@ export function ChatPane({
   onAttach,
   onSend,
   onStop,
+  onAnswer,
   onSettle,
 }: {
   chat: Chat;
@@ -58,6 +58,7 @@ export function ChatPane({
   onAttach: (paths: string[]) => Promise<AttachCheck>;
   onSend: (text: string, attachments: Attachment[]) => void;
   onStop: () => void;
+  onAnswer: (approvalId: string, choice: ApprovalChoice) => void;
   onSettle?: (settled: boolean) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -138,6 +139,7 @@ export function ChatPane({
 
   const blocks = toBlocks(chat.items);
   const last = chat.items[chat.items.length - 1];
+  const waiting = chat.items.some(isWaiting);
 
   return (
     <div className="chat">
@@ -246,9 +248,12 @@ export function ChatPane({
                   {b.text}
                 </div>
               );
+            if (b.kind === "approval")
+              return <ApprovalCard key={b.id} item={b} offline={status !== "connected"} onAnswer={(c) => onAnswer(b.id, c)} />;
             return <ToolGroup key={b.id} tools={b.tools} />;
           })}
-          {chat.running && last?.kind !== "assistant" && (
+          {/* A reply waiting on the owner isn't thinking. */}
+          {chat.running && last?.kind !== "assistant" && !(last && isWaiting(last)) && (
             <div className="msg assistant thinking">
               <span />
               <span />
@@ -263,6 +268,7 @@ export function ChatPane({
         running={!!chat.running}
         stopping={!!chat.stopping}
         note={STATUS_NOTE[status]}
+        hint={waiting ? "Hermes is waiting for your approval above." : undefined}
         alsoPostsIn={alsoPostsIn}
         onAttach={onAttach}
         onSend={(t, attachments) => {
@@ -271,6 +277,39 @@ export function ChatPane({
         }}
         onStop={onStop}
       />
+    </div>
+  );
+}
+
+/** What a closed card says when Hermes stopped waiting without an answer from this app. */
+function endedNote(reason: string): string {
+  if (reason === "timeout") return "Timed out without an answer";
+  if (reason === "resolved") return "Answered in another Hermes client";
+  return "Hermes stopped waiting for an answer";
+}
+
+function ApprovalCard({ item, offline, onAnswer }: { item: ApprovalItem; offline: boolean; onAnswer: (c: ApprovalChoice) => void }) {
+  const closed = item.answer ?? item.ended;
+  return (
+    <div className={`approval ${closed ? "answered" : ""}`}>
+      <div className="approval-head">
+        <ShieldAlert size={15} />
+        {item.answer ? (item.answer === "deny" ? "Denied" : "Approved") : item.ended ? endedNote(item.ended) : "Hermes wants to run a command"}
+      </div>
+      <pre className="approval-cmd">{item.command}</pre>
+      {!closed && (
+        <>
+          {item.description && <div className="approval-desc">{item.description}</div>}
+          <div className="approval-actions">
+            <button className="btn primary" disabled={offline} onClick={() => onAnswer("once")}>
+              Approve
+            </button>
+            <button className="btn" disabled={offline} onClick={() => onAnswer("deny")}>
+              Deny
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -338,6 +377,7 @@ function Composer({
   running,
   stopping,
   note,
+  hint,
   alsoPostsIn,
   onAttach,
   onSend,
@@ -347,6 +387,7 @@ function Composer({
   running: boolean;
   stopping: boolean;
   note?: string;
+  hint?: string;
   alsoPostsIn?: Source;
   onAttach: (paths: string[]) => Promise<AttachCheck>;
   onSend: (text: string, attachments: Attachment[]) => void;
@@ -411,6 +452,7 @@ function Composer({
   return (
     <div className="composer-wrap">
       {note && <div className="offline-note">{note}</div>}
+      {!note && hint && <div className="composer-hint">{hint}</div>}
       {alsoPostsIn && (
         <div className="platform-note">
           <SourceIcon source={alsoPostsIn} /> Hermes also posts its replies in this {SOURCE_LABEL[alsoPostsIn]} chat.

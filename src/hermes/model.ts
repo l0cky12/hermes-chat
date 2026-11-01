@@ -34,7 +34,22 @@ export type Item =
       result?: string;
       summary?: string;
     }
+  /**
+   * An Approval: Hermes asks before running a command it counts as dangerous. `answer`: the owner's, from this app.
+   * `ended`: why Hermes stopped waiting without one: its own reason (`timeout`, `interrupted`, `resolved` when
+   * another Hermes client answered), `turn ended`, or `lost` when Hermes let go of the session while the connection
+   * was down, or the chat couldn't be loaded again.
+   */
+  | { kind: "approval"; id: string; requestId: string; command: string; description: string; answer?: ApprovalChoice; ended?: string }
   | { kind: "error"; id: string; text: string };
+
+/** How the owner answers an Approval: run it this once, for the rest of the chat, always, or not at all. */
+export type ApprovalChoice = "once" | "session" | "always" | "deny";
+
+export type ApprovalItem = Extract<Item, { kind: "approval" }>;
+
+/** An Approval Hermes is still waiting on. */
+export const isWaiting = (i: Item): i is ApprovalItem => i.kind === "approval" && !i.answer && !i.ended;
 
 export type Chat = {
   /** The stored Hermes session id, as dashboard REST lists it. */

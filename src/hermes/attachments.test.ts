@@ -101,7 +101,8 @@ describe("Sending attachments", () => {
     const { attachments } = await hermes.checkAttachments(["/tmp/a.txt"]);
     await hermes.send("s1", "Look", attachments);
 
-    expect(server.requests.map((r) => r.method)).toEqual(["session.resume", "file.attach", "prompt.submit"]);
+    const sent = server.requests.map((r) => r.method).filter((m) => m !== "client.capabilities");
+    expect(sent).toEqual(["session.resume", "file.attach", "prompt.submit"]);
     expect(server.last("file.attach")!.params.session_id).toBe(server.runtimeIdOf("s1"));
   });
 

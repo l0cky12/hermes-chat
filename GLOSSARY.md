@@ -38,6 +38,10 @@ _Avoid_: account, workspace, agent (as a name for a profile)
 A local file the owner sends with a message: an image Hermes looks at, or any other file Hermes can read. Hermes takes images up to 25 MB and other files up to 256 MB.
 _Avoid_: upload, file (when the attachment is meant)
 
+**Approval**:
+Hermes asking the owner before it runs a command it counts as dangerous. It shows as a card in the chat, and the reply waits until the owner approves or denies it, Hermes stops waiting, or the reply is stopped.
+_Avoid_: permission, confirmation, prompt
+
 **Unsecure**:
 The warning on a connection whose traffic between this app and the server isn't encrypted.
 _Avoid_: insecure (the app's label is "Unsecure"), unsafe

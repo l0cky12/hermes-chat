@@ -201,6 +201,7 @@ function Main({ hermes }: { hermes: Hermes }) {
           onAttach={(paths) => hermes.checkAttachments(paths)}
           onSend={send}
           onStop={() => void hermes.stop(selected.id)}
+          onAnswer={(approvalId, choice) => void hermes.answerApproval(selected.id, approvalId, choice)}
           onSettle={selected === draft ? undefined : (s) => setSettled(selected.id, s)}
         />
       </main>

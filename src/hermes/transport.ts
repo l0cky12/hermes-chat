@@ -5,7 +5,9 @@
 // Attachments: research doc §7. A dropped connection is reconnected on its own; keepalive: research doc §1.
 // One profile's chats show at a time; switching opens the connection again for the new profile.
 // Search runs on dashboard REST: research doc "Searching chats".
-import type { AttachCheck, Attachment, Chat, ConnectionStatus, Found, Item, Source } from "./model";
+// Approvals come as legacy server→client requests, answered with a response frame: research doc §6 and
+// "Approvals on the legacy generation".
+import { isWaiting, type ApprovalChoice, type ApprovalItem, type AttachCheck, type Attachment, type Chat, type ConnectionStatus, type Found, type Item, type Source } from "./model";
 import type { OpenPipe, Pipe, PipeEvent, Route } from "./pipe";
 import { isUnsecure } from "./unsecure";
 
@@ -90,6 +92,15 @@ type FileAttached = { ref_text: string };
 
 /** Legacy `session.interrupt` result (research doc §8). `not_interrupted` needs `expected_hosted_task_id`. */
 type InterruptResult = { status: "interrupted" | "not_interrupted" };
+
+/**
+ * A server→client request (`tui_gateway/server_requests.py`), as it arrives or as `session.resume` lists it in
+ * `open_requests`. An `approval` one carries `{request_id, command, description, choices, ...}` (research doc §6).
+ */
+type ServerRequest = { id: string; method: string; params: Record<string, unknown> };
+
+/** JSON-RPC "method not found": what Hermes expects from a client that can't handle a request. */
+const NO_SUCH_METHOD = -32601;
 
 type RpcFrame = {
   jsonrpc: "2.0";
@@ -183,6 +194,15 @@ export class Hermes {
   private resuming = new Map<string, Promise<string>>();
   /** Chats the owner picked from a search though the list doesn't hold them; they stay in it until the profile changes. */
   private revealed = new Set<string>();
+  /** Chats that had a turn running, or an Approval waiting, when the connection dropped. Reconnecting resumes them,
+   * which brings back what Hermes is still waiting on. */
+  private resumeOnReconnect = new Set<string>();
+  /** Requests for a session no chat holds yet: the resume that reattaches it can answer after Hermes writes them. */
+  private earlyRequests = new Map<string, ServerRequest[]>();
+  /** Approvals Hermes has been told are on screen (`approval.received`), by request id. */
+  private shownApprovals = new Set<string>();
+  /** Hermes answered that it has no `approval.received`. */
+  private noApprovalReceived = false;
   /** Messages Hermes hasn't accepted yet, so a Stop waits for the turn it stops. */
   private submitting = new Map<string, Promise<unknown>>();
   private syncing?: Promise<void>;
@@ -247,6 +267,8 @@ export class Hermes {
     this.lastHeard = Date.now();
     this.heartbeat = setInterval(() => this.beat(), PING_EVERY_MS);
     this.update({ status: "connected", closedReason: undefined, route: pipe.route, unsecure: isUnsecure(pipe.route) });
+    // Without this, Hermes never sends this connection an Approval (research doc §6).
+    this.track(this.request("client.capabilities", { server_requests: true }));
   }
 
   /** Tries to connect again now, after a drop or from Offline, and keeps retrying on its own if that fails. */
@@ -270,6 +292,7 @@ export class Hermes {
     if (name === this.profile) return;
     this.viewing = undefined;
     this.staleItems.clear();
+    this.resumeOnReconnect.clear();
     this.revealed.clear();
     this.cache.rememberProfile(name);
     this.update({ profile: name, chats: this.cache.load(name), syncError: undefined });
@@ -373,6 +396,7 @@ export class Hermes {
     this.markRead(chatId);
     try {
       await this.resume(chatId);
+      if (this.viewing === chatId) this.tellShown(chatId);
     } catch (e) {
       // A reply sent meanwhile shares this resume and reports the failure itself.
       this.patchChat(chatId, (c) =>
@@ -504,6 +528,26 @@ export class Hermes {
   }
 
   /**
+   * Answers an Approval with the owner's choice, in a response frame to Hermes's request (research doc §6). One
+   * already answered, or that Hermes stopped waiting for, is left alone. If the answer can't go, the chat says so
+   * and the card stays waiting.
+   */
+  async answerApproval(chatId: string, approvalId: string, choice: ApprovalChoice): Promise<void> {
+    const waiting = this.snapshot.chats.find((c) => c.id === chatId)?.items.some((i) => i.id === approvalId && isWaiting(i));
+    if (!waiting) return;
+    const answer = (a?: ApprovalChoice) =>
+      this.patchChat(chatId, (c) => ({ ...c, items: c.items.map((i) => (i.id === approvalId && i.kind === "approval" ? { ...i, answer: a } : i)) }));
+    answer(choice);
+    try {
+      if (!this.pipe || this.snapshot.status !== "connected") throw new Error("Not connected to Hermes.");
+      await this.pipe.send(JSON.stringify({ jsonrpc: "2.0", id: approvalId, result: { choice, all: false } }));
+    } catch (e) {
+      answer(undefined);
+      this.patchChat(chatId, (c) => ({ ...c, items: [...c.items, errorItem(c, `Couldn't answer Hermes: ${(e as Error).message}`)] }));
+    }
+  }
+
+  /**
    * Refreshes the chat list from dashboard REST: the profile's chats active in the past month, Active when
    * pinned. A call while a sync is running asks for one more pass and resolves with it.
    */
@@ -558,6 +602,7 @@ export class Hermes {
       else p.resolve(frame.result);
       return;
     }
+    if (typeof frame.id === "string" && frame.method) return this.onServerRequest({ id: frame.id, method: frame.method, params: frame.params ?? {} });
     if (frame.method !== "event" || !frame.params?.type) return;
     const { type, session_id, payload = {} } = frame.params;
     if (type === "gateway.ready") {
@@ -576,6 +621,61 @@ export class Hermes {
     if (type === "message.complete" && this.pinWanted.has(chat.id)) this.track(this.writePin(chat.id));
     // The finished reply is newer than the read watermark, though the owner watched it come in.
     if (type === "message.complete" && chat.id === this.viewing) this.markRead(chat.id);
+  }
+
+  /**
+   * A question from Hermes. An Approval shows as a card in its chat. Other kinds this app can't show yet are turned
+   * down, so the agent doesn't wait out their timeout for an answer that won't come.
+   */
+  private onServerRequest(req: ServerRequest) {
+    if (req.method !== "approval") {
+      const error = { code: NO_SUCH_METHOD, message: `Hermes Chat can't answer ${req.method} requests yet.` };
+      void this.pipe?.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, error })).catch(() => {});
+      return;
+    }
+    const sid = String(req.params.session_id ?? "");
+    const chat = this.snapshot.chats.find((c) => c.runtimeId === sid);
+    if (chat) this.showApprovals(chat.id, [req]);
+    else this.earlyRequests.set(sid, [...(this.earlyRequests.get(sid) ?? []), req]);
+  }
+
+  /** Adds a card for each Approval request the chat doesn't show yet. A request can be listed more than once. */
+  private showApprovals(chatId: string, reqs: ServerRequest[]) {
+    this.patchChat(chatId, (c) => {
+      const shown = new Set(c.items.map((i) => i.id));
+      const cards = reqs.filter((r) => r.method === "approval" && !shown.has(r.id) && shown.add(r.id)).map(approvalItem);
+      return cards.length ? { ...c, items: [...c.items, ...cards] } : c;
+    });
+    if (chatId === this.viewing) this.tellShown(chatId);
+  }
+
+  /**
+   * Tells Hermes that the chat's waiting Approvals are on screen (`approval.received`), once each. A server
+   * without that method is asked no more.
+   */
+  private tellShown(chatId: string) {
+    const chat = this.snapshot.chats.find((c) => c.id === chatId);
+    if (!chat?.runtimeId || this.noApprovalReceived) return;
+    for (const i of chat.items) {
+      if (i.kind !== "approval" || !isWaiting(i) || this.shownApprovals.has(i.requestId)) continue;
+      this.shownApprovals.add(i.requestId);
+      const told = this.request("approval.received", { session_id: chat.runtimeId, request_id: i.requestId }).catch((e) => {
+        this.shownApprovals.delete(i.requestId);
+        if (e instanceof RpcError && e.code === NO_SUCH_METHOD) this.noApprovalReceived = true;
+      });
+      this.track(told);
+    }
+  }
+
+  /**
+   * Resumes the chats that were busy when the connection dropped, so the Approvals Hermes is still waiting on come
+   * back, asked before the drop or during it. A waiting card whose chat can't be loaded again is closed.
+   */
+  private resumeBusyChats() {
+    const ids = [...this.resumeOnReconnect].filter((id) => this.snapshot.chats.some((c) => c.id === id));
+    this.resumeOnReconnect.clear();
+    for (const id of ids)
+      this.track(this.resume(id).catch(() => this.patchChat(id, (c) => ({ ...c, items: endWaitingApprovals(c.items, "lost") }))));
   }
 
   /** The connection has dropped, and reconnecting starts. */
@@ -597,7 +697,11 @@ export class Hermes {
     if (pipe) this.droppedClosing = pipe.close().catch(() => {}).finally(() => (this.droppedClosing = undefined));
     for (const p of this.pending.values()) p.reject(new Error(`Connection closed: ${reason}`));
     this.pending.clear();
-    for (const c of this.snapshot.chats) if (c.runtimeId) this.staleItems.set(c.id, c.items.length);
+    this.earlyRequests.clear();
+    for (const c of this.snapshot.chats) {
+      if (c.runtimeId) this.staleItems.set(c.id, c.items.length);
+      if (c.running || c.items.some(isWaiting)) this.resumeOnReconnect.add(c.id);
+    }
     this.update({
       status: "reconnecting",
       closedReason: reason,
@@ -619,6 +723,7 @@ export class Hermes {
       try {
         await this.dial();
         this.failedTries = 0;
+        this.resumeBusyChats();
         void this.sync();
       } catch (e) {
         if (this.closing) return;
@@ -685,15 +790,27 @@ export class Hermes {
         const res = (await this.request("session.resume", { session_id: chatId, profile: this.profile, inline_images: false })) as {
           session_id: string;
           messages?: TranscriptMessage[];
+          /** A live session's turn is still going. */
+          running?: boolean;
+          /** What a live session is still waiting on, oldest first. */
+          open_requests?: ServerRequest[];
         };
         const history = historyItems(res.messages ?? []);
         const stale = this.staleItems.get(chatId) ?? 0;
         this.staleItems.delete(chatId);
+        const early = this.earlyRequests.get(res.session_id) ?? [];
+        this.earlyRequests.delete(res.session_id);
+        const asking = [...(res.open_requests ?? []), ...early];
+        // History has no cards. A card that was waiting when the connection dropped either comes back below, or
+        // Hermes let go of the session meanwhile and the card stays, closed.
+        const lost = (items: Item[]) => endWaitingApprovals(items.filter((i) => isWaiting(i) && !asking.some((r) => r.id === i.id)), "lost");
         this.patchChat(chatId, (c) => ({
           ...c,
           runtimeId: res.session_id,
-          items: [...history, ...withoutLoadError(c.items.slice(stale))],
+          running: c.running || !!res.running,
+          items: [...history, ...lost(c.items.slice(0, stale)), ...withoutLoadError(c.items.slice(stale))],
         }));
+        this.showApprovals(chatId, asking);
         return res.session_id;
       } finally {
         this.resuming.delete(chatId);
@@ -930,6 +1047,13 @@ function historyItems(messages: TranscriptMessage[]): Item[] {
   });
 }
 
+function approvalItem(r: ServerRequest): ApprovalItem {
+  const p = r.params;
+  return { kind: "approval", id: r.id, requestId: String(p.request_id ?? ""), command: String(p.command ?? ""), description: String(p.description ?? "") };
+}
+
+const endWaitingApprovals = (items: Item[], ended: string) => items.map((i): Item => (isWaiting(i) ? { ...i, ended } : i));
+
 function errorItem(c: Chat, text: string): Item {
   return { kind: "error", id: `e-${c.items.length}`, text };
 }
@@ -990,6 +1114,9 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>): Chat {
             : i,
         ),
       };
+    case "request.cancel":
+      // Hermes stopped waiting: timed out, interrupted, or answered in another Hermes client.
+      return { ...c, items: items.map((i) => (isWaiting(i) && i.id === p.id ? { ...i, ended: String(p.reason || "withdrawn") } : i)) };
     case "message.complete": {
       // Providers that don't stream send the whole reply here; a streamed turn repeats text it already sent.
       const lastUser = items.map((i) => i.kind).lastIndexOf("user");
@@ -997,14 +1124,14 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>): Chat {
       if (!answered && typeof p.text === "string" && p.text) items.push({ kind: "assistant", id: `a-${items.length}`, text: p.text });
       const end = { ...c, running: false, stopping: false, updatedAt: Date.now() };
       // Stopped here or from another Hermes client.
-      if (p.status === "interrupted") return { ...end, items: markInterrupted(items) };
+      if (p.status === "interrupted") return { ...end, items: markInterrupted(endWaitingApprovals(items, "turn ended")) };
       const failure = p.error ?? (p.status === "error" ? p.failure_reason ?? "The turn failed." : undefined);
       if (failure) items.push(errorItem({ ...c, items }, String(failure)));
-      return { ...end, items: endRunningTools(items, "done") };
+      return { ...end, items: endRunningTools(endWaitingApprovals(items, "turn ended"), "done") };
     }
     case "error":
       items.push(errorItem(c, String(p.message ?? "Hermes reported an error.")));
-      return { ...c, items, running: false, stopping: false };
+      return { ...c, items: endWaitingApprovals(items, "turn ended"), running: false, stopping: false };
     default:
       return c;
   }
