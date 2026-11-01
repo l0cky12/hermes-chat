@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { connect, type Hermes } from "./hermes/transport";
+import { localChatCache } from "./hermes/chatCache";
 import { tauriPipe, type SignInDetails } from "./hermes/tauriPipe";
 import type { Chat } from "./hermes/model";
 import { ChatList, Rail } from "./ui/Sidebar";
@@ -8,6 +9,8 @@ import { SignIn } from "./ui/SignIn";
 
 const PROFILE = "default";
 const SAVED = "hermes-chat.sign-in"; // SSH target and username only; never the password.
+// Hermes also announces store changes over the socket; the poll catches anything it misses.
+const SYNC_EVERY_MS = 60_000;
 
 function savedSignIn(): Omit<SignInDetails, "password"> {
   try {
@@ -30,7 +33,7 @@ export default function App() {
         onSignIn={async (d) => {
           setError(undefined);
           try {
-            const h = await connect(tauriPipe(d), PROFILE);
+            const h = await connect(tauriPipe(d), PROFILE, localChatCache);
             localStorage.setItem(SAVED, JSON.stringify({ sshTarget: d.sshTarget, username: d.username }));
             setWhere(`ssh://${d.sshTarget}`);
             setHermes(h);
@@ -44,7 +47,7 @@ export default function App() {
 }
 
 function Main({ hermes, where }: { hermes: Hermes; where: string }) {
-  const { chats, status } = useSyncExternalStore(hermes.subscribe, hermes.getSnapshot);
+  const { chats, status, syncError } = useSyncExternalStore(hermes.subscribe, hermes.getSnapshot);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [listOpen, setListOpen] = useState(true);
   const [draftError, setDraftError] = useState<string>();
@@ -80,6 +83,12 @@ function Main({ hermes, where }: { hermes: Hermes; where: string }) {
   };
 
   useEffect(() => {
+    void hermes.sync();
+    const timer = setInterval(() => void hermes.sync(), SYNC_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [hermes]);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return;
       const k = e.key.toLowerCase();
@@ -98,7 +107,9 @@ function Main({ hermes, where }: { hermes: Hermes; where: string }) {
   return (
     <div className="app">
       <Rail status={status} where={where} onToggleList={() => setListOpen((o) => !o)} onNew={newChat} />
-      {listOpen && <ChatList profile={hermes.profile} chats={chats} selectedId={selectedId} onOpen={setSelectedId} />}
+      {listOpen && (
+        <ChatList profile={hermes.profile} chats={chats} syncError={syncError} selectedId={selectedId} onOpen={setSelectedId} />
+      )}
       <main className="main">
         <ChatPane key={selected.id} chat={selected} offline={status === "offline"} onSend={send} />
       </main>

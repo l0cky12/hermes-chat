@@ -155,6 +155,10 @@ Canonical replay: `session.events.since {session_id, last_sequence, last_seen, r
 | WS | `session.resume {session_id, source?, lazy, defer_history, omit_messages, inline_images, cols}` | | `{session_id, stored_session_id, message_count, messages:[TranscriptMessage], info, running, pending_approval?, open_requests?, ...}` (canonical adds `revision, execution_generation, pending, prompts, replay_epoch, last_sequence, subscription_id`) | `sessions.py:73-99, 182-202`; `canonical_sessions.py` (`CanonicalResumeParams`, `CanonicalSnapshot`) |
 | WS | `session.history {session_id}` | | `{count, messages}` | `sessions.py:490-500` |
 
+Dashboard `GET /api/sessions` always passes `include_pinned=True`, so **every page** ends with all pinned rows that aren't already on it, out of recency order (`hermes_cli/web_routers/sessions.py:224`; `hermes_state_sessions.py:1420-1446`). A client that pages must de-duplicate by `id`, and only the unpinned rows tell it how far back the ordered list has reached. The pinned back-fill ignores `archived`. `total` counts the ordered rows only. CONFIRMED at `c419cf7`; not checked against the deployed `bf0203a`.
+
+When any process changes a profile's session rows (title, flags, activity, ...), the WS broadcasts a session-less `{"type":"sessions.changed","session_id":""}` event to every connected client (`tui_gateway/change_watcher.py:190-240, 400-425`; `tui_gateway/server.py:632`). CONFIRMED at `c419cf7`; which profile's store the dashboard process watches was not read, so a client should still poll.
+
 Prior research's "REST session list pages cap at 100; message pages cap at 500 and default to the latest page" is CONFIRMED for the dashboard router (`sessions.py:184, 754-756`); note the API-server router caps at 200.
 
 Gap: the WS `session.list` row has `started_at` but no last-activity timestamp (`methods_session.py:113-123`). Use REST (`last_active`, `order=recent`) or canonical `info.last_active_at` on resume (`canonical_sessions.py` `CanonicalSnapshotInfo.last_active_at`) for recency.

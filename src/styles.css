@@ -62,6 +62,7 @@ code, pre, kbd { font-family: var(--mono); }
 .src-discord { color: #8d96f6; }
 .src-cli { color: #a3a3ad; }
 .src-desktop { color: #c9a26b; }
+.src-other { color: #a3a3ad; }
 
 /* ---------- list panel (ADR 0001) ---------- */
 .sidebar {
@@ -79,6 +80,7 @@ code, pre, kbd { font-family: var(--mono); }
 .chev { transition: transform 0.15s; flex: none; }
 .chev.open { transform: rotate(90deg); }
 .settled-list .row-title { color: var(--muted); }
+.sync-error { color: var(--warn); font-size: 12px; padding: 6px 10px 10px; }
 .empty-hint { color: var(--faint); font-size: 12.5px; padding: 6px 10px 10px; }
 
 .row {

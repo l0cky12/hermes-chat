@@ -54,11 +54,13 @@ function ChatRow({ chat, selected, onOpen }: { chat: Chat; selected: boolean; on
 export function ChatList({
   profile,
   chats,
+  syncError,
   selectedId,
   onOpen,
 }: {
   profile: string;
   chats: Chat[];
+  syncError?: string;
   selectedId: string | null;
   onOpen: (id: string) => void;
 }) {
@@ -72,6 +74,11 @@ export function ChatList({
         <span className="profile-name">{profile}</span>
       </div>
       <div className="sb-scroll">
+        {syncError && (
+          <div className="sync-error" role="status">
+            {syncError}
+          </div>
+        )}
         <div className="section-label">Active</div>
         {active.length ? active.map(row) : <div className="empty-hint">Nothing active. Start a new chat.</div>}
         <button className="section-toggle" onClick={() => setSettledOpen((o) => !o)}>

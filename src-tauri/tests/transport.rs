@@ -1,12 +1,12 @@
-//! The Rust transport against a local stub of the dashboard's sign-in routes and `/api/ws`.
+//! The Rust transport against a local stub of the dashboard's sign-in routes, `/api/ws` and REST.
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::Query;
+use axum::extract::{Path, Query, RawQuery};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{AppendHeaders, IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
-use hermes_chat::transport::{self, PipeEvent, SignIn, TransportError};
+use hermes_chat::transport::{self, Dashboard, PipeEvent, SignIn, TransportError};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -39,6 +39,38 @@ async fn ws_ticket(headers: HeaderMap) -> Response {
     } else {
         (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthenticated", "reason": "no_cookie"}))).into_response()
     }
+}
+
+fn cookie(headers: &HeaderMap) -> String {
+    headers.get(header::COOKIE).and_then(|v| v.to_str().ok()).unwrap_or("").to_owned()
+}
+
+/// Signed-in REST: accepts the first access cookie or the rotated one, and echoes what it got.
+async fn list_sessions(headers: HeaderMap, RawQuery(query): RawQuery) -> Response {
+    let cookie = cookie(&headers);
+    if !cookie.split("; ").any(|c| c == "hermes_session_at=AT" || c == "hermes_session_at=AT2") {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "session_expired"}))).into_response();
+    }
+    Json(json!({"query": query, "cookie": cookie})).into_response()
+}
+
+async fn patch_session(Path(id): Path<String>, headers: HeaderMap, body: String) -> Response {
+    let content_type = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
+    Json(json!({"id": id, "content_type": content_type, "body": serde_json::from_str::<Value>(&body).unwrap()})).into_response()
+}
+
+/// The dashboard rotating an expired access token through the refresh cookie (dashboard_auth middleware).
+async fn rotate() -> Response {
+    (AppendHeaders([(header::SET_COOKIE, "hermes_session_at=AT2; Path=/; HttpOnly")]), Json(json!({}))).into_response()
+}
+
+/// A refresh that failed: the dashboard clears the access cookie.
+async fn expire() -> Response {
+    (AppendHeaders([(header::SET_COOKIE, "hermes_session_at=; Max-Age=0; Path=/")]), Json(json!({}))).into_response()
+}
+
+async fn busy() -> Response {
+    (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"detail": "Session store is busy"}))).into_response()
 }
 
 async fn api_ws(ws: WebSocketUpgrade, Query(q): Query<HashMap<String, String>>) -> Response {
@@ -78,7 +110,12 @@ async fn stub() -> Url {
     let app = Router::new()
         .route("/auth/password-login", post(login))
         .route("/api/auth/ws-ticket", post(ws_ticket))
-        .route("/api/ws", get(api_ws));
+        .route("/api/ws", get(api_ws))
+        .route("/api/sessions", get(list_sessions))
+        .route("/api/sessions/{id}", patch(patch_session))
+        .route("/api/rotate", get(rotate))
+        .route("/api/expire", get(expire))
+        .route("/api/busy", get(busy));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -100,15 +137,24 @@ fn frame(event: PipeEvent) -> Value {
     }
 }
 
+async fn signed_in() -> Dashboard {
+    Dashboard::sign_in(&stub().await, &sign_in("hunter2")).await.expect("signed in")
+}
+
 async fn open_stub() -> (transport::Pipe, mpsc::UnboundedReceiver<PipeEvent>) {
-    let base = stub().await;
     let (tx, rx) = mpsc::unbounded_channel();
-    let pipe = transport::open(&base, &sign_in("hunter2"), move |e| {
-        let _ = tx.send(e);
-    })
-    .await
-    .expect("signed in");
+    let pipe = signed_in()
+        .await
+        .open_pipe(move |e| {
+            let _ = tx.send(e);
+        })
+        .await
+        .expect("pipe open");
     (pipe, rx)
+}
+
+async fn get_json(dashboard: &Dashboard, path: &str) -> Value {
+    serde_json::from_str(&dashboard.request("GET", path, None).await.expect("2xx")).unwrap()
 }
 
 #[tokio::test]
@@ -145,14 +191,14 @@ async fn reports_when_the_server_closes_the_socket() {
 #[tokio::test]
 async fn wrong_password_is_bad_credentials() {
     let base = stub().await;
-    let err = transport::open(&base, &sign_in("nope"), |_| {}).await.err().unwrap();
+    let err = Dashboard::sign_in(&base, &sign_in("nope")).await.err().unwrap();
     assert!(matches!(err, TransportError::BadCredentials), "{err:?}");
 }
 
 #[tokio::test]
 async fn rate_limited_sign_in_is_reported() {
     let base = stub().await;
-    let err = transport::open(&base, &sign_in("slow-down"), |_| {}).await.err().unwrap();
+    let err = Dashboard::sign_in(&base, &sign_in("slow-down")).await.err().unwrap();
     assert!(matches!(err, TransportError::RateLimited), "{err:?}");
 }
 
@@ -160,6 +206,53 @@ async fn rate_limited_sign_in_is_reported() {
 async fn nothing_listening_is_unreachable() {
     let port = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
     let base = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
-    let err = transport::open(&base, &sign_in("hunter2"), |_| {}).await.err().unwrap();
+    let err = Dashboard::sign_in(&base, &sign_in("hunter2")).await.err().unwrap();
     assert!(matches!(err, TransportError::Unreachable(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn relays_a_rest_get_with_the_sign_in_cookies() {
+    let dashboard = signed_in().await;
+    let got = get_json(&dashboard, "api/sessions?profile=default&order=recent&limit=100").await;
+    assert_eq!(got["query"], "profile=default&order=recent&limit=100");
+    assert_eq!(got["cookie"], "hermes_session_at=AT; hermes_session_rt=RT");
+}
+
+#[tokio::test]
+async fn relays_a_rest_patch_with_a_json_body() {
+    let dashboard = signed_in().await;
+    let body = json!({"pinned": true, "profile": "default"}).to_string();
+    let got: Value = serde_json::from_str(&dashboard.request("PATCH", "api/sessions/20261031_120000_abc", Some(body)).await.unwrap()).unwrap();
+    assert_eq!(got, json!({"id": "20261031_120000_abc", "content_type": "application/json", "body": {"pinned": true, "profile": "default"}}));
+}
+
+#[tokio::test]
+async fn keeps_cookies_the_dashboard_rotates() {
+    let dashboard = signed_in().await;
+    get_json(&dashboard, "api/rotate").await;
+    assert_eq!(get_json(&dashboard, "api/sessions").await["cookie"], "hermes_session_rt=RT; hermes_session_at=AT2");
+}
+
+#[tokio::test]
+async fn an_expired_sign_in_is_signed_out() {
+    let dashboard = signed_in().await;
+    get_json(&dashboard, "api/expire").await;
+    let err = dashboard.request("GET", "api/sessions", None).await.err().unwrap();
+    assert!(matches!(err, TransportError::SignedOut), "{err:?}");
+}
+
+#[tokio::test]
+async fn a_failed_rest_call_reports_status_and_body() {
+    let dashboard = signed_in().await;
+    let err = dashboard.request("GET", "api/busy", None).await.err().unwrap();
+    assert!(matches!(&err, TransportError::Unexpected { status: 503, body } if body.contains("busy")), "{err:?}");
+}
+
+#[tokio::test]
+async fn relays_only_get_and_patch_under_api() {
+    let dashboard = signed_in().await;
+    for (method, path) in [("GET", "auth/logout"), ("GET", "api/../auth/logout"), ("DELETE", "api/sessions/x"), ("POST", "api/sessions")] {
+        let err = dashboard.request(method, path, None).await.err().unwrap();
+        assert!(matches!(err, TransportError::NotRelayed(_)), "{method} {path}: {err:?}");
+    }
 }

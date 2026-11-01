@@ -1,5 +1,5 @@
 // Small shared UI bits, ported from the prototype.
-import { Monitor, Send, Terminal } from "lucide-react";
+import { Globe, Monitor, Send, Terminal } from "lucide-react";
 import type { Source } from "../hermes/model";
 import { SOURCE_LABEL } from "../hermes/model";
 
@@ -21,8 +21,10 @@ export function SourceIcon({ source, size = 12 }: { source: Source; size?: numbe
       <DiscordGlyph size={size} />
     ) : source === "cli" ? (
       <Terminal size={size} strokeWidth={2.4} />
-    ) : (
+    ) : source === "desktop" ? (
       <Monitor size={size} strokeWidth={2.4} />
+    ) : (
+      <Globe size={size} strokeWidth={2.4} />
     );
   return (
     <span className={`src src-${source}`} title={`Imported from ${SOURCE_LABEL[source]}`}>
