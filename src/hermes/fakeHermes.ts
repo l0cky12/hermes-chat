@@ -18,6 +18,8 @@ export type SessionRow = {
   message_count: number;
   pinned: boolean;
   archived: boolean;
+  /** The read watermark: unread when activity postdates it. `null` = never tracked = read; 0 = marked unread. */
+  last_read_at: number | null;
 };
 
 /**
@@ -47,7 +49,7 @@ const now = () => Date.now() / 1000;
 /** A stored session `daysAgo` days old, unpinned and from this app unless overridden. */
 export function row(id: string, daysAgo: number, over: Partial<SessionRow> = {}): SessionRow {
   const at = now() - daysAgo * DAY;
-  return { id, source: "hermes-chat", title: `Chat ${id}`, preview: "", started_at: at, last_active: at, message_count: 2, pinned: false, archived: false, ...over };
+  return { id, source: "hermes-chat", title: `Chat ${id}`, preview: "", started_at: at, last_active: at, message_count: 2, pinned: false, archived: false, last_read_at: null, ...over };
 }
 
 export class FakeHermes {
@@ -137,7 +139,7 @@ export class FakeHermes {
       const limit = Number(query.get("limit") ?? 20);
       const page = recent.slice(offset, offset + limit);
       const pinned = visible.filter((s) => s.pinned && !page.includes(s));
-      return { sessions: [...page, ...pinned], total: recent.length, limit, offset, storage: {} };
+      return { sessions: [...page, ...pinned].map((s) => ({ ...s, unread: unread(s) })), total: recent.length, limit, offset, storage: {} };
     },
   };
 
@@ -230,12 +232,18 @@ export class FakeHermes {
     const s = this.sessions.find((r) => r.id === id);
     if (!s) throw new Error(`The dashboard answered 404: {"detail":"Session not found"}`);
     if (typeof body.pinned === "boolean") s.pinned = body.pinned;
+    if (typeof body.unread === "boolean") s.last_read_at = body.unread ? 0 : now();
     return { ok: true };
   }
 
   private frame(f: unknown) {
     this.onEvent?.({ kind: "frame", text: JSON.stringify(f) });
   }
+}
+
+/** `SessionDB.session_unread`: activity postdates the read watermark, and `null` means read. */
+export function unread(s: SessionRow): boolean {
+  return s.last_read_at !== null && (s.last_active ?? s.started_at) > s.last_read_at;
 }
 
 /** `tui_gateway/prompt_attachments.py::_format_ref_value`: quote a ref with whitespace, brackets or quotes. */

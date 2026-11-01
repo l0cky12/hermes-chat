@@ -19,6 +19,10 @@ _Avoid_: archived, done, closed
 **Settle** / **Unsettle**:
 The owner's manual actions that move a chat from Active to Settled, and back.
 
+**Unread**:
+A chat with something new in it since the owner last opened it, in this app or any other Hermes client. It shows a dot, and so does the collapsed Settled header when a Settled chat is unread. The chat on screen never shows the dot.
+_Avoid_: new, unseen
+
 **Source**:
 The platform a chat was started on: this app, Telegram, Discord, the command line, or the official Hermes desktop app. A chat's source never changes, even after the owner replies from this app. Chats whose source is this app show no source icon.
 _Avoid_: origin, platform (as an attribute of a chat)

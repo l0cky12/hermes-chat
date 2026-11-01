@@ -72,13 +72,15 @@ function ChatRow({
 }) {
   return (
     <div
-      className={`row ${selected ? "sel" : ""}`}
+      className={`row ${selected ? "sel" : ""} ${chat.unread ? "unread" : ""}`}
       onClick={onOpen}
       title={chat.source !== "app" ? `${chat.title} (from ${SOURCE_LABEL[chat.source]})` : chat.title}
     >
       {chat.source !== "app" && <SourceIcon source={chat.source} />}
       <span className="row-title">{chat.title}</span>
-      <span className="row-meta">{chat.running ? <Spinner /> : relTime(chat.updatedAt)}</span>
+      <span className="row-meta">
+        {chat.running ? <Spinner /> : chat.unread ? <span className="dot" title="Unread" /> : relTime(chat.updatedAt)}
+      </span>
       <SettleButton settled={chat.settled} size={14} className="row-action" onSettle={onSettle} />
     </div>
   );
@@ -102,6 +104,7 @@ export function ChatList({
   const [settledOpen, setSettledOpen] = useState(false);
   const active = chats.filter((c) => !c.settled).sort(byRecent);
   const settled = chats.filter((c) => c.settled).sort(byRecent);
+  const settledUnread = settled.filter((c) => c.unread).length;
   const row = (c: Chat) => (
     <ChatRow key={c.id} chat={c} selected={c.id === selectedId} onOpen={() => onOpen(c.id)} onSettle={(s) => onSettle(c.id, s)} />
   );
@@ -122,6 +125,7 @@ export function ChatList({
           <ChevronRight size={14} className={`chev ${settledOpen ? "open" : ""}`} />
           Settled
           <span className="count">{settled.length}</span>
+          {settledUnread > 0 && !settledOpen && <span className="dot" title={`${settledUnread} unread`} />}
         </button>
         {settledOpen && <div className="settled-list">{settled.map(row)}</div>}
       </div>

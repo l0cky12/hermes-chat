@@ -45,6 +45,8 @@ export type Chat = {
   source: Source;
   settled: boolean;
   updatedAt: number;
+  /** Something happened in it since the owner last opened it here or in another Hermes client (ADR 0002). */
+  unread?: boolean;
   items: Item[];
   /** Its stored history is on the way (`Hermes.open`). */
   loading?: boolean;

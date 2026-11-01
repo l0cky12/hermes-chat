@@ -101,10 +101,12 @@ function Main({ hermes }: { hermes: Hermes }) {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // An opened chat shows its stored history; a chat already open on this connection is left as it is. After a
-  // reconnect the chat on screen loads again.
+  // An opened chat shows its stored history and is marked read; a chat already open on this connection is left as it
+  // is. After a reconnect the chat on screen loads again.
   useEffect(() => {
-    if (selectedId && status === "connected") void hermes.open(selectedId);
+    if (!selectedId || status !== "connected") return;
+    void hermes.open(selectedId);
+    return () => hermes.leave(selectedId);
   }, [hermes, selectedId, status]);
 
   // Back on the network: don't wait for the next retry, or for the owner if it gave up.

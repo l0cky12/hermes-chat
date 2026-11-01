@@ -155,6 +155,7 @@ describe("Local chat list cache", () => {
       source: "telegram",
       settled: false,
       updatedAt: expect.any(Number),
+      unread: false,
       items: [],
     });
     expect(cache.saved.default.find((c) => c.id === id)).toEqual({
@@ -163,6 +164,7 @@ describe("Local chat list cache", () => {
       source: "app",
       settled: false,
       updatedAt: expect.any(Number),
+      unread: false,
       items: [],
     });
   });

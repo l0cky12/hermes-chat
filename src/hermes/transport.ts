@@ -48,6 +48,8 @@ type SessionRow = {
   last_active?: number | null;
   pinned?: boolean;
   archived?: boolean;
+  /** Activity postdates the session's shared read watermark (`SessionDB.session_unread`). */
+  unread?: boolean;
 };
 type SessionPage = { sessions: SessionRow[]; total: number };
 
@@ -144,6 +146,12 @@ export class Hermes {
   private pinWrites = new Map<string, Promise<void>>();
   /** Chats whose pinned flag was written since the list sync under way read the list, which may predate the write. */
   private pinnedSinceListRead = new Set<string>();
+  /** The chat on screen. It is kept read: new activity in it doesn't show the dot. */
+  private viewing?: string;
+  /** The latest write marking each chat read, while it is under way. */
+  private readWrites = new Map<string, Promise<void>>();
+  /** Chats marked read since the list sync under way read the list, which may predate the write. */
+  private readSinceListRead = new Set<string>();
   /** Resumes in flight, so opening a chat and replying in it share one. */
   private resuming = new Map<string, Promise<string>>();
   /** Messages Hermes hasn't accepted yet, so a Stop waits for the turn it stops. */
@@ -240,10 +248,14 @@ export class Hermes {
 
   /**
    * Opens a chat: one this connection hasn't resumed yet is resumed now and shows its stored history. If that
-   * fails the chat shows why, and the next open tries again.
+   * fails the chat shows why, and the next open tries again. The chat is on screen until `leave`: it is marked read
+   * on the server, and stays read while the owner is in it. Hermes counts a chat no client has marked as read, and
+   * only marking it lets later activity show the dot.
    */
   async open(chatId: string): Promise<void> {
     if (!this.snapshot.chats.some((c) => c.id === chatId)) return;
+    this.viewing = chatId;
+    this.markRead(chatId);
     try {
       await this.resume(chatId);
     } catch (e) {
@@ -252,6 +264,11 @@ export class Hermes {
         c.running ? c : { ...c, items: [...withoutLoadError(c.items), { kind: "error", id: LOAD_ERROR_ID, text: `Couldn't load this chat: ${(e as Error).message}` }] },
       );
     }
+  }
+
+  /** The owner has moved off the chat; new activity in it shows the dot again. */
+  leave(chatId: string) {
+    if (this.viewing === chatId) this.viewing = undefined;
   }
 
   /** Checks local files the owner wants to attach: images up to 25 MB, other files up to 256 MB. */
@@ -441,6 +458,8 @@ export class Hermes {
     this.patchChat(chat.id, (c) => applyEvent(c, type, payload));
     // By the end of a turn Hermes has stored the session, so a pin that failed earlier can succeed.
     if (type === "message.complete" && this.pinWanted.has(chat.id)) this.track(this.writePin(chat.id));
+    // The finished reply is newer than the read watermark, though the owner watched it come in.
+    if (type === "message.complete" && chat.id === this.viewing) this.markRead(chat.id);
   }
 
   /**
@@ -596,9 +615,25 @@ export class Hermes {
     return write;
   }
 
+  /**
+   * Clears the chat's dot here at once and moves its shared read watermark to now (`PATCH {unread: false}`), so
+   * opening it here clears the dot in every Hermes client. A failed write isn't reported: the next refresh shows
+   * the dot again.
+   */
+  private markRead(chatId: string) {
+    this.patchChat(chatId, (c) => (c.unread ? { ...c, unread: false } : c));
+    const write: Promise<void> = this.rest("PATCH", `api/sessions/${encodeURIComponent(chatId)}`, { unread: false, profile: this.profile })
+      .then(() => void this.readSinceListRead.add(chatId))
+      .catch(() => {})
+      .finally(() => this.readWrites.get(chatId) === write && this.readWrites.delete(chatId));
+    this.readWrites.set(chatId, write);
+    this.track(write);
+  }
+
   private async syncOnce() {
     const cutoff = Date.now() - LIST_WINDOW_MS;
     this.pinnedSinceListRead.clear();
+    this.readSinceListRead.clear();
     const rows = new Map<string, SessionRow>();
     try {
       for (let page = 0; page < MAX_PAGES; page++) {
@@ -622,6 +657,7 @@ export class Hermes {
     }
 
     const known = new Map(this.snapshot.chats.map((c) => [c.id, c]));
+    let readOnScreen = false;
     const listed = [...rows.values()]
       .filter((r) => !r.archived && lastActive(r) >= cutoff)
       .map((r): Chat => {
@@ -634,6 +670,9 @@ export class Hermes {
           if (wanted === !!r.pinned) this.pinWanted.delete(r.id);
           else if (!this.submitting.has(r.id)) this.track(this.writePin(r.id));
         }
+        // A row read before this app marked the chat read is stale too.
+        const readHere = this.readWrites.has(r.id) || this.readSinceListRead.has(r.id);
+        if (r.id === this.viewing && r.unread && !readHere) readOnScreen = true;
         return {
           items: [],
           ...c,
@@ -642,6 +681,7 @@ export class Hermes {
           source: toSource(r.source),
           settled: !(wanted ?? r.pinned),
           updatedAt: Math.max(c?.updatedAt ?? 0, lastActive(r)),
+          unread: !!r.unread && !readHere && r.id !== this.viewing,
         };
       });
     // Chats started or resumed on this connection stay even before Hermes stores them (a new chat has no row
@@ -650,9 +690,10 @@ export class Hermes {
     const onThisConnection = this.snapshot.chats.filter((c) => c.runtimeId && !listedIds.has(c.id));
     const chats = [...onThisConnection, ...listed];
     this.update({ chats, syncError: undefined });
+    if (readOnScreen) this.markRead(this.viewing!);
     this.cache.save(
       this.profile,
-      chats.map(({ id, title, source, settled, updatedAt }) => ({ id, title, source, settled, updatedAt, items: [] })),
+      chats.map(({ id, title, source, settled, updatedAt, unread }) => ({ id, title, source, settled, updatedAt, unread, items: [] })),
     );
   }
 
