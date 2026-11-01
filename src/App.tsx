@@ -2,9 +2,10 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { connect, type Hermes } from "./hermes/transport";
 import { localChatCache } from "./hermes/chatCache";
 import { tauriPipe, type SignInDetails } from "./hermes/tauriPipe";
-import type { Attachment, Chat } from "./hermes/model";
+import type { Attachment, Chat, Found } from "./hermes/model";
 import { ChatList, Rail } from "./ui/Sidebar";
 import { ChatPane } from "./ui/ChatPane";
+import { SearchPalette } from "./ui/Search";
 import { SignIn } from "./ui/SignIn";
 
 const SAVED = "hermes-chat.sign-in"; // Everything but the password.
@@ -55,6 +56,9 @@ function Main({ hermes }: { hermes: Hermes }) {
   const [listOpen, setListOpen] = useState(true);
   const [draftError, setDraftError] = useState<string>();
   const [toast, setToast] = useState<Toast | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  // The search result the chat on screen was opened from; `at` tells one pick from the next.
+  const [picked, setPicked] = useState<{ found: Found; at: number } | null>(null);
 
   // No chat selected means a fresh draft; the Hermes session is created on the first message.
   const draft: Chat = {
@@ -67,10 +71,26 @@ function Main({ hermes }: { hermes: Hermes }) {
   };
   const selected = chats.find((c) => c.id === selectedId) ?? draft;
 
+  const openChat = (id: string | null) => {
+    setSelectedId(id);
+    setPicked(null);
+  };
+
   const newChat = () => {
-    setSelectedId(null);
+    openChat(null);
     setDraftError(undefined);
   };
+
+  const pick = (found: Found) => {
+    hermes.reveal(found);
+    setSelectedId(found.chatId);
+    setPicked({ found, at: Date.now() });
+    setSearchOpen(false);
+  };
+  const findTarget =
+    picked?.found.chatId === selected.id && picked.found.find
+      ? { query: picked.found.find, itemId: hermes.locate(picked.found), at: picked.at }
+      : undefined;
 
   const send = async (text: string, attachments: Attachment[]) => {
     let id = selectedId;
@@ -81,7 +101,7 @@ function Main({ hermes }: { hermes: Hermes }) {
         setDraftError(`Couldn't start a chat: ${e instanceof Error ? e.message : String(e)}`);
         return;
       }
-      setSelectedId(id);
+      openChat(id);
     }
     await hermes.send(id, text, attachments);
   };
@@ -132,7 +152,10 @@ function Main({ hermes }: { hermes: Hermes }) {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return;
       const k = e.key.toLowerCase();
-      if (k === "n") {
+      if (k === "k") {
+        e.preventDefault();
+        setSearchOpen((o) => !o);
+      } else if (k === "n") {
         e.preventDefault();
         newChat();
       } else if (k === "b") {
@@ -154,6 +177,7 @@ function Main({ hermes }: { hermes: Hermes }) {
         onReconnect={() => void hermes.reconnect()}
         onToggleList={() => setListOpen((o) => !o)}
         onNew={newChat}
+        onSearch={() => setSearchOpen(true)}
       />
       {listOpen && (
         <ChatList
@@ -161,7 +185,7 @@ function Main({ hermes }: { hermes: Hermes }) {
           chats={chats}
           syncError={syncError}
           selectedId={selectedId}
-          onOpen={setSelectedId}
+          onOpen={openChat}
           onSettle={setSettled}
           onListProfiles={() => hermes.profiles()}
           onSwitchProfile={switchProfile}
@@ -171,6 +195,7 @@ function Main({ hermes }: { hermes: Hermes }) {
         <ChatPane
           key={selected.id}
           chat={selected}
+          findTarget={findTarget}
           status={status}
           alsoPostsIn={hermes.alsoPostsIn(selected.id)}
           onAttach={(paths) => hermes.checkAttachments(paths)}
@@ -179,6 +204,7 @@ function Main({ hermes }: { hermes: Hermes }) {
           onSettle={selected === draft ? undefined : (s) => setSettled(selected.id, s)}
         />
       </main>
+      {searchOpen && <SearchPalette onSearch={(q) => hermes.search(q)} onPick={pick} onClose={() => setSearchOpen(false)} />}
       {toast && (
         <div className="toast" key={toast.at} role="status">
           <span>{toast.text}</span>

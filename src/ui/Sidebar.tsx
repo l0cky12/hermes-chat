@@ -1,7 +1,7 @@
 // Icon rail beside a chat list (ADR 0001), ported from the prototype's variants C and A. The list's header is the
-// profile switcher. Search and Settings come in later tickets.
+// profile switcher. Settings come in a later ticket.
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronRight, LockOpen, SquarePen } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, LockOpen, Search, SquarePen } from "lucide-react";
 import type { Chat, ConnectionStatus } from "../hermes/model";
 import { SOURCE_LABEL } from "../hermes/model";
 import type { Route } from "../hermes/pipe";
@@ -19,6 +19,7 @@ export function Rail({
   onReconnect,
   onToggleList,
   onNew,
+  onSearch,
 }: {
   status: ConnectionStatus;
   route?: Route;
@@ -27,6 +28,7 @@ export function Rail({
   onReconnect: () => void;
   onToggleList: () => void;
   onNew: () => void;
+  onSearch: () => void;
 }) {
   const where = route?.kind === "ssh" ? `ssh://${route.target}` : route?.url;
   // The full wording lives only in the tooltip (ADR 0001).
@@ -47,6 +49,9 @@ export function Rail({
         </button>
         <button className="icon-btn" title="New chat (Ctrl+N)" onClick={onNew}>
           <SquarePen size={18} />
+        </button>
+        <button className="icon-btn" title="Search all chats (Ctrl+K)" onClick={onSearch}>
+          <Search size={18} />
         </button>
       </div>
       <div className="rail-bottom">
@@ -184,6 +189,11 @@ export function ChatList({
   onSwitchProfile: (name: string) => void;
 }) {
   const [settledOpen, setSettledOpen] = useState(false);
+  // Opening a Settled chat, say from a search, shows it in the list; settling the chat on screen doesn't.
+  const selectedSettled = chats.some((c) => c.id === selectedId && c.settled);
+  useEffect(() => {
+    if (selectedSettled) setSettledOpen(true);
+  }, [selectedId]);
   const active = chats.filter((c) => !c.settled).sort(byRecent);
   const settled = chats.filter((c) => c.settled).sort(byRecent);
   const settledUnread = settled.filter((c) => c.unread).length;

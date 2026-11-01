@@ -146,6 +146,43 @@ export class FakeHermes {
       const pinned = visible.filter((s) => s.pinned && !page.includes(s));
       return { sessions: [...page, ...pinned].map((s) => ({ ...s, unread: unread(s) })), total: recent.length, limit, offset, storage: {} };
     },
+    // `search_sessions` in `hermes_cli/web_routers/sessions.py` at the deployed `bf0203a`: one row per chat, archived
+    // ones too. Message hits come first, then title matches. FTS5 matches a message holding every word of the query,
+    // each as a prefix; its `snippet()` marks the matched words between `>>>` and `<<<`. Message hits carry the
+    // message's `role`.
+    "GET /api/sessions/search": ({ query }) => {
+      const q = (query.get("q") ?? "").trim();
+      const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+      if (!words.length) return { results: [] };
+      const limit = Math.min(Number(query.get("limit") ?? 20), 100);
+      const excluded = (query.get("exclude_sources") ?? "").split(",").filter(Boolean);
+      const store = this.storeOrFail(query.get("profile")).filter((s) => !excluded.includes(s.source));
+      const hits = (token: string) => words.some((w) => token.toLowerCase().startsWith(w));
+      const results = new Map<string, Record<string, unknown>>();
+      const add = (s: SessionRow, snippet: string, role: string | null) =>
+        results.size < limit && !results.has(s.id) && results.set(s.id, {
+          snippet, role, source: s.source, model: null, session_started: s.started_at, session_id: s.id, lineage_root: s.id,
+          profile: query.get("profile") ?? "default", id: s.id, title: s.title, started_at: s.started_at,
+          last_active: s.last_active ?? s.started_at, message_count: s.message_count, preview: s.preview, archived: s.archived,
+        });
+      for (const s of store)
+        for (const m of this.transcripts[s.id] ?? []) {
+          const text = m.text ?? (typeof m.content === "string" ? m.content : "");
+          // Odd entries are FTS5 tokens (unicode61: runs of letters and digits), even ones what lies between.
+          const parts = text.split(/([\p{L}\p{N}]+)/u);
+          const tokens = parts.filter((_, i) => i % 2);
+          if (!words.every((w) => tokens.some((t) => t.toLowerCase().startsWith(w)))) continue;
+          // snippet(..., '>>>', '<<<', '...', 40): up to 40 tokens from a little before the first match.
+          const first = parts.findIndex((t, i) => i % 2 && hits(t));
+          const start = Math.max(1, first - 20);
+          const end = Math.min(parts.length, start + 79);
+          const body = parts.slice(start, end).map((t, i) => (i % 2 === 0 && hits(t) ? `>>>${t}<<<` : t)).join("");
+          add(s, `${start > 1 ? "..." : parts[0]}${body}${end < parts.length - 1 ? "..." : (parts[end] ?? "")}`, m.role);
+          break;
+        }
+      for (const s of store) if (s.title?.toLowerCase().includes(q.toLowerCase())) add(s, s.preview || `Session title matched: ${q}`, null);
+      return { results: [...results.values()] };
+    },
     // `hermes_cli/web_routers/profiles.py` `_profile_to_dict` at the deployed `bf0203a`, trimmed to what matters here.
     "GET /api/profiles": () => ({
       profiles: ["default", ...Object.keys(this.otherProfiles)].map((name) => ({

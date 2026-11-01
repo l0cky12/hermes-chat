@@ -1,13 +1,13 @@
-// Transcript, tool-call groups, composer and the Settle button, ported from the prototype. Find-in-chat and
-// approvals come in later tickets.
+// Transcript, tool-call groups, find bar, composer and the Settle button, ported from the prototype. Approvals come
+// in a later ticket.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, ChevronRight, Paperclip, Square, Wrench, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronRight, ChevronUp, Paperclip, Search, Square, Wrench, X } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import type { AttachCheck, Attachment, Chat, ConnectionStatus, Item, Source } from "../hermes/model";
 import { SOURCE_LABEL } from "../hermes/model";
 import { Markdown } from "./Markdown";
-import { SettleButton, SourceIcon, Spinner } from "./bits";
+import { SettleButton, SourceIcon, Spinner, highlight } from "./bits";
 
 type ToolItem = Extract<Item, { kind: "tool" }>;
 type Block = { kind: "tools"; id: string; tools: ToolItem[] } | Exclude<Item, ToolItem>;
@@ -25,6 +25,12 @@ function toBlocks(items: Item[]): Block[] {
   return out;
 }
 
+/**
+ * Where the find bar opens when a chat is opened from a search: on `query`, at the first match in the message
+ * `itemId`, or at the first match anywhere when the matched message isn't known. `at` tells one pick from the next.
+ */
+export type FindTarget = { query: string; itemId?: string; at: number };
+
 const STATUS_NOTE: Record<ConnectionStatus, string | undefined> = {
   connected: undefined,
   reconnecting: "Reconnecting to Hermes…",
@@ -33,10 +39,11 @@ const STATUS_NOTE: Record<ConnectionStatus, string | undefined> = {
 
 /**
  * `alsoPostsIn`: the Telegram or Discord chat Hermes will also post its replies in. `onSettle` is left out for a chat
- * not started yet.
+ * not started yet. Ctrl+F opens the find bar.
  */
 export function ChatPane({
   chat,
+  findTarget,
   status,
   alsoPostsIn,
   onAttach,
@@ -45,6 +52,7 @@ export function ChatPane({
   onSettle,
 }: {
   chat: Chat;
+  findTarget?: FindTarget;
   status: ConnectionStatus;
   alsoPostsIn?: Source;
   onAttach: (paths: string[]) => Promise<AttachCheck>;
@@ -53,13 +61,80 @@ export function ChatPane({
   onSettle?: (settled: boolean) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const findRef = useRef<HTMLInputElement>(null);
   const stickToBottom = useRef(true);
+  const [findOpen, setFindOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  // Which match is the current one, counting from the top of the chat.
+  const [matchIndex, setMatchIndex] = useState(0);
+  const [count, setCount] = useState(0);
+  // A search pick waiting for the chat's history, so the find bar can land on the matched message.
+  const [landing, setLanding] = useState(false);
+  // The current match should be scrolled to after the next render.
+  const scrollToMatch = useRef(false);
+
+  useEffect(() => {
+    if (!findTarget) return;
+    setFindOpen(true);
+    setQuery(findTarget.query);
+    setLanding(true);
+    stickToBottom.current = false;
+  }, [findTarget?.at]);
+
+  const openFind = () => {
+    setFindOpen(true);
+    setTimeout(() => findRef.current?.select(), 0);
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        openFind();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const q = findOpen ? query : "";
+
+  // After every render, count the marks and point at the current one.
+  useLayoutEffect(() => {
+    const marks = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("mark.hit") ?? []);
+    setCount(marks.length);
+    let idx = Math.min(matchIndex, marks.length - 1);
+    // Land once the history is in: it has marks, or it has loaded without any (the match was in a tool call, say).
+    if (landing && !chat.loading && (marks.length || chat.runtimeId)) {
+      setLanding(false);
+      const itemId = findTarget?.itemId;
+      idx = Math.max(0, itemId ? marks.findIndex((m) => m.closest(`[data-item="${CSS.escape(itemId)}"]`)) : 0);
+      setMatchIndex(idx);
+      scrollToMatch.current = true;
+    }
+    marks.forEach((m, i) => m.classList.toggle("current", i === idx));
+    if (scrollToMatch.current && marks[idx]) {
+      scrollToMatch.current = false;
+      marks[idx].scrollIntoView({ block: "center" });
+    }
+  });
 
   // Follow the stream while the user is at the bottom.
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
+    if (el && stickToBottom.current && !q) el.scrollTop = el.scrollHeight;
   });
+
+  const step = (d: number) => {
+    if (!count) return;
+    setMatchIndex((i) => (Math.min(i, count - 1) + d + count) % count);
+    scrollToMatch.current = true;
+    stickToBottom.current = false;
+  };
+  const closeFind = () => {
+    setFindOpen(false);
+    setLanding(false);
+  };
 
   const blocks = toBlocks(chat.items);
   const last = chat.items[chat.items.length - 1];
@@ -72,9 +147,49 @@ export function ChatPane({
           <span>{chat.title}</span>
           {chat.settled && <span className="badge">Settled</span>}
         </div>
-        {onSettle && (
-          <div className="chat-head-actions">
-            <SettleButton settled={chat.settled} size={16} className="icon-btn" onSettle={onSettle} />
+        <div className="chat-head-actions">
+          <button
+            className="icon-btn"
+            title="Find in chat (Ctrl+F)"
+            onClick={openFind}
+          >
+            <Search size={16} />
+          </button>
+          {onSettle && <SettleButton settled={chat.settled} size={16} className="icon-btn" onSettle={onSettle} />}
+        </div>
+        {findOpen && (
+          <div className="find" role="search">
+            <input
+              ref={findRef}
+              autoFocus
+              placeholder="Find in chat"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setMatchIndex(0);
+                setLanding(false);
+                scrollToMatch.current = true;
+                stickToBottom.current = false;
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === "ArrowDown" || e.key === "ArrowUp") {
+                  e.preventDefault();
+                  step(e.key === "ArrowUp" || (e.key === "Enter" && e.shiftKey) ? -1 : 1);
+                } else if (e.key === "Escape") closeFind();
+              }}
+            />
+            <span className="find-count" aria-live="polite">
+              {query ? `${count ? Math.min(matchIndex, count - 1) + 1 : 0} of ${count}` : ""}
+            </span>
+            <button className="icon-btn" title="Previous (↑ or Shift+Enter)" disabled={!count} onClick={() => step(-1)}>
+              <ChevronUp size={16} />
+            </button>
+            <button className="icon-btn" title="Next (↓ or Enter)" disabled={!count} onClick={() => step(1)}>
+              <ChevronDown size={16} />
+            </button>
+            <button className="icon-btn" title="Close (Esc)" onClick={closeFind}>
+              <X size={16} />
+            </button>
           </div>
         )}
       </header>
@@ -103,7 +218,7 @@ export function ChatPane({
           {blocks.map((b) => {
             if (b.kind === "user")
               return (
-                <div key={b.id} className="msg user">
+                <div key={b.id} className="msg user" data-item={b.id}>
                   {b.attachments && (
                     <div className="msg-files">
                       {b.attachments.map((name, i) => (
@@ -114,13 +229,13 @@ export function ChatPane({
                       ))}
                     </div>
                   )}
-                  {b.text && <div className="bubble-text">{b.text}</div>}
+                  {b.text && <div className="bubble-text">{highlight(b.text, q)}</div>}
                 </div>
               );
             if (b.kind === "assistant")
               return (
-                <div key={b.id} className="msg assistant">
-                  <Markdown text={b.text} />
+                <div key={b.id} className="msg assistant" data-item={b.id}>
+                  <Markdown text={b.text} query={q} />
                   {chat.running && b === last && <span className="cursor" />}
                   {b.interrupted && <div className="stopped">Stopped</div>}
                 </div>

@@ -310,6 +310,12 @@ Checked over SSH as `liam@10.2.1.136` (LAN address of the Tailscale node `hermes
 - **Listing profiles:** `GET /api/profiles` → `{"profiles": [{name, path, is_default, model, provider, has_env, skill_count, gateway_running, description, display_name, ...}]}` (`hermes_cli/web_routers/profiles.py:84-100, 794-809` at `bf0203a`). On error the server falls back to scanning the profile directories.
 - **`sessions.changed` across profiles:** the change watcher hashes the launch home's `state.db` and only the profiles the process serves (`tui_gateway/change_watcher.py:278-289`). So a standalone dashboard may not announce changes in another profile's store, and the app's 60-second poll covers that.
 
+### Searching chats (2026-10-31, deployed `bf0203a`, source read over SSH)
+
+- `GET /api/sessions/search?q=&profile=&limit=&exclude_sources=` → `{"results": [...]}`, one row per chat (deduplicated by compression lineage), archived chats included. Each row has `id`/`session_id` (the lineage tip), `title`, `source`, `last_active`, `preview`, `archived`, `snippet` and `role`, but no `pinned` and no message id (`hermes_cli/web_routers/sessions.py:286-460`, same as `c419cf7`). Session id matches come first, then FTS5 message hits, then title matches; `role` is null for id and title matches.
+- Message hits: each word of `q` gets a `*` prefix wildcard, and FTS5 matches a message that holds all of them. `snippet` is `snippet(table, -1, '>>>', '<<<', '...', 40)`, so matched words come wrapped in `>>>`/`<<<`, and `...` marks where the message was cut (`hermes_state_search.py:945`). The official desktop app strips the markers (`apps/desktop/src/app/chat/sidebar/index.tsx:292`).
+- So a client opening a chat "at the match" has to find the message itself, by looking for the snippet's text in the history. Every pinned chat is on each `GET /api/sessions` page, so a hit that isn't in the client's list is unpinned or archived.
+
 ## Open risks
 
 Items marked UNCONFIRMED above, plus things that must be checked against the user's live Debian server:

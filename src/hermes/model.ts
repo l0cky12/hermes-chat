@@ -56,3 +56,15 @@ export type Chat = {
 };
 
 export type ConnectionStatus = "connected" | "reconnecting" | "offline";
+
+/**
+ * A chat found by searching all chats (`Hermes.search`). `snippet`: the text around the match, with the matched words
+ * marked. `find`: what find-in-chat looks for when the chat opens; there is none when only the title matched.
+ */
+export type Found = Pick<Chat, "title" | "source" | "settled" | "updatedAt"> & {
+  chatId: string;
+  snippet: { text: string; hit?: boolean }[];
+  find?: string;
+  /** The kind of message that matched. */
+  role?: "user" | "assistant";
+};

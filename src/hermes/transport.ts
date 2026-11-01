@@ -4,7 +4,8 @@
 // The chat list comes from dashboard REST, because the legacy `session.list` has no last-activity field.
 // Attachments: research doc §7. A dropped connection is reconnected on its own; keepalive: research doc §1.
 // One profile's chats show at a time; switching opens the connection again for the new profile.
-import type { AttachCheck, Attachment, Chat, ConnectionStatus, Item, Source } from "./model";
+// Search runs on dashboard REST: research doc "Searching chats".
+import type { AttachCheck, Attachment, Chat, ConnectionStatus, Found, Item, Source } from "./model";
 import type { OpenPipe, Pipe, PipeEvent, Route } from "./pipe";
 import { isUnsecure } from "./unsecure";
 
@@ -23,6 +24,8 @@ const LIST_WINDOW_MS = 30 * 86_400_000;
 /** Dashboard REST caps `GET /api/sessions` pages at 100. */
 const PAGE_SIZE = 100;
 const MAX_PAGES = 20;
+/** The most chats one search lists; dashboard REST caps it at 100. */
+const SEARCH_LIMIT = 50;
 
 const MiB = 1024 * 1024;
 /** The most legacy `image.attach_bytes` and `file.attach` take (research doc §7). PDFs go as files: `pdf.attach`
@@ -58,6 +61,15 @@ type SessionRow = {
   unread?: boolean;
 };
 type SessionPage = { sessions: SessionRow[]; total: number };
+/**
+ * A row of dashboard REST `GET /api/sessions/search` (research doc "Searching chats"): one per chat, archived ones
+ * too. `snippet` is FTS5's, with each matched word `>>>marked<<<`; `role` is the matched message's, and null when the
+ * chat's id or title matched instead.
+ */
+type SearchRow = Pick<SessionRow, "id" | "source" | "title" | "preview" | "started_at" | "last_active" | "archived"> & {
+  snippet?: string;
+  role?: string | null;
+};
 /** Dashboard REST `GET /api/profiles` (`web_routers/profiles.py`), as far as this app reads it. */
 type ProfileList = { profiles: { name: string }[] };
 
@@ -169,6 +181,8 @@ export class Hermes {
   private readSinceListRead = new Set<string>();
   /** Resumes in flight, so opening a chat and replying in it share one. */
   private resuming = new Map<string, Promise<string>>();
+  /** Chats the owner picked from a search though the list doesn't hold them; they stay in it until the profile changes. */
+  private revealed = new Set<string>();
   /** Messages Hermes hasn't accepted yet, so a Stop waits for the turn it stops. */
   private submitting = new Map<string, Promise<unknown>>();
   private syncing?: Promise<void>;
@@ -256,6 +270,7 @@ export class Hermes {
     if (name === this.profile) return;
     this.viewing = undefined;
     this.staleItems.clear();
+    this.revealed.clear();
     this.cache.rememberProfile(name);
     this.update({ profile: name, chats: this.cache.load(name), syncError: undefined });
     // A reconnect under way may be opening the old profile's socket.
@@ -264,6 +279,59 @@ export class Hermes {
     if (this.pipe && this.pipeProfile === name) return void this.sync();
     if (this.pipe) this.detach(`Switching to the ${name} profile.`);
     await this.reconnect();
+  }
+
+  /**
+   * Searches the words and titles of every chat in the profile, Active and Settled, however old.
+   * Chats archived in another Hermes client are left out, as they are from the list.
+   */
+  async search(text: string): Promise<Found[]> {
+    const q = text.trim();
+    if (!q) return [];
+    const query = new URLSearchParams({ q, profile: this.profile, limit: String(SEARCH_LIMIT), exclude_sources: "cron" });
+    const res = (await this.rest("GET", `api/sessions/search?${query}`)) as { results: SearchRow[] };
+    const listed = new Map(this.snapshot.chats.map((c) => [c.id, c]));
+    return res.results
+      .filter((r) => !r.archived)
+      .map((r): Found => {
+        const c = listed.get(r.id);
+        const snippet = snippetParts(r.snippet ?? "");
+        const role = r.role === "user" || r.role === "assistant" ? r.role : undefined;
+        return {
+          chatId: r.id,
+          title: r.title || r.preview || c?.title || "Untitled chat",
+          source: toSource(r.source),
+          // Every pinned chat is listed, so one that isn't is Settled.
+          settled: c?.settled ?? true,
+          updatedAt: Math.max(c?.updatedAt ?? 0, lastActive(r)),
+          snippet,
+          ...(role && { role, find: findTerm(q, snippet) }),
+        };
+      });
+  }
+
+  /** Puts a found chat in the list, if it isn't there yet, so it can be opened (`open`). */
+  reveal(found: Found) {
+    if (this.snapshot.chats.some((c) => c.id === found.chatId)) return;
+    const { chatId: id, title, source, settled, updatedAt } = found;
+    this.revealed.add(id);
+    this.update({ chats: [...this.snapshot.chats, { id, title, source, settled, updatedAt, items: [] }] });
+  }
+
+  /**
+   * The id of the message a search matched in a found chat, once its history has loaded. FTS5 cuts the snippet out of
+   * the stored message and puts "..." where it cut, so the longest piece between cuts picks the message out; failing
+   * that, the first message of its kind holding the `find` text.
+   */
+  locate(found: Found): string | undefined {
+    const chat = this.snapshot.chats.find((c) => c.id === found.chatId);
+    if (!chat || !found.role) return undefined;
+    const flat = (t: string) => t.replace(/\s+/g, " ").toLowerCase();
+    const pieces = flat(found.snippet.map((p) => p.text).join("")).split("...").map((t) => t.trim());
+    const longest = pieces.reduce((a, b) => (b.length > a.length ? b : a), "");
+    const messages = chat.items.flatMap((i) => (i.kind === found.role ? [{ id: i.id, text: flat(i.text) }] : []));
+    const holding = (t: string) => t && messages.find((m) => m.text.includes(t));
+    return (holding(longest) || holding(flat(found.find ?? "")) || undefined)?.id;
   }
 
   subscribe = (fn: () => void) => {
@@ -742,9 +810,9 @@ export class Hermes {
         };
       });
     // Chats started or resumed on this connection stay even before Hermes stores them (a new chat has no row
-    // until its first prompt).
+    // until its first prompt), and so do chats picked from a search.
     const listedIds = new Set(listed.map((c) => c.id));
-    const onThisConnection = this.snapshot.chats.filter((c) => c.runtimeId && !listedIds.has(c.id));
+    const onThisConnection = this.snapshot.chats.filter((c) => (c.runtimeId || this.revealed.has(c.id)) && !listedIds.has(c.id));
     const chats = [...onThisConnection, ...listed];
     this.update({ chats, syncError: undefined });
     if (readOnScreen) this.markRead(this.viewing!);
@@ -795,8 +863,27 @@ export class Hermes {
   }
 }
 
-function lastActive(r: SessionRow): number {
+function lastActive(r: Pick<SessionRow, "last_active" | "started_at">): number {
   return (r.last_active ?? r.started_at ?? 0) * 1000;
+}
+
+/** An FTS5 snippet as text with the matched words marked, on one line. */
+function snippetParts(snippet: string): Found["snippet"] {
+  return snippet
+    .replace(/\s+/g, " ")
+    .split(/>>>(.*?)<<</)
+    .flatMap((text, i) => (!text ? [] : i % 2 ? [{ text, hit: true }] : [{ text }]));
+}
+
+/**
+ * What find-in-chat looks for in a chat found by `q`: a one-word `q` where the snippet holds it, else the first
+ * matched word, since Hermes matches each word of `q` on its own and as a prefix. Several words are never looked for
+ * together: on screen, a line break or formatting can sit between them.
+ */
+function findTerm(q: string, snippet: Found["snippet"]): string {
+  const plain = snippet.map((p) => p.text).join("");
+  if (!/\s/.test(q) && plain.toLowerCase().includes(q.toLowerCase())) return q;
+  return snippet.find((p) => p.hit)?.text ?? q;
 }
 
 /** A chat's Source from the session's `source` field. This app's own chats, and `gui` ones, show no icon. */

@@ -1,4 +1,5 @@
 // Small shared UI bits, ported from the prototype.
+import type { ReactNode } from "react";
 import { Archive, ArchiveRestore, Globe, Monitor, Send, Terminal } from "lucide-react";
 import type { Source } from "../hermes/model";
 import { SOURCE_LABEL } from "../hermes/model";
@@ -70,4 +71,20 @@ export function relTime(ts: number) {
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   if (s < 86400 * 7) return `${Math.floor(s / 86400)}d`;
   return `${Math.floor(s / (86400 * 7))}w`;
+}
+
+export const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Wraps every case-insensitive occurrence of `query` in `<mark className={className}>`. */
+export function highlight(text: string, query: string, className = "hit"): ReactNode {
+  if (!query) return text;
+  return text.split(new RegExp(`(${escapeRe(query)})`, "gi")).map((part, i) =>
+    i % 2 === 1 ? (
+      <mark key={i} className={className}>
+        {part}
+      </mark>
+    ) : (
+      part
+    ),
+  );
 }
