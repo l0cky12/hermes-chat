@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Hermes Chat
+Comment=Chat with a remote Hermes Agent
+Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 hermes-chat
+Icon=hermes-chat
+Terminal=false
+Categories=Network;Chat;
+StartupWMClass=hermes-chat

@@ -1,0 +1,54 @@
+# Maintainer: l0cky12 <73147961+l0cky12@users.noreply.github.com>
+
+pkgname=hermes-chat-git
+_pkgname=hermes-chat
+pkgver=r0
+pkgrel=1
+pkgdesc='Desktop chat client for a remote Hermes Agent'
+arch=('x86_64')
+url='https://github.com/l0cky12/hermes-chat'
+license=('LicenseRef-unknown')
+depends=('webkit2gtk-4.1' 'gtk3' 'libsoup3' 'glib2' 'cairo' 'gdk-pixbuf2' 'dbus'
+         'libgcc' 'glibc' 'hicolor-icon-theme')
+makedepends=('git' 'cargo' 'npm')
+optdepends=('openssh: sign in through an SSH tunnel'
+            'org.freedesktop.secrets: remember the dashboard password')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+# The -debug package makepkg splits off comes out empty for this build, so skip it.
+options=('!debug')
+source=("$_pkgname::git+$url.git"
+        "$_pkgname.desktop")
+sha256sums=('SKIP'
+            '4e69886b7eeca1e9ceb1cc528d7fb6f202708d74e1590b7a166534a35d4304d9')
+
+pkgver() {
+  cd "$_pkgname"
+  printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  cd "$_pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  npm ci --cache "$srcdir/npm-cache"
+  cargo fetch --locked --manifest-path src-tauri/Cargo.toml \
+    --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$_pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  # The Tauri CLI builds the frontend and adds the feature that embeds it in the binary.
+  node_modules/.bin/tauri build --no-bundle -- --frozen
+}
+
+package() {
+  cd "$_pkgname"
+  install -Dm755 "src-tauri/target/release/$_pkgname" "$pkgdir/usr/bin/$_pkgname"
+  # The launcher sets WEBKIT_DISABLE_DMABUF_RENDERER=1, as `npm run app` does.
+  install -Dm644 "$srcdir/$_pkgname.desktop" "$pkgdir/usr/share/applications/$_pkgname.desktop"
+  install -Dm644 src-tauri/icons/32x32.png "$pkgdir/usr/share/icons/hicolor/32x32/apps/$_pkgname.png"
+  install -Dm644 src-tauri/icons/128x128.png "$pkgdir/usr/share/icons/hicolor/128x128/apps/$_pkgname.png"
+  install -Dm644 src-tauri/icons/icon.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/$_pkgname.png"
+  install -Dm644 assets/icon.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/$_pkgname.svg"
+}

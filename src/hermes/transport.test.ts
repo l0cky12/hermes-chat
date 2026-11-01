@@ -5,13 +5,18 @@ import { APP_SOURCE, ProtocolMismatchError, connect } from "./transport";
 async function signedIn() {
   const server = new FakeHermes();
   const hermes = await connect(server.openPipe);
-  return { server, hermes, chat: (id: string) => hermes.getSnapshot().chats.find((c) => c.id === id)! };
+  return {
+    server,
+    hermes,
+    chat: (id: string) => hermes.getSnapshot().chats.find((c) => c.id === id)!,
+    runtime: (id: string) => server.runtimeIdOf(id)!,
+  };
 }
 
 describe("Hermes transport", () => {
   it("connects once gateway.ready arrives", async () => {
     const { hermes } = await signedIn();
-    expect(hermes.getSnapshot()).toEqual({ chats: [], status: "connected" });
+    expect(hermes.getSnapshot()).toEqual({ profile: "default", chats: [], olderPulled: false, status: "connected", route: { kind: "ssh", target: "liam@hermes" }, unsecure: false });
   });
 
   it("refuses a server that speaks the canonical protocol", async () => {
@@ -25,22 +30,22 @@ describe("Hermes transport", () => {
     const { server, hermes, chat } = await signedIn();
     const id = await hermes.newChat();
     expect(server.last("session.create")!.params).toEqual({ profile: "default", source: APP_SOURCE });
-    expect(chat(id)).toMatchObject({ id: "live-1", title: "New chat", source: "app", settled: false, items: [] });
+    expect(chat(id)).toMatchObject({ id: "20261031_120001_abc123", runtimeId: "rt-1", title: "New chat", source: "app", settled: false, items: [] });
   });
 
   it("sends a message and streams the reply into the chat", async () => {
-    const { server, hermes, chat } = await signedIn();
+    const { server, hermes, chat, runtime } = await signedIn();
     const id = await hermes.newChat();
     await hermes.send(id, "What's the disk usage on the NAS?");
-    expect(server.last("prompt.submit")!.params).toEqual({ session_id: id, profile: "default", text: "What's the disk usage on the NAS?" });
+    expect(server.last("prompt.submit")!.params).toEqual({ session_id: runtime(id), profile: "default", text: "What's the disk usage on the NAS?" });
     expect(chat(id)).toMatchObject({ title: "What's the disk usage on the NAS?", running: true });
 
-    server.event(id, "message.start");
-    server.event(id, "message.delta", { text: "It's at " });
+    server.event(runtime(id), "message.start");
+    server.event(runtime(id), "message.delta", { text: "It's at " });
     expect(chat(id).items.at(-1)).toMatchObject({ kind: "assistant", text: "It's at " });
-    server.event(id, "message.delta", { text: "**92%**." });
+    server.event(runtime(id), "message.delta", { text: "**92%**." });
     expect(chat(id).running).toBe(true);
-    server.event(id, "message.complete", { text: "It's at **92%**.", status: "complete" });
+    server.event(runtime(id), "message.complete", { text: "It's at **92%**.", status: "complete" });
 
     expect(chat(id).running).toBe(false);
     expect(chat(id).items.map((i) => [i.kind, "text" in i ? i.text : i.id])).toEqual([
@@ -50,35 +55,35 @@ describe("Hermes transport", () => {
   });
 
   it("shows a reply that arrives only in message.complete", async () => {
-    const { server, hermes, chat } = await signedIn();
+    const { server, hermes, chat, runtime } = await signedIn();
     const id = await hermes.newChat();
     await hermes.send(id, "hi");
-    server.event(id, "message.start");
-    server.event(id, "message.complete", { text: "Hello!", status: "complete" });
+    server.event(runtime(id), "message.start");
+    server.event(runtime(id), "message.complete", { text: "Hello!", status: "complete" });
     expect(chat(id).items.at(-1)).toMatchObject({ kind: "assistant", text: "Hello!" });
   });
 
   it("shows tool calls between reply segments", async () => {
-    const { server, hermes, chat } = await signedIn();
+    const { server, hermes, chat, runtime } = await signedIn();
     const id = await hermes.newChat();
     await hermes.send(id, "check disk");
-    server.event(id, "message.start");
-    server.event(id, "message.delta", { text: "Checking." });
-    server.event(id, "tool.start", { tool_id: "t1", name: "terminal", args: { command: "df -h" }, preview: "df -h" });
+    server.event(runtime(id), "message.start");
+    server.event(runtime(id), "message.delta", { text: "Checking." });
+    server.event(runtime(id), "tool.start", { tool_id: "t1", name: "terminal", args: { command: "df -h" }, preview: "df -h" });
     expect(chat(id).items.at(-1)).toMatchObject({ kind: "tool", status: "running", preview: "df -h" });
-    server.event(id, "tool.complete", { tool_id: "t1", name: "terminal", duration_s: 0.2, result: "92% used", summary: "1 line" });
-    server.event(id, "message.delta", { text: "92% used." });
-    server.event(id, "message.complete", { text: "Checking.92% used.", status: "complete" });
+    server.event(runtime(id), "tool.complete", { tool_id: "t1", name: "terminal", duration_s: 0.2, result: "92% used", summary: "1 line" });
+    server.event(runtime(id), "message.delta", { text: "92% used." });
+    server.event(runtime(id), "message.complete", { text: "Checking.92% used.", status: "complete" });
     expect(chat(id).items.map((i) => i.kind)).toEqual(["user", "assistant", "tool", "assistant"]);
     expect(chat(id).items[2]).toMatchObject({ status: "done", durationS: 0.2, result: "92% used", summary: "1 line" });
   });
 
   it("shows a failed turn as an error", async () => {
-    const { server, hermes, chat } = await signedIn();
+    const { server, hermes, chat, runtime } = await signedIn();
     const id = await hermes.newChat();
     await hermes.send(id, "hi");
-    server.event(id, "message.start");
-    server.event(id, "message.complete", { text: "", status: "error", error: "Provider returned 529 overloaded" });
+    server.event(runtime(id), "message.start");
+    server.event(runtime(id), "message.complete", { text: "", status: "error", error: "Provider returned 529 overloaded" });
     expect(chat(id)).toMatchObject({ running: false });
     expect(chat(id).items.at(-1)).toMatchObject({ kind: "error", text: "Provider returned 529 overloaded" });
   });
@@ -100,13 +105,13 @@ describe("Hermes transport", () => {
     expect(hermes.getSnapshot()).toBe(before);
   });
 
-  it("goes offline when the connection drops mid-reply", async () => {
-    const { server, hermes, chat } = await signedIn();
+  it("starts reconnecting when the connection drops mid-reply", async () => {
+    const { server, hermes, chat, runtime } = await signedIn();
     const id = await hermes.newChat();
     await hermes.send(id, "hi");
-    server.event(id, "message.start");
+    server.event(runtime(id), "message.start");
     server.drop("closed by the server (1006 )");
-    expect(hermes.getSnapshot()).toMatchObject({ status: "offline", closedReason: "closed by the server (1006 )" });
+    expect(hermes.getSnapshot()).toMatchObject({ status: "reconnecting", closedReason: "closed by the server (1006 )" });
     expect(chat(id).running).toBe(false);
     await expect(hermes.newChat()).rejects.toThrow("Not connected");
   });
@@ -115,7 +120,7 @@ describe("Hermes transport", () => {
     await expect(
       connect(async (onEvent) => {
         onEvent({ kind: "closed", reason: "closed by the server (4401 )" });
-        return { send: async () => {}, close: async () => {} };
+        return { route: { kind: "ssh", target: "liam@hermes" }, send: async () => {}, request: async () => "", statFiles: async () => [], sendFile: async () => {}, close: async () => {} };
       }),
     ).rejects.toThrow("4401");
   });
