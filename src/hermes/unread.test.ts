@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FakeHermes, row, type RestRequest } from "./fakeHermes";
+import { memoryCache } from "./memoryCache";
 import { connect, type ChatCache } from "./transport";
-import type { Chat } from "./model";
 
 async function listed(rows: ReturnType<typeof row>[], profile = "default", cache?: ChatCache) {
   const server = new FakeHermes();
@@ -144,13 +144,7 @@ describe("The unread dot", () => {
   });
 
   it("is kept with the cached list, so it shows at the next launch", async () => {
-    const saved: Record<string, Chat[]> = {};
-    const cache: ChatCache = {
-      load: (p) => saved[p] ?? [],
-      save: (p, chats) => void (saved[p] = chats),
-      lastProfile: () => undefined,
-      rememberProfile: () => {},
-    };
+    const cache = memoryCache();
     await listed([row("a", 1, { last_read_at: 0 })], "default", cache);
     const server = new FakeHermes();
     const hermes = await connect(server.openPipe, "default", cache);

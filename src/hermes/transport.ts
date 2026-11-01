@@ -7,6 +7,8 @@
 // Search runs on dashboard REST: research doc "Searching chats".
 // Approvals come as legacy server→client requests, answered with a response frame: research doc §6 and
 // "Approvals on the legacy generation".
+// The list holds the past month's chats until the owner pulls older history for the profile; from then on it holds
+// them all.
 import { isWaiting, type ApprovalChoice, type ApprovalItem, type AttachCheck, type Attachment, type Chat, type ConnectionStatus, type Found, type Item, type Source } from "./model";
 import type { OpenPipe, Pipe, PipeEvent, Route } from "./pipe";
 import { isUnsecure } from "./unsecure";
@@ -40,14 +42,30 @@ const IMAGE_ONLY_PROMPT = "What do you see in this image?";
 /** Stands in for a file's base64 in a frame; the pipe swaps the bytes in. JSON can't hold a raw NUL. */
 const FILE_MARK = "\u0000file\u0000";
 
-/** Where each profile's last synced chat list, and the profile shown last, are kept between launches. */
+/**
+ * Where each profile's last synced chat list, the profile shown last, and the profiles whose older history was pulled
+ * are kept between launches. `bytes`: the storage the chat lists take; `clear` deletes them, and only them.
+ */
 export type ChatCache = {
   load(profile: string): Chat[];
   save(profile: string, chats: Chat[]): void;
   lastProfile(): string | undefined;
   rememberProfile(profile: string): void;
+  bytes(): number;
+  clear(): void;
+  olderPulled(profile: string): boolean;
+  rememberOlderPulled(profile: string): void;
 };
-const noCache: ChatCache = { load: () => [], save: () => {}, lastProfile: () => undefined, rememberProfile: () => {} };
+const noCache: ChatCache = {
+  load: () => [],
+  save: () => {},
+  lastProfile: () => undefined,
+  rememberProfile: () => {},
+  bytes: () => 0,
+  clear: () => {},
+  olderPulled: () => false,
+  rememberOlderPulled: () => {},
+};
 
 /** A row of dashboard REST `GET /api/sessions`; times are Unix seconds. */
 type SessionRow = {
@@ -129,11 +147,12 @@ export class RpcError extends Error {
 /**
  * `profile`: the profile whose chats are shown. `route`: how the latest connection reached the dashboard. `unsecure`:
  * its traffic isn't encrypted (unsecure.ts). `closedReason`: why the connection dropped, or why the last try to
- * reconnect failed.
+ * reconnect failed. `olderPulled`: the list holds the profile's chats older than a month too (`pullOlderHistory`).
  */
 export type Snapshot = {
   profile: string;
   chats: Chat[];
+  olderPulled: boolean;
   status: ConnectionStatus;
   route?: Route;
   unsecure: boolean;
@@ -205,7 +224,7 @@ export class Hermes {
   private noApprovalReceived = false;
   /** Messages Hermes hasn't accepted yet, so a Stop waits for the turn it stops. */
   private submitting = new Map<string, Promise<unknown>>();
-  private syncing?: Promise<void>;
+  private syncing?: Promise<Error | undefined>;
   private syncAgain = false;
   private background = new Set<Promise<unknown>>();
 
@@ -214,7 +233,7 @@ export class Hermes {
     profile: string,
     private cache: ChatCache = noCache,
   ) {
-    this.snapshot = { profile, chats: cache.load(profile), status: "offline", unsecure: false };
+    this.snapshot = { profile, chats: cache.load(profile), olderPulled: cache.olderPulled(profile), status: "offline", unsecure: false };
   }
 
   /** The profile whose chats are shown. */
@@ -295,7 +314,7 @@ export class Hermes {
     this.resumeOnReconnect.clear();
     this.revealed.clear();
     this.cache.rememberProfile(name);
-    this.update({ profile: name, chats: this.cache.load(name), syncError: undefined });
+    this.update({ profile: name, chats: this.cache.load(name), olderPulled: this.cache.olderPulled(name), syncError: undefined });
     // A reconnect under way may be opening the old profile's socket.
     await this.redialing;
     if (this.profile !== name || this.closing) return;
@@ -548,21 +567,63 @@ export class Hermes {
   }
 
   /**
-   * Refreshes the chat list from dashboard REST: the profile's chats active in the past month, Active when
-   * pinned. A call while a sync is running asks for one more pass and resolves with it.
+   * Refreshes the chat list from dashboard REST: the profile's chats active in the past month, or all of them once
+   * older history is pulled, Active when pinned. A call while a sync is running asks for one more pass and resolves
+   * with it.
    */
-  sync(): Promise<void> {
-    if (this.snapshot.status !== "connected") return Promise.resolve(); // Reconnecting syncs again.
+  async sync(): Promise<void> {
+    await this.syncList();
+  }
+
+  /**
+   * Pulls the profile's chats older than a month into the list: from now on it holds all of them, Settled unless
+   * pinned (ADR 0002), and the profile remembers it. Resolves to the older chats added. Only reads from Hermes. If
+   * the list can't be read, or the owner switches profile first, rejects and leaves the list a month long.
+   */
+  async pullOlderHistory(): Promise<Chat[]> {
+    const profile = this.profile;
+    const cutoff = Date.now() - LIST_WINDOW_MS;
+    const before = new Set(this.snapshot.chats.map((c) => c.id));
+    this.update({ olderPulled: true });
+    const failure = await this.syncList();
+    // The switch shows the new profile's flag, and this profile's list wasn't read.
+    if (this.profile !== profile) throw new Error(`Switched to the ${this.profile} profile before the older chats arrived.`);
+    if (failure) {
+      this.update({ olderPulled: false });
+      throw failure;
+    }
+    this.cache.rememberOlderPulled(profile);
+    return this.snapshot.chats.filter((c) => !before.has(c.id) && c.updatedAt < cutoff);
+  }
+
+  /** The storage the chat lists saved on this computer take, in bytes. */
+  cacheBytes(): number {
+    return this.cache.bytes();
+  }
+
+  /**
+   * Deletes the chat lists saved on this computer. Nothing is sent to Hermes. The list on screen stays, and the next
+   * refresh saves it again.
+   */
+  clearCache() {
+    this.cache.clear();
+  }
+
+  /** `sync`, resolving to why the last pass failed, if it did. */
+  private syncList(): Promise<Error | undefined> {
+    if (this.snapshot.status !== "connected") return Promise.resolve(new Error("Not connected to Hermes.")); // Reconnecting syncs again.
     if (this.syncing) {
       this.syncAgain = true;
       return this.syncing;
     }
     this.syncing = (async () => {
       try {
+        let failure: Error | undefined;
         do {
           this.syncAgain = false;
-          await this.syncOnce();
+          failure = await this.syncOnce();
         } while (this.syncAgain);
+        return failure;
       } finally {
         this.syncing = undefined;
       }
@@ -869,9 +930,9 @@ export class Hermes {
     this.track(write);
   }
 
-  private async syncOnce() {
+  private async syncOnce(): Promise<Error | undefined> {
     const profile = this.profile;
-    const cutoff = Date.now() - LIST_WINDOW_MS;
+    const cutoff = this.snapshot.olderPulled ? -Infinity : Date.now() - LIST_WINDOW_MS;
     this.pinnedSinceListRead.clear();
     this.readSinceListRead.clear();
     const rows = new Map<string, SessionRow>();
@@ -893,10 +954,10 @@ export class Hermes {
       }
     } catch (e) {
       if (this.profile === profile) this.update({ syncError: `Couldn't refresh the chat list: ${(e as Error).message}` });
-      return;
+      return e as Error;
     }
     // The owner switched profile meanwhile; the switch syncs the new one.
-    if (this.profile !== profile) return;
+    if (this.profile !== profile) return undefined;
 
     const known = new Map(this.snapshot.chats.map((c) => [c.id, c]));
     let readOnScreen = false;
@@ -937,6 +998,7 @@ export class Hermes {
       profile,
       chats.map(({ id, title, source, settled, updatedAt, unread }) => ({ id, title, source, settled, updatedAt, unread, items: [] })),
     );
+    return undefined;
   }
 
   private async rest(method: "GET" | "PATCH", pathAndQuery: string, body?: unknown): Promise<unknown> {

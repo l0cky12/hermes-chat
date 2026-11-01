@@ -1,12 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { FakeHermes, row } from "./fakeHermes";
+import { memoryCache } from "./memoryCache";
 import type { Chat } from "./model";
 import { type ChatCache, connect } from "./transport";
-
-function memoryCache(initial: Record<string, Chat[]> = {}): ChatCache & { saved: Record<string, Chat[]> } {
-  const saved = { ...initial };
-  return { saved, load: (p) => saved[p] ?? [], save: (p, chats) => void (saved[p] = chats), lastProfile: () => undefined, rememberProfile: () => {} };
-}
 
 async function signedIn(server = new FakeHermes(), cache?: ChatCache) {
   const hermes = await connect(server.openPipe, "default", cache);
@@ -138,7 +134,7 @@ describe("Chat list sync", () => {
 describe("Local chat list cache", () => {
   it("shows the cached list as soon as Hermes is connected", async () => {
     const cached: Chat = { id: "c1", title: "Cached", source: "telegram", settled: true, updatedAt: 1, items: [] };
-    const { chats } = await signedIn(new FakeHermes(), memoryCache({ default: [cached] }));
+    const { chats } = await signedIn(new FakeHermes(), memoryCache({ saved: { default: [cached] } }));
     expect(chats()).toEqual([cached]);
   });
 

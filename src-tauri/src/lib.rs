@@ -1,3 +1,4 @@
+pub mod saved_password;
 pub mod transport;
 pub mod tunnel;
 
@@ -122,6 +123,21 @@ async fn hermes_disconnect(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn password_load() -> Result<Option<String>, String> {
+    saved_password::load().await
+}
+
+#[tauri::command]
+async fn password_save(password: String) -> Result<(), String> {
+    saved_password::save(password).await
+}
+
+#[tauri::command]
+async fn password_delete() -> Result<(), String> {
+    saved_password::delete().await
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -132,7 +148,10 @@ pub fn run() {
             hermes_send_file,
             hermes_stat_files,
             hermes_request,
-            hermes_disconnect
+            hermes_disconnect,
+            password_load,
+            password_save,
+            password_delete
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

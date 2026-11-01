@@ -5,7 +5,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type { LocalFile, OpenPipe, PipeEvent, Route } from "./pipe";
 
 // A failed command rejects with the Rust error's text, not an Error.
-const asError = (e: unknown) => Promise.reject(new Error(String(e)));
+export const asError = (e: unknown) => Promise.reject(new Error(String(e)));
 
 /** `mode` picks which of `sshTarget` and `url` is used. */
 export type SignInDetails = { mode: "ssh" | "url"; sshTarget: string; url: string; username: string; password: string };

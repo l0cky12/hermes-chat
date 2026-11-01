@@ -6,7 +6,7 @@ import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import type { ApprovalChoice, ApprovalItem, AttachCheck, Attachment, Chat, ConnectionStatus, Item, Source } from "../hermes/model";
 import { SOURCE_LABEL, isWaiting } from "../hermes/model";
 import { Markdown } from "./Markdown";
-import { SettleButton, SourceIcon, Spinner, highlight } from "./bits";
+import { SettleButton, SourceIcon, Spinner, fmtSize, highlight } from "./bits";
 
 type ToolItem = Extract<Item, { kind: "tool" }>;
 type Block = { kind: "tools"; id: string; tools: ToolItem[] } | Exclude<Item, ToolItem>;
@@ -511,11 +511,4 @@ function Composer({
       </div>
     </div>
   );
-}
-
-function fmtSize(b: number): string {
-  if (b < 1024) return `${b} B`;
-  if (b < 1024 ** 2) return `${(b / 1024).toFixed(0)} KB`;
-  if (b < 1024 ** 3) return `${(b / 1024 ** 2).toFixed(1)} MB`;
-  return `${(b / 1024 ** 3).toFixed(2)} GB`;
 }

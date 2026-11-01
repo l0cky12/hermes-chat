@@ -1,7 +1,8 @@
 // Small shared UI bits, ported from the prototype.
 import type { ReactNode } from "react";
 import { Archive, ArchiveRestore, Globe, Monitor, Send, Terminal } from "lucide-react";
-import type { Source } from "../hermes/model";
+import type { ConnectionStatus, Source } from "../hermes/model";
+import type { Route } from "../hermes/pipe";
 import { SOURCE_LABEL } from "../hermes/model";
 
 // Approximate brand marks; the real app should use proper icon assets.
@@ -71,6 +72,18 @@ export function relTime(ts: number) {
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   if (s < 86400 * 7) return `${Math.floor(s / 86400)}d`;
   return `${Math.floor(s / (86400 * 7))}w`;
+}
+
+export const STATUS_LABEL: Record<ConnectionStatus, string> = { connected: "Connected", reconnecting: "Reconnecting…", offline: "Offline" };
+
+/** Where the connection goes, as the owner typed it. */
+export const routeLabel = (route?: Route) => (route?.kind === "ssh" ? `ssh://${route.target}` : route?.url);
+
+export function fmtSize(b: number): string {
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 ** 2) return `${(b / 1024).toFixed(0)} KB`;
+  if (b < 1024 ** 3) return `${(b / 1024 ** 2).toFixed(1)} MB`;
+  return `${(b / 1024 ** 3).toFixed(2)} GB`;
 }
 
 export const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

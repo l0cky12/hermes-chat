@@ -1,14 +1,17 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { connect, type Hermes } from "./hermes/transport";
+import { type Account, type SavedSignIn, savedSignIn, signIn, signOut } from "./hermes/account";
 import { localChatCache } from "./hermes/chatCache";
+import { systemKeyring } from "./hermes/tauriKeyring";
 import { tauriPipe, type SignInDetails } from "./hermes/tauriPipe";
 import type { Attachment, Chat, Found } from "./hermes/model";
 import { ChatList, Rail } from "./ui/Sidebar";
 import { ChatPane } from "./ui/ChatPane";
 import { SearchPalette } from "./ui/Search";
+import { SettingsScreen } from "./ui/Settings";
 import { SignIn } from "./ui/SignIn";
 
-const SAVED = "hermes-chat.sign-in"; // Everything but the password.
+const SAVED = "hermes-chat.sign-in"; // Everything but the password, which is in the system keyring.
 // Hermes also announces store changes over the socket; the poll catches anything it misses.
 const SYNC_EVERY_MS = 60_000;
 const TOAST_MS = 5_000;
@@ -16,7 +19,9 @@ const TOAST_MS = 5_000;
 /** A short notice above the composer; `undo` puts back what it reports. `at` restarts the timer for a repeat. */
 type Toast = { text: string; undo?: () => void; at: number };
 
-function savedSignIn(): Omit<SignInDetails, "password"> {
+const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+function loadSignIn(): SavedSignIn {
   const blank = { mode: "ssh" as const, sshTarget: "", url: "", username: "" };
   try {
     return { ...blank, ...JSON.parse(localStorage.getItem(SAVED) ?? "{}") };
@@ -25,37 +30,105 @@ function savedSignIn(): Omit<SignInDetails, "password"> {
   }
 }
 
+const account: Account = {
+  keyring: systemKeyring,
+  store: { load: loadSignIn, save: (d) => localStorage.setItem(SAVED, JSON.stringify(d)) },
+  connect: (d) => connect(tauriPipe(d), undefined, localChatCache),
+};
+
+/** What launch ends in: signed in with the saved password, or the sign-in screen and why. */
+type Launch = { hermes: Hermes } | { initial: SignInDetails; error?: string };
+let launching: Promise<Launch> | undefined;
+
+/**
+ * Signs in with the saved password, if there is one. If that fails the sign-in screen has it filled in, so Connect
+ * tries again. Runs once, though StrictMode runs effects twice.
+ */
+function launch(): Promise<Launch> {
+  return (launching ??= (async () => {
+    const saved = await savedSignIn(account);
+    if (!saved) return { initial: { ...loadSignIn(), password: "" } };
+    try {
+      return { hermes: await account.connect(saved) };
+    } catch (e) {
+      return { initial: saved, error: messageOf(e) };
+    }
+  })());
+}
+
 export default function App() {
   const [hermes, setHermes] = useState<Hermes | null>(null);
+  // The sign-in screen's details; none while launch is signing in with the saved password.
+  const [initial, setInitial] = useState<SignInDetails>();
   const [error, setError] = useState<string>();
+  // Why the keyring couldn't save the password at sign-in, shown once signed in.
+  const [notSaved, setNotSaved] = useState<string>();
 
-  if (!hermes)
+  useEffect(() => {
+    void launch().then((l) => {
+      if ("hermes" in l) return setHermes(l.hermes);
+      setInitial(l.initial);
+      setError(l.error);
+    });
+  }, []);
+
+  if (hermes)
     return (
-      <SignIn
-        initial={savedSignIn()}
-        error={error}
-        onSignIn={async (d) => {
-          setError(undefined);
+      <Main
+        hermes={hermes}
+        username={account.store.load().username}
+        notSaved={notSaved}
+        onSignOut={async () => {
+          let failure: string | undefined;
           try {
-            const h = await connect(tauriPipe(d), undefined, localChatCache);
-            const { password: _, ...saved } = d;
-            localStorage.setItem(SAVED, JSON.stringify(saved));
-            setHermes(h);
+            await signOut(hermes, account);
           } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
+            failure = messageOf(e);
           }
+          setHermes(null);
+          setNotSaved(undefined);
+          setInitial({ ...loadSignIn(), password: "" });
+          setError(failure);
         }}
       />
     );
-  return <Main hermes={hermes} />;
+  if (!initial)
+    return (
+      <div className="first-run">
+        <div className="first-run-card">
+          <div className="rail-brand big">H</div>
+          <p className="muted">Signing in…</p>
+        </div>
+      </div>
+    );
+  return (
+    <SignIn
+      initial={initial}
+      error={error}
+      onSignIn={async (d) => {
+        setError(undefined);
+        try {
+          const { hermes: h, notSaved } = await signIn(d, account);
+          setNotSaved(notSaved);
+          setHermes(h);
+        } catch (e) {
+          setError(messageOf(e));
+        }
+      }}
+    />
+  );
 }
 
-function Main({ hermes }: { hermes: Hermes }) {
-  const { profile, chats, status, route, unsecure, closedReason, syncError } = useSyncExternalStore(hermes.subscribe, hermes.getSnapshot);
+function Main({ hermes, username, notSaved, onSignOut }: { hermes: Hermes; username: string; notSaved?: string; onSignOut: () => Promise<void> }) {
+  const { profile, chats, olderPulled, status, route, unsecure, closedReason, syncError } = useSyncExternalStore(
+    hermes.subscribe,
+    hermes.getSnapshot,
+  );
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [listOpen, setListOpen] = useState(true);
   const [draftError, setDraftError] = useState<string>();
-  const [toast, setToast] = useState<Toast | null>(null);
+  const [toast, setToast] = useState<Toast | null>(notSaved ? { text: notSaved, at: Date.now() } : null);
   const [searchOpen, setSearchOpen] = useState(false);
   // The search result the chat on screen was opened from; `at` tells one pick from the next.
   const [picked, setPicked] = useState<{ found: Found; at: number } | null>(null);
@@ -74,6 +147,7 @@ function Main({ hermes }: { hermes: Hermes }) {
   const openChat = (id: string | null) => {
     setSelectedId(id);
     setPicked(null);
+    setSettingsOpen(false);
   };
 
   const newChat = () => {
@@ -86,6 +160,7 @@ function Main({ hermes }: { hermes: Hermes }) {
     setSelectedId(found.chatId);
     setPicked({ found, at: Date.now() });
     setSearchOpen(false);
+    setSettingsOpen(false);
   };
   const findTarget =
     picked?.found.chatId === selected.id && picked.found.find
@@ -128,12 +203,12 @@ function Main({ hermes }: { hermes: Hermes }) {
   }, [toast]);
 
   // An opened chat shows its stored history and is marked read; a chat already open on this connection is left as it
-  // is. After a reconnect the chat on screen loads again.
+  // is. After a reconnect the chat on screen loads again. Settings covers the chat, so it isn't on screen meanwhile.
   useEffect(() => {
-    if (!selectedId || status !== "connected") return;
+    if (!selectedId || status !== "connected" || settingsOpen) return;
     void hermes.open(selectedId);
     return () => hermes.leave(selectedId);
-  }, [hermes, selectedId, status]);
+  }, [hermes, selectedId, status, settingsOpen]);
 
   // Back on the network: don't wait for the next retry, or for the owner if it gave up.
   useEffect(() => {
@@ -178,13 +253,14 @@ function Main({ hermes }: { hermes: Hermes }) {
         onToggleList={() => setListOpen((o) => !o)}
         onNew={newChat}
         onSearch={() => setSearchOpen(true)}
+        onSettings={() => setSettingsOpen(true)}
       />
       {listOpen && (
         <ChatList
           profile={profile}
           chats={chats}
           syncError={syncError}
-          selectedId={selectedId}
+          selectedId={settingsOpen ? null : selectedId}
           onOpen={openChat}
           onSettle={setSettled}
           onListProfiles={() => hermes.profiles()}
@@ -192,18 +268,35 @@ function Main({ hermes }: { hermes: Hermes }) {
         />
       )}
       <main className="main">
-        <ChatPane
-          key={selected.id}
-          chat={selected}
-          findTarget={findTarget}
-          status={status}
-          alsoPostsIn={hermes.alsoPostsIn(selected.id)}
-          onAttach={(paths) => hermes.checkAttachments(paths)}
-          onSend={send}
-          onStop={() => void hermes.stop(selected.id)}
-          onAnswer={(approvalId, choice) => void hermes.answerApproval(selected.id, approvalId, choice)}
-          onSettle={selected === draft ? undefined : (s) => setSettled(selected.id, s)}
-        />
+        {settingsOpen ? (
+          <SettingsScreen
+            status={status}
+            route={route}
+            unsecure={unsecure}
+            username={username}
+            passwordSaved={!notSaved}
+            profile={profile}
+            olderPulled={olderPulled}
+            cacheBytes={() => hermes.cacheBytes()}
+            onClearCache={() => hermes.clearCache()}
+            onPullOlder={() => hermes.pullOlderHistory()}
+            onSignOut={onSignOut}
+            onClose={() => setSettingsOpen(false)}
+          />
+        ) : (
+          <ChatPane
+            key={selected.id}
+            chat={selected}
+            findTarget={findTarget}
+            status={status}
+            alsoPostsIn={hermes.alsoPostsIn(selected.id)}
+            onAttach={(paths) => hermes.checkAttachments(paths)}
+            onSend={send}
+            onStop={() => void hermes.stop(selected.id)}
+            onAnswer={(approvalId, choice) => void hermes.answerApproval(selected.id, approvalId, choice)}
+            onSettle={selected === draft ? undefined : (s) => setSettled(selected.id, s)}
+          />
+        )}
       </main>
       {searchOpen && <SearchPalette onSearch={(q) => hermes.search(q)} onPick={pick} onClose={() => setSearchOpen(false)} />}
       {toast && (

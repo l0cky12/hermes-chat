@@ -56,4 +56,5 @@ _Avoid_: insecure (the app's label is "Unsecure"), unsafe
 ## Flagged ambiguities
 
 - **Settled** vs Hermes's own "archived" flag: they are different things. Archiving in Hermes hides a session in every Hermes client; settling is this app's view of the owner's attention.
+- **Imported chat** vs pulling older history: the list holds the past month's chats until the owner pulls older history in Settings, after which it holds all of the profile's chats. Pulled chats come in Settled unless pinned, but they are Imported chats only if their Source isn't this app.
 - **Source** vs the `source` field on a Hermes session: the app derives a chat's Source from that field, but the field has more values than the app shows. `hermes-chat` and `gui` count as this app, and `cli` and `tui` as the command line. `cron` chats aren't listed, and any other value (for example `api_server`, `webhook`) shows as "another Hermes platform".

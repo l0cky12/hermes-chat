@@ -22,6 +22,7 @@ thiserror = "2"
 url = "2"
 base64 = "0.22"
 tauri-plugin-dialog = "2"
+keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
 
 [dev-dependencies]
 axum = { version = "0.8", features = ["ws"] }

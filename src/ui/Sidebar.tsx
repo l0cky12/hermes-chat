@@ -1,15 +1,14 @@
 // Icon rail beside a chat list (ADR 0001), ported from the prototype's variants C and A. The list's header is the
-// profile switcher. Settings come in a later ticket.
+// profile switcher. Settings opens from the rail's foot.
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronRight, LockOpen, Search, SquarePen } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, LockOpen, Search, Settings, SquarePen } from "lucide-react";
 import type { Chat, ConnectionStatus } from "../hermes/model";
 import { SOURCE_LABEL } from "../hermes/model";
 import type { Route } from "../hermes/pipe";
-import { SettleButton, SourceIcon, Spinner, relTime } from "./bits";
+import { STATUS_LABEL, SettleButton, SourceIcon, Spinner, relTime, routeLabel } from "./bits";
 
 const byRecent = (a: Chat, b: Chat) => b.updatedAt - a.updatedAt;
 
-const STATUS_LABEL: Record<ConnectionStatus, string> = { connected: "Connected", reconnecting: "Reconnecting…", offline: "Offline" };
 
 export function Rail({
   status,
@@ -20,6 +19,7 @@ export function Rail({
   onToggleList,
   onNew,
   onSearch,
+  onSettings,
 }: {
   status: ConnectionStatus;
   route?: Route;
@@ -29,8 +29,9 @@ export function Rail({
   onToggleList: () => void;
   onNew: () => void;
   onSearch: () => void;
+  onSettings: () => void;
 }) {
-  const where = route?.kind === "ssh" ? `ssh://${route.target}` : route?.url;
+  const where = routeLabel(route);
   // The full wording lives only in the tooltip (ADR 0001).
   const tip = [
     STATUS_LABEL[status],
@@ -58,6 +59,9 @@ export function Rail({
         <button className="conn-btn" title={tip} aria-label={tip} onClick={() => status !== "connected" && onReconnect()}>
           <span className={`conn-dot ${status} ${unsecure ? "unsecure" : ""}`} />
           {unsecure && <LockOpen className="conn-lock" size={9} strokeWidth={2.8} />}
+        </button>
+        <button className="icon-btn" title="Settings" onClick={onSettings}>
+          <Settings size={18} />
         </button>
       </div>
     </aside>

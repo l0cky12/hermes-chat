@@ -9,11 +9,12 @@ export function SignIn({
   error,
   onSignIn,
 }: {
-  initial: Omit<SignInDetails, "password">;
+  /** The saved sign-in; the password is filled in when launch couldn't sign in with it. */
+  initial: SignInDetails;
   error?: string;
   onSignIn: (d: SignInDetails) => Promise<void>;
 }) {
-  const [d, setD] = useState<SignInDetails>({ ...initial, password: "" });
+  const [d, setD] = useState<SignInDetails>(initial);
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<SignInDetails>) => setD({ ...d, ...patch });
   const ready = (d.mode === "ssh" ? d.sshTarget : d.url).trim() && d.username.trim() && d.password;
@@ -69,8 +70,8 @@ export function SignIn({
             <span className="field-label">Dashboard password</span>
             <input type="password" autoFocus value={d.password} onChange={(e) => set({ password: e.target.value })} />
             <span className="field-hint">
-              <KeyRound size={12} /> {d.mode === "ssh" ? "Sent to the server through the SSH tunnel." : "Sent to the dashboard at this URL."} Not
-              stored.
+              <KeyRound size={12} /> {d.mode === "ssh" ? "Sent to the server through the SSH tunnel." : "Sent to the dashboard at this URL."} Saved
+              in your system keyring.
             </span>
           </label>
           {error && <div className="sign-in-error" role="alert">{error}</div>}

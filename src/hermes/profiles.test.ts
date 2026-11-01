@@ -1,19 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FakeHermes, row, type RestRequest } from "./fakeHermes";
-import type { Chat } from "./model";
+import { memoryCache } from "./memoryCache";
 import { type ChatCache, connect } from "./transport";
-
-function memoryCache(profile?: string): ChatCache & { saved: Record<string, Chat[]>; profile?: string } {
-  const cache = {
-    saved: {} as Record<string, Chat[]>,
-    profile,
-    load: (p: string) => cache.saved[p] ?? [],
-    save: (p: string, chats: Chat[]) => void (cache.saved[p] = chats),
-    lastProfile: () => cache.profile,
-    rememberProfile: (p: string) => void (cache.profile = p),
-  };
-  return cache;
-}
 
 /** Signed in to a server with a `work` profile beside `default`. */
 async function signedIn(cache: ChatCache = memoryCache()) {
@@ -151,7 +139,7 @@ describe("Profiles", () => {
   });
 
   it("says so when the remembered profile is gone from the server", async () => {
-    const { hermes } = await signedIn(memoryCache("retired"));
+    const { hermes } = await signedIn(memoryCache({ profile: "retired" }));
     expect(hermes.getSnapshot()).toMatchObject({ profile: "retired", chats: [] });
     expect(hermes.getSnapshot().syncError).toMatch(/Couldn't refresh the chat list: .*Profile 'retired' not found/);
   });
