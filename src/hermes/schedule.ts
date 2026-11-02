@@ -157,8 +157,8 @@ function parseField(text: string, i: number): { set: Field; last: boolean } {
       const lastOne = values[values.length - 1];
       if (lastOne !== undefined && lastOne - MIN + step > MAX - MIN + 1 && MAX - lastOne < step) skip = step - (MAX - lastOne);
       values.push(...span(MIN + skip, hi));
-    } else if (ranged && lo === hi) {
-      values = span(MIN, MAX); // `sun-sun`, `0-7`: croniter takes the whole cycle
+    } else if ((ranged || stepText !== undefined) && lo === hi) {
+      values = span(MIN, MAX); // `sun-sun`, `0-7`, `6/2` in the week, `59/2`: croniter takes the whole cycle
     } else values = span(lo, hi);
     for (const v of values) set.add(v);
   }
@@ -174,7 +174,11 @@ export function parseCron(expr: string): Cron | undefined {
   if (parts.length !== 5) return undefined;
   try {
     const [minute, hour, dom, month, dow] = parts.map(parseField);
-    return { minute: minute.set, hour: hour.set, dom: dom.set, lastDom: dom.last, month: month.set, dow: dow.set, domAny: parts[2] === "*", dowAny: parts[4] === "*" };
+    // croniter reads a day field that names every day as `*`, which joins the two with AND, unless the other day
+    // field's text has no `*` in it (`_expand`'s LEN_MEANS_ALL): `*/2 * */1` is odd dates, `1 * */1` every day.
+    const domAny = parts[2] === "*" || (dom.set.size === 31 && !dom.last && parts[4].includes("*"));
+    const dowAny = parts[4] === "*" || (dow.set.size === 7 && parts[2].includes("*"));
+    return { minute: minute.set, hour: hour.set, dom: dom.set, lastDom: dom.last, month: month.set, dow: dow.set, domAny, dowAny };
   } catch (e) {
     if (e instanceof Unreadable) return undefined;
     throw e;

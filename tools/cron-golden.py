@@ -32,6 +32,8 @@ EXPRS = [
     "0 0 29 2 *", "5/20 1-3 * * *", "0 9 1 jan,jul *", "0 12 * * sun", "0 9 * * 7", "0 9 1 * */1", "45 23 31 * *",
     # Wrapping weekday ranges with steps, and steps over Sunday's two names.
     "0 9 * * 5-1/2", "0 9 * * 6-2/3", "0 9 * * sat-tue", "0 9 * * 0-7/2", "0 9 * * 1-7", "0 9 * * 7-2", "* 0,12 * * *",
+    # Stepped single values take the whole cycle; a day field naming every day is `*` only beside a `*`.
+    "0 9 * * 6/2", "59/2 * * * *", "0 9 */2 * */1", "0 9 */1 * 1", "0 9 1 * 0-6", "0 9 2-31/2 * 1",
 ]
 INTERVALS = [30, 90, 1440]
 PARSE = [

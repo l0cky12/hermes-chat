@@ -41,18 +41,26 @@ describe.skipIf(!BASE)("against a throwaway Hermes", () => {
   const rest = dashboard();
   const cron = new CronApi(rest);
 
+  // Set only once the server is known to be a throwaway; cleanup does nothing without it.
+  let safe = false;
+  /** The jobs there before this run, by profile: cleanup never touches them. */
+  const before = new Map<string, Set<string>>();
+
   // Every test waits on this: vitest runs none of the suite's tests when its beforeAll throws.
   beforeAll(async () => {
     const { profiles } = (await rest("GET", "api/profiles")) as { profiles: { name: string; path: string }[] };
     const real = profiles.filter((p) => !p.path.startsWith("/tmp/"));
     if (!profiles.length || real.length) throw new Error(`Refusing to run: ${real.map((p) => p.path).join(", ") || "no profiles"} isn't a throwaway home under /tmp.`);
+    for (const p of ["default", "fixture-b"]) before.set(p, new Set((await cron.list(p)).map((j) => j.id)));
+    safe = true;
   });
 
-  // Whatever a failed test left behind: only the jobs these tests name.
+  // vitest runs afterAll even when beforeAll threw, so it checks `safe` first. Only jobs this run made, by their names.
   afterAll(async () => {
-    for (const profile of ["default", "fixture-b"]) {
+    if (!safe) return;
+    for (const [profile, had] of before) {
       const jobs = await cron.list(profile).catch(() => []);
-      for (const j of jobs.filter((j) => j.name.startsWith("[fixture] live"))) await rest("DELETE", `api/cron/jobs/${j.id}?profile=${profile}`).catch(() => {});
+      for (const j of jobs.filter((j) => !had.has(j.id) && j.name.startsWith("[fixture] live"))) await rest("DELETE", `api/cron/jobs/${j.id}?profile=${profile}`).catch(() => {});
     }
   });
 

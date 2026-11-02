@@ -261,6 +261,25 @@ describe("editing", () => {
     await expect(cron.update("default", job, { schedule: "0 10 * * *" })).rejects.toThrow(/weren't saved/);
   });
 
+  it("checks a lost one-shot edit by its instant, not only Hermes's label", async () => {
+    const { s, cron, job } = await withJob();
+    s.cron.failNext = { match: /^PUT /, when: "before" };
+    const original = s.cron.route.bind(s.cron);
+    s.cron.route = (req) => {
+      // Another client saves 15:00 at +05:30 between the failed PUT and the read-back: the same label, 5½ hours off.
+      if (req.method === "GET" && writes(s).length === 2)
+        Object.assign(s.cron.jobs.default[0], { schedule: { kind: "once", run_at: "2026-11-05T15:00:00+05:30", display: "once at 2026-11-05 15:00" }, schedule_display: "once at 2026-11-05 15:00" });
+      return original(req);
+    };
+    await expect(cron.update("default", job, { schedule: "2026-11-05T15:00:00Z" })).rejects.toThrow(/weren't saved/);
+  });
+
+  it("accepts a lost one-shot edit that Hermes saved, reading a time without an offset in the profile's zone", async () => {
+    const { s, cron, job } = await withJob();
+    s.cron.failNext = { match: /^PUT /, when: "after" };
+    expect(await cron.update("default", job, { schedule: "2026-11-05T15:00" })).toMatchObject({ schedule: { kind: "once", runAt: Date.parse("2026-11-05T15:00:00-06:00") } });
+  });
+
   it("clears a repeat limit with 'forever'", async () => {
     const { s, cron } = await setUp();
     const job = await cron.create("default", fields({ repeat: 5 }), false);
@@ -359,6 +378,34 @@ describe("profiles", () => {
       return original(req);
     };
     await expect(cron.remove("default", job)).rejects.toThrow(/deleted the copy of this job in the work profile/);
+  });
+
+  it("doesn't show unstamped script runs from another profile's copy when this job went meanwhile", async () => {
+    const { s, cron } = await setUp();
+    const job = await cron.create("default", fields(), true);
+    s.cron.jobs.work.push(structuredClone(s.cron.jobs.default[0]));
+    s.cron.runs[job.id] = [{ id: "cron_output:x:1", title: "COMPLETED · work's output", source: "cron_output", started_at: 1 }];
+    const original = s.cron.route.bind(s.cron);
+    s.cron.route = (req) => {
+      if (req.path.endsWith("/runs")) s.cron.jobs.default = []; // deleted elsewhere: Hermes answers with work's copy
+      return original(req);
+    };
+    await expect(cron.runs("default", job)).rejects.toMatchObject({ kind: "gone" });
+  });
+
+  it("claims a copy was deleted only when its profile was read and lacks it", async () => {
+    const { s, cron } = await setUp();
+    const job = await cron.create("default", fields(), false);
+    s.cron.jobs.work.push(structuredClone(s.cron.jobs.default[0]));
+    const original = s.cron.route.bind(s.cron);
+    let deleted = false;
+    s.cron.route = (req) => {
+      if (req.method === "DELETE") deleted = true;
+      if (deleted && req.method === "GET" && req.query.get("profile") === "work") return () => Promise.reject(new Error("Can't reach the Hermes dashboard: connection reset"));
+      return original(req);
+    };
+    await cron.remove("default", job);
+    expect(s.cron.jobs.work).toHaveLength(1);
   });
 
   it("reads run history only for the profile's own job", async () => {

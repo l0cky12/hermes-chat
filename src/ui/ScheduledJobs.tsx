@@ -283,6 +283,7 @@ export function ScheduledJobs({ api, profile, connected, onClose }: { api: CronA
               apply(job.id, job);
               setView({ kind: "job", id: job.id });
             }}
+            onSeen={(job) => apply(job.id, job)}
             onCancel={() => setView(view.id ? { kind: "job", id: view.id } : { kind: "list" })}
           />
         )}
@@ -573,6 +574,7 @@ function JobEditor({
   job,
   loaded,
   onSaved,
+  onSeen,
   onCancel,
 }: {
   api: CronApi;
@@ -582,6 +584,8 @@ function JobEditor({
   job?: CronJob;
   loaded: Loaded;
   onSaved: (job: CronJob) => void;
+  /** The job as Hermes has it now, read while saving, for the list. */
+  onSeen: (job: CronJob) => void;
   onCancel: () => void;
 }) {
   const zone = loaded.zone;
@@ -614,7 +618,8 @@ function JobEditor({
       return e instanceof ScheduleError ? e : new ScheduleError(messageOf(e));
     }
   }, [form.schedule, zone.zone, touched]);
-  const once = parsed && !(parsed instanceof ScheduleError) && parsed.kind === "once";
+  // A schedule left as it was keeps its kind even when it no longer reads (a one-shot that is due by now).
+  const once = scheduleChanged ? !!parsed && !(parsed instanceof ScheduleError) && parsed.kind === "once" : base?.schedule?.kind === "once";
   const repeatProblem = !once && repeatText.trim() && !/^[1-9]\d{0,5}$/.test(repeatText.trim()) ? "Enter how many runs, a whole number from 1." : undefined;
   const promptProblem = !form.prompt.trim() && !(base && (base.noAgent || base.script || base.skills.length)) ? "Write what Hermes should do each time." : undefined;
   // A schedule left as it was isn't checked again: Hermes already has it, and a one-shot may be due by now.
@@ -640,6 +645,7 @@ function JobEditor({
       if (e instanceof CronConflict) {
         setConflict(e);
         setBase(e.job);
+        onSeen(e.job);
       } else setError(messageOf(e));
     } finally {
       setSaving(false);
@@ -703,7 +709,7 @@ function JobEditor({
               schedule={preview}
               zone={zone}
               first={!scheduleChanged && base?.nextRunAt ? Date.parse(base.nextRunAt) : undefined}
-              remaining={once || !/^[1-9]\d*$/.test(repeatText.trim()) ? null : Number(repeatText) - (scheduleChanged ? 0 : (base?.repeat.completed ?? 0))}
+              remaining={once || !/^[1-9]\d*$/.test(repeatText.trim()) ? null : Number(repeatText) - (base?.repeat.completed ?? 0)}
             />
             {scheduleChanged && <p className="muted small">Hermes works out the runs again when it saves the job.</p>}
           </div>

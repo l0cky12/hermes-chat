@@ -240,24 +240,6 @@ function created(jobs: CronJob[], before: Set<string>, body: Record<string, unkn
 }
 
 /**
- * Whether a job's schedule is the one `typed` asks for, by Hermes's label for it, which doesn't depend on the clock
- * or zone (`parse_schedule`'s `display`), and its expression or interval.
- */
-function sameSchedule(job: CronJob, typed: string): boolean {
-  let want: Schedule;
-  try {
-    want = parseSchedule(typed, "UTC", 0);
-  } catch {
-    return false;
-  }
-  if (job.scheduleText !== want.display) return false;
-  const s = job.schedule;
-  if (want.kind === "cron") return s?.kind === "cron" && s.expr === want.expr;
-  if (want.kind === "interval") return s?.kind === "interval" && s.minutes === want.minutes;
-  return s?.kind === "once";
-}
-
-/**
  * A create whose answer was lost: the ids the list had before it went, and what it asked for. `warned`: the owner has
  * been told it may still appear, so the next create sends anew.
  */
@@ -311,6 +293,9 @@ export class CronApi {
     const rows = isObj(res) && Array.isArray(res.runs) ? res.runs : [];
     if (rows.some((r) => isObj(r) && typeof r.profile === "string" && r.profile !== profile))
       throw new CronError("gone", "Hermes answered with the runs of this job's copy in another profile, so they aren't shown here.");
+    // A script run's rows carry no profile: had the job gone meanwhile, they could be another profile's copy's. So the
+    // job must still be this profile's once they are read.
+    await this.owned(profile, job.id);
     return rows.map(toRun).filter((r): r is JobRun => !!r);
   }
 
@@ -441,11 +426,35 @@ export class CronApi {
       updates.prompt !== undefined && back.prompt.trim() !== updates.prompt && "prompt",
       updates.deliver !== undefined && back.deliver !== updates.deliver && "delivery",
       updates.repeat !== undefined && back.repeat.times !== (edits.repeat ?? null) && "repeat limit",
-      updates.schedule !== undefined && (answer ? shown(back).schedule !== shown(answer).schedule : !sameSchedule(back, String(updates.schedule))) && "schedule",
+      updates.schedule !== undefined && (answer ? shown(back).schedule !== shown(answer).schedule : !(await this.scheduleIs(profile, back, String(updates.schedule)))) && "schedule",
     ].filter((w): w is string => !!w);
     if (!wrong.length) return back;
     if (failure) throw new CronError("unknown", `${failure.message} The job as Hermes has it now doesn't have your changes, so they weren't saved.`);
     throw new CronError("unknown", `Hermes took the change, but reading the job back shows a different ${wrong.join(", ")}: another Hermes client may have changed it at the same moment.`);
+  }
+
+  /**
+   * Whether a job's schedule is the one `typed` asks for, when Hermes's answer was lost: by Hermes's label for it
+   * (`parse_schedule`'s `display`) and its expression, interval or instant. A time without an offset is read in the
+   * profile's zone; when that can't be read, or for `in 30m`, which Hermes counts from its own clock, only a run
+   * within five minutes of the one asked for counts.
+   */
+  private async scheduleIs(profile: string, job: CronJob, typed: string): Promise<boolean> {
+    let want: Schedule;
+    try {
+      want = parseSchedule(typed, "UTC", 0);
+    } catch {
+      return false;
+    }
+    const s = job.schedule;
+    if (job.scheduleText !== want.display || s?.kind !== want.kind) return false;
+    if (want.kind === "cron") return s.kind === "cron" && s.expr === want.expr;
+    if (want.kind === "interval") return s.kind === "interval" && s.minutes === want.minutes;
+    if (s.kind !== "once") return false;
+    if (/^in /i.test(typed.trim())) return Math.abs(s.runAt - (parseSchedule(typed, "UTC", Date.now()) as { runAt: number }).runAt) < 5 * 60_000;
+    if (/(Z|[+-]\d{2}:?\d{2})$/i.test(typed.trim())) return s.runAt === want.runAt;
+    const zone = await this.timezone(profile).catch(() => "");
+    return !!zone && knownZone(zone) && s.runAt === (parseSchedule(typed, zone, 0) as { runAt: number }).runAt;
   }
 
   /** The job from the list after a write; throws `unknown` when the list can't be read. */
@@ -484,8 +493,8 @@ export class CronApi {
     const still = await this.readBack(profile, job.id, "Hermes didn't confirm the delete");
     if (copies.length) {
       // A copy elsewhere that went with it means Hermes deleted that one: this profile's job was gone first.
-      const left = new Set(await this.copiesOf(profile, job.id));
-      const gone = copies.filter((c) => !left.has(c));
+      // Only a read that worked can show a copy gone; a profile that can't be read says nothing.
+      const gone = (await Promise.all(copies.map((c) => this.list(c).then((jobs) => (jobs.some((j) => j.id === job.id) ? "" : c), () => "")))).filter(Boolean);
       if (gone.length)
         throw new CronError("unknown", `Hermes deleted the copy of this job in the ${gone.join(" and ")} profile, since this profile's job had just been deleted elsewhere. That can't be undone here.`);
     }

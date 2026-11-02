@@ -204,6 +204,35 @@ describe("the Scheduled jobs screen", () => {
     expect(document.querySelectorAll(".job-runs-preview li")).toHaveLength(1);
   });
 
+  it("keeps an overdue one-shot's repeat limit when only its name changes", async () => {
+    const s = server();
+    const row = s.cron.add("default", { name: "[fixture] Overdue", prompt: "Fixture only.", schedule: "in 2h" });
+    Object.assign(row, { schedule: { kind: "once", run_at: "2026-01-01T09:00:00-06:00", display: "once at 2026-01-01 09:00" }, schedule_display: "once at 2026-01-01 09:00" });
+    const { user } = await launch(s);
+    await user.click(screen.getByText("[fixture] Overdue"));
+    await user.click(screen.getByRole("button", { name: /Edit/ }));
+    const name = screen.getByDisplayValue("[fixture] Overdue");
+    await user.clear(name);
+    await user.type(name, "Fixture overdue renamed");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByRole("heading", { name: "Fixture overdue renamed" });
+    expect(writes(s).map((w) => w.body)).toEqual([{ updates: { name: "Fixture overdue renamed" } }]);
+  });
+
+  it("previews only the runs a repeat limit has left, after a schedule edit too", async () => {
+    const s = server();
+    const row = s.cron.add("default", { name: "[fixture] Limited", prompt: "Fixture only.", schedule: "every 2h", repeat: 5 });
+    (row.repeat as { completed: number }).completed = 4;
+    const { user } = await launch(s);
+    await user.click(screen.getByText("[fixture] Limited"));
+    expect(document.querySelectorAll(".job-runs-preview li")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: /Edit/ }));
+    const schedule = screen.getByDisplayValue("every 120m");
+    await user.clear(schedule);
+    await user.type(schedule, "every 3h");
+    expect(document.querySelectorAll(".job-preview li")).toHaveLength(1);
+  });
+
   it("shows the profile's own jobs after switching profile", async () => {
     const s = server();
     s.cron.add("work", { name: "[fixture] Work job", prompt: "Fixture only.", schedule: "0 8 * * *" });
