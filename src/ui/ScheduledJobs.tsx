@@ -4,7 +4,7 @@
 // back, has it.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, CalendarClock, CircleAlert, History, Pause, Pencil, Play, Plus, RefreshCw, Trash2, Zap } from "lucide-react";
-import { CronConflict, CronError, type CronApi, type CronJob, type DeliveryTarget, type JobFields, type JobRun, type JobsZone, jobsZone, statusLabel } from "../hermes/cronJobs";
+import { CronConflict, CronError, RUNS_MAX, type CronApi, type CronJob, type DeliveryTarget, type JobFields, type JobRun, type JobsZone, jobsZone, missedRunNote, statusLabel } from "../hermes/cronJobs";
 import { type Schedule, ScheduleError, clockChangeNote, explainSchedule, formatInstant, isoIn, offsetAt, parseSchedule, upcomingRuns } from "../hermes/schedule";
 import { Spinner } from "./bits";
 
@@ -13,7 +13,7 @@ const HERE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 /** A scheduler that hasn't checked the jobs for this long is likely not running (it checks about every minute). */
 const STALE_SCHEDULER_S = 300;
 
-type Loaded = { jobs: CronJob[]; zone: JobsZone; targets: DeliveryTarget[] };
+type Loaded = { jobs: CronJob[]; zone: JobsZone; targets: DeliveryTarget[]; catchUp: boolean };
 type View = { kind: "list" } | { kind: "job"; id: string } | { kind: "edit"; id?: string };
 
 /** An instant on the jobs' clock, and on this computer's when that reads differently. */
@@ -130,11 +130,11 @@ export function ScheduledJobs({ api, profile, connected, onClose }: { api: CronA
     try {
       const [jobs, setting, targets] = await Promise.all([
         api.list(profile),
-        api.timezone(profile).catch(() => undefined),
+        api.scheduling(profile).catch(() => undefined),
         api.targets(profile).catch(() => [] as DeliveryTarget[]),
       ]);
       if (!live.current) return;
-      setLoaded({ jobs, zone: jobsZone(setting, jobs), targets });
+      setLoaded({ jobs, zone: jobsZone(setting?.timezone, jobs), targets, catchUp: setting?.catchUp ?? true });
     } catch (e) {
       if (live.current) setError(e as Error);
     } finally {
@@ -330,14 +330,15 @@ function JobDetail({
   const offline = connected ? undefined : "Connect to Hermes to change this job.";
   const paused = !job.enabled || job.state === "paused";
 
-  const readRuns = () =>
-    void api.runs(profile, job).then(
+  const [runLimit, setRunLimit] = useState(20);
+  const readRuns = (limit = runLimit) =>
+    void api.runs(profile, job, limit).then(
       (r) => setRuns(r),
       (e) => setRuns(messageOf(e)),
     );
   useEffect(() => {
     if (connected) readRuns();
-  }, [connected, job.lastRunAt]);
+  }, [connected, job.lastRunAt, runLimit]);
 
   const act = async (what: NonNullable<typeof busy>, fn: () => Promise<void>) => {
     setBusy(what);
@@ -486,6 +487,14 @@ function JobDetail({
             <Upcoming schedule={job.schedule} zone={zone} first={Date.parse(job.nextRunAt!)} remaining={job.repeat.times === null ? null : job.repeat.times - job.repeat.completed} />
           </>
         )}
+        {job.schedule && (
+          <p className="muted small">
+            {missedRunNote(job.schedule, (() => {
+              const two = job.schedule.kind === "once" ? undefined : upcomingRuns(job.schedule, zone.zone, Date.now(), 2);
+              return two && two.length === 2 ? two[1] - two[0] : undefined;
+            })(), loaded.catchUp)}
+          </p>
+        )}
         {job.repeat.times !== null && (
           <p className="muted small">
             Runs {job.repeat.times} {job.repeat.times === 1 ? "time" : "times"} in all; {job.repeat.completed} done.
@@ -544,6 +553,15 @@ function JobDetail({
           </ul>
         ) : (
           <p className="muted small">Hermes has no runs of this job on record.</p>
+        )}
+        {Array.isArray(runs) && runs.length >= runLimit && (
+          runLimit < RUNS_MAX ? (
+            <button className="btn" onClick={() => setRunLimit(RUNS_MAX)}>
+              Show more runs
+            </button>
+          ) : (
+            <p className="muted small">Hermes lists a job's latest {RUNS_MAX} runs; older ones aren't shown.</p>
+          )
         )}
       </section>
     </>

@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeHermes } from "./fakeHermes";
 import { connect, type Hermes } from "./transport";
-import { CronConflict, CronError, cronError, statusLabel, type JobFields } from "./cronJobs";
+import { CronConflict, CronError, cronError, missedRunNote, statusLabel, type JobFields } from "./cronJobs";
 
 const running: Hermes[] = [];
 afterEach(async () => {
@@ -57,9 +57,18 @@ describe("listing", () => {
     await expect(cron.list("default")).rejects.toMatchObject({ kind: "unsupported", message: "This Hermes server has no scheduled jobs. Updating Hermes adds them." });
   });
 
+  it("words what Hermes does with a missed run", () => {
+    const daily = { kind: "cron" as const, expr: "0 9 * * *", display: "" };
+    expect(missedRunNote(daily, 86_400_000, true)).toMatch(/up to 2 hours late\. Later than that, the runs it missed become one run/);
+    expect(missedRunNote({ kind: "interval", minutes: 10, display: "" }, 600_000, false)).toMatch(/up to 5 minutes late\. Later than that, Hermes skips it/);
+    expect(missedRunNote({ kind: "interval", minutes: 1, display: "" }, 60_000, true)).toMatch(/up to 2 minutes late/);
+    expect(missedRunNote({ kind: "once", runAt: 0, display: "" }, undefined, true)).toMatch(/more than 2 minutes later, Hermes doesn't run it/);
+  });
+
   it("reads the profile's time zone and delivery targets", async () => {
     const { s, cron } = await setUp();
     expect(await cron.timezone("default")).toBe("America/Chicago");
+    expect(await cron.scheduling("default")).toEqual({ timezone: "America/Chicago", catchUp: true });
     s.cron.timezone = "";
     expect(await cron.timezone("default")).toBe("");
     expect(await cron.targets("default")).toEqual([

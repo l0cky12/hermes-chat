@@ -108,6 +108,24 @@ export class CronConflict extends Error {
   }
 }
 
+/** The most runs Hermes lists for a job (`_list_cron_job_runs_sync`): it takes a limit but no offset. */
+export const RUNS_MAX = 100;
+
+/**
+ * What Hermes does with a run the scheduler missed, say while the server was down (`cron/jobs.py`
+ * `_compute_grace_seconds`, `_fast_forward_missed_recurring`, `ONESHOT_GRACE_SECONDS`). A recurring run up to half its
+ * period late (2 minutes to 2 hours) still runs; later than that, missed runs become one run as soon as Hermes can,
+ * or none when `cron.catch_up_missed` is off. A one-shot more than 2 minutes late doesn't run.
+ */
+export function missedRunNote(s: Schedule, periodMs: number | undefined, catchUp: boolean): string {
+  if (s.kind === "once") return "If the server's scheduler isn't running at that time, and only starts more than 2 minutes later, Hermes doesn't run it.";
+  const grace = Math.max(120, Math.min(Math.floor((periodMs ?? 0) / 2000), 7200));
+  const said = grace >= 3600 ? `${+(grace / 3600).toFixed(1)} ${grace === 3600 ? "hour" : "hours"}` : `${Math.round(grace / 60)} minutes`;
+  return `If the server's scheduler is down when a run is due, Hermes still runs it up to ${said} late. ${
+    catchUp ? "Later than that, the runs it missed become one run as soon as it can, and the schedule goes on." : "Later than that, Hermes skips it (cron.catch_up_missed is off for this profile)."
+  }`;
+}
+
 export type RestFn = (method: RestMethod, pathAndQuery: string, body?: unknown) => Promise<unknown>;
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -273,10 +291,19 @@ export class CronApi {
     return rows.map(toJob).filter((j): j is CronJob => !!j && (!j.profile || j.profile === profile));
   }
 
-  /** The profile's `timezone` setting (`config.yaml`), or "" when it has none and Hermes uses the server's zone. */
-  async timezone(profile: string): Promise<string> {
+  /**
+   * The profile's scheduling settings (`config.yaml`): `timezone`, "" when it has none and Hermes uses the server's
+   * zone, and `catchUp`, false when `cron.catch_up_missed` is off and Hermes skips runs missed by more than their grace.
+   */
+  async scheduling(profile: string): Promise<{ timezone: string; catchUp: boolean }> {
     const config = await this.call("GET", `api/config?${q(profile)}`);
-    return isObj(config) && typeof config.timezone === "string" ? config.timezone.trim() : "";
+    const cron = isObj(config) && isObj(config.cron) ? config.cron : {};
+    return { timezone: isObj(config) && typeof config.timezone === "string" ? config.timezone.trim() : "", catchUp: cron.catch_up_missed !== false };
+  }
+
+  /** The profile's `timezone` setting, or "" when it has none. */
+  async timezone(profile: string): Promise<string> {
+    return (await this.scheduling(profile)).timezone;
   }
 
   /** Where the profile can deliver results. `ready` is false for a platform with no home channel set. */
@@ -286,7 +313,10 @@ export class CronApi {
     return rows.filter(isObj).filter((t) => typeof t.id === "string" && t.id).map((t) => ({ id: t.id as string, name: text(t.name) || (t.id as string), ready: t.home_target_set !== false }));
   }
 
-  /** The job's latest runs, newest first. Reads only, and only this profile's: Hermes would read another's copy. */
+  /**
+   * The job's latest runs, newest first, up to `limit`: Hermes lists at most 100 (`RUNS_MAX`) and has no paging past
+   * them. Reads only, and only this profile's: Hermes would read another's copy.
+   */
   async runs(profile: string, job: CronJob, limit = 20): Promise<JobRun[]> {
     await this.owned(profile, job.id);
     const res = await this.call("GET", `${jobPath(job.id)}/runs?${q(profile)}&limit=${limit}`);

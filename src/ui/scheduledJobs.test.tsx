@@ -233,6 +233,19 @@ describe("the Scheduled jobs screen", () => {
     expect(document.querySelectorAll(".job-preview li")).toHaveLength(1);
   });
 
+  it("pages run history up to Hermes's limit, and says what a missed run does", async () => {
+    const s = server();
+    const id = s.cron.jobs.default[0].id;
+    s.cron.runs[id] = Array.from({ length: 30 }, (_, i) => ({ id: `cron_output:${id}:${i}`, title: `COMPLETED · run ${i}`, source: "cron_output", started_at: 1_793_600_000 - i * 60 }));
+    const { user } = await launch(s);
+    await user.click(screen.getByText("[fixture] Weekday brief"));
+    expect(screen.getByText(/Hermes still runs it up to 2 hours late/)).toBeTruthy();
+    // The fake answers with all 30 whatever the limit; the app asks for 20 first, then Hermes's 100.
+    await waitFor(() => expect(s.restRequests.some((r) => r.path.endsWith("/runs") && r.query.get("limit") === "20")).toBe(true));
+    await user.click(await screen.findByRole("button", { name: "Show more runs" }));
+    await waitFor(() => expect(s.restRequests.some((r) => r.path.endsWith("/runs") && r.query.get("limit") === "100")).toBe(true));
+  });
+
   it("shows the profile's own jobs after switching profile", async () => {
     const s = server();
     s.cron.add("work", { name: "[fixture] Work job", prompt: "Fixture only.", schedule: "0 8 * * *" });
