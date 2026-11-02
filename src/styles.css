@@ -1249,3 +1249,49 @@ button.status-item:disabled { opacity: 0.5; cursor: default; }
   .files-table th:nth-child(3), .files-table td:nth-child(3) { display: none; }
   .files-goto input { width: 150px; }
 }
+
+/* Scheduled jobs (ScheduledJobs.tsx) */
+.faint { color: var(--faint); }
+.bad { color: var(--bad); }
+.jobs-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+.job-banner { display: flex; align-items: flex-start; gap: 8px; color: var(--warn); font-size: calc(12.5rem / 14); line-height: 1.5; }
+.job-banner svg { flex: none; margin-top: 2px; }
+.job-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: 10px; color: var(--bad); background: rgba(248, 113, 113, 0.08); border: 1px solid rgba(248, 113, 113, 0.2); margin-bottom: 14px; }
+.settings .job-error p { margin: 0; font-size: calc(12.5rem / 14); }
+.job-notice { color: var(--text); background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
+.jobs-empty { padding: 18px 2px; line-height: 1.5; }
+.job-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.job-row { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--raised); font-size: calc(13rem / 14); line-height: 1.45; }
+.job-row:hover { border-color: var(--line-3); }
+.job-row:focus-visible { outline: 2px solid var(--line-2); outline-offset: 1px; }
+.job-row-head { display: flex; align-items: center; gap: 8px; }
+.job-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-row-line { color: var(--muted); }
+.job-status.good { color: var(--ok); }
+.job-status.bad { color: var(--bad); }
+.job-status.warn { color: var(--warn); }
+.job-sub { margin: 14px 0 6px; font-size: calc(13rem / 14); }
+.job-runs-preview { margin: 0 0 10px; padding-left: 20px; font-size: calc(13rem / 14); line-height: 1.7; }
+.job-dst { color: var(--warn); }
+.job-prompt { white-space: pre-wrap; font-family: var(--mono); font-size: calc(12.5rem / 14); background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 0 0 12px; max-height: 320px; overflow: auto; }
+.job-kept { display: grid; gap: 4px; margin: 8px 0 0; font-size: calc(12.5rem / 14); }
+.job-kept > div { display: flex; gap: 10px; }
+.job-kept dt { color: var(--muted); min-width: 110px; }
+.job-kept dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
+.job-history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; font-size: calc(12.5rem / 14); }
+.job-history li { border-left: 2px solid var(--line-2); padding-left: 10px; }
+.job-history .badge { margin-left: 8px; }
+.job-history-title { color: var(--text); overflow-wrap: anywhere; }
+.job-history-preview { overflow-wrap: anywhere; }
+.job-form { display: flex; flex-direction: column; gap: 16px; }
+.job-form textarea, .job-form select { background: var(--raised); border: 1px solid var(--line-2); border-radius: 9px; padding: 9px 11px; color: var(--text); font: inherit; font-size: calc(13rem / 14); }
+.job-form textarea { resize: vertical; min-height: 96px; line-height: 1.5; }
+.job-form textarea:focus, .job-form select:focus { border-color: var(--line-3); outline: none; }
+.job-form [aria-invalid="true"] { border-color: var(--bad); }
+.job-example { font-family: var(--mono); font-size: calc(11.5rem / 14); padding: 2px 7px; border-radius: 6px; border: 1px solid var(--line-2); color: var(--muted); }
+.job-example:hover { color: var(--text); border-color: var(--line-3); }
+.job-preview { padding: 12px 14px; border-radius: 12px; background: var(--raised); border: 1px solid var(--line); font-size: calc(13rem / 14); }
+.job-preview .job-runs-preview { margin-top: 8px; }
+.settings .job-preview p { margin: 6px 0 0; }
+.job-check { display: flex; align-items: center; gap: 8px; font-size: calc(13rem / 14); }
+.jobs-screen .confirm { max-width: 560px; margin: 0 0 16px; padding: 12px 14px; border-radius: 12px; background: var(--raised); border: 1px solid var(--line-2); color: var(--text); }

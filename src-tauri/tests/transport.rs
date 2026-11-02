@@ -62,7 +62,7 @@ async fn list_sessions(headers: HeaderMap, RawQuery(query): RawQuery) -> Respons
 
 async fn patch_session(Path(id): Path<String>, headers: HeaderMap, body: String) -> Response {
     let content_type = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
-    Json(json!({"id": id, "content_type": content_type, "body": serde_json::from_str::<Value>(&body).unwrap()})).into_response()
+    Json(json!({"id": id, "content_type": content_type, "body": serde_json::from_str::<Value>(&body).unwrap_or(Value::Null)})).into_response()
 }
 
 async fn delete_session(Path(id): Path<String>, RawQuery(query): RawQuery) -> Response {
@@ -72,7 +72,7 @@ async fn delete_session(Path(id): Path<String>, RawQuery(query): RawQuery) -> Re
 /// Settings → Model's writes: `POST /api/model/set` and `PUT /api/config` echo what they got.
 async fn echo_write(axum::extract::OriginalUri(uri): axum::extract::OriginalUri, headers: HeaderMap, body: String) -> Response {
     let content_type = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
-    Json(json!({"uri": uri.to_string(), "content_type": content_type, "body": serde_json::from_str::<Value>(&body).unwrap()})).into_response()
+    Json(json!({"uri": uri.to_string(), "content_type": content_type, "body": serde_json::from_str::<Value>(&body).unwrap_or(Value::Null)})).into_response()
 }
 
 /// The dashboard rotating an expired access token through the refresh cookie (dashboard_auth middleware).
@@ -242,6 +242,9 @@ fn stub_routes() -> Router {
         .route("/api/config", put(echo_write).get(config))
         .route("/api/model/moa", put(echo_write).post(echo_write))
         .route("/api/profiles/{name}/soul", put(echo_write).post(echo_write))
+        .route("/api/cron/jobs", post(echo_write))
+        .route("/api/cron/jobs/{id}", put(echo_write))
+        .route("/api/cron/jobs/{id}/{action}", post(echo_write))
         .route("/api/rotate", get(rotate))
         .route("/api/expire", get(expire))
         .route("/api/busy", get(busy))
@@ -452,6 +455,21 @@ async fn relays_the_persona_write_for_a_profile() {
 }
 
 #[tokio::test]
+async fn relays_the_scheduled_job_writes() {
+    let dashboard = signed_in().await;
+    let body = json!({"schedule": "0 9 * * *", "prompt": "p"}).to_string();
+    let got: Value = serde_json::from_str(&dashboard.request("POST", "api/cron/jobs?profile=default", Some(body)).await.unwrap()).unwrap();
+    assert_eq!(got["uri"], "/api/cron/jobs?profile=default");
+    let body = json!({"updates": {"name": "n"}}).to_string();
+    let got: Value = serde_json::from_str(&dashboard.request("PUT", "api/cron/jobs/f8f9e9ea90bc?profile=default", Some(body)).await.unwrap()).unwrap();
+    assert_eq!(got, json!({"uri": "/api/cron/jobs/f8f9e9ea90bc?profile=default", "content_type": "application/json", "body": {"updates": {"name": "n"}}}));
+    for action in ["pause", "resume", "trigger"] {
+        let got: Value = serde_json::from_str(&dashboard.request("POST", &format!("api/cron/jobs/f8f9e9ea90bc/{action}?profile=default"), None).await.unwrap()).unwrap();
+        assert_eq!(got["uri"], format!("/api/cron/jobs/f8f9e9ea90bc/{action}?profile=default"));
+    }
+}
+
+#[tokio::test]
 async fn keeps_cookies_the_dashboard_rotates() {
     let dashboard = signed_in().await;
     get_json(&dashboard, "api/rotate").await;
@@ -474,7 +492,7 @@ async fn a_failed_rest_call_reports_status_and_body() {
 }
 
 #[tokio::test]
-async fn relays_only_get_patch_and_delete_under_api_and_the_model_and_persona_writes() {
+async fn relays_only_get_patch_and_delete_under_api_and_the_model_job_and_persona_writes() {
     let dashboard = signed_in().await;
     for (method, path) in [
         ("GET", "auth/logout"),
@@ -498,6 +516,17 @@ async fn relays_only_get_patch_and_delete_under_api_and_the_model_and_persona_wr
         ("PUT", "api/profiles/work%2F..%2Fx/soul"),
         ("PUT", "api/profiles/default/soul/../../../auth/logout"),
         ("PUT", "api/profiles/default"),
+        ("PUT", "api/cron/jobs"),
+        ("POST", "api/cron/jobs/x"),
+        ("POST", "api/cron/jobs/x/run"),
+        ("POST", "api/cron/jobs/x/pause/now"),
+        ("POST", "api/cron/jobs/../../auth/logout"),
+        ("POST", "api/cron/jobs/x/../../../auth/logout"),
+        ("PUT", "api/cron/jobs/a%2Fb"),
+        ("PUT", "api/cron/jobs/x/pause"),
+        ("POST", "api/cron/jobsx"),
+        ("POST", "api/cron/fire"),
+        ("POST", "api/cron/blueprints/instantiate"),
     ] {
         let err = dashboard.request(method, path, None).await.err().unwrap();
         assert!(matches!(err, TransportError::NotRelayed(_)), "{method} {path}: {err:?}");

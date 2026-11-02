@@ -30,6 +30,7 @@ import { catalogFromServer, fallbackCatalog, isEffort, modelKey, pickFromInfo, t
 import { noOthers, OtherProfilesCheck } from "./otherProfiles";
 // Projects are Hermes's own, read and written with legacy `projects.*` (projects.ts, research doc "Projects").
 import { projectsApi, type ProjectsApi } from "./projects";
+import { CronApi } from "./cronJobs";
 import { ModelSettingsApi } from "./modelSettings";
 import type { OpenPipe, Pipe, PipeEvent, RestMethod, Route, Speech, Transcript, VoiceSetup } from "./pipe";
 import { remoteFiles, type RemoteFiles } from "./remoteFiles";
@@ -484,6 +485,9 @@ export class Hermes {
     hermes.dropped(reason);
     return hermes;
   }
+
+  /** Hermes's scheduled jobs, each call naming its profile (cronJobs.ts). Hermes runs them; this only manages them. */
+  readonly cron = new CronApi((method, pathAndQuery, body) => this.rest(method, pathAndQuery, body));
 
   /** Settings → Model's reads and writes, for the profile shown (modelSettings.ts). */
   readonly modelSettings = new ModelSettingsApi(

@@ -2,6 +2,7 @@
 // JSON-RPC frames and dashboard REST bodies (shapes from the deployed contracts, see the research doc).
 import type { LocalFile, OpenPipe, PipeEvent, Route, Speech, VoiceSetup } from "./pipe";
 import { FakeServerFiles } from "./fakeServerFiles";
+import { ScheduleError, isoIn, parseSchedule, upcomingRuns } from "./schedule";
 
 type Request = { jsonrpc: "2.0"; id: number; method: string; params: Record<string, unknown> };
 /** The client's answer to a server→client request (`tui_gateway/server_requests.py`). */
@@ -197,6 +198,11 @@ export class FakeHermes {
   afterSoulWrite?: () => void;
   /** Profile distributions, by profile name, as `GET /api/profiles` lists them (`distribution_name`). */
   distributions: Record<string, string> = {};
+  /**
+   * Scheduled jobs by profile, as `cron/jobs.json` holds them, and how the cron routes behave
+   * (`hermes_cli/web_routers/cron.py` at the deployed `bf0203a`, as probed with a throwaway HERMES_HOME).
+   */
+  cron: FakeCron = new FakeCron(this);
   /** The `?profile=` each `/api/ws` connection was opened with, in order. */
   readonly wsProfiles: string[] = [];
   /** Stored session id -> its history, as `session.resume` projects it (`_history_to_messages`). */
@@ -604,7 +610,12 @@ export class FakeHermes {
       })),
       main: { provider: this.modelConfig.model.provider, model: this.modelConfig.model.default },
     }),
-    "GET /api/config": () => ({ model: this.modelConfig.model.default, agent: { ...this.modelConfig.agent }, delegation: { ...this.modelConfig.delegation } }),
+    "GET /api/config": () => ({
+      model: this.modelConfig.model.default,
+      agent: { ...this.modelConfig.agent },
+      delegation: { ...this.modelConfig.delegation },
+      ...(this.cron.timezone && { timezone: this.cron.timezone }),
+    }),
     "GET /api/delegation/routing": () => ({
       configured: "default",
       blocked_reason: null,
@@ -702,7 +713,8 @@ export class FakeHermes {
           (method === "DELETE" && patch ? () => this.deleteSession(decodeURIComponent(patch[1]), req.query.get("profile")) : undefined) ??
           (method === "GET" && snapshot ? () => this.mutationSnapshot(snapshot[1], req.query.get("profile")) : undefined) ??
           (method === "GET" && messages ? () => this.storedMessages(decodeURIComponent(messages[1]), req.query) : undefined) ??
-          (soul && this.soulRoutes && (method === "GET" || method === "PUT") ? () => this.soul(method, decodeURIComponent(soul[1]), req.body) : undefined);
+          (soul && this.soulRoutes && (method === "GET" || method === "PUT") ? () => this.soul(method, decodeURIComponent(soul[1]), req.body) : undefined) ??
+          this.cron.route(req);
         if (soul && this.soulRoutes && method !== "GET" && method !== "PUT") throw new Error(`The dashboard answered 405: {"detail":"Method Not Allowed"}`);
         if (soul && !this.soulRoutes) throw new Error(`The dashboard answered 404: {"detail":"No such API endpoint: ${req.path}"}`);
         if (!handler) throw new Error(`The dashboard answered 404: {"detail":"Not Found"}`);
@@ -1050,3 +1062,204 @@ function formatRefValue(value: string): string {
   const q = ["`", '"', "'"].find((q) => !value.includes(q));
   return q ? `${q}${value}${q}` : value;
 }
+
+
+/** A job row in a fake `jobs.json`, in the shape the dashboard sends. */
+export type CronRow = Record<string, unknown> & { id: string; enabled: boolean; state: string };
+
+/**
+ * The fake's scheduled jobs. Like Hermes, a per-job route given a profile that doesn't hold the job acts on the
+ * profile that does (`_job_owner_profile`), a paused job keeps its stale `next_run_at`, and running a paused job
+ * resumes it. `failNext` makes the next matching write fail the way a lost answer does: before Hermes saw it, or after
+ * it saved.
+ */
+export class FakeCron {
+  jobs: Record<string, CronRow[]> = { default: [] };
+  timezone = "America/Chicago";
+  targets = [
+    { id: "local", name: "Local (save only)", home_target_set: true, home_env_var: null },
+    { id: "telegram", name: "Telegram", home_target_set: true, home_env_var: "TELEGRAM_HOME_CHANNEL" },
+    { id: "discord", name: "Discord", home_target_set: false, home_env_var: "DISCORD_HOME_CHANNEL" },
+  ];
+  runs: Record<string, Record<string, unknown>[]> = {};
+  /** No session store yet: the runs route answers 503, as on a profile whose gateway never started. */
+  runsUnavailable = false;
+  heartbeat: number | null = 14;
+  /** `last_status` a manual run ends with. */
+  runStatus = "ok";
+  /** No `/api/cron/*` routes at all, as on an old server. */
+  missing = false;
+  now = () => Date.now();
+  /** The next write whose "METHOD /path" matches fails: `before` it reaches Hermes, or `after` Hermes saved it. */
+  failNext?: { match: RegExp; when: "before" | "after"; message?: string };
+  /** Reads of the job list that fail from now on, as a dropped connection does. */
+  failLists = 0;
+  /** Calls the next write waits for before it is handled. */
+  gate?: Promise<void>;
+  private seq = 0;
+
+  constructor(private server: FakeHermes) {}
+
+  /** A job in `profile`, made the way `create_job` does from these fields. */
+  add(profile: string, fields: Record<string, unknown> & { schedule: string }): CronRow {
+    const zone = this.zoneOf(profile);
+    const now = this.now();
+    const s = parseSchedule(fields.schedule, zone, now);
+    const paused = fields.paused === true;
+    const id = (fields.id as string) ?? `${(++this.seq).toString(16).padStart(4, "0")}feed0000`.slice(0, 12);
+    const stamp = isoIn(zone, now);
+    const row: CronRow = {
+      id,
+      name: (fields.name as string) || String(fields.prompt ?? "").slice(0, 50).trim(),
+      prompt: fields.prompt ?? "",
+      skills: [],
+      skill: null,
+      model: null,
+      provider: null,
+      script: fields.script ?? null,
+      no_agent: fields.no_agent === true,
+      schedule: s.kind === "cron" ? { kind: "cron", expr: s.expr, display: s.display } : s.kind === "interval" ? { kind: "interval", minutes: s.minutes, display: s.display } : { kind: "once", run_at: isoIn(zone, s.runAt), display: s.display },
+      schedule_display: s.display,
+      repeat: { times: typeof fields.repeat === "number" ? fields.repeat : s.kind === "once" ? 1 : null, completed: 0 },
+      enabled: !paused,
+      state: paused ? "paused" : "scheduled",
+      paused_at: paused ? stamp : null,
+      paused_reason: paused ? "Created paused; awaiting operator approval." : null,
+      created_at: stamp,
+      next_run_at: paused ? null : this.next(s, zone, now),
+      last_run_at: null,
+      last_status: null,
+      last_error: null,
+      last_delivery_error: null,
+      deliver: (fields.deliver as string) || "local",
+      origin: null,
+      enabled_toolsets: null,
+      workdir: fields.workdir ?? null,
+      ...Object.fromEntries(Object.entries(fields).filter(([k]) => ["model", "provider", "skills"].includes(k))),
+    };
+    (this.jobs[profile] ??= []).push(row);
+    return row;
+  }
+
+  private zoneOf(_profile: string) {
+    return this.timezone || "UTC";
+  }
+
+  private next(s: ReturnType<typeof parseSchedule>, zone: string, from: number): string | null {
+    const at = upcomingRuns(s, zone, from, 1)?.[0];
+    return at === undefined ? null : isoIn(zone, at);
+  }
+
+  private stamp(profile: string, row: CronRow) {
+    return { ...structuredClone(row), profile, profile_name: profile, hermes_home: `/home/liam/.hermes${profile === "default" ? "" : `/profiles/${profile}`}`, is_default_profile: profile === "default", scheduler_heartbeat_age_s: this.heartbeat, latest_execution: null };
+  }
+
+  private refuse(status: number, detail: unknown): never {
+    throw new Error(`The dashboard answered ${status}: ${JSON.stringify({ detail })}`);
+  }
+
+  private profile(query: URLSearchParams): string {
+    const p = query.get("profile") ?? "default";
+    if (!(p in this.jobs) && p !== "default" && !(p in this.server.otherProfiles)) this.refuse(404, `Profile '${p}' does not exist.`);
+    return p;
+  }
+
+  /** `_job_owner_profile`: the named profile if it holds the job, else whichever profile does. */
+  private owner(id: string, hint: string): [string, CronRow] {
+    for (const p of [hint, ...Object.keys(this.jobs)]) {
+      const row = this.jobs[p]?.find((j) => j.id === id);
+      if (row) return [p, row];
+    }
+    this.refuse(404, "Job not found");
+  }
+
+  /** A cron route's handler for `req`, or undefined if it isn't one. */
+  route(req: RestRequest): (() => unknown) | undefined {
+    const m = /^\/api\/cron\/(jobs|delivery-targets)(?:\/([^/]+))?(?:\/(runs|pause|resume|trigger))?$/.exec(req.path);
+    if (!m) return undefined;
+    if (this.missing) return () => this.refuse(404, "Not Found");
+    const [, what, rawId, action] = m;
+    const id = rawId && decodeURIComponent(rawId);
+    const key = `${req.method} ${what}${id ? "/:id" : ""}${action ? `/${action}` : ""}`;
+    const write = req.method !== "GET";
+    return async () => {
+      if (write) await this.gate;
+      const fail = write && this.failNext?.match.test(`${req.method} ${req.path}`) ? this.failNext : undefined;
+      if (fail) this.failNext = undefined;
+      if (fail?.when === "before") throw new Error(fail.message ?? "Can't reach the Hermes dashboard: error sending request");
+      if (!write && what === "jobs" && !id && this.failLists > 0) {
+        this.failLists--;
+        throw new Error("Can't reach the Hermes dashboard: connection reset");
+      }
+      const answer = this.handle(key, req, id);
+      if (fail) throw new Error(fail.message ?? "Can't reach the Hermes dashboard: connection closed before message completed");
+      return answer;
+    };
+  }
+
+  private handle(key: string, req: RestRequest, id?: string): unknown {
+    const profile = this.profile(req.query);
+    const zone = this.zoneOf(profile);
+    const now = this.now();
+    switch (key) {
+      case "GET jobs":
+        return (this.jobs[profile] ?? []).map((j) => this.stamp(profile, j));
+      case "GET delivery-targets":
+        return { targets: this.targets };
+      case "POST jobs": {
+        const body = req.body ?? {};
+        if (typeof body.schedule !== "string") this.refuse(422, [{ msg: "Field required" }]);
+        if (!String(body.prompt ?? "").trim() && !body.script) this.refuse(400, "A cron job needs a prompt, a script or a skill.");
+        try {
+          return this.stamp(profile, this.add(profile, body as { schedule: string }));
+        } catch (e) {
+          if (e instanceof ScheduleError) this.refuse(400, e.message);
+          throw e;
+        }
+      }
+    }
+    const [owner, row] = this.owner(id!, profile);
+    switch (key) {
+      case "GET jobs/:id":
+        return this.stamp(owner, row);
+      case "GET jobs/:id/runs":
+        if (this.runsUnavailable) this.refuse(503, "Session store is not initialized. Start this profile's gateway to initialize it.");
+        return { runs: this.runs[row.id] ?? [], limit: Number(req.query.get("limit") ?? 20) };
+      case "PUT jobs/:id": {
+        const updates = (req.body?.updates ?? {}) as Record<string, unknown>;
+        if ("schedule" in updates) {
+          let s;
+          try {
+            s = parseSchedule(String(updates.schedule), zone, now);
+          } catch (e) {
+            this.refuse(400, (e as Error).message);
+          }
+          row.schedule = s.kind === "cron" ? { kind: "cron", expr: s.expr, display: s.display } : s.kind === "interval" ? { kind: "interval", minutes: s.minutes, display: s.display } : { kind: "once", run_at: isoIn(zone, s.runAt), display: s.display };
+          row.schedule_display = s.display;
+          if (row.state !== "paused") row.next_run_at = this.next(s, zone, now);
+        }
+        for (const k of ["name", "prompt", "deliver"]) if (k in updates) row[k] = updates[k];
+        if ("repeat" in updates) row.repeat = { times: updates.repeat === "forever" ? null : Number(updates.repeat), completed: (row.repeat as { completed: number }).completed };
+        return this.stamp(owner, row);
+      }
+      case "POST jobs/:id/pause":
+        Object.assign(row, { enabled: false, state: "paused", paused_at: isoIn(zone, now) });
+        return this.stamp(owner, row);
+      case "POST jobs/:id/resume": {
+        const s = parseSchedule(String(row.schedule_display), zone, now);
+        Object.assign(row, { enabled: true, state: "scheduled", paused_at: null, paused_reason: null, next_run_at: this.next(s, zone, now) });
+        return this.stamp(owner, row);
+      }
+      case "POST jobs/:id/trigger": {
+        const stamp = isoIn(zone, now);
+        Object.assign(row, { enabled: true, state: "scheduled", paused_at: null, last_run_at: stamp, last_status: this.runStatus, last_error: this.runStatus === "error" ? "The fixture failed." : null });
+        return this.stamp(owner, row);
+      }
+      case "DELETE jobs/:id":
+        this.jobs[owner] = this.jobs[owner].filter((j) => j !== row);
+        return { ok: true };
+    }
+    this.refuse(405, "Method Not Allowed");
+  }
+}
+
