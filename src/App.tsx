@@ -286,9 +286,12 @@ export function Main({
   // Settings → Persona holds an edit Hermes doesn't have, or a save under way: leaving it asks first.
   const personaDirty = useRef(false);
   const [personaUnsaved, setPersonaUnsaved] = useState(false);
-  const onPersonaDirty = useCallback((dirty: boolean) => {
+  // This computer could keep the unsaved edit, so leaving doesn't lose it.
+  const [personaKept, setPersonaKept] = useState(true);
+  const onPersonaDirty = useCallback((dirty: boolean, kept: boolean) => {
     personaDirty.current = dirty;
     setPersonaUnsaved(dirty);
+    setPersonaKept(kept);
   }, []);
   const [leaving, setLeaving] = useState<{ what: LeaveWhat; go: () => void; stay?: () => void }>();
   /** Runs `go` now, or once the owner agrees to leave an unsaved persona edit behind. `stay` runs if they don't. */
@@ -947,6 +950,7 @@ export function Main({
         <LeavePersona
           what={leaving.what}
           profile={profile}
+          kept={personaKept}
           onStay={() => {
             leaving.stay?.();
             setLeaving(undefined);

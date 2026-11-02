@@ -50,14 +50,16 @@ export class PersonaStore {
     }
   }
 
-  private write(key: string, value: unknown) {
+  /** Whether storage took it; either way it is kept in memory until the app closes. */
+  private write(key: string, value: unknown): boolean {
     const raw = value === undefined ? null : JSON.stringify(value);
     this.memory.set(key, raw);
     try {
       if (raw === null) this.storage.removeItem(key);
       else this.storage.setItem(key, raw);
+      return true;
     } catch {
-      // Only a restart loses it.
+      return false;
     }
   }
 
@@ -68,9 +70,9 @@ export class PersonaStore {
     });
   }
 
-  /** Keeps the edit; undefined deletes it. */
-  setDraft(key: string, draft: PersonaDraft | undefined) {
-    this.write(`${key}.draft`, draft);
+  /** Keeps the edit; undefined deletes it. False: storage didn't take it, so it would be lost on closing the app. */
+  setDraft(key: string, draft: PersonaDraft | undefined): boolean {
+    return this.write(`${key}.draft`, draft);
   }
 
   earlier(key: string): EarlierSoul[] {

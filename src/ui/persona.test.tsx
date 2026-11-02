@@ -272,6 +272,81 @@ describe("Settings → Persona", () => {
   });
 });
 
+describe("edge cases an independent review found", () => {
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => (resolve = r));
+    return { promise, resolve };
+  }
+
+  it("makes the editor read-only while a reload is under way, so its answer can't replace new typing", async () => {
+    const { server, user } = await launch();
+    await openPersona(user);
+    await editor();
+    const gate = deferred<void>();
+    server.rest["GET /api/profiles/default/soul"] = async () => {
+      await gate.promise;
+      return { content: "# Reloaded\n", exists: true };
+    };
+    await user.click(screen.getByRole("button", { name: /Reload/ }));
+    expect((await editor()).readOnly).toBe(true);
+    expect(screen.getByRole("button", { name: /^Save$/ }).hasAttribute("disabled")).toBe(true);
+    await act(async () => gate.resolve());
+    await waitFor(async () => expect((await editor()).value).toBe("# Reloaded\n"));
+    expect((await editor()).readOnly).toBe(false);
+  });
+
+  it("keeps an edit it couldn't read back as unsaved: kept on this computer, and leaving still asks", async () => {
+    const { server, user, store, connection } = await launch();
+    await openPersona(user);
+    await edit(user, "# Mine\n");
+    server.afterSoulWrite = () => (server.soulReadError = `The dashboard answered 500: Internal Server Error`);
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText(/Hermes said it saved SOUL.md, but reading it back failed/);
+    expect(screen.getByText("Unsaved")).toBeTruthy();
+    expect(store.draft(personaKey(connection, "default"))?.text).toBe("# Mine\n");
+    await user.click(screen.getByRole("button", { name: /Back to chat/ }));
+    expect(screen.getByRole("alertdialog", { name: "Leave without saving the persona?" })).toBeTruthy();
+  });
+
+  it("keeps what a save replaced even when the owner left before it finished", async () => {
+    const { server, user } = await launch();
+    await openPersona(user);
+    await edit(user, "# Mine\n");
+    const gate = deferred<void>();
+    server.rest["PUT /api/profiles/default/soul"] = async ({ body }) => {
+      await gate.promise;
+      server.souls.default = body!.content as string;
+      return { ok: true };
+    };
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await user.click(screen.getByRole("button", { name: /Back to chat/ }));
+    await user.click(screen.getByRole("button", { name: "Leave" }));
+    await act(async () => gate.resolve());
+    await waitFor(() => expect(server.souls.default).toBe("# Mine\n"));
+    await openPersona(user);
+    expect((await editor()).value).toBe("# Mine\n");
+    expect(screen.queryByText(/Changes you didn't save/)).toBeNull();
+    const earlier = screen.getByRole("heading", { name: /Earlier versions/ }).closest("section")!;
+    await user.click(within(earlier).getByRole("button", { name: "View" }));
+    expect(within(earlier).getByRole<HTMLTextAreaElement>("textbox").value).toBe(SOUL);
+  });
+
+  it("says when this computer's storage can't keep the edit, and so does leaving", async () => {
+    const storage = memoryStorage();
+    storage.setItem = () => {
+      throw new Error("QuotaExceededError");
+    };
+    const { user } = await launch({ storage });
+    await openPersona(user);
+    await edit(user, "# Mine\n");
+    await screen.findByText(/couldn't write your changes to this computer's storage/);
+    await user.click(screen.getByRole("button", { name: /Back to chat/ }));
+    const ask = screen.getByRole("alertdialog", { name: "Leave without saving the persona?" });
+    expect(ask.textContent).toMatch(/last only until the app closes/);
+  });
+});
+
 describe("leaving an unsaved persona edit", () => {
   it("asks before going back to the chats or to another tab, and stays when told", async () => {
     const { user } = await launch();

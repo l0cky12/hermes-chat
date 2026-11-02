@@ -100,7 +100,7 @@ export function SettingsScreen({
   /** Settings → Persona; the tab is left out without it. */
   persona?: PersonaWiring;
   /** Says whether the Persona tab holds an edit Hermes doesn't have yet. */
-  onPersonaDirty?: (dirty: boolean) => void;
+  onPersonaDirty?: (dirty: boolean, kept: boolean) => void;
   /** Runs `go`, once the owner agrees to leave an unsaved persona edit behind, if there is one. */
   guard?: (go: () => void) => void;
 }) {

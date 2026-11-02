@@ -59,8 +59,11 @@ export function PersonaSettings({
   store: PersonaStore;
   /** Where this connection and profile's edits are kept (personaStore.ts `personaKey`). */
   storeKey: string;
-  /** Says whether there is an edit Hermes doesn't have yet, so leaving can ask first. False once this closes. */
-  onDirty: (dirty: boolean) => void;
+  /**
+   * Says whether there is an edit Hermes doesn't have yet, so leaving can ask first, and whether this computer could
+   * keep it. False once this closes.
+   */
+  onDirty: (dirty: boolean, kept: boolean) => void;
   now?: () => number;
 }) {
   const { profile } = where;
@@ -74,6 +77,10 @@ export function PersonaSettings({
   /** Editing a SOUL.md that doesn't exist yet, which the owner asked to create. */
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
+  /** A reload under way: the editor is read-only until it lands, so its answer can't replace text typed meanwhile. */
+  const [reloading, setReloading] = useState(false);
+  /** The last write of the edit to this computer's storage worked. */
+  const [kept, setKept] = useState(true);
   const [notice, setNotice] = useState<Notice>();
   const [conflict, setConflict] = useState<Conflict>();
   const [ask, setAsk] = useState<Ask>();
@@ -96,19 +103,20 @@ export function PersonaSettings({
   const dirty = editing && asReadBack(text) !== asReadBack(loaded.base.content);
 
   // Leaving asks first while there is an edit Hermes doesn't have, or a save whose outcome isn't known yet.
-  useEffect(() => onDirty(dirty || saving), [dirty, saving, onDirty]);
-  useEffect(() => () => onDirty(false), [onDirty]);
+  useEffect(() => onDirty(dirty || saving, kept), [dirty, saving, kept, onDirty]);
+  useEffect(() => () => onDirty(false, true), [onDirty]);
 
   // The edit is kept on this computer as it is typed. A kept edit waiting to be restored isn't overwritten meanwhile.
   useEffect(() => {
     if (!loaded || recover) return;
-    store.setDraft(storeKey, dirty ? { text, base: loaded.base, at: now() } : undefined);
+    setKept(store.setDraft(storeKey, dirty ? { text, base: loaded.base, at: now() } : undefined));
   }, [text, dirty, loaded?.base, recover]);
 
   const read = useCallback(
     async (then?: (soul: Soul) => void) => {
       const mine = ++seq.current;
       setLoad((l) => (l.state === "loaded" ? l : { state: "loading" }));
+      setReloading(true);
       void api.home(profile).then(
         (h) => alive.current && setHome(h),
         () => {},
@@ -126,6 +134,8 @@ export function PersonaSettings({
         const problem = e instanceof PersonaError ? e : new PersonaError("error", messageOf(e));
         setLoad((l) => (l.state === "loaded" ? l : { state: "problem", problem }));
         if (wasLoaded.current) setNotice({ kind: "failed", message: `Couldn't reload: ${problem.message}` });
+      } finally {
+        if (alive.current && mine === seq.current) setReloading(false);
       }
     },
     [api, profile],
@@ -175,38 +185,33 @@ export function PersonaSettings({
     setNotice(undefined);
     try {
       const r = await api.save(profile, base, sent);
+      // What a write replaced is kept, and a confirmed save's draft let go, even if the owner has left meanwhile.
+      const replaced = r.kind === "conflict" ? undefined : store.addEarlier(storeKey, r.previous, now());
+      if (r.kind === "saved") store.setDraft(storeKey, undefined);
       if (!alive.current) return;
-      const keep = (previous: Soul) => setEarlier(store.addEarlier(storeKey, previous, now()));
+      if (replaced) setEarlier(replaced);
       if (r.kind === "saved") {
-        keep(r.previous);
         setLoad({ state: "loaded", server: r.soul, base: r.soul, readAt: now() });
         setText(r.soul.content);
         setCreating(false);
         setConflict(undefined);
         setNotice({ kind: "saved", at: now(), created: !r.previous.exists });
-        store.setDraft(storeKey, undefined);
       } else if (r.kind === "conflict") {
         setLoad({ ...loaded, server: r.server, readAt: now() });
         setConflict({ server: r.server, written: false });
       } else if (r.kind === "changed") {
-        keep(r.previous);
         setLoad({ ...loaded, server: r.server, readAt: now() });
         setConflict({ server: r.server, written: true });
       } else {
-        keep(r.previous);
-        const sentSoul = { exists: true, content: asReadBack(sent) };
-        setLoad({ state: "loaded", server: sentSoul, base: sentSoul, readAt: loaded.readAt });
-        setText(sentSoul.content);
-        setCreating(false);
-        store.setDraft(storeKey, undefined);
+        // Until a read says what Hermes has, the edit stays unsaved: kept on this computer, and leaving still asks.
         setNotice({
           kind: "unverified",
-          message: `Hermes said it saved SOUL.md, but reading it back failed: ${r.problem.message} Reload to check what Hermes has.`,
+          message: `Hermes said it saved SOUL.md, but reading it back failed: ${r.problem.message} Your text is still here as unsaved changes. Reload to check what Hermes has.`,
         });
       }
     } catch (e) {
       if (!alive.current) return;
-      setNotice({ kind: "failed", message: `${messageOf(e)} Your changes are still here, and kept on this computer.` });
+      setNotice({ kind: "failed", message: `${messageOf(e)} Your changes are still here${kept ? ", and kept on this computer" : ""}.` });
     } finally {
       if (alive.current) setSaving(false);
     }
@@ -253,7 +258,7 @@ export function PersonaSettings({
 
   const file = home?.path ? `${home.path.replace(/\/+$/, "")}/SOUL.md` : undefined;
   const notes = editing ? soulNotes(text) : [];
-  const canWrite = connected && !saving && !!loaded;
+  const canWrite = connected && !saving && !reloading && !!loaded;
 
   return (
     <div className="persona">
@@ -388,7 +393,7 @@ export function PersonaSettings({
                 className="persona-text"
                 aria-label={`SOUL.md for the ${profile} profile`}
                 value={text}
-                readOnly={saving || !!recover}
+                readOnly={saving || reloading || !!recover}
                 onChange={(e) => {
                   setText(e.target.value);
                   if (notice?.kind !== "discarded") setNotice(undefined);
@@ -442,17 +447,26 @@ export function PersonaSettings({
               <button className="btn primary" disabled={!canWrite || !dirty || !!conflict || !!recover} onClick={trySave}>
                 <Save size={14} /> {saving ? "Saving…" : loaded.base.exists ? "Save" : "Create SOUL.md"}
               </button>
-              <button className="btn" disabled={saving || (!dirty && !creating)} onClick={cancel}>
+              <button className="btn" disabled={saving || reloading || (!dirty && !creating)} onClick={cancel}>
                 <X size={14} /> Cancel
               </button>
-              <button className="btn" disabled={!connected || saving} onClick={() => (dirty ? setAsk("reload") : reload())}>
+              <button className="btn" disabled={!connected || saving || reloading} onClick={() => (dirty ? setAsk("reload") : reload())}>
                 <RotateCcw size={14} /> Reload
               </button>
             </div>
 
             {!connected && (
               <p className="muted small persona-note" role="status">
-                Not connected to Hermes, so nothing can be saved or reloaded now.{dirty && " Your changes are kept on this computer."}
+                Not connected to Hermes, so nothing can be saved or reloaded now.{dirty && kept && " Your changes are kept on this computer."}
+              </p>
+            )}
+            {dirty && !kept && (
+              <p className="sign-in-error persona-note" role="alert">
+                Hermes Chat couldn't write your changes to this computer's storage: it is full or can't be written. They last only until the app
+                closes, unless you save them.{" "}
+                <button className="link-btn" onClick={() => void navigator.clipboard?.writeText(text)}>
+                  Copy them
+                </button>
               </p>
             )}
             <NoticeLine notice={notice} onUndo={undoDiscard} />
