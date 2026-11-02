@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "Desktop chat client for a remote Hermes Agent.",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "app": "WEBKIT_DISABLE_DMABUF_RENDERER=1 tauri dev",

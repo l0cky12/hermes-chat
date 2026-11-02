@@ -3,6 +3,7 @@
 // until it closes. A sent message Hermes didn't take, or may not have, isn't a draft: it stays in its chat, kept in
 // the chat's outbox (transport.ts `Outgoing`), until the owner retries or dismisses it.
 import type { SavedSignIn } from "./account";
+import { persist } from "./unsaved";
 
 const PREFIX = "hermes-chat.draft.";
 
@@ -50,12 +51,8 @@ export function drafts(storage: DraftStorage): Drafts {
   const set = (key: string, text: string) => {
     if (get(key) === text) return;
     texts.set(key, text);
-    try {
-      if (text) storage.setItem(key, text);
-      else storage.removeItem(key);
-    } catch {
-      // Only a restart loses it.
-    }
+    // A failed write keeps it in memory, and for an update's restart (unsaved.ts).
+    persist(() => storage, key, text || null);
     notify();
   };
 

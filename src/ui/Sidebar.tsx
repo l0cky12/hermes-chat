@@ -1,12 +1,12 @@
 // Icon rail beside a chat list (ADR 0001), ported from the prototype's variants C and A. The list's header is the
 // profile switcher. Settings opens from the rail's foot. Right-clicking a chat opens its menu (ChatMenu.tsx).
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Check, ChevronDown, ChevronRight, CircleAlert, EyeOff, LockOpen, Search, Settings, SquarePen, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CircleAlert, EyeOff, FolderOpen, LockOpen, Search, Settings, SquarePen, Trash2 } from "lucide-react";
 import type { Chat, ConnectionStatus, OtherProfile, OtherProfiles } from "../hermes/model";
 import { SOURCE_LABEL, isWaiting } from "../hermes/model";
 import { CHECK_EVERY_MS, totalUnread } from "../hermes/otherProfiles";
 import type { Route } from "../hermes/pipe";
-import { RenameConflict, type Snapshot } from "../hermes/transport";
+import { RenameConflict, TitleModelUnavailable, type Snapshot } from "../hermes/transport";
 import { ChatMenu, type ChatProjects } from "./ChatMenu";
 import { ArchiveButton, STATUS_LABEL, SettleButton, SourceIcon, Spinner, composing, relTime, routeLabel, useReturnFocus } from "./bits";
 
@@ -22,7 +22,10 @@ export function Rail({
   onToggleList,
   onNew,
   onSearch,
+  onFiles,
+  filesOpen = false,
   onSettings,
+  updateWaiting = false,
 }: {
   status: ConnectionStatus;
   route?: Route;
@@ -32,7 +35,12 @@ export function Rail({
   onToggleList: () => void;
   onNew: () => void;
   onSearch: () => void;
+  /** Opens Server files, the read-only browser for the files on the Hermes server (FileBrowser.tsx). */
+  onFiles?: () => void;
+  filesOpen?: boolean;
   onSettings: () => void;
+  /** An update is ready to install or restart into (Settings → Updates). */
+  updateWaiting?: boolean;
 }) {
   const where = routeLabel(route);
   // The full wording lives only in the tooltip (ADR 0001).
@@ -57,14 +65,20 @@ export function Rail({
         <button className="icon-btn" title="Search all chats (Ctrl+K)" onClick={onSearch}>
           <Search size={18} />
         </button>
+        {onFiles && (
+          <button className={`icon-btn ${filesOpen ? "on" : ""}`} title="Server files (read-only)" aria-pressed={filesOpen} onClick={onFiles}>
+            <FolderOpen size={18} />
+          </button>
+        )}
       </div>
       <div className="rail-bottom">
         <button className="conn-btn" title={tip} aria-label={tip} onClick={() => status !== "connected" && onReconnect()}>
           <span className={`conn-dot ${status} ${unsecure ? "unsecure" : ""}`} />
           {unsecure && <LockOpen className="conn-lock" size={9} strokeWidth={2.8} />}
         </button>
-        <button className="icon-btn" title="Settings" onClick={onSettings}>
+        <button className="icon-btn settings-btn" title={updateWaiting ? "Settings: an update is ready" : "Settings"} onClick={onSettings}>
           <Settings size={18} />
+          {updateWaiting && <span className="dot update-dot" />}
         </button>
       </div>
     </aside>
@@ -136,7 +150,8 @@ function RenameRow({
  * Cancel or clicking away keeps the chat. Cancel and the trash button share a key, so React keeps the one button, and
  * focus with it, when the row goes back. An archived chat has Restore in place of Settle and Archive. A chat with
  * a reply running can't be archived, restored or deleted. Regenerate title in the menu shows a spinner until the new
- * title is saved, and why underneath if it isn't.
+ * title is saved, and why underneath if it isn't. When Hermes can't use the Text generation model's provider, that
+ * note says how to fix it and offers the setting.
  */
 function ChatRow({
   chat,
@@ -150,6 +165,7 @@ function ChatRow({
   onDelete,
   onRename,
   onRegenTitle,
+  onTextGenerationSettings,
   projects,
 }: {
   chat: Chat;
@@ -165,12 +181,15 @@ function ChatRow({
   onDelete: () => void;
   onRename: (title: string, from: string) => Promise<unknown>;
   onRegenTitle: () => Promise<unknown>;
+  /** Opens Settings → Model at the Text generation model. */
+  onTextGenerationSettings?: () => void;
   projects?: ChatProjects;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [retitling, setRetitling] = useState(false);
-  const [retitleError, setRetitleError] = useState<string>();
+  /** Why the title wasn't regenerated. `detail`: Hermes's own words; `settings`: the fix is the Text generation model. */
+  const [retitleError, setRetitleError] = useState<{ text: string; detail?: string; settings?: boolean }>();
   const regenTitle = () => {
     if (retitling) return;
     setRetitling(true);
@@ -179,8 +198,10 @@ function ChatRow({
       .catch((e) =>
         setRetitleError(
           e instanceof RenameConflict
-            ? `This chat was renamed in another Hermes client meanwhile, to "${e.title}". Regenerate again to replace it.`
-            : `Couldn't regenerate the title: ${e instanceof Error ? e.message : String(e)}`,
+            ? { text: `This chat was renamed in another Hermes client meanwhile, to "${e.title}". Regenerate again to replace it.` }
+            : e instanceof TitleModelUnavailable
+              ? { text: `Couldn't regenerate the title: ${e.message}`, detail: e.detail, settings: true }
+              : { text: `Couldn't regenerate the title: ${e instanceof Error ? e.message : String(e)}` },
         ),
       )
       .finally(() => setRetitling(false));
@@ -268,8 +289,19 @@ function ChatRow({
         />
       )}
       {retitleError && (
-        <div className="row-rename-error" role="alert">
-          {retitleError}
+        <div className="row-rename-error" role="alert" title={retitleError.detail && `Hermes said: ${retitleError.detail}`}>
+          {retitleError.text}
+          {retitleError.settings && onTextGenerationSettings && (
+            <button
+              className="link-btn row-error-action"
+              onClick={() => {
+                setRetitleError(undefined);
+                onTextGenerationSettings();
+              }}
+            >
+              Text generation settings
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -582,6 +614,7 @@ export function ChatList({
   onDelete,
   onRename,
   onRegenTitle,
+  onTextGenerationSettings,
   onListProfiles,
   onCheckOthers,
   onSwitchProfile,
@@ -610,6 +643,8 @@ export function ChatList({
   onDelete: (id: string) => void;
   onRename: (id: string, title: string, from: string) => Promise<unknown>;
   onRegenTitle: (id: string) => Promise<unknown>;
+  /** Opens Settings → Model at the Text generation model, the model titles are made with. */
+  onTextGenerationSettings?: () => void;
   onListProfiles: () => Promise<string[]>;
   onCheckOthers: () => void;
   onSwitchProfile: (name: string) => void;
@@ -639,6 +674,7 @@ export function ChatList({
       onDelete={() => onDelete(c.id)}
       onRename={(title, from) => onRename(c.id, title, from)}
       onRegenTitle={() => onRegenTitle(c.id)}
+      onTextGenerationSettings={onTextGenerationSettings}
       projects={projectsOf?.(c.id)}
     />
   );

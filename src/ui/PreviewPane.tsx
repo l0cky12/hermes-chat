@@ -2,11 +2,11 @@
 // "Preview pane"). Everything it shows is untrusted (ADR 0007): web pages load in a sandboxed frame that can't reach the
 // app, HTML files render with scripts and network off, and Markdown renders without raw HTML, as replies do.
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { AlertTriangle, ArrowLeft, Check, Copy, FileQuestion, Globe, Laptop, Plus, RotateCw, Server, Wrench, X } from "lucide-react";
-import { fenced, parseAddress, previewName, sandboxedHtml, type FileView, type PreviewTarget } from "../hermes/preview";
+import { AlertTriangle, ArrowLeft, Check, Copy, ExternalLink, FileQuestion, Globe, Laptop, Plus, RotateCw, Server, Wrench, X } from "lucide-react";
+import { fenced, parseAddress, previewName, sandboxedHtml, type FileView, type Framing, type PreviewTarget } from "../hermes/preview";
 import { Markdown } from "./Markdown";
 import { Spinner, fmtSize } from "./bits";
-import type { LocalFiles } from "./tauriPreview";
+import type { LocalFiles, WebPages } from "./tauriPreview";
 
 /** The narrowest the pane gets, and the step the arrow keys resize it by. */
 export const PANE_MIN_WIDTH = 300;
@@ -44,6 +44,7 @@ const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /**
  * `serverLabel`: how the app reaches the Hermes server, e.g. `liam@hermes`, so a Server file says where it is.
+ * `web`: asks whether a site refuses to be shown in the frame, and opens a page in the owner's browser.
  * `overlay`: the window is too narrow for the pane beside the chat, so it covers the chat until `onHide`.
  * `onResize(width, done)`: the owner is dragging the pane's edge; `done` once they let go.
  */
@@ -52,6 +53,7 @@ export function PreviewPane({
   serverLabel,
   readServer,
   local,
+  web,
   overlay,
   width,
   maxWidth,
@@ -64,6 +66,7 @@ export function PreviewPane({
   serverLabel: string;
   readServer: (path: string) => Promise<FileView>;
   local: LocalFiles;
+  web: WebPages;
   overlay: boolean;
   width: number;
   maxWidth: number;
@@ -76,6 +79,7 @@ export function PreviewPane({
   const [reloads, setReloads] = useState(0);
   const [copied, setCopied] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [openError, setOpenError] = useState<string>();
   const titleId = useId();
   const root = useRef<HTMLElement>(null);
   // Covering the chat makes it inert, focus included, so focus moves into the pane unless something in it has it.
@@ -83,6 +87,11 @@ export function PreviewPane({
     if (overlay && !root.current?.contains(document.activeElement)) root.current?.focus();
   }, [overlay]);
   const address = target.kind === "server" || target.kind === "local" ? target.path : target.kind === "web" ? target.url : undefined;
+
+  const openInBrowser = (url: string) => {
+    setOpenError(undefined);
+    web.openInBrowser(url).catch((e) => setOpenError(`Couldn't open it in your browser: ${messageOf(e)}`));
+  };
 
   const onKey = (e: ReactKeyboardEvent) => {
     if (e.key !== "Escape" || e.defaultPrevented) return;
@@ -132,6 +141,11 @@ export function PreviewPane({
               {copied ? <Check size={15} /> : <Copy size={15} />}
             </button>
           )}
+          {target.kind === "web" && (
+            <button className="icon-btn" title="Open in your browser" onClick={() => openInBrowser(target.url)}>
+              <ExternalLink size={15} />
+            </button>
+          )}
           {target.kind !== "start" && target.kind !== "tool" && (
             <button className="icon-btn" title="Reload" onClick={() => setReloads((n) => n + 1)}>
               <RotateCw size={15} />
@@ -147,11 +161,16 @@ export function PreviewPane({
           </button>
         </div>
       </header>
+      {openError && (
+        <div className="attach-note preview-open-error" role="alert">
+          {openError}
+        </div>
+      )}
       <div className="preview-body">
         {target.kind === "start" ? (
           <StartView serverLabel={serverLabel} local={local} onOpen={onOpen} />
         ) : target.kind === "web" ? (
-          <WebView key={reloads} url={target.url} />
+          <WebView key={reloads} url={target.url} check={web.check} onOpenInBrowser={() => openInBrowser(target.url)} />
         ) : target.kind === "tool" ? (
           <pre className="preview-pre">{target.text || "(empty)"}</pre>
         ) : target.kind === "server" ? (
@@ -437,18 +456,35 @@ function TextView({ view, name }: { view: Extract<FileView, { kind: "text" }>; n
 }
 
 /**
- * A web page in a frame. It can't be told apart from a site that refuses to be framed, which loads blank, so a page
- * slow to load says that it may not show.
+ * A web page in a frame. WebKitGTK gives the frame no sign that a site refused to be framed: it fires `load` at once
+ * and stays blank. So Rust asks the site the way the frame does (`check`, ADR 0011): a refusal replaces the frame with
+ * a note and Open in your browser, and a site this computer can't reach says so instead of loading forever. Anything
+ * else (a script that blanks the page, say) still can't be told apart, so a page slow to load says it may not show.
  */
-function WebView({ url }: { url: string }) {
+function WebView({ url, check, onOpenInBrowser }: { url: string; check: (url: string) => Promise<Framing>; onOpenInBrowser: () => void }) {
   const [loaded, setLoaded] = useState(false);
   const [slow, setSlow] = useState(false);
-  const [refused, setRefused] = useState(false);
+  const [closed, setClosed] = useState(false);
+  const [framing, setFraming] = useState<Framing>();
+  const [showAnyway, setShowAnyway] = useState(false);
   const frame = useRef<HTMLIFrameElement>(null);
+  const checkRef = useRef(check);
+  checkRef.current = check;
   useEffect(() => {
     const timer = setTimeout(() => setSlow(true), SLOW_PAGE_MS);
     return () => clearTimeout(timer);
   }, []);
+  useEffect(() => {
+    let live = true;
+    // A check that fails says nothing either way: the frame is left to show what it can.
+    checkRef.current(url).then(
+      (f) => live && setFraming(f),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [url]);
   const onLoad = () => {
     // A page that redirected the frame onto the app's own origin could reach the app; such a frame is emptied at once.
     // The frame-src policy (index.html) and Tauri's invoke key are the main guards; this is the last one (ADR 0007).
@@ -456,7 +492,7 @@ function WebView({ url }: { url: string }) {
       const href = frame.current?.contentWindow?.location.href;
       if (href !== undefined && href !== "about:blank") {
         frame.current!.src = "about:blank";
-        setRefused(true);
+        setClosed(true);
         return;
       }
     } catch {
@@ -464,7 +500,8 @@ function WebView({ url }: { url: string }) {
     }
     setLoaded(true);
   };
-  if (refused)
+  const host = hostOf(url);
+  if (closed)
     return (
       <div className="preview-state preview-error" role="alert">
         <AlertTriangle size={18} />
@@ -474,10 +511,42 @@ function WebView({ url }: { url: string }) {
         </div>
       </div>
     );
+  if (framing?.kind === "refused" && !showAnyway)
+    return (
+      <div className="preview-state preview-error" role="alert">
+        <AlertTriangle size={18} />
+        <div>
+          <div className="preview-state-title">{host} doesn't allow being shown inside other apps</div>
+          <div>
+            The site's answer says so (<code className="preview-refused-by">{framing.by}</code>), so here it would stay blank. Open it in your
+            browser instead.
+          </div>
+          <div className="preview-state-actions">
+            <button className="btn primary" onClick={onOpenInBrowser}>
+              <ExternalLink size={14} /> Open in your browser
+            </button>
+            <button
+              className="link-btn"
+              onClick={() => {
+                setLoaded(false);
+                setShowAnyway(true);
+              }}
+            >
+              Try showing it here anyway
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   return (
     <div className="preview-web">
       <div className="preview-web-note">
-        Runs on its own, with no access to Hermes Chat or your sign-in. Some sites refuse to show inside other apps and stay blank.
+        Runs on its own, with no access to Hermes Chat or your sign-in. Some sites don't allow being shown inside other apps; if this one stays
+        blank,{" "}
+        <button className="link-btn" onClick={onOpenInBrowser}>
+          open it in your browser
+        </button>
+        .
       </div>
       <div className="preview-web-frame">
         <iframe
@@ -490,12 +559,31 @@ function WebView({ url }: { url: string }) {
           referrerPolicy="no-referrer"
           onLoad={onLoad}
         />
-        {!loaded && (
-          <div className="preview-state preview-loading" role="status">
-            <Spinner /> {slow ? "Still loading. If the page stays blank, the site may not allow being shown here." : "Loading page…"}
-          </div>
-        )}
+        {!loaded &&
+          (framing?.kind === "unreachable" ? (
+            <div className="preview-state preview-error preview-loading" role="alert">
+              <AlertTriangle size={18} />
+              <div>
+                <div className="preview-state-title">Couldn't reach {host}</div>
+                <div>{framing.message}</div>
+                <div>Check the address, or Reload to try again.</div>
+              </div>
+            </div>
+          ) : (
+            <div className="preview-state preview-loading" role="status">
+              <Spinner /> {slow ? "Still loading. If the page stays blank, the site may not allow being shown here." : "Loading page…"}
+            </div>
+          ))}
       </div>
     </div>
   );
+}
+
+/** The host a web address names, for messages about it. */
+function hostOf(url: string) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
 }

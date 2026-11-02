@@ -1,8 +1,9 @@
 // The Settings screen, in three tabs. General, ported from the prototype: the connection and Sign out, what shows on
-// launch, voice, screenshots, the local cache, and older history. Appearance: how the app looks on this computer (AppearanceSettings.tsx).
-// Model: the profile's models on Hermes (ModelSettings.tsx). Persona: the profile's SOUL.md on Hermes (PersonaSettings.tsx).
+// launch, voice, screenshots, updates, the local cache, and older history. Appearance: how the app looks on this
+// computer (AppearanceSettings.tsx). Model: the profile's models on Hermes (ModelSettings.tsx). Persona: the profile's
+// SOUL.md on Hermes (PersonaSettings.tsx).
 // Profiles are switched in the list's header, not here (ADR 0001).
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft, Cpu, Download, KeyRound, Lock, LogOut, Palette, Settings2, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import type { Chat, ConnectionStatus } from "../hermes/model";
 import type { Route } from "../hermes/pipe";
@@ -20,6 +21,7 @@ import { VoiceSettings } from "./Voice";
 import type { VoiceSetup } from "../hermes/pipe";
 import { ScreenshotSettings } from "./ScreenshotSettings";
 import type { ScreenshotSupport } from "../hermes/tauriScreenshot";
+import { UpdateSettings } from "./UpdateSettings";
 
 type Tab = "general" | "appearance" | "model" | "persona";
 const TABS = [
@@ -68,6 +70,7 @@ export function SettingsScreen({
   persona,
   onPersonaDirty = () => {},
   guard = allow,
+  showTextGeneration,
 }: {
   status: ConnectionStatus;
   route?: Route;
@@ -103,6 +106,8 @@ export function SettingsScreen({
   onPersonaDirty?: (dirty: boolean, kept: boolean) => void;
   /** Runs `go`, once the owner agrees to leave an unsaved persona edit behind, if there is one. */
   guard?: (go: () => void) => void;
+  /** Set, each time anew, to show the Model tab at the Text generation model: from a title that couldn't be regenerated. */
+  showTextGeneration?: object;
 }) {
   const [bytes, setBytes] = useState(cacheBytes);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -110,10 +115,13 @@ export function SettingsScreen({
   const [pulled, setPulled] = useState<string>();
   const [pullError, setPullError] = useState<string>();
   const [signingOut, setSigningOut] = useState(false);
-  const [tab, setTabNow] = useState<Tab>("general");
+  const [tab, setTabNow] = useState<Tab>(showTextGeneration ? "model" : "general");
   const tabs = TABS.filter((t) => t.id !== "persona" || persona);
   // Leaving the Persona tab asks first while it holds an unsaved edit.
   const setTab = (t: Tab) => t !== tab && guard(() => setTabNow(t));
+  useEffect(() => {
+    if (showTextGeneration) setTab("model");
+  }, [showTextGeneration]);
 
   const pull = async () => {
     setPulling(true);
@@ -176,7 +184,7 @@ export function SettingsScreen({
         ) : tab === "model" ? (
           <div id="settings-panel-model" role="tabpanel" aria-labelledby="settings-tab-model">
             {/* A draft lives only while this tab is open, and for one profile. */}
-            <ModelSettings key={profile} api={modelSettings} profile={profile} connected={status === "connected"} />
+            <ModelSettings key={profile} api={modelSettings} profile={profile} connected={status === "connected"} showTextGeneration={showTextGeneration} />
           </div>
         ) : (
           <div id="settings-panel-general" role="tabpanel" aria-labelledby="settings-tab-general">
@@ -230,6 +238,7 @@ export function SettingsScreen({
 
             <VoiceSettings status={status} profile={profile} setup={voiceSetup} />
             <ScreenshotSettings checkSupport={checkScreenshots} />
+            <UpdateSettings />
 
             <section>
               <h2>Local cache</h2>

@@ -362,6 +362,11 @@ describe("leaving an unsaved persona edit", () => {
     await user.keyboard("{Escape}");
     expect((await editor()).value).toBe("# Mine\n");
 
+    // The Server files button on the rail asks too.
+    await user.click(screen.getByTitle("Server files (read-only)"));
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Keep editing" }));
+    expect((await editor()).value).toBe("# Mine\n");
+
     // Opening a chat from the list asks too.
     await user.click(screen.getByText("Nightly backup"));
     await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Leave" }));

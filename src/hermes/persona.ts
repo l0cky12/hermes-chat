@@ -10,7 +10,7 @@
 //   file is `<profile home>/SOUL.md`, the one `agent/prompt_builder.py` `load_soul_md` reads.
 //
 // Hermes has no conditional write, so a Save first reads SOUL.md again and writes only if it is still what the editor
-// started from, then reads it back to check it holds what was sent (ADR 0011). The `tui_gateway` twin,
+// started from, then reads it back to check it holds what was sent (ADR 0013). The `tui_gateway` twin,
 // `profiles.configure {soul}`, is not used: it writes with a bare `write_text` that can leave a truncated file.
 import type { RestMethod } from "./pipe";
 

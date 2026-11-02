@@ -37,6 +37,11 @@ export interface Pipe {
    * `body` is JSON text. Resolves to the response body text on 2xx; rejects with a readable message otherwise.
    */
   request(method: RestMethod, pathAndQuery: string, body?: string): Promise<string>;
+  /**
+   * A dashboard REST `GET` whose answer may be big, such as a server file's contents for the file browser. Rejects,
+   * without reading the rest, once the answer passes `maxBytes`; otherwise like `request`.
+   */
+  getLimited(pathAndQuery: string, maxBytes: number): Promise<string>;
   statFiles(paths: string[]): Promise<LocalFile[]>;
   /**
    * Sends one frame: `head`, the file at `path` as base64, then `tail`. The bytes go from disk to Hermes

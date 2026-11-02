@@ -67,5 +67,3 @@ export function syncScreenshotOutbox(): Promise<void> {
   return syncing;
 }
 subscribeOutbox(() => void syncScreenshotOutbox().catch(() => {}));
-// Runs even at the sign-in screen: crash leftovers are swept with every connection's persisted outbox protected.
-void syncScreenshotOutbox().catch(() => {});

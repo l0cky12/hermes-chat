@@ -2,6 +2,7 @@
 name = "hermes-chat"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-3.0-or-later"
 
 [lib]
 name = "hermes_chat"
@@ -22,6 +23,8 @@ tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 thiserror = "2"
 url = "2"
+# Comes with url; decodes a relayed path the way the dashboard will before routing it.
+percent-encoding = "2"
 base64 = "0.22"
 tauri-plugin-dialog = "2"
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
@@ -32,6 +35,8 @@ gtk = "0.18"
 webkit2gtk = { version = "2.0", features = ["v2_40"] }
 
 libc = "0.2"
+# Verified self-updates for a standalone AppImage built with an update key (update.rs). Never used on a pacman install.
+tauri-plugin-updater = "2"
 
 [dev-dependencies]
 axum = { version = "0.8", features = ["ws"] }

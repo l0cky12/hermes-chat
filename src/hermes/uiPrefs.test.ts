@@ -42,7 +42,7 @@ afterEach(() => {
 
 describe("reading", () => {
   it("is the defaults when nothing is stored", () => {
-    expect(getUIPrefs()).toEqual({ theme: "system", reopenLastChat: true, lastOpenChat: {}, reasoningBlocks: true, modelPicker: null, modelFavorites: [], statusBar: ["context", "yolo", "model", "status"], previewWidth: null, screenshotShortcut: "Ctrl+Shift+S" });
+    expect(getUIPrefs()).toEqual({ theme: "system", reopenLastChat: true, checkUpdatesOnLaunch: true, lastOpenChat: {}, reasoningBlocks: true, modelPicker: null, modelFavorites: [], statusBar: ["context", "yolo", "model", "status"], previewWidth: null, screenshotShortcut: "Ctrl+Shift+S" });
     expect(getUIPrefs()).toEqual(DEFAULT_UI_PREFS);
   });
 
@@ -60,6 +60,7 @@ describe("reading", () => {
         v: 1,
         theme: "neon",
         reopenLastChat: false,
+        checkUpdatesOnLaunch: "yes",
         reasoningBlocks: "no",
         modelPicker: { provider: "anthropic", model: "claude-opus-5-5", effort: "max", fast: true, extra: 1 },
         modelFavorites: ["openai/gpt-5", "no-slash", 7, "openai/gpt-5", "anthropic/claude-opus-5-5"],
@@ -71,6 +72,7 @@ describe("reading", () => {
     expect(getUIPrefs()).toEqual({
       theme: "system",
       reopenLastChat: false,
+      checkUpdatesOnLaunch: true,
       lastOpenChat: { default: "c1" },
       reasoningBlocks: true,
       modelPicker: { provider: "anthropic", model: "claude-opus-5-5", effort: "max", fast: true },

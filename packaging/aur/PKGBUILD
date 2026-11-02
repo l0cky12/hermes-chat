@@ -7,7 +7,7 @@ pkgrel=1
 pkgdesc='Desktop chat client for a remote Hermes Agent'
 arch=('x86_64')
 url='https://github.com/l0cky12/hermes-chat'
-license=('LicenseRef-unknown')
+license=('GPL-3.0-or-later')
 depends=('webkit2gtk-4.1' 'gtk3' 'libsoup3' 'glib2' 'cairo' 'gdk-pixbuf2' 'dbus'
          'libgcc' 'glibc' 'hicolor-icon-theme')
 makedepends=('git' 'cargo' 'npm')

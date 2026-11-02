@@ -23,6 +23,8 @@ export type UIPrefs = {
   theme: Theme;
   /** Open the chat that was on screen when the app last closed. */
   reopenLastChat: boolean;
+  /** Ask GitHub, or the update server, for a newer version as the app starts (updates.ts). */
+  checkUpdatesOnLaunch: boolean;
   /** Each profile's chat on screen last, kept as the owner moves between chats; a profile on the New chat pane has none. */
   lastOpenChat: Record<string, string>;
   /** Show the model's reasoning blocks in transcripts. */
@@ -48,6 +50,7 @@ export const STATUS_BAR_ITEMS = ["context", "yolo", "model", "status"] as const;
 export const DEFAULT_UI_PREFS: Readonly<UIPrefs> = Object.freeze({
   theme: "system",
   reopenLastChat: true,
+  checkUpdatesOnLaunch: true,
   lastOpenChat: Object.freeze({}) as Record<string, string>,
   reasoningBlocks: true,
   modelPicker: null,
@@ -139,6 +142,7 @@ export function readUIPrefs(doc: UIPrefsDoc, d: Readonly<UIPrefs> = DEFAULT_UI_P
   return {
     theme: THEMES.includes(doc.theme as Theme) ? (doc.theme as Theme) : d.theme,
     reopenLastChat: typeof doc.reopenLastChat === "boolean" ? doc.reopenLastChat : d.reopenLastChat,
+    checkUpdatesOnLaunch: typeof doc.checkUpdatesOnLaunch === "boolean" ? doc.checkUpdatesOnLaunch : d.checkUpdatesOnLaunch,
     lastOpenChat: toLastOpenChat(doc.lastOpenChat) ?? { ...d.lastOpenChat },
     reasoningBlocks: typeof doc.reasoningBlocks === "boolean" ? doc.reasoningBlocks : d.reasoningBlocks,
     modelPicker: pick === undefined ? (d.modelPicker && { ...d.modelPicker }) : pick,

@@ -6,6 +6,8 @@ pub mod saved_password;
 pub mod screenshot;
 pub mod transport;
 pub mod tunnel;
+pub mod web_page;
+pub mod update;
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -164,8 +166,10 @@ async fn screenshot_support() -> screenshot::Support {
 
 /// The renderer supplies all persisted outboxes at startup and whenever they change, before cleanup.
 #[tauri::command]
-fn screenshot_sync_outbox(state: State<'_, Screenshots>, paths: Vec<String>) -> Result<(), screenshot::CaptureError> {
-    state.captures()?.retain_outbox(paths.into_iter().map(std::path::PathBuf::from));
+fn screenshot_sync_outbox(app: tauri::AppHandle, state: State<'_, Screenshots>, paths: Vec<String>) -> Result<(), screenshot::CaptureError> {
+    // Also those of drafts an update's restart couldn't put back (update.rs).
+    let saved = update::saved_attachment_paths(&app);
+    state.captures()?.retain_outbox(paths.into_iter().map(std::path::PathBuf::from).chain(saved));
     Ok(())
 }
 
@@ -271,6 +275,14 @@ async fn hermes_voice_setup(state: State<'_, AppState>, profile: String) -> Resu
     dashboard.voice_setup(&profile).await.map_err(|e| e.to_string())
 }
 
+/// A read-only dashboard GET whose answer may be big, e.g. a server file for the Server files screen's preview: refused
+/// once it passes `max_bytes`.
+#[tauri::command]
+async fn hermes_get_limited(state: State<'_, AppState>, path: String, max_bytes: u64) -> Result<String, String> {
+    let dashboard = dashboard(&state).await?;
+    dashboard.get_limited(&path, max_bytes).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn hermes_disconnect(state: State<'_, AppState>) -> Result<(), String> {
     *state.0.lock().await = None;
@@ -369,6 +381,19 @@ async fn preview_read_local_image(picked: State<'_, PickedFiles>, path: String) 
     picked.read_image(&path).await.map(tauri::ipc::Response::new).map_err(|e| e.to_string())
 }
 
+/// Whether the site at `url` refuses to be shown in the preview's frame, asked the way the frame asks
+/// (`web_page::check`, ADR 0011). `user_agent`: the webview's, which the frame sends.
+#[tauri::command]
+async fn preview_check_web(url: String, user_agent: String) -> Result<web_page::Framing, String> {
+    web_page::check(&url, &user_agent).await
+}
+
+/// Opens an http(s) page in the owner's browser, for one the preview can't show.
+#[tauri::command]
+async fn preview_open_in_browser(url: String) -> Result<(), String> {
+    web_page::open_in_browser(&url).await
+}
+
 #[tauri::command]
 async fn notify_desktop(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
     notify::show(app, title, body).await
@@ -405,10 +430,17 @@ pub fn run(screenshot: bool) {
     if screenshot {
         screenshots.requests.ask();
     }
-    tauri::Builder::default()
+    let context = tauri::generate_context!();
+    let mut builder = tauri::Builder::default();
+    // The updater needs a public key to start, so it is there only in a build given one (README, "Updates").
+    if update::configured(context.config()) {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+    builder
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .manage(screenshots)
+        .manage(update::Updates::default())
         .on_permission_request(|webview, kind| permission(&webview, kind))
         .setup(|app| {
             use tauri::Emitter;
@@ -425,6 +457,9 @@ pub fn run(screenshot: bool) {
             if let Err(e) = app.state::<Screenshots>().captures() {
                 eprintln!("hermes-chat: couldn't clean up old screenshots: {e}");
             }
+            // Which package the binary came from, read before anything can upgrade it.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move { handle.state::<update::Updates>().start().await });
             let handle = app.handle().clone();
             remote::serve(move || {
                 handle.state::<Screenshots>().requests.ask();
@@ -444,6 +479,7 @@ pub fn run(screenshot: bool) {
             hermes_transcribe,
             hermes_speak,
             hermes_voice_setup,
+            hermes_get_limited,
             hermes_disconnect,
             password_load,
             password_save,
@@ -455,6 +491,8 @@ pub fn run(screenshot: bool) {
             preview_pick_local,
             preview_read_local,
             preview_read_local_image,
+            preview_check_web,
+            preview_open_in_browser,
             notify_desktop,
             system_fonts,
             screenshot_capture,
@@ -463,11 +501,22 @@ pub fn run(screenshot: bool) {
             screenshot_sync_outbox,
             screenshot_pending_request,
             screenshot_ack_request,
-            screenshot_show_window
+            screenshot_show_window,
+            update::update_install_kind,
+            update::update_check,
+            update::update_download_and_install,
+            update::app_restart,
+            update::restart_drafts_read,
+            update::restart_drafts_clear,
+            update::restart_drafts_set_aside
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         // Outbox persistence in the renderer can precede its asynchronous retention IPC. Leave remaining captures
         // for the next startup's sweep, after persisted references are known, rather than risk deleting Retry bytes.
-        .run(|_, _| {});
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                update::relaunch(app);
+            }
+        });
 }

@@ -34,6 +34,7 @@ export function tauriPipe(d: SignInDetails): OpenPipe {
       route,
       send: (frame) => invoke("hermes_send", { frame }),
       request: (method, path, body) => invoke<string>("hermes_request", { method, path, body }).catch(asError),
+      getLimited: (path, maxBytes) => invoke<string>("hermes_get_limited", { path, maxBytes }).catch(asError),
       statFiles: (paths) => invoke<LocalFile[]>("hermes_stat_files", { paths }),
       sendFile: (head, path, tail, maxBytes) => invoke<void>("hermes_send_file", { head, path, tail, maxBytes }).catch(asError),
       // The recording goes as the raw body, not as a JSON list of numbers.
