@@ -160,6 +160,9 @@ describe("schedules in words", () => {
     ["0 9 1 jan,jul *", "On day 1 of the month, in January and July at 9:00 AM"],
     ["every 30m", "Every 30 minutes, counted from the last run"],
     ["2h", "Every 2 hours, counted from the last run"],
+    ["* 0,12 * * *", "Every minute during the hours starting 12:00 AM and 12:00 PM"],
+    ["0 9 * * 5-1/2", "On Sundays and Fridays at 9:00 AM"],
+    ["0 9 * * 0-7", "Every day at 9:00 AM"],
     ["1d", "Every day, counted from the last run"],
   ])("%s → %s", (typed, words) => expect(say(typed)).toBe(words));
 });

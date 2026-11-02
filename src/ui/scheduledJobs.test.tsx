@@ -7,6 +7,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
+import { StrictMode } from "react";
+import { ScheduledJobs } from "./ScheduledJobs";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
@@ -157,7 +159,7 @@ describe("the Scheduled jobs screen", () => {
     expect(writes(s)).toHaveLength(0);
     await user.click(screen.getByRole("button", { name: "Save over their changes" }));
     await screen.findByRole("heading", { name: "[fixture] Weekday brief" });
-    expect(writes(s).map((w) => w.body)).toEqual([{ updates: { prompt: "Fixture only.", schedule: "0 10 * * 1-5" } }]);
+    expect(writes(s).map((w) => w.body)).toEqual([{ updates: { prompt: "Fixture only.", schedule: "0 10 * * 1-5", repeat: "forever" } }]);
   });
 
   it("shows why a save failed and keeps the edits", async () => {
@@ -172,6 +174,34 @@ describe("the Scheduled jobs screen", () => {
     expect((await screen.findByText(/weren't saved/)).textContent).toMatch(/Hermes didn't answer/);
     expect(screen.getByDisplayValue("Fixture renamed")).toBeTruthy();
     expect(s.cron.jobs.default[0].name).toBe("[fixture] Weekday brief");
+  });
+
+  it("loads under StrictMode, which mounts the screen twice", async () => {
+    const s = server();
+    const hermes = await connect(s.openPipe);
+    running.push(hermes);
+    render(
+      <StrictMode>
+        <ScheduledJobs api={hermes.cron} profile="default" connected onClose={() => {}} />
+      </StrictMode>,
+    );
+    expect(await screen.findByText("[fixture] Weekday brief")).toBeTruthy();
+  });
+
+  it("warns about a copy of the job in another profile", async () => {
+    const s = server();
+    s.cron.jobs.work.push(structuredClone(s.cron.jobs.default[0]));
+    const { user } = await launch(s);
+    await user.click(screen.getByText("[fixture] Weekday brief"));
+    expect((await screen.findByText(/profile has a copy of this job, with the same id/)).textContent).toMatch(/^ ?The work profile/);
+  });
+
+  it("shows a one-shot's single run once", async () => {
+    const s = server();
+    s.cron.add("default", { name: "[fixture] Once", prompt: "Fixture only.", schedule: "in 2h" });
+    const { user } = await launch(s);
+    await user.click(screen.getByText("[fixture] Once"));
+    expect(document.querySelectorAll(".job-runs-preview li")).toHaveLength(1);
   });
 
   it("shows the profile's own jobs after switching profile", async () => {

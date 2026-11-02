@@ -132,23 +132,35 @@ function parseField(text: string, i: number): { set: Field; last: boolean } {
       step = Number(stepText);
       if (step === 0) throw new ScheduleError(`A step of 0 in ${part} never moves on.`);
     }
+    // croniter's bounds: the week runs 0–6, and 7 is another name for Sunday, read as 0 before anything else.
+    const [MIN, MAX] = i === 4 ? [0, 6] : [f.min, f.max];
+    const alias = (v: number) => (i === 4 && v === 7 ? 0 : v);
     let lo: number, hi: number;
-    if (range === "*") [lo, hi] = [f.min, i === 4 ? 6 : f.max];
+    let ranged = false;
+    if (range === "*") [lo, hi] = [MIN, MAX];
     else if (range.includes("-")) {
       const [a, b, more] = range.split("-");
       if (more !== undefined || !a || !b) throw new Unreadable(part);
-      [lo, hi] = [fieldValue(a, f), fieldValue(b, f)];
+      [lo, hi] = [alias(fieldValue(a, f)), alias(fieldValue(b, f))];
+      ranged = true;
     } else {
-      lo = fieldValue(range, f);
-      hi = stepText === undefined ? lo : i === 4 ? 6 : f.max;
+      lo = alias(fieldValue(range, f));
+      hi = stepText === undefined ? lo : MAX;
     }
-    // croniter wraps a range that runs backwards (`fri-mon`, `22-2`) round the end of the field.
-    const span = hi >= lo ? hi - lo : hi + (f.max - f.min + 1) - lo;
-    for (let k = 0; k <= span; k += step) {
-      let v = lo + k;
-      if (v > f.max) v -= f.max - f.min + 1;
-      set.add(i === 4 && v === 7 ? 0 : v);
-    }
+    const span = (a: number, b: number) => Array.from({ length: Math.max(0, Math.ceil((b + 1 - a) / step)) }, (_, k) => a + k * step);
+    let values: number[];
+    if (lo > hi) {
+      // A range that runs backwards (`fri-mon`, `22-2`) wraps round the end of the field, as croniter's `_expand`
+      // does: to the end with the step, then from the start, skipped ahead by what the step carried past the end.
+      values = span(lo, MAX);
+      let skip = 0;
+      const lastOne = values[values.length - 1];
+      if (lastOne !== undefined && lastOne - MIN + step > MAX - MIN + 1 && MAX - lastOne < step) skip = step - (MAX - lastOne);
+      values.push(...span(MIN + skip, hi));
+    } else if (ranged && lo === hi) {
+      values = span(MIN, MAX); // `sun-sun`, `0-7`: croniter takes the whole cycle
+    } else values = span(lo, hi);
+    for (const v of values) set.add(v);
   }
   return { set, last };
 }
@@ -396,13 +408,14 @@ function timesText(c: Cron): string {
   const minutes = sorted(c.minute);
   const minuteStep = stepOf(c.minute, 60);
   const allHours = hours.length === 24;
-  if (minutes.length === 60) return allHours ? "every minute" : `every minute from ${clock(hours[0], 0)} to ${clock(hours[hours.length - 1], 59)}`;
+  const contiguous = hours.every((h, i) => i === 0 || h === hours[i - 1] + 1);
+  const during = `during the hours starting ${list(hours.map((h) => clock(h, 0)))}`;
+  if (minutes.length === 60) return allHours ? "every minute" : contiguous ? `every minute from ${clock(hours[0], 0)} to ${clock(hours[hours.length - 1], 59)}` : `every minute ${during}`;
   if (minuteStep) {
     const each = every(minuteStep, "minute");
     if (allHours) return each;
-    const contiguous = hours.every((h, i) => i === 0 || h === hours[i - 1] + 1);
     if (contiguous) return `${each} from ${clock(hours[0], 0)} to ${clock(hours[hours.length - 1], 60 - minuteStep)}`;
-    return `${each} during the hours starting ${list(hours.map((h) => clock(h, 0)))}`;
+    return `${each} ${during}`;
   }
   if (allHours) return minutes.length === 1 && minutes[0] === 0 ? "every hour, on the hour" : `every hour at ${list(minutes.map((m) => `:${pad(m)}`))}`;
   if (hours.length * minutes.length <= 8) return `at ${list(hours.flatMap((h) => minutes.map((m) => clock(h, m))))}`;

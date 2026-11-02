@@ -5,7 +5,7 @@
 //
 //   HERMES_LIVE_DASHBOARD=http://127.0.0.2:9339 HERMES_LIVE_USER=fixture HERMES_LIVE_PASSWORD=… \
 //   HERMES_LIVE_HOME=/tmp/hcron/home npx vitest run src/hermes/cronJobs.live.test.ts
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CronApi, CronConflict, type RestFn } from "./cronJobs";
 import { parseSchedule } from "./schedule";
 
@@ -41,10 +41,19 @@ describe.skipIf(!BASE)("against a throwaway Hermes", () => {
   const rest = dashboard();
   const cron = new CronApi(rest);
 
-  it("is a throwaway server", async () => {
+  // Every test waits on this: vitest runs none of the suite's tests when its beforeAll throws.
+  beforeAll(async () => {
     const { profiles } = (await rest("GET", "api/profiles")) as { profiles: { name: string; path: string }[] };
-    expect(profiles.length).toBeGreaterThan(0);
-    for (const p of profiles) expect(p.path.startsWith("/tmp/")).toBe(true);
+    const real = profiles.filter((p) => !p.path.startsWith("/tmp/"));
+    if (!profiles.length || real.length) throw new Error(`Refusing to run: ${real.map((p) => p.path).join(", ") || "no profiles"} isn't a throwaway home under /tmp.`);
+  });
+
+  // Whatever a failed test left behind: only the jobs these tests name.
+  afterAll(async () => {
+    for (const profile of ["default", "fixture-b"]) {
+      const jobs = await cron.list(profile).catch(() => []);
+      for (const j of jobs.filter((j) => j.name.startsWith("[fixture] live"))) await rest("DELETE", `api/cron/jobs/${j.id}?profile=${profile}`).catch(() => {});
+    }
   });
 
   it("creates, edits, pauses, resumes and deletes, each checked by reading back and on disk", async () => {

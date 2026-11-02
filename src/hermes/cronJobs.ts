@@ -11,7 +11,7 @@
 // - An edit sends only the fields the owner changed, after checking that nobody changed the job's shown fields since
 //   the owner opened it (`update`). Fields this app doesn't show are never sent, so Hermes keeps them.
 import type { RestMethod } from "./pipe";
-import { type Schedule, type Zone, knownZone, offsetAt, offsetLabel, storedSchedule } from "./schedule";
+import { type Schedule, type Zone, knownZone, offsetAt, offsetLabel, parseSchedule, storedSchedule } from "./schedule";
 
 /** How Hermes last ran a job, from its execution ledger (`cron/executions.py`). */
 export type Execution = { status: string; claimedAt?: string; finishedAt?: string; error?: string; delivery?: string };
@@ -64,7 +64,12 @@ export type JobRun = { id: string; title: string; preview?: string; startedAt: n
 export type JobFields = { name: string; prompt: string; schedule: string; deliver: string; repeat: number | null };
 
 /** What a manual run came to. `completed` is false when Hermes took the run but recorded no result yet. */
-export type RunOutcome = { job?: CronJob; completed: boolean };
+/**
+ * What a manual run came to. `completed` is false when Hermes took the run but recorded no result yet. `job` is the
+ * job as the list has it after; undefined when the list no longer has it (a one-shot Hermes removed, or a delete
+ * elsewhere). `unverified`: the list couldn't be read, so `job` is only Hermes's answer.
+ */
+export type RunOutcome = { job?: CronJob; completed: boolean; unverified?: boolean };
 
 export type CronErrorKind =
   /** The server has no cron routes. */
@@ -234,8 +239,29 @@ function created(jobs: CronJob[], before: Set<string>, body: Record<string, unkn
   return fresh.sort((a, b) => Date.parse(b.createdAt ?? "") - Date.parse(a.createdAt ?? ""))[0];
 }
 
-/** A create whose answer was lost: the ids the list had before it went, and what it asked for. */
-type Unsure = { before: Set<string>; body: Record<string, unknown> };
+/**
+ * Whether a job's schedule is the one `typed` asks for, by Hermes's label for it, which doesn't depend on the clock
+ * or zone (`parse_schedule`'s `display`), and its expression or interval.
+ */
+function sameSchedule(job: CronJob, typed: string): boolean {
+  let want: Schedule;
+  try {
+    want = parseSchedule(typed, "UTC", 0);
+  } catch {
+    return false;
+  }
+  if (job.scheduleText !== want.display) return false;
+  const s = job.schedule;
+  if (want.kind === "cron") return s?.kind === "cron" && s.expr === want.expr;
+  if (want.kind === "interval") return s?.kind === "interval" && s.minutes === want.minutes;
+  return s?.kind === "once";
+}
+
+/**
+ * A create whose answer was lost: the ids the list had before it went, and what it asked for. `warned`: the owner has
+ * been told it may still appear, so the next create sends anew.
+ */
+type Unsure = { before: Set<string>; body: Record<string, unknown>; warned?: boolean };
 
 /**
  * Hermes's scheduled jobs. Every call names the profile, since each profile has its own jobs, and every answer is
@@ -278,11 +304,26 @@ export class CronApi {
     return rows.filter(isObj).filter((t) => typeof t.id === "string" && t.id).map((t) => ({ id: t.id as string, name: text(t.name) || (t.id as string), ready: t.home_target_set !== false }));
   }
 
-  /** The job's latest runs, newest first. Reads only. */
+  /** The job's latest runs, newest first. Reads only, and only this profile's: Hermes would read another's copy. */
   async runs(profile: string, job: CronJob, limit = 20): Promise<JobRun[]> {
+    await this.owned(profile, job.id);
     const res = await this.call("GET", `${jobPath(job.id)}/runs?${q(profile)}&limit=${limit}`);
     const rows = isObj(res) && Array.isArray(res.runs) ? res.runs : [];
+    if (rows.some((r) => isObj(r) && typeof r.profile === "string" && r.profile !== profile))
+      throw new CronError("gone", "Hermes answered with the runs of this job's copy in another profile, so they aren't shown here.");
     return rows.map(toRun).filter((r): r is JobRun => !!r);
+  }
+
+  /**
+   * The other profiles that have a job with this id: Hermes copies a profile's jobs into a profile made from it. Hermes
+   * acts on such a copy if this profile's job is gone when a change arrives (`_job_owner_profile`), so the screen says
+   * so. Profiles whose jobs can't be read are left out; it never throws.
+   */
+  async copiesOf(profile: string, id: string): Promise<string[]> {
+    const res = await this.call("GET", "api/profiles").catch(() => undefined);
+    const names = (isObj(res) && Array.isArray(res.profiles) ? res.profiles : []).map((p) => (isObj(p) ? text(p.name) : "")).filter((n) => n && n !== profile);
+    const found = await Promise.all(names.map((n) => this.list(n).then((jobs) => (jobs.some((j) => j.id === id) ? n : ""), () => "")));
+    return found.filter(Boolean);
   }
 
   /** The job as the profile's list has it now; throws `gone` when the list doesn't hold it. */
@@ -340,9 +381,18 @@ export class CronApi {
     const earlier = this.unsure.get(profile);
     if (earlier) {
       const made = created(jobs, earlier.before, earlier.body);
+      if (made) {
+        this.unsure.delete(profile);
+        if (JSON.stringify(earlier.body) === JSON.stringify(body)) return made;
+        throw new CronError("refused", `Your earlier try did create “${made.name}”: it's in the list now. Edit that job instead of creating another.`);
+      }
+      // Hermes may still be saving it after the connection dropped: a list without it proves nothing. Say so once, and
+      // send anew only when the owner presses Create again.
+      if (!earlier.warned) {
+        earlier.warned = true;
+        throw new CronError("unknown", "Your last try may still be saved by Hermes: the list doesn't show it yet. Refresh in a moment. If it still isn't there, press Create again to send it anew; if both arrive, delete one.");
+      }
       this.unsure.delete(profile);
-      if (made && JSON.stringify(earlier.body) === JSON.stringify(body)) return made;
-      if (made) throw new CronError("refused", `Your earlier try did create “${made.name}”: it's in the list now. Edit that job instead of creating another.`);
     }
     const before = new Set(jobs.map((j) => j.id));
     const [raw, failure] = await this.attempt("POST", `api/cron/jobs?${q(profile)}`, body);
@@ -358,7 +408,7 @@ export class CronApi {
     if (made) return made;
     if (answer) throw new CronError("unknown", "Hermes answered that it created the job, but the list doesn't have it. Another Hermes client may have deleted it at once.");
     this.unsure.set(profile, { before, body });
-    throw new CronError("unknown", `${failure!.message} The job isn't in the list, so it wasn't created. Create again to retry; it checks the list first.`);
+    throw new CronError("unknown", `${failure!.message} The job isn't in the list yet. Hermes may still save it, so refresh before creating it again; Create checks the list first.`);
   }
 
   /**
@@ -377,7 +427,9 @@ export class CronApi {
     if (edits.prompt !== undefined && edits.prompt.trim() !== base.prompt.trim()) updates.prompt = edits.prompt.trim();
     if (edits.schedule !== undefined) updates.schedule = edits.schedule.trim();
     if (edits.deliver !== undefined && edits.deliver !== base.deliver) updates.deliver = edits.deliver;
-    if (edits.repeat !== undefined && edits.repeat !== base.repeat.times) updates.repeat = edits.repeat ?? "forever";
+    // With a new schedule the repeat limit goes too, even unchanged: Hermes re-derives it when the schedule's kind
+    // changes (a one-shot's 1 becomes no limit), and the owner saw and kept the one in the form.
+    if (edits.repeat !== undefined && (edits.repeat !== base.repeat.times || updates.schedule !== undefined)) updates.repeat = edits.repeat ?? "forever";
     if (!Object.keys(updates).length) return now;
 
     const [raw, failure] = await this.attempt("PUT", `${jobPath(base.id)}?${q(profile)}`, { updates });
@@ -389,9 +441,7 @@ export class CronApi {
       updates.prompt !== undefined && back.prompt.trim() !== updates.prompt && "prompt",
       updates.deliver !== undefined && back.deliver !== updates.deliver && "delivery",
       updates.repeat !== undefined && back.repeat.times !== (edits.repeat ?? null) && "repeat limit",
-      updates.schedule !== undefined &&
-        (answer ? shown(back).schedule !== shown(answer).schedule : shown(back).schedule === shown(base).schedule && back.scheduleText === base.scheduleText) &&
-        "schedule",
+      updates.schedule !== undefined && (answer ? shown(back).schedule !== shown(answer).schedule : !sameSchedule(back, String(updates.schedule))) && "schedule",
     ].filter((w): w is string => !!w);
     if (!wrong.length) return back;
     if (failure) throw new CronError("unknown", `${failure.message} The job as Hermes has it now doesn't have your changes, so they weren't saved.`);
@@ -422,6 +472,7 @@ export class CronApi {
   /** Deletes a job for good, in every Hermes client; resolves once the list no longer has it. */
   async remove(profile: string, job: CronJob): Promise<void> {
     await this.owned(profile, job.id);
+    const copies = await this.copiesOf(profile, job.id);
     let failure: CronError | undefined;
     try {
       await this.call("DELETE", `${jobPath(job.id)}?${q(profile)}`);
@@ -430,7 +481,15 @@ export class CronApi {
       if (failure.kind === "gone") return;
       if (failure.kind !== "unknown") throw failure;
     }
-    if (!(await this.readBack(profile, job.id, "Hermes didn't confirm the delete"))) return;
+    const still = await this.readBack(profile, job.id, "Hermes didn't confirm the delete");
+    if (copies.length) {
+      // A copy elsewhere that went with it means Hermes deleted that one: this profile's job was gone first.
+      const left = new Set(await this.copiesOf(profile, job.id));
+      const gone = copies.filter((c) => !left.has(c));
+      if (gone.length)
+        throw new CronError("unknown", `Hermes deleted the copy of this job in the ${gone.join(" and ")} profile, since this profile's job had just been deleted elsewhere. That can't be undone here.`);
+    }
+    if (!still) return;
     throw new CronError("unknown", `${failure ? `${failure.message} ` : ""}The job is still on the server.`);
   }
 
@@ -451,8 +510,12 @@ export class CronApi {
       throw err;
     }
     const answer = this.answered(profile, raw);
-    const back = (await this.list(profile).catch(() => undefined))?.find((j) => j.id === job.id) ?? answer;
-    return { job: back, completed: !!back && back.lastRunAt !== before.lastRunAt };
+    const ran = (j?: CronJob) => !!j && (j.lastRunAt !== before.lastRunAt || j.state === "completed");
+    const jobs = await this.list(profile).catch(() => undefined);
+    if (!jobs) return { job: answer, completed: ran(answer), unverified: true };
+    const back = jobs.find((j) => j.id === job.id);
+    // Gone from the list: a one-shot Hermes removed once it ran, or a delete in another client.
+    return back ? { job: back, completed: ran(back) } : { completed: ran(answer) };
   }
 }
 

@@ -121,12 +121,28 @@ describe("creating", () => {
     expect(s.cron.jobs.default).toHaveLength(1);
   });
 
-  it("says nothing was created when the answer was lost before Hermes saw it, and retries once", async () => {
+  it("doesn't send again on the next press when a lost create isn't in the list, since Hermes may still save it", async () => {
     const { s, cron } = await setUp();
     s.cron.failNext = { match: /^POST \/api\/cron\/jobs$/, when: "before" };
-    await expect(cron.create("default", fields(), false)).rejects.toThrow(/isn't in the list, so it wasn't created/);
-    expect(s.cron.jobs.default).toHaveLength(0);
+    await expect(cron.create("default", fields(), false)).rejects.toThrow(/isn't in the list yet\. Hermes may still save it/);
+    const sent = writes(s).length;
+    // The next press looks again and warns, sending nothing: a slow server may commit the first one any moment.
+    await expect(cron.create("default", fields(), false)).rejects.toThrow(/may still be saved by Hermes/);
+    expect(writes(s)).toHaveLength(sent);
+    // Pressed once more, the owner has chosen to send it anew.
     await cron.create("default", fields(), false);
+    expect(s.cron.jobs.default).toHaveLength(1);
+  });
+
+  it("finds a lost create that Hermes saved late, on the next press", async () => {
+    const { s, cron } = await setUp();
+    s.cron.failNext = { match: /^POST \/api\/cron\/jobs$/, when: "before" };
+    await expect(cron.create("default", fields(), false)).rejects.toThrow();
+    s.cron.add("default", { ...fields(), schedule: "0 9 * * *" }); // the first POST, committed after the read-back
+    const sent = writes(s).length;
+    const job = await cron.create("default", fields(), false);
+    expect(job.name).toBe("[fixture] Morning check");
+    expect(writes(s)).toHaveLength(sent);
     expect(s.cron.jobs.default).toHaveLength(1);
   });
 
@@ -222,6 +238,29 @@ describe("editing", () => {
     await expect(cron.update("default", job, { name: "x" })).rejects.toMatchObject({ kind: "gone" });
   });
 
+  it("keeps the shown repeat limit when the schedule changes kind, instead of Hermes's re-derived one", async () => {
+    const { s, cron } = await setUp();
+    const job = await cron.create("default", fields({ schedule: "in 2h" }), false);
+    expect(job.repeat.times).toBe(1);
+    await cron.update("default", job, { schedule: "every 2h", repeat: null });
+    expect(writes(s).at(-1)!.body).toEqual({ updates: { schedule: "every 2h", repeat: "forever" } });
+    const again = (await cron.list("default"))[0];
+    await cron.update("default", again, { schedule: "every 3h", repeat: 4 });
+    expect(writes(s).at(-1)!.body).toEqual({ updates: { schedule: "every 3h", repeat: 4 } });
+  });
+
+  it("doesn't report a lost schedule edit as saved when another client saved a different one", async () => {
+    const { s, cron, job } = await withJob();
+    s.cron.failNext = { match: /^PUT /, when: "before" };
+    const original = s.cron.route.bind(s.cron);
+    s.cron.route = (req) => {
+      // Another client sets 15:00 between the failed PUT and the read-back.
+      if (req.method === "GET" && writes(s).length === 2) Object.assign(s.cron.jobs.default[0], { schedule: { kind: "cron", expr: "0 15 * * *", display: "0 15 * * *" }, schedule_display: "0 15 * * *" });
+      return original(req);
+    };
+    await expect(cron.update("default", job, { schedule: "0 10 * * *" })).rejects.toThrow(/weren't saved/);
+  });
+
   it("clears a repeat limit with 'forever'", async () => {
     const { s, cron } = await setUp();
     const job = await cron.create("default", fields({ repeat: 5 }), false);
@@ -268,6 +307,30 @@ describe("pausing, resuming, deleting and running", () => {
     s.cron.failNext = { match: /\/trigger$/, when: "after" };
     await expect(cron.runNow("default", outcome.job!)).rejects.toThrow(/may still be running the job/);
   });
+
+  it("tells a run whose job then left the list, and one it couldn't read back", async () => {
+    const { s, cron } = await setUp();
+    const job = await cron.create("default", fields(), false);
+    const original = s.cron.route.bind(s.cron);
+    s.cron.route = (req) => {
+      const handler = original(req);
+      if (!req.path.endsWith("/trigger") || !handler) return handler;
+      return async () => {
+        const answer = await handler();
+        s.cron.jobs.default = []; // deleted elsewhere just after the run
+        return answer;
+      };
+    };
+    expect(await cron.runNow("default", job)).toEqual({ completed: true });
+    s.cron.route = original;
+    const next = await cron.create("default", fields({ name: "[fixture] other" }), false);
+    s.cron.route = (req) => {
+      const handler = original(req);
+      if (req.path.endsWith("/trigger")) s.cron.failLists = 1;
+      return handler;
+    };
+    expect(await cron.runNow("default", next)).toMatchObject({ completed: true, unverified: true, job: { id: next.id } });
+  });
 });
 
 describe("profiles", () => {
@@ -282,6 +345,29 @@ describe("profiles", () => {
     expect(writes(s).filter((w) => w.path.includes(theirs.id))).toEqual([]);
     expect(s.cron.jobs.work[0]).toMatchObject({ enabled: false, name: "[fixture] Work only" });
     expect(await cron.list("default")).toEqual([]);
+  });
+
+  it("finds copies of a job in other profiles, and says when a delete took a copy", async () => {
+    const { s, cron } = await setUp();
+    const job = await cron.create("default", fields(), false);
+    s.cron.jobs.work.push(structuredClone(s.cron.jobs.default[0])); // Hermes copied it into work
+    expect(await cron.copiesOf("default", job.id)).toEqual(["work"]);
+    // Another client deletes default's copy as this delete goes: Hermes deletes work's instead.
+    const original = s.cron.route.bind(s.cron);
+    s.cron.route = (req) => {
+      if (req.method === "DELETE") s.cron.jobs.default = [];
+      return original(req);
+    };
+    await expect(cron.remove("default", job)).rejects.toThrow(/deleted the copy of this job in the work profile/);
+  });
+
+  it("reads run history only for the profile's own job", async () => {
+    const { s, cron } = await setUp();
+    const theirs = await cron.create("work", fields(), true);
+    await expect(cron.runs("default", theirs)).rejects.toMatchObject({ kind: "gone" });
+    const mine = await cron.create("default", fields(), true);
+    s.cron.runs[mine.id] = [{ id: "local-x", title: "Run", source: "cron", started_at: 1, profile: "work" }];
+    await expect(cron.runs("default", mine)).rejects.toThrow(/copy in another profile/);
   });
 
   it("keeps an uncertain create's check to its own profile", async () => {

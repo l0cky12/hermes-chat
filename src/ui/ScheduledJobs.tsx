@@ -74,12 +74,14 @@ function stateBadge(j: CronJob) {
 }
 
 /** The upcoming runs Hermes's rules make, from its own next run, with what the next clock change does. */
-function Upcoming({ schedule, zone, first, count = 5 }: { schedule?: Schedule; zone: JobsZone; first?: number; count?: number }) {
+function Upcoming({ schedule, zone, first, remaining }: { schedule?: Schedule; zone: JobsZone; first?: number; remaining?: number | null }) {
   if (!schedule) return <p className="muted small">Hermes Chat can't preview this schedule; Hermes's own next run is shown above.</p>;
+  const count = Math.min(5, remaining ?? 5);
   const from = first ?? Date.now();
-  const later = upcomingRuns(schedule, zone.zone, from, first === undefined ? count : count - 1);
+  // A one-shot has its one run; anything else follows Hermes's next run with the ones after it, up to its limit.
+  const later = schedule.kind === "once" ? [] : upcomingRuns(schedule, zone.zone, from, first === undefined ? count : count - 1);
   if (!later) return <p className="muted small">Hermes Chat can't preview this cron expression. Hermes checks it, and works out the runs itself.</p>;
-  const runs = first === undefined ? later : [first, ...later];
+  const runs = (schedule.kind === "once" ? [first ?? schedule.runAt] : first === undefined ? later : [first, ...later]).slice(0, Math.max(0, count));
   const note = zone.named ? clockChangeNote(schedule, zone.zone, from) : undefined;
   return (
     <>
@@ -113,8 +115,14 @@ export function ScheduledJobs({ api, profile, connected, onClose }: { api: CronA
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<CronError | Error>();
   const [view, setView] = useState<View>({ kind: "list" });
+  /** What happened to a job that has left the list, said on the list. */
+  const [notice, setNotice] = useState<string>();
   const live = useRef(true);
-  useEffect(() => () => void (live.current = false), []);
+  useEffect(() => {
+    // Set again on mount: StrictMode mounts twice, and a flag only cleared would drop every load after the first.
+    live.current = true;
+    return () => void (live.current = false);
+  }, []);
 
   const load = async () => {
     setLoading(true);
@@ -201,6 +209,11 @@ export function ScheduledJobs({ api, profile, connected, onClose }: { api: CronA
                 </button>
               </div>
             )}
+            {notice && (
+              <p className="job-notice" role="status">
+                {notice}
+              </p>
+            )}
             {loading && !loaded && (
               <div className="empty-hint" role="status">
                 <Spinner /> Loading the jobs…
@@ -250,7 +263,12 @@ export function ScheduledJobs({ api, profile, connected, onClose }: { api: CronA
         )}
 
         {view.kind === "job" && loaded && shown && (
-          <JobDetail key={shown.id} api={api} profile={profile} connected={connected} job={shown} loaded={loaded} onChanged={apply} onEdit={() => setView({ kind: "edit", id: shown.id })} onDeleted={() => setView({ kind: "list" })} />
+          <JobDetail key={shown.id} api={api} profile={profile} connected={connected} job={shown} loaded={loaded} onChanged={apply} onEdit={() => setView({ kind: "edit", id: shown.id })} onDeleted={() => setView({ kind: "list" })}
+            onToast={(text) => {
+              setNotice(text);
+              setView({ kind: "list" });
+            }}
+          />
         )}
         {view.kind === "job" && loaded && !shown && <p className="muted">This job isn't in the list any more: it was deleted in another Hermes client.</p>}
         {view.kind === "edit" && loaded && (view.id === undefined || shown) && (
@@ -282,6 +300,7 @@ function JobDetail({
   onChanged,
   onEdit,
   onDeleted,
+  onToast,
 }: {
   api: CronApi;
   profile: string;
@@ -291,12 +310,21 @@ function JobDetail({
   onChanged: (id: string, job: CronJob | null) => void;
   onEdit: () => void;
   onDeleted: () => void;
+  /** Says something on the list, once this job has left it. */
+  onToast?: (text: string) => void;
 }) {
   const [busy, setBusy] = useState<"pause" | "resume" | "run" | "delete">();
   const [confirm, setConfirm] = useState<"run" | "delete">();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [runs, setRuns] = useState<JobRun[] | string>();
+  const [copies, setCopies] = useState<string[]>([]);
+  useEffect(() => {
+    if (connected) void api.copiesOf(profile, job.id).then(setCopies);
+  }, [connected, job.id]);
+  const copyNote =
+    copies.length > 0 &&
+    `The ${copies.join(" and ")} ${copies.length === 1 ? "profile has a copy" : "profiles have copies"} of this job, with the same id. If this one is deleted in another Hermes client while you change it here, Hermes changes ${copies.length === 1 ? "that copy" : "one of those copies"} instead; Hermes Chat says so if it notices.`;
   const zone = loaded.zone;
   const offline = connected ? undefined : "Connect to Hermes to change this job.";
   const paused = !job.enabled || job.state === "paused";
@@ -328,13 +356,19 @@ function JobDetail({
   const runNow = () =>
     act("run", async () => {
       const outcome = await api.runNow(profile, job);
-      if (outcome.job) onChanged(job.id, outcome.job);
       const status = outcome.job?.lastStatus ? statusLabel(outcome.job.lastStatus).text : undefined;
-      setNotice(
-        outcome.completed
-          ? `The run finished: ${status ?? "Hermes recorded no result"}.${outcome.job?.lastError ? ` ${outcome.job.lastError}` : ""}`
-          : "Hermes took the run, but hasn't recorded its result yet. Refresh later to see it.",
-      );
+      const said = !outcome.completed
+        ? "Hermes took the run, but hasn't recorded its result yet. Refresh later to see it."
+        : !outcome.job
+          ? "The run finished, and the job is no longer in the list: Hermes removes a one-shot once it has run, or it was deleted elsewhere."
+          : `The run finished: ${status ?? "Hermes recorded no result"}.${outcome.job.lastError ? ` ${outcome.job.lastError}` : ""}`;
+      if (!outcome.job) {
+        onChanged(job.id, null);
+        onToast?.(said);
+        return;
+      }
+      if (!outcome.unverified) onChanged(job.id, outcome.job);
+      setNotice(outcome.unverified ? `${said} The list couldn't be read afterwards to confirm it; refresh to check.` : said);
     });
 
   const deliver = deliveryLabel(job.deliver, loaded.targets);
@@ -376,6 +410,11 @@ function JobDetail({
           <Trash2 size={14} /> {busy === "delete" ? "Deleting…" : "Delete"}
         </button>
       </div>
+      {copyNote && (
+        <p className="job-banner" role="note">
+          <CircleAlert size={14} /> {copyNote}
+        </p>
+      )}
       {confirm === "run" && (
         <div className="confirm" role="alertdialog" aria-label="Run this job now?" onKeyDown={(e) => e.key === "Escape" && setConfirm(undefined)}>
           <span>
@@ -443,7 +482,7 @@ function JobDetail({
         {runState(job).runs && (
           <>
             <h3 className="job-sub">Upcoming runs</h3>
-            <Upcoming schedule={job.schedule} zone={zone} first={Date.parse(job.nextRunAt!)} />
+            <Upcoming schedule={job.schedule} zone={zone} first={Date.parse(job.nextRunAt!)} remaining={job.repeat.times === null ? null : job.repeat.times - job.repeat.completed} />
           </>
         )}
         {job.repeat.times !== null && (
@@ -556,7 +595,9 @@ function JobEditor({
     repeat: j?.repeat.times ?? null,
   });
   const [form, setForm] = useState<JobFields>(() => initial(job));
-  const [repeatText, setRepeatText] = useState(job?.repeat.times ? String(job.repeat.times) : "");
+  // A one-shot's limit of 1 is Hermes's own, not the owner's: a one-shot made recurring starts with none.
+  const repeatOf = (j?: CronJob) => (j?.repeat.times && j.schedule?.kind !== "once" ? String(j.repeat.times) : "");
+  const [repeatText, setRepeatText] = useState(repeatOf(job));
   const [paused, setPaused] = useState(false);
   const [touched, setTouched] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -658,7 +699,12 @@ function JobEditor({
             <div>
               <strong>{explainSchedule(preview, zone.zone)}</strong>
             </div>
-            <Upcoming schedule={preview} zone={zone} first={!scheduleChanged && base?.nextRunAt ? Date.parse(base.nextRunAt) : undefined} />
+            <Upcoming
+              schedule={preview}
+              zone={zone}
+              first={!scheduleChanged && base?.nextRunAt ? Date.parse(base.nextRunAt) : undefined}
+              remaining={once || !/^[1-9]\d*$/.test(repeatText.trim()) ? null : Number(repeatText) - (scheduleChanged ? 0 : (base?.repeat.completed ?? 0))}
+            />
             {scheduleChanged && <p className="muted small">Hermes works out the runs again when it saves the job.</p>}
           </div>
         )}
@@ -694,7 +740,7 @@ function JobEditor({
               className="btn"
               onClick={() => {
                 setForm(initial(conflict.job));
-                setRepeatText(conflict.job.repeat.times ? String(conflict.job.repeat.times) : "");
+                setRepeatText(repeatOf(conflict.job));
                 setConflict(undefined);
               }}
             >
