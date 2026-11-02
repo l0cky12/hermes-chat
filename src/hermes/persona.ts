@@ -34,6 +34,8 @@ export class PersonaError extends Error {
     message: string,
     /** The HTTP status Hermes answered with; undefined when it didn't answer. */
     readonly status?: number,
+    /** The request never left this computer: there was no connection to send it on. */
+    readonly unsent = false,
   ) {
     super(message);
   }
@@ -86,7 +88,7 @@ export function personaError(e: unknown, profile: string, writing: boolean): Per
   const message = e instanceof Error ? e.message : String(e);
   const verb = writing ? "save" : "read";
   if (/^Not connected to Hermes|^The chat connection is closed/.test(message))
-    return new PersonaError("disconnected", "Not connected to Hermes.");
+    return new PersonaError("disconnected", "Not connected to Hermes.", undefined, true);
   if (/^Can't reach the Hermes dashboard/.test(message)) return new PersonaError("disconnected", message);
   if (/^The dashboard sign-in has expired/.test(message)) return new PersonaError("signed-out", message);
   if (/^Hermes Chat doesn't relay/.test(message)) return new PersonaError("unsupported", message);
@@ -108,16 +110,32 @@ export function personaError(e: unknown, profile: string, writing: boolean): Per
 }
 
 /**
- * Whether a failed write certainly left SOUL.md as it was: Hermes answered with a refusal of its own. A 4xx is
+ * Whether a failed write certainly left SOUL.md as it was: it never went out, or Hermes answered with a refusal of its own. A 4xx is
  * refused before the write, and Hermes's 500 `Could not write SOUL.md` comes from the atomic write, which leaves the
  * file untouched. Any other failure (no answer, or a proxy's 502/504) may have come after Hermes wrote it.
  */
 const certainlyUnwritten = (e: PersonaError) =>
-  e.status !== undefined && ((e.status >= 400 && e.status < 500) || (e.status === 500 && /Could not write SOUL\.md/.test(e.message)));
+  e.unsent ||
+  (e.status !== undefined && ((e.status >= 400 && e.status < 500) || (e.status === 500 && /Could not write SOUL\.md/.test(e.message))));
+
+/** How long a read or a write of SOUL.md may go unanswered. The relay has no deadline of its own. */
+export const PERSONA_TIMEOUTS = { readMs: 30_000, writeMs: 60_000 };
+
+/** `p`, or a rejection once `ms` pass without an answer. The request itself may still be answered later. */
+function deadline<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Hermes didn't answer ${what} within ${Math.round(ms / 1000)} seconds.`)), ms);
+  });
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+}
 
 /** Reads and writes SOUL.md for a named profile. Every call names its profile; nothing here follows the profile shown. */
 export class PersonaApi {
-  constructor(private rest: (method: RestMethod, pathAndQuery: string, body?: unknown) => Promise<unknown>) {}
+  constructor(
+    private rest: (method: RestMethod, pathAndQuery: string, body?: unknown) => Promise<unknown>,
+    private timeouts = PERSONA_TIMEOUTS,
+  ) {}
 
   private path(profile: string): string {
     if (profile !== "default" && !PROFILE_ID.test(profile)) throw new PersonaError("error", `"${profile}" isn't a Hermes profile name.`);
@@ -129,7 +147,7 @@ export class PersonaApi {
    * which holds SOUL.md, and the profile distribution it was installed from, if any. Undefined when it isn't listed.
    */
   async home(profile: string): Promise<ProfileHome | undefined> {
-    const res = (await this.rest("GET", "api/profiles")) as { profiles?: { name?: unknown; path?: unknown; distribution_name?: unknown }[] } | null;
+    const res = (await deadline(this.rest("GET", "api/profiles"), this.timeouts.readMs, "listing profiles")) as { profiles?: { name?: unknown; path?: unknown; distribution_name?: unknown }[] } | null;
     const row = res?.profiles?.find((p) => p.name === profile);
     if (!row) return undefined;
     return {
@@ -142,7 +160,7 @@ export class PersonaApi {
   async read(profile: string): Promise<Soul> {
     let res: unknown;
     try {
-      res = await this.rest("GET", this.path(profile));
+      res = await deadline(this.rest("GET", this.path(profile)), this.timeouts.readMs, "reading SOUL.md");
     } catch (e) {
       throw personaError(e, profile, false);
     }
@@ -162,7 +180,7 @@ export class PersonaApi {
     if (!sameSoul(before, base)) return { kind: "conflict", server: before };
     const sent: Soul = { exists: true, content: asReadBack(content) };
     try {
-      const res = (await this.rest("PUT", this.path(profile), { content })) as { ok?: unknown } | null;
+      const res = (await deadline(this.rest("PUT", this.path(profile), { content }), this.timeouts.writeMs, "the save")) as { ok?: unknown } | null;
       if (res?.ok !== true) throw new PersonaError("error", "Hermes didn't say it saved SOUL.md.");
     } catch (e) {
       const err = personaError(e, profile, true);

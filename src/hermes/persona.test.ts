@@ -3,8 +3,9 @@
 // without the routes, and that every call stays on the profile it names.
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeHermes } from "./fakeHermes";
-import { asReadBack, PersonaError, personaError, sameSoul, soulNotes } from "./persona";
+import { asReadBack, PersonaApi, PersonaError, personaError, sameSoul, soulNotes } from "./persona";
 import { connect, type Hermes } from "./transport";
+import type { RestMethod } from "./pipe";
 
 const running: Hermes[] = [];
 afterEach(async () => {
@@ -204,6 +205,49 @@ describe("saving SOUL.md", () => {
     expect(sameSoul({ exists: false, content: "" }, { exists: true, content: "" })).toBe(false);
   });
 });
+
+describe("requests that never end, and a closed connection", () => {
+  it("gives up on a read Hermes doesn't answer", async () => {
+    const { server, hermes } = await signedIn();
+    server.rest["GET /api/profiles/default/soul"] = () => new Promise(() => {});
+    const api = new PersonaApi((m, p, b) => (hermes as unknown as { rest: PersonaRest }).rest(m, p, b), { readMs: 20, writeMs: 20 });
+    expect(await rejection(api.read("default"))).toMatchObject({ kind: "error", message: expect.stringContaining("didn't answer reading SOUL.md") });
+  });
+
+  it("settles a save Hermes doesn't answer by reading back, so the save always ends", async () => {
+    const { server, hermes } = await signedIn();
+    const api = new PersonaApi((m, p, b) => (hermes as unknown as { rest: PersonaRest }).rest(m, p, b), { readMs: 1000, writeMs: 20 });
+    const base = await api.read("default");
+    server.rest["PUT /api/profiles/default/soul"] = () => new Promise(() => {});
+    // The write never landed: Hermes still has the old text, so the timeout is what it says.
+    expect(await rejection(api.save("default", base, "# Mine\n"))).toMatchObject({ message: expect.stringContaining("didn't answer the save") });
+    // It landed but the answer never came: the read-back shows it saved.
+    server.rest["PUT /api/profiles/default/soul"] = ({ body }) => {
+      server.souls.default = body!.content as string;
+      return new Promise(() => {});
+    };
+    expect(await api.save("default", base, "# Mine\n")).toMatchObject({ kind: "saved" });
+  });
+
+  it("sends nothing once signed out, even for a save that started before", async () => {
+    const { server, hermes, api } = await signedIn();
+    const base = await api.read("default");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    server.rest["GET /api/profiles/default/soul"] = async () => {
+      await gate;
+      return { content: SOUL, exists: true };
+    };
+    const saving = rejection(api.save("default", base, "# Mine\n"));
+    await hermes.close();
+    release();
+    expect(await saving).toMatchObject({ kind: "disconnected" });
+    expect(server.restRequests.some((r) => r.method === "PUT")).toBe(false);
+    expect(server.souls.default).toBe(SOUL);
+  });
+});
+
+type PersonaRest = (method: RestMethod, path: string, body?: unknown) => Promise<unknown>;
 
 describe("what Hermes does with it", () => {
   it("notes an empty persona and one longer than Hermes includes in full", () => {

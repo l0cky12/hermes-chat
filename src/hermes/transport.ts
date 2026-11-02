@@ -2140,7 +2140,9 @@ export class Hermes {
   }
 
   private async rest(method: RestMethod, pathAndQuery: string, body?: unknown): Promise<unknown> {
-    if (!this.pipe) throw new Error("Not connected to Hermes.");
+    // Once closed (signed out), nothing more goes out: the Rust side relays through whichever sign-in is current, which
+    // may be another server's by then.
+    if (!this.pipe || this.closing) throw new Error("Not connected to Hermes.");
     return JSON.parse(await this.pipe.request(method, pathAndQuery, body === undefined ? undefined : JSON.stringify(body)));
   }
 
