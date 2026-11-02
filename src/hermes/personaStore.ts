@@ -28,6 +28,8 @@ const isSoul = (s: unknown): s is Soul =>
 export class PersonaStore {
   /** Kept in memory too, so a storage that is full or can't be written still keeps them until the app closes. */
   private memory = new Map<string, string | null>();
+  /** Keys whose latest value storage refused: they last only until the app closes. */
+  private notStored = new Set<string>();
 
   constructor(private storage: PersonaStorage) {}
 
@@ -57,8 +59,10 @@ export class PersonaStore {
     try {
       if (raw === null) this.storage.removeItem(key);
       else this.storage.setItem(key, raw);
+      this.notStored.delete(key);
       return true;
     } catch {
+      this.notStored.add(key);
       return false;
     }
   }
@@ -73,6 +77,11 @@ export class PersonaStore {
   /** Keeps the edit; undefined deletes it. False: storage didn't take it, so it would be lost on closing the app. */
   setDraft(key: string, draft: PersonaDraft | undefined): boolean {
     return this.write(`${key}.draft`, draft);
+  }
+
+  /** Whether the edit kept for `key` is in storage, so it outlives the app closing. True when there is none. */
+  draftStored(key: string): boolean {
+    return !this.notStored.has(`${key}.draft`);
   }
 
   earlier(key: string): EarlierSoul[] {

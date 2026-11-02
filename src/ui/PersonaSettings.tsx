@@ -79,8 +79,10 @@ export function PersonaSettings({
   const [saving, setSaving] = useState(false);
   /** A reload under way: the editor is read-only until it lands, so its answer can't replace text typed meanwhile. */
   const [reloading, setReloading] = useState(false);
-  /** The last write of the edit to this computer's storage worked. */
-  const [kept, setKept] = useState(true);
+  /** The edit kept for this connection and profile is in storage, not only in memory until the app closes. */
+  const [kept, setKept] = useState(() => store.draftStored(storeKey));
+  /** Hermes said a save worked but it couldn't be read back: the edit stays unsaved until a read says what Hermes has. */
+  const [unverified, setUnverified] = useState(false);
   const [notice, setNotice] = useState<Notice>();
   const [conflict, setConflict] = useState<Conflict>();
   const [ask, setAsk] = useState<Ask>();
@@ -100,10 +102,14 @@ export function PersonaSettings({
 
   const loaded = load.state === "loaded" ? load : undefined;
   const editing = !!loaded && (loaded.base.exists || creating);
-  const dirty = editing && asReadBack(text) !== asReadBack(loaded.base.content);
+  const dirty = editing && (unverified || asReadBack(text) !== asReadBack(loaded.base.content));
+  /** A reload or save under way: nothing may change the editor's text until it lands. */
+  const busy = saving || reloading;
 
   // Leaving asks first while there is an edit Hermes doesn't have, or a save whose outcome isn't known yet.
-  useEffect(() => onDirty(dirty || saving, kept), [dirty, saving, kept, onDirty]);
+  // A kept edit waiting to be restored that only memory holds is lost on closing too, so that asks first as well.
+  const atRisk = !!recover && !kept;
+  useEffect(() => onDirty(dirty || saving || atRisk, kept), [dirty, saving, atRisk, kept, onDirty]);
   useEffect(() => () => onDirty(false, true), [onDirty]);
 
   // The edit is kept on this computer as it is typed. A kept edit waiting to be restored isn't overwritten meanwhile.
@@ -128,6 +134,7 @@ export function PersonaSettings({
         setText(soul.content);
         setCreating(false);
         setConflict(undefined);
+        setUnverified(false);
         then?.(soul);
       } catch (e) {
         if (!alive.current || mine !== seq.current) return;
@@ -166,6 +173,7 @@ export function PersonaSettings({
     if (dirty) setNotice({ kind: "discarded", text, creating });
     setText(loaded.base.content);
     setCreating(false);
+    setUnverified(false);
     setAsk(undefined);
   };
 
@@ -187,7 +195,9 @@ export function PersonaSettings({
       const r = await api.save(profile, base, sent);
       // What a write replaced is kept, and a confirmed save's draft let go, even if the owner has left meanwhile.
       const replaced = r.kind === "conflict" ? undefined : store.addEarlier(storeKey, r.previous, now());
-      if (r.kind === "saved") store.setDraft(storeKey, undefined);
+      // Only the draft this save sent is let go: one edited further meanwhile (after leaving and restoring) stays.
+      const kept = store.draft(storeKey);
+      if (r.kind === "saved" && (!kept || asReadBack(kept.text) === asReadBack(sent))) store.setDraft(storeKey, undefined);
       if (!alive.current) return;
       if (replaced) setEarlier(replaced);
       if (r.kind === "saved") {
@@ -195,6 +205,7 @@ export function PersonaSettings({
         setText(r.soul.content);
         setCreating(false);
         setConflict(undefined);
+        setUnverified(false);
         setNotice({ kind: "saved", at: now(), created: !r.previous.exists });
       } else if (r.kind === "conflict") {
         setLoad({ ...loaded, server: r.server, readAt: now() });
@@ -203,7 +214,12 @@ export function PersonaSettings({
         setLoad({ ...loaded, server: r.server, readAt: now() });
         setConflict({ server: r.server, written: true });
       } else {
-        // Until a read says what Hermes has, the edit stays unsaved: kept on this computer, and leaving still asks.
+        // Until a read says what Hermes has, the edit stays unsaved against the base it was written over: kept on this
+        // computer, and leaving still asks, even when the text matches that base.
+        setLoad({ ...loaded, base });
+        setConflict(undefined);
+        setUnverified(true);
+        setKept(store.setDraft(storeKey, { text: sent, base, at: now() }));
         setNotice({
           kind: "unverified",
           message: `Hermes said it saved SOUL.md, but reading it back failed: ${r.problem.message} Your text is still here as unsaved changes. Reload to check what Hermes has.`,
@@ -231,6 +247,7 @@ export function PersonaSettings({
     setText(conflict.server.content);
     setCreating(false);
     setConflict(undefined);
+    setUnverified(false);
   };
 
   const restoreKept = () => {
@@ -297,16 +314,24 @@ export function PersonaSettings({
             <FileText size={14} />
             <div>
               <div>
-                Changes you didn't save, from {when(recover.at)}, are kept on this computer ({chars(recover.text.length)}).
+                Changes you didn't save, from {when(recover.at)}, are kept {kept ? "on this computer" : "in this app until it closes"} ({chars(recover.text.length)}).
                 {loaded && !sameSoul(recover.base, loaded.server) && " SOUL.md has changed on the server since you made them."}
                 {!loaded && " They come back once SOUL.md loads."}
               </div>
+              {!kept && (
+                <div className="sign-in-error" role="alert">
+                  This computer's storage couldn't take them, so they last only until the app closes.{" "}
+                  <button className="link-btn" onClick={() => void navigator.clipboard?.writeText(recover.text)}>
+                    Copy them
+                  </button>
+                </div>
+              )}
               {loaded && (
                 <div className="confirm-actions persona-actions-left">
-                  <button className="btn primary" onClick={restoreKept}>
+                  <button className="btn primary" disabled={busy} onClick={restoreKept}>
                     Restore them
                   </button>
-                  <button className="btn" onClick={discardKept}>
+                  <button className="btn" disabled={busy} onClick={discardKept}>
                     Discard them
                   </button>
                 </div>
@@ -328,7 +353,7 @@ export function PersonaSettings({
               it sets up this profile's folder. Creating one now gives this profile a persona of your own; no other profile changes.
             </p>
             <div className="persona-actions">
-              <button className="btn primary" disabled={!connected || !!recover} onClick={() => setCreating(true)}>
+              <button className="btn primary" disabled={!connected || !!recover || busy} onClick={() => setCreating(true)}>
                 <FileText size={14} /> Create SOUL.md
               </button>
               <button className="btn" disabled={!connected} onClick={reload}>
@@ -375,7 +400,7 @@ export function PersonaSettings({
                     <button className="btn" disabled={!canWrite} onClick={() => setAsk("overwrite")}>
                       Save mine over it…
                     </button>
-                    <button className="btn" disabled={saving} onClick={takeServer}>
+                    <button className="btn" disabled={busy} onClick={takeServer}>
                       Use the server's version
                     </button>
                   </div>
@@ -469,7 +494,7 @@ export function PersonaSettings({
                 </button>
               </p>
             )}
-            <NoticeLine notice={notice} onUndo={undoDiscard} />
+            <NoticeLine notice={notice} undoDisabled={busy} onUndo={undoDiscard} />
           </>
         )}
       </section>
@@ -507,7 +532,7 @@ export function PersonaSettings({
                       spellCheck={false}
                     />
                     <div className="persona-actions">
-                      <button className="btn" disabled={!loaded || saving || !!recover} onClick={() => putInEditor(v)}>
+                      <button className="btn" disabled={!loaded || busy || !!recover} onClick={() => putInEditor(v)}>
                         Put in the editor
                       </button>
                       <button className="btn" onClick={() => void navigator.clipboard?.writeText(v.content)}>
@@ -559,7 +584,7 @@ function Problem({ problem, connected, profile, onRetry }: { problem: PersonaErr
   );
 }
 
-function NoticeLine({ notice, onUndo }: { notice?: Notice; onUndo: () => void }) {
+function NoticeLine({ notice, undoDisabled, onUndo }: { notice?: Notice; undoDisabled: boolean; onUndo: () => void }) {
   if (!notice) return null;
   if (notice.kind === "saved")
     return (
@@ -577,7 +602,7 @@ function NoticeLine({ notice, onUndo }: { notice?: Notice; onUndo: () => void })
     return (
       <p className="muted small persona-note" role="status">
         Your unsaved changes were set aside ({chars(notice.text.length)}).{" "}
-        <button className="link-btn" onClick={onUndo}>
+        <button className="link-btn" disabled={undoDisabled} onClick={onUndo}>
           <Undo2 size={12} /> Undo
         </button>
       </p>

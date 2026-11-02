@@ -347,6 +347,89 @@ describe("edge cases an independent review found", () => {
   });
 });
 
+describe("edge cases the second review round found", () => {
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => (resolve = r));
+    return { promise, resolve };
+  }
+
+  it("doesn't let an older save delete a draft edited further since", async () => {
+    const { server, user, store, connection } = await launch();
+    await openPersona(user);
+    await edit(user, "# Mine\n");
+    const gate = deferred<void>();
+    server.rest["PUT /api/profiles/default/soul"] = async ({ body }) => {
+      await gate.promise;
+      server.souls.default = body!.content as string;
+      return { ok: true };
+    };
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await user.click(screen.getByRole("button", { name: /Back to chat/ }));
+    await user.click(screen.getByRole("button", { name: "Leave" }));
+    await openPersona(user);
+    await user.click(await screen.findByRole("button", { name: "Restore them" }));
+    await edit(user, "# Mine, more\n");
+    await act(async () => gate.resolve());
+    await waitFor(() => expect(server.souls.default).toBe("# Mine\n"));
+    expect(store.draft(personaKey(connection, "default"))?.text).toBe("# Mine, more\n");
+  });
+
+  it("can't restore, undo or put back text while a reload is under way", async () => {
+    const { server, user } = await launch();
+    await openPersona(user);
+    await edit(user, "# Mine\n");
+    await user.click(screen.getByRole("button", { name: /Back to chat/ }));
+    await user.click(screen.getByRole("button", { name: "Leave" }));
+    await openPersona(user);
+    await screen.findByRole("button", { name: "Restore them" });
+    const gate = deferred<void>();
+    server.rest["GET /api/profiles/default/soul"] = async () => {
+      await gate.promise;
+      return { content: SOUL, exists: true };
+    };
+    await user.click(screen.getByRole("button", { name: /Reload/ }));
+    expect(screen.getByRole("button", { name: "Restore them" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Discard them" }).hasAttribute("disabled")).toBe(true);
+    await act(async () => gate.resolve());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Restore them" }).hasAttribute("disabled")).toBe(false));
+  });
+
+  it("keeps an unverified overwrite unsaved even when its text matches what it started from", async () => {
+    const { server, user, store, connection } = await launch();
+    await openPersona(user);
+    await edit(user, "# Mine\n");
+    server.souls.default = "# Theirs\n";
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText(/nothing was saved/);
+    await edit(user, SOUL);
+    server.afterSoulWrite = () => (server.soulReadError = `The dashboard answered 500: Internal Server Error`);
+    await user.click(screen.getByRole("button", { name: "Save mine over it…" }));
+    await user.click(screen.getByRole("button", { name: "Save mine over it" }));
+    await screen.findByText(/reading it back failed/);
+    expect(screen.getByText("Unsaved")).toBeTruthy();
+    expect(store.draft(personaKey(connection, "default"))).toMatchObject({ text: SOUL, base: { exists: true, content: "# Theirs\n" } });
+    await user.click(screen.getByRole("button", { name: /Back to chat/ }));
+    expect(screen.getByRole("alertdialog", { name: "Leave without saving the persona?" })).toBeTruthy();
+  });
+
+  it("warns, and guards closing, when a kept edit waiting to be restored is only in memory", async () => {
+    const storage = memoryStorage();
+    storage.setItem = () => {
+      throw new Error("QuotaExceededError");
+    };
+    const { user, window } = await launch({ storage });
+    await openPersona(user);
+    await edit(user, "# Mine\n");
+    await user.click(screen.getByRole("button", { name: /Back to chat/ }));
+    await user.click(screen.getByRole("button", { name: "Leave" }));
+    await openPersona(user);
+    await screen.findByText(/are kept in this app until it closes/);
+    expect(screen.getByText(/storage couldn't take them, so they last only until the app closes/)).toBeTruthy();
+    await waitFor(() => expect(window.ask).toBeDefined());
+  });
+});
+
 describe("leaving an unsaved persona edit", () => {
   it("asks before going back to the chats or to another tab, and stays when told", async () => {
     const { user } = await launch();
