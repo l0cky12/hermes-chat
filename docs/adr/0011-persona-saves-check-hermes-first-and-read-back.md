@@ -1,0 +1,18 @@
+# Persona saves check what Hermes has first, and read it back after
+
+Settings → Persona edits the shown profile's `SOUL.md` through the dashboard's own persona routes, `GET` and `PUT /api/profiles/{name}/soul`. At the deployed `bf0203a` the `PUT` replaces the whole file atomically (temp file, fsync, rename). It has no revision, ETag or If-Match, and it creates the file when it is missing. So the app guards the write itself. A Save reads `SOUL.md` again and writes only if Hermes still has the text the edit started from. After the write it reads the file back, and it says "saved" only when Hermes has exactly what was sent. A changed file becomes a conflict: nothing is written, and the owner sees what Hermes has now, then chooses to save over it (after a confirmation) or take the server's version. The editor never says something saved that only this computer holds.
+
+## Considered options
+
+- **`tui_gateway` `profiles.configure {soul}` over the socket.** Rejected: it writes with a bare `write_text`, which truncates before writing. It reports a failure only as `applied.soul: false`. And `profiles.describe` reads the file with `errors="replace"`, which would quietly change bytes that aren't valid UTF-8.
+- **Write without checking first.** Rejected: it would silently overwrite an edit made in the CLI, the official desktop app or a terminal since the editor loaded.
+- **Ask Hermes for a conditional write.** Not available at `bf0203a` or upstream `c419cf7`. If Hermes adds `expected_revision` or If-Match to this route, it should replace the check-then-write below.
+
+## Consequences
+
+- One round trip separates the check from the write. A write that lands in that gap is overwritten without a conflict, and only a write after ours shows up, in the read-back ("something else changed SOUL.md at the same time"). Closing that gap needs a conditional write on the server.
+- A write whose answer is lost (no answer, or a proxy's 502/504) is settled by reading the file back: Hermes has our text, Hermes still has the old text, or it has something else (a conflict). A refusal Hermes answers itself (4xx, or 500 `Could not write SOUL.md`) left the file as it was, because the write is atomic.
+- Hermes reads the file back without a byte order mark and with LF line ends (`read_text(encoding="utf-8-sig")`). It writes bytes exactly as sent. A file with CRLF line ends or a byte order mark is edited as LF and saved as LF. The comparisons use the same normalization, so they don't report false conflicts.
+- Unsaved text is kept on this computer per connection and profile, together with the `SOUL.md` it started from, so a restored edit is checked like any other. The last five versions that saves from here replaced are kept too, to view, copy or put back in the editor. Putting one back doesn't save it.
+- The routes take any profile name, so every call names its profile explicitly. The editor is remounted for each connection and profile. The Rust side relays `PUT` only to `api/profiles/<profile id>/soul`.
+- Hermes reads `SOUL.md` when it builds a chat's system prompt: on a chat's first turn, and when it rebuilds a continuing chat's stored prompt (for example after the model, provider or working folder changes). Saving needs no restart, and the app never restarts Hermes. Hermes may also write its own default `SOUL.md` into a profile's folder the first time a process sets that folder up (`_ensure_default_soul_md`). It also replaces a file that exactly matches one of its old auto-seeded templates. It never replaces a persona someone wrote, including an empty one.

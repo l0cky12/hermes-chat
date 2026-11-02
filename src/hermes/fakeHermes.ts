@@ -177,6 +177,25 @@ export class FakeHermes {
   sessions: SessionRow[] = [];
   /** Every other profile's stored sessions, by profile name. Each profile has its own store (research doc §5). */
   otherProfiles: Record<string, SessionRow[]> = {};
+  /**
+   * Each profile's SOUL.md as the file holds it, by profile name; a profile left out has none. Read and written as
+   * `GET`/`PUT /api/profiles/{name}/soul` do at the deployed `bf0203a` (persona.ts).
+   */
+  souls: Record<string, string> = {};
+  /** False: the server is older than the persona routes, and answers them as `bf0203a` answers a path it hasn't. */
+  soulRoutes = true;
+  /** While set, `GET …/soul` fails with this message (e.g. a 500 for a file Hermes may not read). */
+  soulReadError?: string;
+  /** While set, `PUT …/soul` fails with this message and writes nothing. */
+  soulWriteError?: string;
+  /** While set, `PUT …/soul` writes the file, then fails with this message, as a connection lost before the answer. */
+  soulWriteLost?: string;
+  /** Runs as a `PUT …/soul` arrives, before it writes: another client's write in the middle of a Save. */
+  beforeSoulWrite?: () => void;
+  /** Runs after a `PUT …/soul` wrote: another client writing again before the read-back. */
+  afterSoulWrite?: () => void;
+  /** Profile distributions, by profile name, as `GET /api/profiles` lists them (`distribution_name`). */
+  distributions: Record<string, string> = {};
   /** The `?profile=` each `/api/ws` connection was opened with, in order. */
   readonly wsProfiles: string[] = [];
   /** Stored session id -> its history, as `session.resume` projects it (`_history_to_messages`). */
@@ -554,6 +573,7 @@ export class FakeHermes {
         provider: this.profileModel[name]?.provider ?? null,
         description: "",
         display_name: "",
+        distribution_name: this.distributions[name] ?? null,
       })),
     }),
     // Settings → Model (hermes_cli/web_routers/models.py, config_env.py, delegation.py at the deployed `bf0203a`).
@@ -669,13 +689,17 @@ export class FakeHermes {
         const patch = /^\/api\/sessions\/([^/]+)$/.exec(req.path);
         const snapshot = /^\/api\/sessions\/([^/]+)\/mutation-snapshot$/.exec(req.path);
         const messages = /^\/api\/sessions\/([^/]+)\/messages$/.exec(req.path);
+        const soul = /^\/api\/profiles\/([^/]+)\/soul$/.exec(req.path);
         const handler =
           this.rest[`${method} ${req.path}`] ??
           (method === "PATCH" && patch ? () => this.patchSession(patch[1], req.body!) : undefined) ??
           (method === "GET" && patch ? () => this.sessionDetail(decodeURIComponent(patch[1]), req.query.get("profile")) : undefined) ??
           (method === "DELETE" && patch ? () => this.deleteSession(decodeURIComponent(patch[1]), req.query.get("profile")) : undefined) ??
           (method === "GET" && snapshot ? () => this.mutationSnapshot(snapshot[1], req.query.get("profile")) : undefined) ??
-          (method === "GET" && messages ? () => this.storedMessages(decodeURIComponent(messages[1]), req.query) : undefined);
+          (method === "GET" && messages ? () => this.storedMessages(decodeURIComponent(messages[1]), req.query) : undefined) ??
+          (soul && this.soulRoutes && (method === "GET" || method === "PUT") ? () => this.soul(method, decodeURIComponent(soul[1]), req.body) : undefined);
+        if (soul && this.soulRoutes && method !== "GET" && method !== "PUT") throw new Error(`The dashboard answered 405: {"detail":"Method Not Allowed"}`);
+        if (soul && !this.soulRoutes) throw new Error(`The dashboard answered 404: {"detail":"No such API endpoint: ${req.path}"}`);
         if (!handler) throw new Error(`The dashboard answered 404: {"detail":"Not Found"}`);
         return JSON.stringify(await handler(req));
       },
@@ -684,6 +708,28 @@ export class FakeHermes {
       },
     };
   };
+
+  /**
+   * `GET`/`PUT /api/profiles/{name}/soul` at `bf0203a`: `_resolve_profile_dir` (400 bad name, 404 no profile), then a
+   * read with `encoding="utf-8-sig"` and universal newlines, or an unconditional whole-file write that creates it.
+   */
+  private soul(method: string, name: string, body?: Record<string, unknown>): unknown {
+    if (name !== "default" && !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) throw new Error(`The dashboard answered 400: {"detail":"Invalid profile name '${name}'"}`);
+    if (name !== "default" && !(name in this.otherProfiles)) throw new Error(`The dashboard answered 404: {"detail":"Profile '${name}' does not exist."}`);
+    if (method === "GET") {
+      if (this.soulReadError) throw new Error(this.soulReadError);
+      const file = this.souls[name];
+      return file === undefined ? { content: "", exists: false } : { content: file.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n"), exists: true };
+    }
+    if (typeof body?.content !== "string")
+      throw new Error(`The dashboard answered 422: {"detail":[{"type":"missing","loc":["body","content"],"msg":"Field required"}]}`);
+    this.beforeSoulWrite?.();
+    if (this.soulWriteError) throw new Error(this.soulWriteError);
+    this.souls[name] = body.content;
+    this.afterSoulWrite?.();
+    if (this.soulWriteLost) throw new Error(this.soulWriteLost);
+    return { ok: true };
+  }
 
   /** A Server file for `/api/fs/*`, failing the way `_fs_regular_file` and `_is_sensitive_path` do at `bf0203a`. */
   private serverFile(query: URLSearchParams): { path: string; data: string } {

@@ -1094,3 +1094,45 @@ button.status-item:disabled { opacity: 0.5; cursor: default; }
 .text-gen .model-options { left: auto; right: calc(100% + 6px); }
 .text-gen .model-options::before { right: auto; left: 100%; }
 .model-status { margin-top: 10px; }
+
+/* Settings → Persona (PersonaSettings.tsx) and the question before leaving an unsaved edit (LeavePersona.tsx) */
+.persona-where { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 4px 0 14px; font-size: calc(13rem / 14); }
+.persona-where dt { color: var(--muted); }
+.persona-where dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.settings p.persona-effect { margin: 0 0 8px; line-height: 1.55; }
+.settings p.persona-effect svg, .settings p.persona-note svg { vertical-align: -2px; }
+.settings p.persona-note { margin: 8px 0 0; }
+.persona-text {
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 160px; padding: 12px 14px; border-radius: var(--radius);
+  background: var(--code-bg); border: 1px solid var(--line-2); color: var(--text); outline: none;
+  font-family: var(--mono); font-size: var(--mono-size); line-height: 1.55; tab-size: 4; white-space: pre-wrap;
+}
+.persona-text:focus { border-color: var(--line-3); }
+.persona-text[readonly] { color: var(--text-2); }
+.persona-readonly { min-height: 100px; }
+.persona-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.persona-actions-left { justify-content: flex-start; margin-top: 10px; }
+.persona-banner, .persona-conflict, .persona-problem {
+  display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; margin-bottom: 14px; border-radius: var(--radius);
+  border: 1px solid var(--line-2); background: var(--raised); font-size: calc(13rem / 14); line-height: 1.5;
+}
+.persona-banner { flex-direction: row; align-items: flex-start; gap: 10px; }
+.persona-banner > svg { flex: none; margin-top: 3px; color: var(--muted); }
+.persona-conflict, .persona-problem { border-color: rgba(245, 184, 74, 0.4); }
+.persona-problem.permission, .persona-problem.error, .persona-problem.no-profile { border-color: rgba(248, 113, 113, 0.4); }
+.persona-confirm { max-width: none; margin-top: 12px; }
+.persona-missing p { margin-bottom: 4px; }
+.settings p.persona-saved { color: var(--ok); margin: 10px 0 0; }
+.persona .field-label .badge { margin-left: 2px; }
+.persona h2 svg { vertical-align: -2px; margin-right: 4px; }
+.persona-earlier { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.persona-earlier-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: calc(13rem / 14); }
+.persona-earlier-view { margin-top: 8px; }
+.leave-scrim { z-index: 60; align-items: flex-start; }
+.leave-dialog {
+  width: min(460px, 92vw); padding: 18px 20px; background: var(--raised); border: 1px solid var(--line-2); border-radius: 14px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55); display: flex; flex-direction: column; gap: 10px; font-size: calc(13rem / 14);
+}
+.leave-dialog p { margin: 0; line-height: 1.55; }
+.leave-title { font-weight: 600; }
+.leave-title svg { color: var(--warn); }

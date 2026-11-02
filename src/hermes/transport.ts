@@ -24,6 +24,7 @@
 // Each chat's context fullness and YOLO come from its session's `info` and `usage`: research doc "Status bar".
 // Token usage and cost (usage.ts, ADR 0008): each reply's usage is how far its session's live counters moved during
 // its turn; each chat's totals and cost are Hermes's stored ones, read with the chat list and after each turn.
+import { PersonaApi } from "./persona";
 import { APPROVAL_CHOICES, isBroadGrant, isOutgoing, isWaiting, offeredChoices, type ApprovalChoice, type ApprovalItem, type AttachCheck, type Attachment, type Chat, type ConnectionStatus, type ContextPart, type ContextUse, type Found, type Item, type OtherProfiles, type Outgoing, type OutgoingItem, type SessionLive, type Source } from "./model";
 import { catalogFromServer, fallbackCatalog, isEffort, modelKey, pickFromInfo, type ModelCatalog, type ModelPick } from "./models";
 import { noOthers, OtherProfilesCheck } from "./otherProfiles";
@@ -438,6 +439,9 @@ export class Hermes {
     (method, pathAndQuery, body) => this.rest(method, pathAndQuery, body),
     () => this.profile,
   );
+
+  /** Settings → Persona's reads and writes of a profile's SOUL.md (persona.ts). Each call names its profile. */
+  readonly persona = new PersonaApi((method, pathAndQuery, body) => this.rest(method, pathAndQuery, body));
 
   /** The profile whose chats are shown. */
   get profile(): string {

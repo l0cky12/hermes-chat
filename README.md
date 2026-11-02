@@ -59,6 +59,10 @@ remain scoped to their connection and profile. Split layout and scroll positions
 The existing Preview Pane is available from either header and uses the same connection/profile as the chats.
 Leaving a pane cancels its Dictation and stops its Read aloud audio, so a hidden or unfocused pane cannot keep the
 microphone or audio running or take composer focus when a late transcript arrives.
+## Persona
+
+Settings → Persona edits the shown profile's `SOUL.md` on the Hermes server, the file that says who Hermes is in that profile. It shows the server, profile and file path, and edits the Markdown as plain text. Save checks that the file hasn't changed on the server since you started; if it has, nothing is written and you choose what to keep. After writing, the app reads the file back to confirm it. New chats use the saved persona; chats already under way keep theirs, and Hermes doesn't restart. Unsaved changes stay on this computer if you leave, close the app or sign out. The last five versions a save replaced can be viewed and put back. It needs the dashboard's `/api/profiles/{name}/soul` routes, which the deployed Hermes (`bf0203a`) has (ADR 0011).
+
 ## Screenshots
 
 Ctrl+Shift+S (or the camera button in the composer) takes a screenshot of a region or window and attaches it to the message you're writing, for you to review before sending. Change or turn off the shortcut in Settings → General → Screenshots.

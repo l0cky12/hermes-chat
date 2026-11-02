@@ -6,6 +6,7 @@ import { CHECK_EVERY_MS } from "./hermes/otherProfiles";
 import { type Account, type Kept, type SavedSignIn, launchSignIn, savedSignIn, signIn, signInForm, signOutToSignIn } from "./hermes/account";
 import { localChatCache } from "./hermes/chatCache";
 import { draftKey, drafts } from "./hermes/drafts";
+import { PersonaStore, personaKey } from "./hermes/personaStore";
 import { chatToReopen, forgetOpenChat, rememberOpenChat } from "./hermes/uiPrefs";
 import { exportChat } from "./hermes/exportChat";
 import { projectLinks, projectScope } from "./hermes/projectLinks";
@@ -24,7 +25,9 @@ import { ChatPane } from "./ui/ChatPane";
 import { PANE_NAMES, Split, usePaneVisible, type PaneSlot } from "./ui/Split";
 import type { VoiceApi } from "./ui/Voice";
 import { SearchPalette } from "./ui/Search";
-import { SettingsScreen } from "./ui/Settings";
+import { SettingsScreen, type PersonaWiring } from "./ui/Settings";
+import { LeavePersona, type LeaveWhat } from "./ui/LeavePersona";
+import { tauriCloseGuard, type CloseGuard } from "./ui/tauriWindow";
 import { composing, routeLabel } from "./ui/bits";
 import { ProjectScreen, ProjectSwitcher, type ProjectUnread } from "./ui/Projects";
 import { appearanceStore } from "./ui/appearance";
@@ -99,6 +102,7 @@ const account: Account = {
 
 const savedDrafts = drafts(localStorage);
 const savedProjects = projectLinks(localStorage);
+const savedPersona = new PersonaStore(localStorage);
 // Applied as the app loads, so the chosen fonts show from the first screen.
 const appearance = appearanceStore(localStorage, document.documentElement);
 
@@ -253,6 +257,8 @@ export function Main({
   reopenLast = false,
   localFiles = tauriLocalFiles,
   screenshots = tauriScreenshotWiring,
+  personaStore = savedPersona,
+  guardClose = tauriCloseGuard,
   onSignOut,
 }: {
   hermes: Hermes;
@@ -266,6 +272,10 @@ export function Main({
   reopenLast?: boolean;
   localFiles?: LocalFiles;
   screenshots?: Screenshots;
+  /** Where Settings → Persona keeps unsaved edits and replaced versions on this computer. */
+  personaStore?: PersonaStore;
+  /** Asks before the window closes; registered only while Settings → Persona holds an unsaved edit. */
+  guardClose?: CloseGuard;
   onSignOut: () => Promise<void>;
 }) {
   const { profile, chats, olderPulled, archivedListed, status, route, unsecure, closedReason, syncError, others, models, switching } = useSyncExternalStore(
@@ -273,6 +283,36 @@ export function Main({
     hermes.getSnapshot,
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Settings → Persona holds an edit Hermes doesn't have, or a save under way: leaving it asks first.
+  const personaDirty = useRef(false);
+  const [personaUnsaved, setPersonaUnsaved] = useState(false);
+  const onPersonaDirty = useCallback((dirty: boolean) => {
+    personaDirty.current = dirty;
+    setPersonaUnsaved(dirty);
+  }, []);
+  const [leaving, setLeaving] = useState<{ what: LeaveWhat; go: () => void; stay?: () => void }>();
+  /** Runs `go` now, or once the owner agrees to leave an unsaved persona edit behind. `stay` runs if they don't. */
+  const guard = (go: () => void, what: LeaveWhat = "leave", stay?: () => void) => {
+    if (!personaDirty.current) return go();
+    setLeaving({ what, go, stay });
+  };
+  const guardRef = useRef(guard);
+  guardRef.current = guard;
+  // Closing the window asks too, only while there is something to lose.
+  const guardCloseRef = useRef(guardClose);
+  useEffect(() => {
+    if (!personaUnsaved) return;
+    let stop: (() => void) | undefined;
+    let gone = false;
+    guardCloseRef.current((close) => guardRef.current(close, "close")).then(
+      (off) => (gone ? off() : (stop = off)),
+      () => {},
+    );
+    return () => {
+      gone = true;
+      stop?.();
+    };
+  }, [personaUnsaved]);
   const voice = useMemo<VoiceApi>(
     () => ({ setup: () => hermes.voiceSetup(), transcribe: (audio, mime) => hermes.transcribe(audio, mime), speak: (text) => hermes.speak(text) }),
     [hermes],
@@ -351,6 +391,13 @@ export function Main({
   };
   const projectNames = (chatId: string) => listable.filter((p) => proj.chats[p.id]?.includes(chatId)).map((p) => p.name);
   const where = routeLabel(route) ?? (connection.mode === "ssh" ? `ssh://${connection.sshTarget}` : connection.url) ?? undefined;
+  // Settings → Persona edits this connection and profile's SOUL.md; its edits are kept apart per connection and profile.
+  const persona: PersonaWiring = {
+    api: hermes.persona,
+    store: personaStore,
+    storeKey: personaKey(connection, profile),
+    where: { server: route ? serverLabel(route) : connection.mode === "ssh" ? connection.sshTarget : serverLabel({ kind: "url", url: connection.url, addresses: [] }), route: where, profile },
+  };
 
   const stillIn = (p: string) => hermes.profile === p;
 
@@ -369,20 +416,25 @@ export function Main({
   // Every move between chats is kept as the profile's last open chat, so it reopens at the next launch whether or not
   // the app closes cleanly. Going somewhere also ends the wait to reopen the last one. A chat opens in the active pane
   // unless another is named, and the pane it opens in becomes the active one.
-  const openChat = (id: string | null, { pane = active.key, remember = true, fresh = false } = {}) => {
-    setPreviewHidden(true);
-    patchPane(pane, { chatId: id, picked: undefined, ...(fresh && { draftError: undefined }) });
-    activeKeyRef.current = pane;
-    setActiveKey(pane);
-    setReopening(undefined);
-    setSettingsOpen(false);
-    setProjectOpen(false);
-    if (remember) rememberOpenChat(profile, id);
+  // `keepSettings`: the move isn't the owner's, so Settings stays on screen.
+  const openChat = (id: string | null, { pane = active.key, remember = true, fresh = false, keepSettings = false } = {}) => {
+    const go = () => {
+      setPreviewHidden(true);
+      patchPane(pane, { chatId: id, picked: undefined, ...(fresh && { draftError: undefined }) });
+      activeKeyRef.current = pane;
+      setActiveKey(pane);
+      setReopening(undefined);
+      if (!keepSettings) setSettingsOpen(false);
+      setProjectOpen(false);
+      if (remember) rememberOpenChat(profile, id);
+    };
+    if (keepSettings) go();
+    else guard(go);
   };
 
   const newChat = (remember = true) => openChat(null, { remember, fresh: true });
 
-  const pick = (found: Found) => {
+  const pick = (found: Found) => guard(() => {
     setPreviewHidden(true);
     hermes.reveal(found);
     patchPane(active.key, { chatId: found.chatId, picked: { found, at: Date.now() } });
@@ -391,11 +443,11 @@ export function Main({
     setSearchOpen(false);
     setSettingsOpen(false);
     setProjectOpen(false);
-  };
+  });
 
   // A second pane opens to the right and becomes the active one. Both panes may show the same chat: they are two views
   // of it, with one transcript, one draft and one reply, each scrolled and searched on its own.
-  const splitWith = (chatId: string | null) => {
+  const splitWith = (chatId: string | null) => guard(() => {
     if (split) return;
     setPreviewHidden(true);
     const key = newPaneKey();
@@ -406,7 +458,7 @@ export function Main({
     setSettingsOpen(false);
     setProjectOpen(false);
     rememberOpenChat(profile, chatId);
-  };
+  });
 
   /** Opens a chat in the left (0) or right (1) pane, opening the right one if there's one pane. */
   const openIn = (id: string, side: number) => {
@@ -425,7 +477,7 @@ export function Main({
     return () => d.dispose();
   }, []);
   // Reveal the composer when Search, Settings, Projects or a narrow preview covers it, so the capture can be reviewed.
-  const takeScreenshot = (remote = false) => {
+  const takeScreenshot = (remote = false) => guard(() => {
     if (!desk) return;
     flushSync(() => {
       setSettingsOpen(false);
@@ -435,7 +487,7 @@ export function Main({
     });
     focusPane(active.key);
     void desk.capture({ remote });
-  };
+  });
   const takeScreenshotRef = useRef(takeScreenshot);
   takeScreenshotRef.current = takeScreenshot;
   useEffect(() => (desk ? screenshotsRef.current.onDesktopShortcut(() => takeScreenshotRef.current(true)) : undefined), [desk]);
@@ -457,13 +509,13 @@ export function Main({
   // The panes showing a chat that leaves the list give way to the New chat pane. The active one does as New chat does.
   const clearChat = (id: string) => {
     if (!panes.some((p) => p.chatId === id)) return;
-    if (active.chatId === id) newChat();
+    if (active.chatId === id) openChat(null, { fresh: true, keepSettings: true });
     setPanes((ps) => ps.map((p) => (p.chatId === id ? { ...p, chatId: null, picked: undefined, draftError: undefined } : p)));
   };
 
   // The other profile's chats replace the list, so one pane stays, on a fresh draft. The profile left keeps its last
   // open chat for the next launch.
-  const switchProfile = (name: string) => {
+  const switchProfile = (name: string) => guard(() => {
     const keep = active.key;
     setPanes([{ key: keep, chatId: null }]);
     activeKeyRef.current = keep;
@@ -474,7 +526,7 @@ export function Main({
     setToast(null);
     setPreview(null);
     void hermes.switchProfile(name);
-  };
+  }, "profile");
 
   // Undo sends the opposite change, not a stored copy, so it also works once the list has refreshed.
   const setSettled = (id: string, settled: boolean) => {
@@ -749,13 +801,17 @@ export function Main({
                 }}
                 onCreate={async (name) => {
                   await projects.create(name);
-                  setSettingsOpen(false);
-                  setProjectOpen(true);
+                  guard(() => {
+                    setSettingsOpen(false);
+                    setProjectOpen(true);
+                  });
                 }}
-                onManage={() => {
-                  setSettingsOpen(false);
-                  setProjectOpen(true);
-                }}
+                onManage={() =>
+                  guard(() => {
+                    setSettingsOpen(false);
+                    setProjectOpen(true);
+                  })
+                }
               />
             }
             projectsOf={(chatId) => {
@@ -837,11 +893,16 @@ export function Main({
             voiceSetup={voice.setup}
             onClearCache={() => hermes.clearCache()}
             onPullOlder={() => hermes.pullOlderHistory()}
-            onSignOut={onSignOut}
-            onClose={() => {
-              flushSync(() => setSettingsOpen(false));
-              focusPane(active.key);
-            }}
+            onSignOut={() => new Promise<void>((done) => guard(() => void onSignOut().finally(done), "signout", done))}
+            onClose={() =>
+              guard(() => {
+                flushSync(() => setSettingsOpen(false));
+                focusPane(active.key);
+              })
+            }
+            persona={persona}
+            onPersonaDirty={onPersonaDirty}
+            guard={guard}
           />
         ) : null}
         <Split panes={slots} activeKey={active.key} onActivate={activate} covered={settingsOpen || projectScreenOpen || previewCovers} />
@@ -881,6 +942,21 @@ export function Main({
             </button>
           )}
         </div>
+      )}
+      {leaving && (
+        <LeavePersona
+          what={leaving.what}
+          profile={profile}
+          onStay={() => {
+            leaving.stay?.();
+            setLeaving(undefined);
+          }}
+          onGo={() => {
+            setLeaving(undefined);
+            personaDirty.current = false;
+            leaving.go();
+          }}
+        />
       )}
     </div>
     </PreviewContext.Provider>
