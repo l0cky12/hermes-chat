@@ -8,8 +8,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import { connect, type Hermes } from "../hermes/transport";
 import { getUIPrefs } from "../hermes/uiPrefs";
-import type { FileView } from "../hermes/preview";
-import type { LocalFiles } from "./tauriPreview";
+import type { FileView, Framing } from "../hermes/preview";
+import type { LocalFiles, WebPages } from "./tauriPreview";
 import { Main } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
@@ -50,10 +50,32 @@ function localDisk(files: Record<string, FileView | Error>) {
 }
 
 /**
+ * The web as Rust's framing check sees it (src-tauri/src/web_page.rs): each address answers as `answers` says, and any
+ * other answers that nothing refused. `checked` and `opened` record what the pane asked for.
+ */
+function theWeb(answers: Record<string, Framing | Error | Promise<Framing>> = {}, openFails?: string) {
+  const web: WebPages & { checked: string[]; opened: string[] } = {
+    checked: [],
+    opened: [],
+    check: async (url) => {
+      web.checked.push(url);
+      const a = answers[url] ?? { kind: "notRefused" };
+      if (a instanceof Error) throw a;
+      return a;
+    },
+    openInBrowser: async (url) => {
+      if (openFails) throw new Error(openFails);
+      web.opened.push(url);
+    },
+  };
+  return web;
+}
+
+/**
  * Signed in, with the chat "Fix the app" open: a reply with a link, then a read_file call on a server file, a
  * browser_navigate call and a terminal call.
  */
-async function signedIn({ local = localDisk({}) } = {}) {
+async function signedIn({ local = localDisk({}), web = theWeb() } = {}) {
   const server = new FakeHermes();
   server.sessions = [row("fix", 1, { pinned: true, title: "Fix the app" }), row("other", 2, { pinned: true, title: "Another chat" })];
   server.transcripts = {
@@ -76,12 +98,12 @@ async function signedIn({ local = localDisk({}) } = {}) {
   const hermes = await connect(server.openPipe);
   const user = userEvent.setup();
   render(
-    <Main hermes={hermes} connection={{ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }} localFiles={local} onSignOut={async () => {}} />,
+    <Main hermes={hermes} connection={{ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }} localFiles={local} webPages={web} onSignOut={async () => {}} />,
   );
   await user.click(await screen.findByRole("button", { name: /Fix the app/ }));
   await screen.findByText(/It reads a missing file/);
   await settle(hermes);
-  return { server, hermes, user, local };
+  return { server, hermes, user, local, web };
 }
 
 /** Opens the chat's tool calls, then the one named `name`. */
@@ -251,6 +273,102 @@ describe("What the pane shows", () => {
     local.next = { path: "/home/me/locked.txt", name: "locked.txt" };
     await user.click(within(pane()).getByRole("button", { name: "Open a file on this computer…" }));
     expect((await within(pane()).findByRole("alert")).textContent).toContain("Permission denied (os error 13)");
+  });
+});
+
+describe("Web pages a site won't let the pane show (issue #55)", () => {
+  const GOOGLE = "https://www.google.com/";
+  /**
+   * What WebKitGTK 2.54 did for both www.google.com and example.com: the frame's `load` fired within a few hundred
+   * milliseconds, and its location then threw a SecurityError, whether the page showed or was refused.
+   */
+  const loadCrossOrigin = (frame: HTMLElement) => {
+    Object.defineProperty(frame, "contentWindow", {
+      get: () => ({
+        get location() {
+          throw new DOMException("Blocked a frame from accessing a cross-origin frame.", "SecurityError");
+        },
+      }),
+    });
+    fireEvent.load(frame);
+  };
+  async function openWeb(url: string, web: ReturnType<typeof theWeb>) {
+    const s = await signedIn({ web });
+    await s.user.click(screen.getByRole("button", { name: "Open the preview" }));
+    await s.user.type(within(pane()).getByRole("textbox"), `${url}{Enter}`);
+    return s;
+  }
+
+  it("says a site refuses to be shown, instead of a blank frame, and opens it in the browser", async () => {
+    // What www.google.com answers: WebKitGTK fires the frame's load at once and leaves it white.
+    let answer = (_: Framing) => {};
+    const web = theWeb({ [GOOGLE]: new Promise<Framing>((resolve) => (answer = resolve)) });
+    const { user } = await openWeb(GOOGLE, web);
+    loadCrossOrigin(within(pane()).getByTitle(`Web page: ${GOOGLE}`));
+    expect(within(pane()).queryByRole("status")).toBeNull();
+    expect(web.checked).toEqual([GOOGLE]);
+
+    await act(async () => answer({ kind: "refused", by: "X-Frame-Options: SAMEORIGIN" }));
+    const note = within(pane()).getByRole("alert");
+    expect(note.textContent).toContain("www.google.com doesn't allow being shown inside other apps");
+    expect(note.textContent).toContain("X-Frame-Options: SAMEORIGIN");
+    expect(within(pane()).queryByTitle(/^Web page/)).toBeNull();
+    // The address is still there to copy.
+    expect(within(pane()).getByText(GOOGLE)).toBeTruthy();
+
+    await user.click(within(note).getByRole("button", { name: "Open in your browser" }));
+    expect(web.opened).toEqual([GOOGLE]);
+
+    // The owner may still try, in the same sandboxed frame.
+    await user.click(within(note).getByRole("button", { name: "Try showing it here anyway" }));
+    const again = within(pane()).getByTitle(`Web page: ${GOOGLE}`);
+    expect(again.getAttribute("sandbox")!.split(" ").sort()).toEqual(["allow-forms", "allow-same-origin", "allow-scripts"]);
+    expect(within(pane()).getByRole("status").textContent).toContain("Loading page");
+  });
+
+  it("keeps showing a page that allows framing, with a way to open it in the browser", async () => {
+    const web = theWeb();
+    const { user } = await openWeb("https://example.com/", web);
+    const frame = within(pane()).getByTitle("Web page: https://example.com/");
+    await act(async () => {});
+    loadCrossOrigin(frame);
+    expect(web.checked).toEqual(["https://example.com/"]);
+    expect(within(pane()).queryByRole("alert")).toBeNull();
+    expect(within(pane()).queryByRole("status")).toBeNull();
+    expect(frame.isConnected).toBe(true);
+
+    await user.click(within(pane()).getByRole("button", { name: "open it in your browser" }));
+    await user.click(within(pane()).getByRole("button", { name: "Open in your browser" }));
+    expect(web.opened).toEqual(["https://example.com/", "https://example.com/"]);
+
+    // Reload asks again.
+    await user.click(within(pane()).getByRole("button", { name: "Reload" }));
+    expect(web.checked).toEqual(["https://example.com/", "https://example.com/"]);
+  });
+
+  it("says a site can't be reached rather than loading forever, until the frame loads after all", async () => {
+    const url = "http://127.0.0.1:4599/";
+    const web = theWeb({ [url]: { kind: "unreachable", message: "Connection refused (os error 111)" } });
+    await openWeb(url, web);
+    const alert = await within(pane()).findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't reach 127.0.0.1:4599");
+    expect(alert.textContent).toContain("Connection refused (os error 111)");
+    // The frame stays: this computer's browser engine may reach what Rust couldn't.
+    loadCrossOrigin(within(pane()).getByTitle(`Web page: ${url}`));
+    expect(within(pane()).queryByRole("alert")).toBeNull();
+  });
+
+  it("leaves the frame alone when the check itself fails, and says why the browser didn't open", async () => {
+    const web = theWeb({ [GOOGLE]: new Error("not running in Tauri") }, "Couldn't find xdg-open, which opens pages in your browser.");
+    const { user } = await openWeb(GOOGLE, web);
+    await act(async () => {});
+    expect(within(pane()).getByTitle(`Web page: ${GOOGLE}`)).toBeTruthy();
+    expect(within(pane()).queryByRole("alert")).toBeNull();
+
+    await user.click(within(pane()).getByRole("button", { name: "Open in your browser" }));
+    expect((await within(pane()).findByRole("alert")).textContent).toBe(
+      "Couldn't open it in your browser: Couldn't find xdg-open, which opens pages in your browser.",
+    );
   });
 });
 

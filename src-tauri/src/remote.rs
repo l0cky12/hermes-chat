@@ -70,7 +70,7 @@ pub fn forward() -> Result<(), dbus::Error> {
 }
 
 /// Takes the bus name and answers `Screenshot` calls with `asked`, on a thread of its own. If another Hermes Chat
-/// already has the name, the desktop shortcut goes to that one, and this one just doesn't listen.
+/// already has the name, the desktop shortcut goes to that one, and this one takes over once it exits.
 pub fn serve(asked: impl Fn() + Send + 'static) {
     std::thread::spawn(move || {
         let conn = match Connection::new_session() {
@@ -78,8 +78,13 @@ pub fn serve(asked: impl Fn() + Send + 'static) {
             Err(e) => return eprintln!("hermes-chat: no session bus, so the desktop screenshot shortcut won't reach this window: {e}"),
         };
         use dbus::blocking::stdintf::org_freedesktop_dbus::RequestNameReply;
-        match conn.request_name(NAME, false, false, true) {
+        // Queued behind another Hermes Chat, rather than giving up: the bus hands this one the name once that one
+        // exits, as the one an update's restart replaces does just after starting this one (update.rs `relaunch`).
+        match conn.request_name(NAME, false, false, false) {
             Ok(RequestNameReply::PrimaryOwner) | Ok(RequestNameReply::AlreadyOwner) => {}
+            Ok(RequestNameReply::InQueue) => {
+                eprintln!("hermes-chat: another Hermes Chat is running; the desktop screenshot shortcut goes to it until it closes")
+            }
             Ok(_) => return eprintln!("hermes-chat: another Hermes Chat is running; the desktop screenshot shortcut goes to it"),
             Err(e) => return eprintln!("hermes-chat: couldn't take {NAME}: {e}"),
         }

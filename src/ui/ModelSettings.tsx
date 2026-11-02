@@ -1,7 +1,7 @@
 // Settings → Model: the main model, subagents, auxiliary (helper task) models and the guardrails, as Hermes has them
 // for the profile shown. Edits are one draft held here until a part is applied; leaving Settings drops it without
 // asking, as the official desktop app does. Reads and writes: modelSettings.ts.
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { CircleDollarSign, Pin, RotateCcw, ShieldAlert, TriangleAlert } from "lucide-react";
 import {
   AUX_AUTO,
@@ -182,14 +182,23 @@ function TextGeneration({
   profile,
   connected,
   onSaved,
+  show,
 }: {
   saved: Settings;
   api: ModelSettingsApi;
   profile: string;
   connected: boolean;
   onSaved: (fresh: Settings) => void;
+  /** Set anew to scroll this section into view and move focus to it. */
+  show?: object;
 }) {
   const { modelFavorites } = useSyncExternalStore(subscribeUIPrefs, getUIPrefs);
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (!show || !heading.current) return;
+    heading.current.scrollIntoView({ block: "start" });
+    heading.current.focus({ preventScroll: true });
+  }, [show]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   /** A model Hermes flagged as expensive, not written until the owner says Use anyway. */
@@ -237,7 +246,9 @@ function TextGeneration({
 
   return (
     <section>
-      <h2>Text generation</h2>
+      <h2 ref={heading} tabIndex={-1}>
+        Text generation
+      </h2>
       <div className="model-card text-gen" role="group" aria-label="Text generation model">
         <div className="text-gen-label">
           <div className="text-gen-title">
@@ -296,7 +307,18 @@ function TextGeneration({
   );
 }
 
-export function ModelSettings({ api, profile, connected }: { api: ModelSettingsApi; profile: string; connected: boolean }) {
+export function ModelSettings({
+  api,
+  profile,
+  connected,
+  showTextGeneration,
+}: {
+  api: ModelSettingsApi;
+  profile: string;
+  connected: boolean;
+  /** Set anew to bring the Text generation model into view once the setup is read. */
+  showTextGeneration?: object;
+}) {
   const [saved, setSaved] = useState<Settings>();
   const [draft, setDraft] = useState<Draft>();
   const [loadError, setLoadError] = useState<string>();
@@ -515,6 +537,7 @@ export function ModelSettings({ api, profile, connected }: { api: ModelSettingsA
         api={api}
         profile={profile}
         connected={connected}
+        show={showTextGeneration}
         onSaved={(fresh) => {
           setSaved(fresh);
           // The other helper tasks' edits stay drafted; this one is what Hermes now has.

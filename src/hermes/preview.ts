@@ -27,6 +27,13 @@ export type FileView =
   | { kind: "image"; src: string; size?: number }
   | { kind: "unsupported"; reason: string; size?: number };
 
+/**
+ * What a site answered when Rust asked for a page the way the preview's frame does (src-tauri/src/web_page.rs, ADR
+ * 0011). `refused`: its response forbids being shown inside another app; `by` is the header that says so.
+ * `unreachable`: this computer couldn't connect to it. `notRefused`: nothing said no, which doesn't promise it shows.
+ */
+export type Framing = { kind: "refused"; by: string } | { kind: "unreachable"; message: string } | { kind: "notRefused" };
+
 /** The most text Hermes's `read-text` returns, and the most Rust reads of a Local file (`_FS_TEXT_PREVIEW_MAX_BYTES`). */
 export const TEXT_PREVIEW_BYTES = 512 * 1024;
 

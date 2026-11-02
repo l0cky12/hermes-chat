@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Scheduled jobs against a fake Hermes whose cron routes behave the way the deployed `bf0203a` did when probed with a
-// throwaway HERMES_HOME (ADR 0011), including its per-job routes acting on another profile's job.
+// throwaway HERMES_HOME (ADR 0013), including its per-job routes acting on another profile's job.
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeHermes } from "./fakeHermes";
 import { connect, type Hermes } from "./transport";

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { editFlags, FakeHermes, row } from "./fakeHermes";
-import { cleanTitle, connect } from "./transport";
+import { cleanTitle, connect, TitleModelUnavailable, titleModelUnavailable } from "./transport";
 
 type Stored = { id: number; role: string; content: unknown };
 
@@ -81,6 +81,45 @@ describe("Regenerating a chat's title", () => {
     expect(title()).toBe("Lisbon trip");
   });
 
+  // Issue #54: the profile's Text generation model was pinned to Nous Portal, and Hermes wasn't signed in to it.
+  const NOUS_MISSING = "Nous Portal runtime credentials unavailable: Hermes is not logged into Nous Portal. (code: nous_auth_missing)";
+
+  it("says how to fix it when Hermes isn't signed in to the Text generation model's provider, and keeps the old title", async () => {
+    const { server, hermes, title, asks, patches } = await listed();
+    server.oneshotFailure = NOUS_MISSING;
+
+    const failed = await hermes.regenerateTitle("a").then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+
+    expect(failed).toBeInstanceOf(TitleModelUnavailable);
+    const e = failed as TitleModelUnavailable;
+    expect(e.provider).toBe("nous");
+    expect(e.detail).toBe(NOUS_MISSING);
+    expect(e.message).toBe(
+      "Text generation runs on Nous Portal, and Hermes on the server isn't signed in to Nous Portal. Sign it in there with " +
+        "`hermes auth add nous`, or pick another Text generation model in Settings → Model.",
+    );
+    // One ask, on the profile's own Text generation model: no other provider is tried behind the owner's back.
+    expect(asks()).toHaveLength(1);
+    expect(Object.keys(asks()[0].params).sort()).toEqual(["input", "instructions", "max_tokens", "profile"]);
+    expect(patches()).toEqual([]);
+    expect(title()).toBe("Lisbon trip");
+  });
+
+  it("names any other provider Hermes has no key for", async () => {
+    const { server, hermes, title } = await listed();
+    server.oneshotFailure =
+      "Provider 'openrouter' is set in config.yaml but no API key was found. Set the OPENROUTER_API_KEY environment variable, or switch to a different provider with `hermes model`.";
+
+    await expect(hermes.regenerateTitle("a")).rejects.toMatchObject({
+      provider: "openrouter",
+      message: "Text generation runs on openrouter, and Hermes on the server has no API key or sign-in for it. Add one there, or pick another Text generation model in Settings → Model.",
+    });
+    expect(title()).toBe("Lisbon trip");
+  });
+
   it("keeps the old title when Hermes answers with nothing", async () => {
     const { server, hermes, title, patches } = await listed();
     server.oneshotAnswer = '  ""  ';
@@ -96,6 +135,27 @@ describe("Regenerating a chat's title", () => {
     await expect(hermes.regenerateTitle("a")).rejects.toThrow("no messages");
     expect(asks()).toEqual([]);
   });
+});
+
+describe("titleModelUnavailable", () => {
+  it.each([
+    "one-shot generation failed: Nous Portal runtime credentials unavailable: No access token found for Nous Portal login. (code: nous_auth_missing_access_token)",
+    "Provider 'anthropic' is set in config.yaml but no credentials were found. Run `hermes auth add anthropic` to sign in, or switch to a different provider with `hermes model`.",
+  ])("is a sign-in problem: %j", (why) => expect(titleModelUnavailable(why, "default")).toBeInstanceOf(TitleModelUnavailable));
+
+  it("names a profile other than the default in the sign-in command, as Hermes's own guidance does", () => {
+    const why = "one-shot generation failed: Nous Portal runtime credentials unavailable: Hermes is not logged into Nous Portal. (code: nous_auth_missing)";
+    expect(titleModelUnavailable(why, "work")?.message).toContain("`hermes -p work auth add nous`");
+    expect(titleModelUnavailable(why, "default")?.message).toContain("`hermes auth add nous`");
+  });
+
+  it.each([
+    "no title model configured",
+    "Request timed out.",
+    "Nous Portal runtime credentials unavailable: Nous Portal is rate limited; retry in 30s. (code: rate_limited)",
+    "Provider 'openrouter' is out of usable credentials: its only credential is exhausted (last error 402). Add credits or update billing with that provider, then retry, or switch to a different provider with `hermes model`.",
+    "No LLM provider configured for task=title_generation provider=auto. Run: hermes setup",
+  ])("isn't a sign-in problem: %j", (why) => expect(titleModelUnavailable(why, "default")).toBeUndefined());
 });
 
 describe("cleanTitle", () => {

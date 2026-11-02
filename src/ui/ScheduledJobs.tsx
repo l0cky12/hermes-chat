@@ -1,4 +1,4 @@
-// Scheduled jobs (GLOSSARY.md "Scheduled job", ADR 0011): the profile's cron jobs, which Hermes keeps and runs on the
+// Scheduled jobs (GLOSSARY.md "Scheduled job", ADR 0013): the profile's cron jobs, which Hermes keeps and runs on the
 // server, also while Hermes Chat is closed. The screen lists them with their schedule, time zone and next run, and
 // creates, edits, pauses, resumes, runs and deletes them through Hermes. Every change shows only once Hermes, read
 // back, has it.

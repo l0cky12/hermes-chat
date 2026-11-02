@@ -1,6 +1,7 @@
 // A fake Hermes dashboard for tests: it sits where the Rust pipe does and speaks wire-shaped legacy
 // JSON-RPC frames and dashboard REST bodies (shapes from the deployed contracts, see the research doc).
 import type { LocalFile, OpenPipe, PipeEvent, Route, Speech, VoiceSetup } from "./pipe";
+import { FakeServerFiles } from "./fakeServerFiles";
 import { ScheduleError, isoIn, parseSchedule, upcomingRuns } from "./schedule";
 
 type Request = { jsonrpc: "2.0"; id: number; method: string; params: Record<string, unknown> };
@@ -221,6 +222,8 @@ export class FakeHermes {
    * file's text (or bytes, one char per byte); `{ dir: true }` is a folder.
    */
   serverFiles: Record<string, string | { dir: true }> = {};
+  /** The server's own disk, for the Server files screen (managed files: `GET /api/files`, `GET /api/files/read`). */
+  readonly managedFiles = new FakeServerFiles();
   /** Whether this connection sent `client.capabilities {server_requests: true}`. */
   answersRequests = false;
   /** Server→client requests nobody has answered yet, by id. */
@@ -550,6 +553,8 @@ export class FakeHermes {
       const ext = /\.([a-z0-9]+)$/i.exec(path)?.[1].toLowerCase() ?? "";
       return { dataUrl: `data:${FS_MIME[ext] ?? "application/octet-stream"};base64,${btoa(data)}` };
     },
+    "GET /api/files": ({ query }) => this.managedFiles.list(query),
+    "GET /api/files/read": ({ query }) => this.managedFiles.read(query),
     // `hermes_cli/web_routers/profiles.py` `_profile_to_dict` at the deployed `bf0203a`, trimmed to what matters here.
     "GET /api/profiles": () => ({
       profiles: ["default", ...Object.keys(this.otherProfiles)].map((name) => ({
@@ -690,6 +695,17 @@ export class FakeHermes {
           this.cron.route(req);
         if (!handler) throw new Error(`The dashboard answered 404: {"detail":"Not Found"}`);
         return JSON.stringify(await handler(req));
+      },
+      // Mirrors `Dashboard::get_limited`: refused once the answer passes the limit.
+      getLimited: async (pathAndQuery, maxBytes) => {
+        const url = new URL(pathAndQuery, "http://dashboard/");
+        const req: RestRequest = { method: "GET", path: url.pathname, query: url.searchParams };
+        this.restRequests.push(req);
+        const handler = this.rest[`GET ${req.path}`];
+        if (!handler) throw new Error(`The dashboard answered 404: {"detail":"Not Found"}`);
+        const body = JSON.stringify(await handler(req));
+        if (body.length > maxBytes) throw new Error(`it's ${(body.length / MiB).toFixed(1)} MB now, over the ${Math.floor(maxBytes / MiB)} MB limit`);
+        return body;
       },
       close: async () => {
         this.closed = true;

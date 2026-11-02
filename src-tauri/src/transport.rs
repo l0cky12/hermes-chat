@@ -664,11 +664,12 @@ impl Dashboard {
             ("POST" | "PUT", _) => return Err(TransportError::NotRelayed(format!("{method} {path}"))),
             (other, _) => return Err(TransportError::NotRelayed(format!("{other} requests"))),
         };
-        if !path.starts_with("api/") || path.split('/').any(|seg| seg == "..") {
-            return Err(TransportError::NotRelayed(path.to_owned()));
+        let (url, routed) = relay_url(&self.base, path, query)?;
+        // Server files are read-only (ADR 0012): nothing but GET goes to the server's file routes, checked on the
+        // path as the server will route it, so `api/./files` or `api/%66iles` can't slip past.
+        if method != Method::GET && is_file_route(&routed) {
+            return Err(TransportError::NotRelayed(format!("{method} {path}")));
         }
-        let mut url = endpoint(&self.base, path);
-        url.set_query(Some(query).filter(|q| !q.is_empty()));
         let mut req = self.http.request(method, url).header(header::COOKIE, self.cookie_header());
         if let Some(body) = body {
             req = req.header(header::CONTENT_TYPE, "application/json").body(body);
@@ -789,6 +790,39 @@ impl Dashboard {
         Ok(if no_route { AudioAnswer::NoRoute } else { AudioAnswer::Refused(reason) })
     }
 
+    /// A dashboard REST `GET` under `api/` whose answer may be big, such as a server file's contents from
+    /// `api/files/read`. It stops reading, and refuses the answer, once it passes `max_bytes`, so a file that grew
+    /// since it was listed can't fill memory. Returns the response body on 2xx.
+    pub async fn get_limited(&self, path_and_query: &str, max_bytes: u64) -> Result<String, TransportError> {
+        let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
+        let (url, _) = relay_url(&self.base, path, query)?;
+        let mut resp = self
+            .http
+            .get(url)
+            .header(header::COOKIE, self.cookie_header())
+            .send()
+            .await
+            .map_err(|e| TransportError::Unreachable(e.to_string()))?;
+        self.keep_cookies(&resp);
+        match resp.status() {
+            s if s.is_success() => {}
+            StatusCode::UNAUTHORIZED => return Err(TransportError::SignedOut),
+            _ => return Err(unexpected(resp).await),
+        }
+        let too_large = |size| TransportError::FileTooLarge { size, max: max_bytes };
+        if let Some(size) = resp.content_length().filter(|&n| n > max_bytes) {
+            return Err(too_large(size));
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = resp.chunk().await.map_err(|e| TransportError::Unreachable(e.to_string()))? {
+            body.extend_from_slice(&chunk);
+            if body.len() as u64 > max_bytes {
+                return Err(too_large(body.len() as u64));
+            }
+        }
+        String::from_utf8(body).map_err(|_| TransportError::Unexpected { status: 200, body: "the answer isn't UTF-8 text".into() })
+    }
+
     /// Take in every Set-Cookie: a new value replaces the old one, an empty one deletes it. Only
     /// `name=value` is kept; the dashboard is the only site this jar talks to.
     fn keep_cookies(&self, resp: &reqwest::Response) {
@@ -825,6 +859,34 @@ fn cron_write(method: &str, path: &str) -> bool {
     }
 }
 
+/// Where a relayed REST call goes, and its path as the dashboard will route it: with `.` segments resolved and
+/// percent-escapes decoded (the server decodes them before routing, so `%2F` is a `/` to it). Both the path asked
+/// for and the routed one must stay under `api/` without `.` or `..` segments.
+fn relay_url(base: &Url, path: &str, query: &str) -> Result<(Url, String), TransportError> {
+    let refused = || TransportError::NotRelayed(path.to_owned());
+    let under_api = |p: &str| p.starts_with("api/") && !p.split('/').any(|seg| seg == ".." || seg == ".");
+    if !under_api(path) {
+        return Err(refused());
+    }
+    let mut url = endpoint(base, path);
+    url.set_query(Some(query).filter(|q| !q.is_empty()));
+    // The dashboard's own path, such as `/team%20one/`, is matched as it's spelled; only what follows is decoded.
+    let prefix = format!("{}/", base.path().trim_end_matches('/'));
+    let rest = url.path().strip_prefix(&prefix).ok_or_else(refused)?;
+    let routed = percent_encoding::percent_decode_str(rest).decode_utf8().map_err(|_| refused())?.into_owned();
+    if !under_api(&routed) {
+        return Err(refused());
+    }
+    Ok((url, routed))
+}
+
+/// The dashboard's routes that write or delete files on the server: managed files (`api/files...`) and the agent's
+/// workspace (`api/fs/...`). Empty segments are skipped, as a lenient router might.
+fn is_file_route(path: &str) -> bool {
+    let mut segs = path.split('/').filter(|seg| !seg.is_empty());
+    segs.next() == Some("api") && matches!(segs.next(), Some("files" | "fs"))
+}
+
 fn endpoint(base: &Url, path: &str) -> Url {
     let mut url = base.clone();
     let prefix = url.path().trim_end_matches('/').to_owned();
@@ -832,7 +894,10 @@ fn endpoint(base: &Url, path: &str) -> Url {
     url
 }
 
-async fn unexpected(resp: reqwest::Response) -> TransportError {
+/// An answer the call didn't expect, with the start of its body. Reads only the first few KB, so a huge or endless
+/// error body can't fill memory.
+async fn unexpected(mut resp: reqwest::Response) -> TransportError {
+    const KEEP: usize = 4096;
     // A redirect that came back unfollowed: `same_origin_redirects` stopped it at another site.
     if resp.status().is_redirection() {
         let to = resp.headers().get(header::LOCATION).and_then(|l| resp.url().join(l.to_str().ok()?).ok());
@@ -841,6 +906,14 @@ async fn unexpected(resp: reqwest::Response) -> TransportError {
         }
     }
     let status = resp.status().as_u16();
-    let body = resp.text().await.unwrap_or_default().chars().take(300).collect();
+    let mut head = Vec::new();
+    while head.len() < KEEP {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => head.extend_from_slice(&chunk),
+            _ => break,
+        }
+    }
+    head.truncate(KEEP);
+    let body = String::from_utf8_lossy(&head).chars().take(300).collect();
     TransportError::Unexpected { status, body }
 }

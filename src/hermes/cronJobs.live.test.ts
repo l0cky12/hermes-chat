@@ -1,7 +1,7 @@
 // Scheduled jobs against a REAL Hermes dashboard: skipped unless HERMES_LIVE_DASHBOARD is set, and refused unless
 // every profile on that server lives under /tmp, so it can only run against a throwaway HERMES_HOME. It makes only
 // "[fixture]" jobs that deliver locally, runs only a script job it made (the fixture script prints one line), and
-// deletes what it made. Set up a server as ADR 0011 describes, then:
+// deletes what it made. Set up a server as ADR 0013 describes, then:
 //
 //   HERMES_LIVE_DASHBOARD=http://127.0.0.2:9339 HERMES_LIVE_USER=fixture HERMES_LIVE_PASSWORD=… \
 //   HERMES_LIVE_HOME=/tmp/hcron/home npx vitest run src/hermes/cronJobs.live.test.ts

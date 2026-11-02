@@ -1,4 +1,4 @@
-// Scheduled job schedules (GLOSSARY.md "Scheduled job", ADR 0011): what Hermes's scheduler makes of a schedule as the
+// Scheduled job schedules (GLOSSARY.md "Scheduled job", ADR 0013): what Hermes's scheduler makes of a schedule as the
 // owner typed it, when it will run, and how to say so. Hermes is the judge: it parses the schedule again when a job is
 // saved, and its own `next_run_at` is the next run shown. This file mirrors `cron/jobs.py` `parse_schedule` and
 // `compute_next_run` at the deployed `bf0203a`, so the editor can explain a schedule and preview its runs before it is

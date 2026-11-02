@@ -1,4 +1,4 @@
-// Scheduled jobs (GLOSSARY.md "Scheduled job", ADR 0011): Hermes's own cron jobs for one profile, read and written over
+// Scheduled jobs (GLOSSARY.md "Scheduled job", ADR 0013): Hermes's own cron jobs for one profile, read and written over
 // dashboard REST `/api/cron/*` (`hermes_cli/web_routers/cron.py` at the deployed `bf0203a`). Hermes stores each job in
 // the profile's `cron/jobs.json` and its gateway's scheduler runs it, so jobs keep running with this app closed. This
 // app only lists them and asks Hermes to change them; it never schedules anything itself.
