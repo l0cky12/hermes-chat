@@ -84,6 +84,26 @@ export class PersonaStore {
     return !this.notStored.has(`${key}.draft`);
   }
 
+  /** Saves under way, by connection and profile, kept here so a reopened editor waits for one started before. */
+  private saves = new Map<string, Promise<unknown>>();
+
+  /** Notes a save of `key` under way until `done` settles. */
+  trackSave(key: string, done: Promise<unknown>) {
+    const settled = done.then(
+      () => {},
+      () => {},
+    );
+    this.saves.set(key, settled);
+    void settled.then(() => {
+      if (this.saves.get(key) === settled) this.saves.delete(key);
+    });
+  }
+
+  /** A save of `key` still under way, which settles (never rejects) when it is done; undefined when there is none. */
+  saveUnderWay(key: string): Promise<unknown> | undefined {
+    return this.saves.get(key);
+  }
+
   earlier(key: string): EarlierSoul[] {
     return (
       this.read(`${key}.earlier`, (v): v is EarlierSoul[] =>

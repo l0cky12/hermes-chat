@@ -83,6 +83,8 @@ export function PersonaSettings({
   const [kept, setKept] = useState(() => store.draftStored(storeKey));
   /** Hermes said a save worked but it couldn't be read back: the edit stays unsaved until a read says what Hermes has. */
   const [unverified, setUnverified] = useState(false);
+  /** A save started before this editor opened (it was left while saving), until it settles. */
+  const [earlierSave, setEarlierSave] = useState(() => store.saveUnderWay(storeKey));
   const [notice, setNotice] = useState<Notice>();
   const [conflict, setConflict] = useState<Conflict>();
   const [ask, setAsk] = useState<Ask>();
@@ -100,11 +102,27 @@ export function PersonaSettings({
     };
   }, []);
 
+  // Once a save started before this editor opened is done, read what Hermes has now, unless the owner is editing.
+  useEffect(() => {
+    if (!earlierSave) return;
+    let current = true;
+    void earlierSave.then(() => {
+      if (!current || !alive.current) return;
+      setEarlierSave(undefined);
+      if (!wasDirty.current) void read();
+    });
+    return () => {
+      current = false;
+    };
+  }, [earlierSave]);
+
   const loaded = load.state === "loaded" ? load : undefined;
   const editing = !!loaded && (loaded.base.exists || creating);
   const dirty = editing && (unverified || asReadBack(text) !== asReadBack(loaded.base.content));
-  /** A reload or save under way: nothing may change the editor's text until it lands. */
-  const busy = saving || reloading;
+  const wasDirty = useRef(dirty);
+  wasDirty.current = dirty;
+  /** A reload or save under way, here or from before this editor opened: nothing may change the text until it lands. */
+  const busy = saving || reloading || !!earlierSave;
 
   // Leaving asks first while there is an edit Hermes doesn't have, or a save whose outcome isn't known yet.
   // A kept edit waiting to be restored that only memory holds is lost on closing too, so that asks first as well.
@@ -191,8 +209,12 @@ export function PersonaSettings({
     setAsk(undefined);
     setSaving(true);
     setNotice(undefined);
+    // Kept before anything goes out, against the base this save checks, so leaving mid-save can't lose the text.
+    setKept(store.setDraft(storeKey, { text: sent, base, at: now() }));
     try {
-      const r = await api.save(profile, base, sent);
+      const saving = api.save(profile, base, sent);
+      store.trackSave(storeKey, saving);
+      const r = await saving;
       // What a write replaced is kept, and a confirmed save's draft let go, even if the owner has left meanwhile.
       const replaced = r.kind === "conflict" ? undefined : store.addEarlier(storeKey, r.previous, now());
       // Only the draft this save sent is let go: one edited further meanwhile (after leaving and restoring) stays.
@@ -219,6 +241,7 @@ export function PersonaSettings({
         setLoad({ ...loaded, base });
         setConflict(undefined);
         setUnverified(true);
+        setCreating(!base.exists);
         setKept(store.setDraft(storeKey, { text: sent, base, at: now() }));
         setNotice({
           kind: "unverified",
@@ -275,7 +298,7 @@ export function PersonaSettings({
 
   const file = home?.path ? `${home.path.replace(/\/+$/, "")}/SOUL.md` : undefined;
   const notes = editing ? soulNotes(text) : [];
-  const canWrite = connected && !saving && !reloading && !!loaded;
+  const canWrite = connected && !busy && !!loaded;
 
   return (
     <div className="persona">
@@ -340,6 +363,11 @@ export function PersonaSettings({
           </div>
         )}
 
+        {earlierSave && (
+          <p className="muted small persona-note" role="status">
+            A save you started before leaving Persona is still under way. Editing waits until Hermes answers it.
+          </p>
+        )}
         {load.state === "loading" && <p className="muted">Reading SOUL.md from Hermes…</p>}
 
         {load.state === "problem" && (
