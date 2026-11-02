@@ -649,8 +649,8 @@ impl Dashboard {
     }
 
     /// One dashboard REST call for the webview: `GET`, `PATCH` or `DELETE` on a path under `api/`, with a
-    /// JSON body. `POST` and `PUT` reach only Settings → Model's two writes: `POST api/model/set` and
-    /// `PUT api/config`. Returns the response body on 2xx.
+    /// JSON body. `POST` and `PUT` reach only Settings → Model's two writes (`POST api/model/set`,
+    /// `PUT api/config`) and the scheduled-job writes (`cron_write`). Returns the response body on 2xx.
     pub async fn request(&self, method: &str, path_and_query: &str, body: Option<String>) -> Result<String, TransportError> {
         let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
         let method = match (method, path) {
@@ -659,6 +659,8 @@ impl Dashboard {
             ("DELETE", _) => Method::DELETE,
             ("POST", "api/model/set") => Method::POST,
             ("PUT", "api/config") => Method::PUT,
+            ("POST", _) if cron_write("POST", path) => Method::POST,
+            ("PUT", _) if cron_write("PUT", path) => Method::PUT,
             ("POST" | "PUT", _) => return Err(TransportError::NotRelayed(format!("{method} {path}"))),
             (other, _) => return Err(TransportError::NotRelayed(format!("{other} requests"))),
         };
@@ -806,6 +808,20 @@ impl Dashboard {
     fn cookie_header(&self) -> String {
         let jar = self.cookies.lock().unwrap();
         jar.iter().map(|(n, v)| format!("{n}={v}")).collect::<Vec<_>>().join("; ")
+    }
+}
+
+/// The scheduled-job writes the Scheduled jobs view makes (`hermes_cli/web_routers/cron.py`): `POST api/cron/jobs`
+/// creates a job, `PUT api/cron/jobs/{id}` edits one, and `POST api/cron/jobs/{id}/{pause,resume,trigger}`. The job id
+/// must be one plain path segment, as Hermes's 12-hex-digit ids are.
+fn cron_write(method: &str, path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("api/cron/jobs") else { return false };
+    let id_ok = |id: &str| (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    match (method, rest.strip_prefix('/').map(|r| r.split('/').collect::<Vec<_>>()).as_deref()) {
+        ("POST", None) => rest.is_empty(),
+        ("PUT", Some([id])) => id_ok(id),
+        ("POST", Some([id, "pause" | "resume" | "trigger"])) => id_ok(id),
+        _ => false,
     }
 }
 

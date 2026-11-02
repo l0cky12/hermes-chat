@@ -1,7 +1,7 @@
 // Icon rail beside a chat list (ADR 0001), ported from the prototype's variants C and A. The list's header is the
 // profile switcher. Settings opens from the rail's foot. Right-clicking a chat opens its menu (ChatMenu.tsx).
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Check, ChevronDown, ChevronRight, CircleAlert, EyeOff, LockOpen, Search, Settings, SquarePen, Trash2 } from "lucide-react";
+import { CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, EyeOff, LockOpen, Search, Settings, SquarePen, Trash2 } from "lucide-react";
 import type { Chat, ConnectionStatus, OtherProfile, OtherProfiles } from "../hermes/model";
 import { SOURCE_LABEL, isWaiting } from "../hermes/model";
 import { CHECK_EVERY_MS, totalUnread } from "../hermes/otherProfiles";
@@ -23,6 +23,8 @@ export function Rail({
   onNew,
   onSearch,
   onSettings,
+  onJobs,
+  jobsOpen = false,
 }: {
   status: ConnectionStatus;
   route?: Route;
@@ -33,6 +35,9 @@ export function Rail({
   onNew: () => void;
   onSearch: () => void;
   onSettings: () => void;
+  /** Opens Scheduled jobs: Hermes's jobs for the profile, which it runs on the server. */
+  onJobs?: () => void;
+  jobsOpen?: boolean;
 }) {
   const where = routeLabel(route);
   // The full wording lives only in the tooltip (ADR 0001).
@@ -57,6 +62,11 @@ export function Rail({
         <button className="icon-btn" title="Search all chats (Ctrl+K)" onClick={onSearch}>
           <Search size={18} />
         </button>
+        {onJobs && (
+          <button className={`icon-btn ${jobsOpen ? "on" : ""}`} title="Scheduled jobs" aria-label="Scheduled jobs" aria-pressed={jobsOpen} onClick={onJobs}>
+            <CalendarClock size={18} />
+          </button>
+        )}
       </div>
       <div className="rail-bottom">
         <button className="conn-btn" title={tip} aria-label={tip} onClick={() => status !== "connected" && onReconnect()}>

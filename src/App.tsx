@@ -27,6 +27,7 @@ import { SearchPalette } from "./ui/Search";
 import { SettingsScreen } from "./ui/Settings";
 import { composing, routeLabel } from "./ui/bits";
 import { ProjectScreen, ProjectSwitcher, type ProjectUnread } from "./ui/Projects";
+import { ScheduledJobs } from "./ui/ScheduledJobs";
 import { appearanceStore } from "./ui/appearance";
 import { StatusBar } from "./ui/StatusBar";
 import { systemFonts } from "./ui/tauriFonts";
@@ -279,6 +280,8 @@ export function Main({
   );
   // The project screen covers the chat pane, as Settings does.
   const [projectOpen, setProjectOpen] = useState(false);
+  /** The Scheduled jobs screen covers the chat, as Settings does. */
+  const [jobsOpen, setJobsOpen] = useState(false);
   // The chat to reopen at launch, until Hermes's list shows it is there or gone, or the owner goes somewhere first.
   const [reopening, setReopening] = useState(() => (reopenLast ? chatToReopen(profile) : undefined));
   // One pane, or two side by side. The chat to reopen opens at once when the list saved on this computer has it, so the
@@ -377,6 +380,7 @@ export function Main({
     setReopening(undefined);
     setSettingsOpen(false);
     setProjectOpen(false);
+    setJobsOpen(false);
     if (remember) rememberOpenChat(profile, id);
   };
 
@@ -391,6 +395,7 @@ export function Main({
     setSearchOpen(false);
     setSettingsOpen(false);
     setProjectOpen(false);
+    setJobsOpen(false);
   };
 
   // A second pane opens to the right and becomes the active one. Both panes may show the same chat: they are two views
@@ -405,6 +410,7 @@ export function Main({
     setReopening(undefined);
     setSettingsOpen(false);
     setProjectOpen(false);
+    setJobsOpen(false);
     rememberOpenChat(profile, chatId);
   };
 
@@ -430,6 +436,7 @@ export function Main({
     flushSync(() => {
       setSettingsOpen(false);
       setProjectOpen(false);
+      setJobsOpen(false);
       setSearchOpen(false);
       if (!previewFits) setPreviewHidden(true);
     });
@@ -631,7 +638,7 @@ export function Main({
       } else if (e.code === "Backslash" || k === "\\") {
         e.preventDefault();
         toggleSplit();
-      } else if ((k === "1" || k === "2") && !e.shiftKey && !e.altKey && split && !settingsOpen) {
+      } else if ((k === "1" || k === "2") && !e.shiftKey && !e.altKey && split && !settingsOpen && !jobsOpen) {
         e.preventDefault();
         focusPane(panes[Number(k) - 1].key);
       }
@@ -646,7 +653,8 @@ export function Main({
   const paneMax = mainWidth ? mainWidth - CHAT_MIN_WIDTH : 1200;
   const paneWidth = Math.min(Math.max(dragWidth ?? previewWidth ?? PREVIEW_DEFAULT_WIDTH, PANE_MIN_WIDTH), Math.max(PANE_MIN_WIDTH, paneMax));
   // Settings covers the chat, and the pane with it.
-  const previewShown = !!preview && !settingsOpen && !projectScreenOpen && (previewFits || !previewHidden);
+  const covering = settingsOpen || projectScreenOpen || jobsOpen;
+  const previewShown = !!preview && !covering && (previewFits || !previewHidden);
   const previewCovers = previewShown && !previewFits;
 
 
@@ -668,7 +676,7 @@ export function Main({
           chat={chat}
           started={!!listed}
           picked={p.picked}
-          active={!settingsOpen && !projectScreenOpen && !previewCovers && (!split || isActive)}
+          active={!covering && !previewCovers && (!split || isActive)}
           split={split}
           screenshots={desk}
           screenshotWiring={screenshots}
@@ -729,7 +737,9 @@ export function Main({
         onToggleList={() => setListOpen((o) => !o)}
         onNew={() => newChat()}
         onSearch={() => setSearchOpen(true)}
-        onSettings={() => { setProjectOpen(false); setSettingsOpen(true); }}
+        onSettings={() => { setProjectOpen(false); setJobsOpen(false); setSettingsOpen(true); }}
+        onJobs={() => { setProjectOpen(false); setSettingsOpen(false); setJobsOpen(true); }}
+        jobsOpen={jobsOpen}
       />
       {listOpen && (
         <ChatList
@@ -750,10 +760,12 @@ export function Main({
                 onCreate={async (name) => {
                   await projects.create(name);
                   setSettingsOpen(false);
+                  setJobsOpen(false);
                   setProjectOpen(true);
                 }}
                 onManage={() => {
                   setSettingsOpen(false);
+                  setJobsOpen(false);
                   setProjectOpen(true);
                 }}
               />
@@ -769,8 +781,8 @@ export function Main({
           chats={listed}
           archivedListed={archivedListed}
           syncError={syncError}
-          selectedId={settingsOpen || projectScreenOpen ? null : active.chatId}
-          alsoShownId={settingsOpen || projectScreenOpen ? null : (other?.chatId ?? null)}
+          selectedId={covering ? null : active.chatId}
+          alsoShownId={covering ? null : (other?.chatId ?? null)}
           split={split}
           onOpen={(id) => openChat(id)}
           onOpenIn={openIn}
@@ -788,7 +800,15 @@ export function Main({
       )}
       <main className="main" ref={mainRef}>
         <div className="main-chat" inert={previewCovers || undefined}>
-            {projectScreenOpen && shownProject && !settingsOpen ? (
+            {jobsOpen && !settingsOpen ? (
+              <ScheduledJobs
+                key={profile}
+                api={hermes.cron}
+                profile={profile}
+                connected={status === "connected"}
+                onClose={() => { flushSync(() => setJobsOpen(false)); focusPane(active.key); }}
+              />
+            ) : projectScreenOpen && shownProject && !settingsOpen ? (
               <ProjectScreen
                 key={shownProject.id}
                 project={shownProject}
@@ -844,7 +864,7 @@ export function Main({
             }}
           />
         ) : null}
-        <Split panes={slots} activeKey={active.key} onActivate={activate} covered={settingsOpen || projectScreenOpen || previewCovers} />
+        <Split panes={slots} activeKey={active.key} onActivate={activate} covered={covering || previewCovers} />
         </div>
           {preview && previewShown && (
             <PreviewPane

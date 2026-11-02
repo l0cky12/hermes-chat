@@ -59,6 +59,12 @@ remain scoped to their connection and profile. Split layout and scroll positions
 The existing Preview Pane is available from either header and uses the same connection/profile as the chats.
 Leaving a pane cancels its Dictation and stops its Read aloud audio, so a hidden or unfocused pane cannot keep the
 microphone or audio running or take composer focus when a late transcript arrives.
+## Scheduled jobs
+
+The calendar button on the rail opens Scheduled jobs: the profile's Hermes cron jobs, which Hermes keeps and runs on the server, so they run while Hermes Chat is closed (ADR 0011). Each shows its schedule in words, the time zone, its next run and its last result. New job and Edit take a schedule the way Hermes does: `every day at 9am`, `weekdays at 8:30am`, `every 2h`, a cron expression such as `0 9 * * 1-5`, `in 30m`, or a time such as `2026-11-05T15:00`, with the next runs previewed in the profile's time zone, daylight-saving changes included. Delivery offers the places the profile's gateway has set up. Pause and Resume act at once; Delete and Run now ask first, since Run now is a real run with the job's real delivery. Every change shows once Hermes, read back, has it.
+
+Jobs run only while the profile's gateway runs on the server; the screen warns when Hermes's scheduler hasn't checked the profile lately. Set the time zone with `timezone:` in the profile's `config.yaml`; without it Hermes uses the server's own zone, which the app can't name, so it shows the offset instead.
+
 ## Screenshots
 
 Ctrl+Shift+S (or the camera button in the composer) takes a screenshot of a region or window and attaches it to the message you're writing, for you to review before sending. Change or turn off the shortcut in Settings → General → Screenshots.
@@ -76,6 +82,8 @@ Captures wait in `$XDG_CACHE_HOME/hermes-chat/captures/` (usually `~/.cache/herm
 npm test                                  # frontend transport against a fake Hermes
 cd src-tauri && cargo test --lib --test transport --test media --test screenshot  # Rust transport, microphone origins, screenshot storage and requests
 ```
+
+`src/hermes/cronGolden.json` holds what Hermes's own scheduler code makes of a set of schedules, DST changes included; `schedule.test.ts` checks the app's preview against it. Regenerate it with `HERMES_HOME=$(mktemp -d) ~/.hermes/hermes-agent/venv/bin/python tools/cron-golden.py ~/.hermes/hermes-agent`. `src/hermes/cronJobs.live.test.ts` runs the Scheduled jobs calls against a real dashboard, and only one whose profiles all live under `/tmp`: see its header.
 
 `node bench/run.mjs` renders the chat pane with synthetic long chats (50, 200 and 800 turns) in headless Chromium and
 times opening, streaming, find-in-chat and scrolling, with memory after each open. It also measures two chats
