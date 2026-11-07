@@ -4,6 +4,7 @@
 // Sign-in: username `verify`, password `verify-pass`; anything else is 401 "Invalid credentials", as Hermes answers.
 // Every prompt gets a short streamed reply that starts `Stand-in reply to:` and is stored in the chat's history, except:
 //   a prompt with "delegate" in it starts two subagents, as Hermes's delegate tool reports them, and its reply runs on.
+//   With "queue" in it too, a third subagent is requested and stays queued, waiting its turn.
 //   a prompt with "approval" in it asks the owner to approve a command, and its reply waits for the answer.
 //   a prompt that starts with "fail" ends its reply with an error, as a provider failure does.
 //   with HV_LONG_REPLY=<n>, a prompt that starts with `long` gets n paragraphs of markdown (code, a list, a table),
@@ -124,7 +125,7 @@ const TEAM = ["Read the auth code", "Read the tests"];
 const delegated = new Map<string, { sid: string; stored: string; payload: Record<string, unknown> }>();
 let started = 0;
 
-function delegate(sid: string) {
+function delegate(sid: string, queue: boolean) {
   const stored = server.runtime.get(sid);
   if (!stored) return;
   server.event(sid, "message.start");
@@ -136,6 +137,12 @@ function delegate(sid: string) {
     (server.subagents[stored] ??= []).push({ ...payload, owner: sid, status: "running", accepting_steer: true, started_at: Date.now() / 1000 });
     server.event(sid, "subagent.start", payload);
   });
+  if (!queue) return;
+  const subagent_id = `sa-${++started}`;
+  const payload = { subagent_id, goal: "Write the summary", task_index: TEAM.length, task_count: TEAM.length + 1, depth: 0, delegation_id: `dlg-${sid}`, model: "stand-in-model" };
+  delegated.set(subagent_id, { sid, stored, payload });
+  (server.subagents[stored] ??= []).push({ ...payload, owner: sid, status: "queued", accepting_steer: false });
+  server.event(sid, "subagent.spawn_requested", payload);
 }
 
 function askApproval(sid: string) {
@@ -248,7 +255,7 @@ http.on("upgrade", async (req, sock: Socket) => {
         const prompt = String(text ?? "");
         setTimeout(() => {
           save();
-          if (/delegate/i.test(prompt)) delegate(session_id);
+          if (/delegate/i.test(prompt)) delegate(session_id, /queue/i.test(prompt));
           else if (/approval/i.test(prompt)) askApproval(session_id);
           else if (/^fail/i.test(prompt)) failReply(session_id);
           else replyTo(session_id, prompt);
