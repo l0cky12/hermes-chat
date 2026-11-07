@@ -1,7 +1,9 @@
 // Keeping a modal dialog modal for the keyboard: Tab and Shift+Tab stay inside it, the app's shortcuts don't reach
 // past it (App.tsx listens on the window, so stopping the key at the dialog is enough), and focus goes back where it
-// was, or to `returnTo`, when it closes.
+// was, or to `returnTo`, when it closes. Undo and redo in its text fields do reach the window, which runs them
+// (editKeys.ts).
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { isTextEdit } from "./editKeys";
 
 const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
@@ -25,7 +27,7 @@ export function useModal(box: RefObject<HTMLElement | null>, returnTo?: RefObjec
     };
   }, []);
   return (e: KeyboardEvent) => {
-    e.stopPropagation();
+    if (!isTextEdit(e)) e.stopPropagation();
     trapTab(e, box.current);
   };
 }

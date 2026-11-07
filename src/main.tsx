@@ -5,6 +5,7 @@ import { ErrorBoundary } from "./ui/ErrorBoundary";
 import { restoreDraftsAfterRestart } from "./hermes/tauriUpdates";
 import { syncScreenshotOutbox } from "./hermes/tauriScreenshot";
 import { captureAppDiagnostics } from "./hermes/logs";
+import { followEditKeys } from "./ui/editKeys";
 import { followWindowVisibility } from "./ui/windowState";
 import { refuseStrayFileDrops } from "./ui/ChatPane";
 import "./styles.css";
@@ -30,6 +31,7 @@ function RecoveryFailed({ reason }: { reason: string }) {
 // Whether the window is hidden to the tray, for the whole app's life (ADR 0034).
 void followWindowVisibility();
 refuseStrayFileDrops();
+followEditKeys();
 
 void restoreDraftsAfterRestart().then((failed) => {
   const root = createRoot(document.getElementById("root")!);

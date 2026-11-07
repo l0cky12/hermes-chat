@@ -20,6 +20,7 @@ import type { SubagentId } from "../hermes/subagents";
 import { SideQuestionPair } from "./SideQuestions";
 import { Markdown } from "./Markdown";
 import { SourceIcon, Spinner, StoredTime, composing, highlight } from "./bits";
+import { caretAfter, editStep, inputKind, type EditStep } from "./editKeys";
 import { wakeFull } from "../hermes/snooze";
 import { stagedFiles } from "../hermes/unsaved";
 import { AttachmentChip, Previews, readPreview } from "./previews";
@@ -293,6 +294,7 @@ export function ChatPane({
   alsoPostsIn,
   draft,
   onDraft,
+  onDraftStep,
   onRetry,
   onEdit,
   onDismiss,
@@ -343,7 +345,10 @@ export function ChatPane({
   status: ConnectionStatus;
   alsoPostsIn?: Source;
   draft: string;
-  onDraft: (text: string) => void;
+  /** `how`: typed, so it joins the undo step under way, or any other change. */
+  onDraft: (text: string, how?: "typing" | "change") => void;
+  /** Undoes or redoes the Draft, and says its text then, or undefined when there was nothing to step. */
+  onDraftStep: (step: EditStep) => string | undefined;
   onRetry: (itemId: string) => void;
   onEdit: (itemId: string) => void;
   onDismiss: (itemId: string) => void;
@@ -832,6 +837,7 @@ export function ChatPane({
         alsoPostsIn={alsoPostsIn}
         text={draft}
         onText={onDraft}
+        onStep={onDraftStep}
         onAttach={onAttach}
         onSend={(...send) => {
           stickToBottom.current = true;
@@ -1176,6 +1182,7 @@ function Composer({
   alsoPostsIn,
   text,
   onText,
+  onStep,
   onAttach,
   onSend,
   onStop,
@@ -1204,7 +1211,9 @@ function Composer({
   alsoPostsIn?: Source;
   /** `onSend` empties it. */
   text: string;
-  onText: (text: string) => void;
+  onText: (text: string, how?: "typing" | "change") => void;
+  /** The text keeps its own undo history, since the webview's breaks when the app writes the text (ADR 0094). */
+  onStep: (step: EditStep) => string | undefined;
   onAttach: (paths: string[]) => Promise<AttachCheck>;
   onSend: (text: string, attachments: Attachment[], skill?: SkillCall) => void;
   onStop: () => void;
@@ -1428,6 +1437,32 @@ function Composer({
 
   const sendable = attaching === 0 && (!!text.trim() || attachments.length > 0);
   const slash = useSlashCommands(commands, text, onText, taRef);
+  const caretTo = useRef<{ text: string; at: number }>(undefined);
+  useLayoutEffect(() => {
+    const to = caretTo.current;
+    if (!to || to.text !== text) return;
+    caretTo.current = undefined;
+    taRef.current?.setSelectionRange(to.at, to.at);
+  }, [text]);
+  const step = (which: EditStep) => {
+    const before = textRef.current;
+    const after = onStep(which);
+    if (after !== undefined) caretTo.current = { text: after, at: caretAfter(before, after) };
+  };
+  // The webview's own Undo and Redo, from its context menu, would step its history: ours runs instead.
+  const stepRef = useRef(step);
+  stepRef.current = step;
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    const onBefore = (e: InputEvent) => {
+      if (e.inputType !== "historyUndo" && e.inputType !== "historyRedo") return;
+      e.preventDefault();
+      stepRef.current(e.inputType === "historyUndo" ? "undo" : "redo");
+    };
+    ta.addEventListener("beforeinput", onBefore);
+    return () => ta.removeEventListener("beforeinput", onBefore);
+  }, []);
   // While a reply runs a message can steer it instead of waiting in the queue. Why it can't now, if it can't: the
   // chat's (no /steer here, still loading), or the message's own (files). Offline, everything queues without a word.
   const [steering, setSteering] = useState(false);
@@ -1562,7 +1597,7 @@ function Composer({
           placeholder="Message Hermes"
           value={text}
           {...slash.inputProps}
-          onChange={(e) => onText(e.target.value)}
+          onChange={(e) => onText(e.target.value, inputKind(e.nativeEvent))}
           onPaste={(e) => {
             // Only files are taken over; text pastes as it always has.
             if (dragging) return;
@@ -1574,6 +1609,13 @@ function Composer({
           }}
           onKeyDown={(e) => {
             if (slash.onKeyDown(e)) return;
+            const edit = editStep(e);
+            // Even with nothing to step, so the webview's own history never runs on this text.
+            if (edit && !composing(e)) {
+              e.preventDefault();
+              step(edit);
+              return;
+            }
             if (e.key === "Enter" && !e.shiftKey && !composing(e)) {
               e.preventDefault();
               // Enter queues or steers only while the hint below says so; Dictation hides it.

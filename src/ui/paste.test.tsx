@@ -56,6 +56,7 @@ async function setUp(draft = "") {
       status="connected"
       draft={draft}
       onDraft={onDraft}
+      onDraftStep={() => undefined}
       onRetry={() => {}}
       onEdit={() => {}}
       onDismiss={() => {}}
@@ -150,7 +151,7 @@ describe("Pasting into the composer", () => {
     const user = userEvent.setup();
     await user.click(composer());
     await user.paste("sda 92%");
-    expect(onDraft).toHaveBeenLastCalledWith("sda 92%");
+    expect(onDraft).toHaveBeenLastCalledWith("sda 92%", "change");
     expect(paste([])).toBe(true);
     expect(staged).toEqual([]);
     expect(chips()).toHaveLength(0);
