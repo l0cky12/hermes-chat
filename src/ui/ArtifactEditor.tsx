@@ -12,6 +12,7 @@ import { MINE_MARK } from "../hermes/textEdit";
 import { DiffView } from "./FileEditor";
 import { Markdown } from "./Markdown";
 import { Spinner, fmtSize } from "./bits";
+import { editStep } from "./editKeys";
 
 type Tab = "edit" | "preview" | "changes" | "versions";
 
@@ -131,16 +132,10 @@ export function ArtifactEditor({
     setInstruction("");
   };
   const onKeys = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    const mod = e.ctrlKey || e.metaKey;
-    if (!mod) return;
-    const k = e.key.toLowerCase();
-    if (k === "z" && !e.shiftKey) {
-      e.preventDefault();
-      store.undo(artifactKey);
-    } else if ((k === "z" && e.shiftKey) || k === "y") {
-      e.preventDefault();
-      store.redo(artifactKey);
-    }
+    const step = editStep(e);
+    if (!step) return;
+    e.preventDefault();
+    store[step](artifactKey);
   };
 
   return (

@@ -2,13 +2,14 @@
 // Ctrl+Z, Ctrl+Shift+Z and Ctrl+Y in the running app, against a fake Hermes: the composer's own undo across slash
 // picks, chat switches and sends; other text fields through the webview's history; and Ctrl+Z outside a text field
 // for the notice's Undo. Each test checks what the owner sees, not which handler ran.
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import { memoryCache } from "../hermes/memoryCache";
 import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
+import { followEditKeys } from "./editKeys";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
@@ -16,6 +17,8 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
   globalThis.CSS ??= { escape: (s: string) => s } as typeof CSS;
+  // main.tsx does this for the app.
+  followEditKeys();
 });
 
 const running: Hermes[] = [];
@@ -127,6 +130,17 @@ describe("Undo and redo in the composer", () => {
     expect(composer().value).toBe("");
   });
 
+  it("steps its own history for the webview's context menu Undo and Redo too", async () => {
+    const { user } = await launch();
+    await user.click(composer());
+    await user.keyboard("hello");
+    const menu = (inputType: string) => act(() => void composer().dispatchEvent(new InputEvent("beforeinput", { inputType, cancelable: true })));
+    menu("historyUndo");
+    expect(composer().value).toBe("");
+    menu("historyRedo");
+    expect(composer().value).toBe("hello");
+  });
+
   it("leaves the webview's own history alone", async () => {
     const run = webviewHistory();
     const { user } = await launch();
@@ -150,11 +164,25 @@ describe("Ctrl+Z in other text fields", () => {
     await user.keyboard(REDO_Y);
     expect(run.mock.calls).toEqual([["undo"], ["redo"], ["redo"]]);
   });
+
+  it("undoes in a dialog's field too, though the dialog keeps the app's shortcuts in", async () => {
+    const run = webviewHistory();
+    const { user } = await launch();
+    fireEvent.contextMenu(document.querySelector<HTMLElement>('.row-open[data-chat="deploy"]')!);
+    await user.click(screen.getByRole("menuitem", { name: "Custom…" }));
+    const dialog = screen.getByRole("dialog", { name: /Snooze/ });
+    await user.click(within(dialog).getByRole("button", { name: "Duration" }));
+    await user.type(within(dialog).getByLabelText("Snooze for"), "45");
+    await user.keyboard(UNDO);
+    expect(run.mock.calls).toEqual([["undo"]]);
+    expect(screen.getByRole("dialog", { name: /Snooze/ })).toBeTruthy();
+  });
 });
 
 describe("Ctrl+Z for the notice's Undo", () => {
   async function settled() {
     const s = await launch();
+    expect(titles("inbox")).toEqual(["Nightly backup", "Deploy notes"]);
     const rowFor = (title: string) => screen.getByRole("button", { name: new RegExp(title) }).parentElement!;
     await s.user.click(within(rowFor("Deploy notes")).getByRole("button", { name: "Settle" }));
     await act(async () => void (await s.hermes.idle()));
@@ -168,7 +196,7 @@ describe("Ctrl+Z for the notice's Undo", () => {
     (document.activeElement as HTMLElement | null)?.blur();
     await user.keyboard(UNDO);
     await act(async () => void (await hermes.idle()));
-    await waitFor(() => expect(titles("inbox")).toEqual(["Deploy notes", "Nightly backup"]));
+    await waitFor(() => expect(titles("inbox")).toEqual(["Nightly backup", "Deploy notes"]));
     expect(notice()).toBeNull();
   });
 

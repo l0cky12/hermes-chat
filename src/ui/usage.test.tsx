@@ -27,6 +27,7 @@ function pane(chat: Chat, onUsage = () => {}) {
       status="connected"
       draft=""
       onDraft={() => {}}
+      onDraftStep={() => undefined}
       onRetry={() => {}}
       onEdit={() => {}}
       onDismiss={() => {}}
@@ -189,6 +190,7 @@ describe("A chat's usage", () => {
         status="connected"
         draft=""
         onDraft={() => {}}
+        onDraftStep={() => undefined}
           onRetry={() => {}}
       onEdit={() => {}}
         onDismiss={() => {}}

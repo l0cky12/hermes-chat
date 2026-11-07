@@ -7,6 +7,7 @@ import { STATE_LABEL, isEmptyFilter, tidyFilter, type ChatFilter, type ChatState
 import { SOURCE_LABEL, type Found, type Source } from "../hermes/model";
 import { previewBulk, type BulkPreview, type ScopeTags } from "../hermes/tags";
 import { SourceIcon, Spinner, composing, highlight, relTime, useReturnFocus } from "./bits";
+import { isTextEdit } from "./editKeys";
 import { trapTab } from "./modal";
 
 /** Typing this long without a pause sends the search. */
@@ -137,10 +138,11 @@ export function SearchPalette({
         aria-label="Search chats"
         ref={box}
         onMouseDown={(e) => e.stopPropagation()}
-        // The app's shortcuts don't reach past the palette, except the ones `passKey` lets through. Tab stays inside
-        // it. Escape closes an open panel first, applying nothing, then the palette.
+        // The app's shortcuts don't reach past the palette, except the ones `passKey` lets through, and undo and redo
+        // in its fields, which the window runs (editKeys.ts). Tab stays inside it. Escape closes an open panel first,
+        // applying nothing, then the palette.
         onKeyDown={(e) => {
-          if (!passKey(e)) e.stopPropagation();
+          if (!passKey(e) && !isTextEdit(e)) e.stopPropagation();
           trapTab(e, box.current);
           if (e.key !== "Escape" || composing(e)) return;
           if (panel) closePanel();
