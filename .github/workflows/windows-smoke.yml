@@ -1,9 +1,9 @@
-name: windows-send-repro
+name: windows-smoke
 
-# Temporary (#308): drives the real Windows build through tauri-driver + msedgedriver against the stand-in Hermes
-# dashboard (msedgedriver attached to the app's WebView2), signs in, opens a chat and sends a message, and uploads
-# screenshots, the page's error buffer, the WebView2 console log, the app's output, the driver log and the stand-in's
-# request log as artifacts.
+# A real sign-in and send on Windows (ADR 0069, #308): builds the app as windows.yml does (plus WebView2's DevTools port in
+# the window config), starts the stand-in Hermes dashboard, attaches msedgedriver to the app's WebView2 and drives the
+# verify skill's sign-in and send recipes through wd.mjs. Screenshots, the page's errors, the WebView2 console log, the
+# driver log and the stand-in's request log are uploaded as artifacts. Started by hand: about ten minutes on a warm cache.
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 jobs:
-  repro:
+  smoke:
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -30,7 +30,7 @@ jobs:
           shared-key: nsis
       - run: npm ci
       - name: Build the app (release, frontend embedded, no installer, WebView2 DevTools port on)
-        run: npx tauri build --no-bundle --config .github/repro/tauri.repro.conf.json
+        run: npx tauri build --no-bundle --config .github/windows-smoke/tauri.smoke.conf.json
       - name: The built app, for a run on another Windows machine
         uses: actions/upload-artifact@v4
         with:
@@ -39,17 +39,17 @@ jobs:
           if-no-files-found: error
       - name: msedgedriver matching the WebView2 runtime
         shell: pwsh
-        run: .github/repro/msedgedriver.ps1 "$env:RUNNER_TEMP\edgedriver"
+        run: .github/windows-smoke/msedgedriver.ps1 "$env:RUNNER_TEMP\edgedriver"
       - name: Drive a send in the real app
         shell: bash
         env:
           HV_RUN: ${{ runner.temp }}\hv
           EDGEDRIVER: ${{ runner.temp }}\edgedriver\msedgedriver.exe
-        run: .github/repro/send.sh
+        run: .github/windows-smoke/send.sh
       - name: Evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-send-evidence
+          name: windows-smoke-evidence
           path: ${{ runner.temp }}\hv\evidence
           if-no-files-found: warn

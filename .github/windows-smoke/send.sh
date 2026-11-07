@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Temporary (#308). Starts the stand-in dashboard, the real Windows app with WebView2's remote debugging port on, and
+# The Windows smoke test (#308, ADR 0069). Starts the stand-in dashboard, the real Windows app with WebView2's remote debugging port on, and
 # msedgedriver attached to that port (Microsoft's "attach" approach: the app sets its own WebView2 user data folder, so
 # msedgedriver's "launch" approach through tauri-driver waited in vain for DevToolsActivePort in a folder of its own).
 # Then drives the app through wd.mjs: Welcome -> Setup -> signed in -> open "Nightly backup failing" -> type -> Enter.
-# Collects evidence at every step into $HV_RUN/evidence, and never stops at the first failure: the point is the evidence.
+# Collects evidence at every step into $HV_RUN/evidence and never stops at the first failure, so the evidence is complete;
+# the verdict at the end fails the job when the message didn't show, didn't reach the server, or the page threw.
 set -uo pipefail
 REPO=$(git rev-parse --show-toplevel)
 S=$REPO/.claude/skills/verify-hermes-chat/scripts
-HERE=$REPO/.github/repro
+HERE=$REPO/.github/windows-smoke
 RUN=${HV_RUN:?}
 EV=$RUN/evidence
 mkdir -p "$EV"
@@ -57,8 +58,8 @@ grep -q "stand-in dashboard ready" "$EV/bridge.log" || { echo "stand-in didn't s
 log "stand-in at $URL"
 
 # The app, started here so its output is kept. Its WebView2 listens on the DevTools port msedgedriver attaches to:
-# tauri.repro.conf.json puts --remote-debugging-port in its browser arguments, since the WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
-# override did nothing against the arguments wry sets (run 2). HERMES_CHAT_NEW_INSTANCE keeps it from handing over to
+# tauri.smoke.conf.json puts --remote-debugging-port in its browser arguments (the WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+# override did nothing against the arguments wry sets). HERMES_CHAT_NEW_INSTANCE keeps it from handing over to
 # another Hermes Chat.
 env HERMES_CHAT_NEW_INSTANCE=1 "$APP" >"$EV/app-stdout.log" 2>"$EV/app-stderr.log" &
 APP_PID=$!
@@ -155,3 +156,11 @@ echo "=== result"; cat "$EV/result.txt"
 echo "=== errors after send"; cat "$EV/07-after-send-errors.json"
 echo "=== app stderr"; cat "$EV/app-stderr.log"
 echo "=== bridge.log tail"; tail -40 "$EV/bridge.log"
+
+# The verdict: every step of the owner's path happened, and the page threw nothing (a console.warn is not a failure).
+verdict=0
+if grep -q "=no" "$EV/result.txt"; then echo "FAIL: $(grep "=no" "$EV/result.txt" | tr "\n" " ")"; verdict=1; fi
+if ! node -e 'const t = require("fs").readFileSync(process.argv[1], "utf8"); const j = JSON.parse(t.slice(t.indexOf("\n[") + 1)); process.exit(j.some((e) => e.type !== "console.warn") ? 1 : 0);' "$EV/09-after-button-send-errors.json"; then
+  echo "FAIL: the page threw or logged an error (see *-errors.json)"; verdict=1
+fi
+exit $verdict
