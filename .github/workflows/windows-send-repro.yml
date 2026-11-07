@@ -27,7 +27,6 @@ jobs:
         with:
           workspaces: src-tauri
           shared-key: nsis
-          save-if: false
       - run: npm ci
       - name: Build the app (release, frontend embedded, no installer)
         run: npx tauri build --no-bundle
