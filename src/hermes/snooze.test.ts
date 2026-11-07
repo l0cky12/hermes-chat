@@ -146,7 +146,7 @@ describe("chatSections", () => {
     expect(s.snoozed.map((c) => c.id)).toEqual(["snoozed", "later"]);
     expect(s.settled.map((c) => c.id)).toEqual(["settled", "settledSnoozed"]);
     expect(s.archived.map((c) => c.id)).toEqual(["archived"]);
-    expect(Object.keys(s)).toEqual(["pinned", "inbox", "working", "snoozed", "archived", "settled"]);
+    expect(Object.keys(s)).toEqual(["pinned", "inbox", "snoozed", "archived", "working", "settled"]);
   });
 
   it("puts a pinned chat in Pinned, in the order pinned, whatever happens in it, unless it is Archived", () => {

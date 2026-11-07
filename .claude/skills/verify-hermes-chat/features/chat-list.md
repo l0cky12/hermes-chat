@@ -1,6 +1,6 @@
 # Chat list and the Settled drawer
 
-The chat list beside the chat shows one profile's chats in sections: Pinned, Inbox, Working, Snoozed and, when Settings turns it on, Archived, in the list's scroll. Settled is a drawer at the panel's foot, outside the scroll (ADR 0090). Its header opens the drawer upward to at most half the panel, with its own scroll, and closes it again. Open or closed is kept across restarts. Settle, from a row's hover button or right-click menu, is the one way to clear a chat from the Inbox. Unsettle moves a Settled chat back.
+The chat list beside the chat shows one profile's chats in sections: Pinned, Inbox, Snoozed, Archived when Settings turns it on, and Working last, in the list's scroll. Settled is a drawer at the panel's foot, outside the scroll (ADR 0090). Its header opens the drawer upward to at most half the panel, with its own scroll, and closes it again. Open or closed is kept across restarts. Settle, from a row's hover button or right-click menu, is the one way to clear a chat from the Inbox. Unsettle moves a Settled chat back.
 
 ## Sub-features
 
@@ -10,7 +10,8 @@ The chat list beside the chat shows one profile's chats in sections: Pinned, Inb
 - `keys`: Up and Down walk from the last row in the scroll into an open drawer's rows, and back.
 - `settle-all`: the Inbox header's Settle all, by keyboard, with its question, the toast, Undo, and writes that fail.
 - `opened-elsewhere`: opening a Settled chat from search opens a closed drawer.
-- `archived`: Archived, switched on in Settings → Chats → Chat list sections, is last in the scroll, above the drawer.
+- `archived`: Archived, switched on in Settings → Chats → Chat list sections, sits just above Working, the scroll's last section, which shows only while a reply runs.
+- `working-last`: a chat with a reply running is the scroll's last row, right above the drawer, with Archived shown or hidden.
 
 ## How to get to it (user POV)
 
@@ -32,7 +33,8 @@ Preconditions:
 - **Keys.** Find the last scroll row (`eval` the last `.sb-scroll .row-open`'s `data-chat`). Click it twice: the first click opens the chat and focuses the composer, the second leaves focus on the row. `$S/wd.mjs press ArrowDown` moves focus into `.settled-drawer`; `ArrowUp` moves it back.
 - **Opened elsewhere.** Close the drawer, then `$S/wd.mjs press Control+k`, `$S/wd.mjs keys "Why is the VPN"`, `$S/wd.mjs click .hit-row "Why is the VPN slow"`. The header has `aria-expanded="true"` and `.settled-list .row-open[data-chat=vpn]` counts `1`.
 - **Remembered.** Close the drawer, then `$S/wd.mjs close`, `$S/wd.mjs open` and sign in again. The header still has `aria-expanded="false"`.
-- **Archived.** Settings → Chats, then `$S/wd.mjs click '[role=switch][aria-labelledby=chat-section-archived]'` and Escape. `.sb-scroll [data-section-head]` ends with `Archived0`, and the drawer still holds only Settled.
+- **Archived.** Settings → Chats, then `$S/wd.mjs click '[role=switch][aria-labelledby=chat-section-archived]'` and Escape. `.sb-scroll [data-section-head]` ends with `Archived0` (no reply runs, so Working draws no header), and the drawer still holds only Settled.
+- **Working last.** Start `hv up` with `HV_LONG_REPLY=400`. Press `Control+n`, then type a prompt that starts with `long` into `textarea[data-composer]` and press Enter. Run `$S/wd.mjs wait '.row[data-section=working]'`. `.sb-scroll`'s `lastElementChild` has `data-section="working"`, and its `nextElementSibling` is `.settled-drawer`. Check this with Archived shown and again with it hidden.
 
 ## Gotchas
 

@@ -16,7 +16,8 @@ vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
-  Element.prototype.scrollIntoView = () => {};
+  // As WebView2 answers (a Promise that settles when the scroll ends), so an effect that leaks it fails here too (#308).
+  Element.prototype.scrollIntoView = () => Promise.resolve() as unknown as void;
   globalThis.CSS ??= { escape: (s: string) => s } as typeof CSS;
 });
 const running: Hermes[] = [];

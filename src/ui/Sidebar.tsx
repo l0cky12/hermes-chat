@@ -917,7 +917,7 @@ function moveBetweenChats(e: KeyboardEvent<HTMLElement>) {
 
 /**
  * The chat list, in sections (snooze.ts `chatSections`, ADR 0063): Pinned, the chats the owner pinned (ADR 0085); the
- * Inbox, the chats that need the owner or are done; Working, the chats Hermes is replying in; Snoozed; and Archived, in
+ * Inbox, the chats that need the owner or are done; Snoozed; Archived; and Working, the chats Hermes is replying in, in
  * the list's scroll. Settled is a drawer at the list's foot, outside the scroll (ADR 0090): its header stays at the
  * bottom, and opens the drawer upward with its own scroll. Settling a chat is how it is cleared from the Inbox.
  * Settings → General picks the sections shown (uiPrefs.ts `chatSectionsShown`), and each one's header collapses it,

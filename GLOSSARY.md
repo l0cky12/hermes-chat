@@ -24,7 +24,7 @@ Where the list shows an Active chat while Hermes is writing a reply in it and is
 _Avoid_: running (fine in conversation), busy, in progress
 
 **Snoozed**:
-An Active chat the owner has put out of the way until a time they chose. It sits in the Snoozed section after Working, collapsed until the owner opens it, soonest to wake first, and shows when it wakes. When that time comes it goes back to the Inbox, as new as when it woke. Snoozes are kept on this computer only, for each connection and profile; Hermes and other Hermes clients don't see them (ADR 0036).
+An Active chat the owner has put out of the way until a time they chose. It sits in the Snoozed section after the Inbox, collapsed until the owner opens it, soonest to wake first, and shows when it wakes. When that time comes it goes back to the Inbox, as new as when it woke. Snoozes are kept on this computer only, for each connection and profile; Hermes and other Hermes clients don't see them (ADR 0036).
 _Avoid_: hidden, deferred, reminder
 
 **Inbox**:
@@ -40,7 +40,7 @@ The owner's actions, from a chat's right-click menu or its header's More menu (P
 _Avoid_: favourite, star (starred models are the model picker's), sticky
 
 **Chat list section**:
-One of the chat list's groups: Pinned, Inbox, Working, Snoozed and Archived in the list's scroll, in that order, then Settled, a drawer at the list's foot that opens upward with its own scroll (ADR 0090). Each chat is in exactly one. Each has a header with its count that collapses or expands it; which are collapsed is kept on this computer across restarts. Settings → General picks which sections show, any mix but never none; a chat in a hidden section is still found by Search (ADR 0063).
+One of the chat list's groups: Pinned, Inbox, Snoozed, Archived and Working in the list's scroll, in that order, so Working sits right above Settled, then Settled, a drawer at the list's foot that opens upward with its own scroll (ADR 0090). Each chat is in exactly one. Each has a header with its count that collapses or expands it; which are collapsed is kept on this computer across restarts. Settings → General picks which sections show, any mix but never none; a chat in a hidden section is still found by Search (ADR 0063).
 _Avoid_: group, folder, tab
 
 **Snooze** / **Unsnooze**:
@@ -166,6 +166,10 @@ _Avoid_: upload, file (when the attachment is meant)
 **Screenshot**:
 An image of a region or window of the owner's screen, taken from the composer by a shortcut or the camera button, and staged as an Attachment. It stays on this computer until the message is sent. Composer captures are deleted when removed or left behind; a failed or uncertain message keeps its Screenshot for Retry until confirmed, reconciled or dismissed.
 _Avoid_: screen capture, snapshot
+
+**Annotation** (proposed, not built):
+A pointer at part of a web page in the Preview, staged in the composer: a Screenshot of the page with the picked element or region marked, plus a block of words with the page's address, the time, the box and the owner's note. An element also adds its details. A region has none. The owner picks it on a still of the page, which covers the live page while they annotate; the page stays loaded behind it. Nothing is sent until the owner sends the message (ADR 0094).
+_Avoid_: comment (the official desktop app's word), inspector
 
 **Global shortcut** (removed):
 The app no longer registers a key of its own (#169; ADR 0033 is superseded). A key the owner binds in their desktop's own config to `hermes-chat --show` or `hermes-chat --toggle` brings Hermes Chat's one window forward from any app, with the cursor in the selected pane's composer; `--toggle` hides it when it's already in front.
