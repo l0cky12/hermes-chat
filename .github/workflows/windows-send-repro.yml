@@ -1,0 +1,58 @@
+name: windows-send-repro
+
+# Temporary (#308): drives the real Windows build through tauri-driver + msedgedriver against the stand-in Hermes
+# dashboard, signs in, opens a chat and sends a message, and uploads screenshots, the page's error buffer, the
+# WebView2 console log, the driver log and the stand-in's request log as artifacts.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Keep LF line endings (bash scripts and wd.mjs run here)
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: nsis
+          save-if: false
+      - run: npm ci
+      - name: Build the app (release, frontend embedded, no installer)
+        run: npx tauri build --no-bundle
+      - name: tauri-driver (cached)
+        id: driver-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/tauri-driver.exe
+          key: tauri-driver-2.1.0-${{ runner.os }}
+      - name: Install tauri-driver
+        if: steps.driver-cache.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver --version 2.1.0 --locked
+      - name: msedgedriver matching the WebView2 runtime
+        shell: pwsh
+        run: .github/repro/msedgedriver.ps1 "$env:RUNNER_TEMP\edgedriver"
+      - name: Drive a send in the real app
+        shell: bash
+        env:
+          HV_RUN: ${{ runner.temp }}\hv
+          EDGEDRIVER: ${{ runner.temp }}\edgedriver\msedgedriver.exe
+        run: .github/repro/send.sh
+      - name: Evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-send-evidence
+          path: ${{ runner.temp }}\hv\evidence
+          if-no-files-found: warn
