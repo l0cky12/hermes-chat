@@ -1,7 +1,8 @@
-// The Settings screen, in nine tabs. General, ported from the prototype: the connection and Sign out, what shows on
+// The Settings screen, in twelve tabs. General, ported from the prototype: the connection and Sign out, what shows on
 // launch, screenshots, updates, the local cache, older history, importing transcripts, and backups. Appearance: how the app looks on this
 // computer (AppearanceSettings.tsx). Model: the profile's models on Hermes (ModelSettings.tsx), and Idle compaction on this computer
-// (IdleCompactSettings.tsx). Voice: Dictation, Read aloud and voice
+// (IdleCompactSettings.tsx). Providers: the profile's model provider API keys on Hermes, listed, added, replaced and removed
+// (ProviderSettings.tsx, ADR 0094). Voice: Dictation, Read aloud and voice
 // conversations, and the profile's speech providers on Hermes (VoiceProviderSettings.tsx). Toolsets: which tools
 // Hermes offers the model in the profile (ToolsetSettings.tsx). Persona: the profile's SOUL.md on Hermes
 // (PersonaSettings.tsx). Memory: what Hermes remembers for the profile (MemorySettings.tsx). Skills: the profile's
@@ -65,8 +66,9 @@ import type { McpApi } from "../hermes/mcp";
 import { McpSettings } from "./McpSettings";
 import type { GatewaysApi } from "../hermes/gateways";
 import { GatewaySettings } from "./GatewaySettings";
+import { ProviderSettings, type ProviderKeysApi } from "./ProviderSettings";
 
-type Tab = "general" | "appearance" | "model" | "voice" | "toolsets" | "mcp" | "gateways" | "persona" | "memory" | "skills" | "diagnostics";
+type Tab = "general" | "appearance" | "model" | "providers" | "voice" | "toolsets" | "mcp" | "gateways" | "persona" | "memory" | "skills" | "diagnostics";
 /**
  * General's five groups, shown one at a time beside a sub-nav (ADR 0051); a search shows every group's sections at once.
  * Voice moved to its own tab with the speech providers (ADR 0055), so the third group holds screenshots.
@@ -89,6 +91,7 @@ const TABS = [
   { id: "general", label: "General", Icon: Settings2 },
   { id: "appearance", label: "Appearance", Icon: Palette },
   { id: "model", label: "Model", Icon: Cpu },
+  { id: "providers", label: "Providers", Icon: KeyRound },
   { id: "voice", label: "Voice", Icon: AudioLines },
   { id: "toolsets", label: "Toolsets", Icon: Wrench },
   { id: "mcp", label: "MCP servers", Icon: Server },
@@ -100,7 +103,7 @@ const TABS = [
 ] as const;
 
 /** The tabs whose sections a search shows in place. */
-const SEARCHED: readonly Tab[] = ["general", "appearance", "model", "voice", "toolsets"];
+const SEARCHED: readonly Tab[] = ["general", "appearance", "model", "providers", "voice", "toolsets"];
 /**
  * The tabs a search names instead: each edits one thing Hermes keeps (a file, a list of entries), so it's opened to
  * search rather than mounted beside the others with its unsaved edit.
@@ -163,6 +166,7 @@ export function SettingsScreen({
   toolsets,
   mcp,
   gateways,
+  providers,
   openUrl = () => {},
   runningReplies = 0,
   openChat,
@@ -230,6 +234,8 @@ export function SettingsScreen({
   mcp?: McpApi;
   /** Each profile's Telegram and Discord gateways on Hermes (ADR 0073); without it there is no Gateways tab. */
   gateways?: GatewaysApi;
+  /** The shown profile's provider API keys on Hermes (ADR 0094); without it there is no Providers tab. */
+  providers?: ProviderKeysApi;
   /** Opens a page in the browser: an MCP server's OAuth sign-in. */
   openUrl?: (url: string) => Promise<void> | void;
   /** Chats of the shown profile with a reply running now. */
@@ -359,6 +365,7 @@ export function SettingsScreen({
       (t.id !== "toolsets" || toolsets) &&
       (t.id !== "mcp" || mcp) &&
       (t.id !== "gateways" || gateways) &&
+      (t.id !== "providers" || providers) &&
       (t.id !== "voice" || voiceSetup || voiceSettings || localStt) &&
       (t.id !== "persona" || persona) &&
       (t.id !== "memory" || memory) &&
@@ -817,6 +824,9 @@ export function SettingsScreen({
             <IdleCompactSettings />
           </>
         );
+      case "providers":
+        // Read for one profile and connection; another starts afresh, with nothing typed kept.
+        return providers && <ProviderSettings key={profile} hermes={providers} profile={profile} connected={status === "connected"} openModel={() => pick("model")} />;
       case "voice":
         return (
           <>

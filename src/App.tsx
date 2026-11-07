@@ -2819,6 +2819,7 @@ export function Main({
             toolsets={hermes.toolsets}
             mcp={hermes.mcp}
             gateways={hermes.gateways}
+            providers={hermes}
             openUrl={(url) => webPages.openInBrowser(url).then(() => undefined)}
             runningReplies={chats.filter((c) => c.running).length}
             openChat={(() => {

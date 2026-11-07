@@ -3369,15 +3369,15 @@ p.logs-status { margin: 0 0 8px; line-height: 1.5; }
 .export-pick > span { flex-basis: 100%; }
 .export-pick-problem { color: var(--warn); }
 
-/* ---------- Settings → Gateways (GatewaySettings.tsx, ADR 0073) ---------- */
-.gw-input {
+/* ---------- Settings → Gateways (GatewaySettings.tsx, ADR 0073) and Providers (ProviderSettings.tsx, ADR 0094) ---------- */
+.gw-input, .pk-input {
   width: 100%; background: var(--raised); border: 1px solid var(--line-2); border-radius: 9px; padding: 9px 12px; outline: none; color: var(--text);
   font-family: var(--mono); font-size: calc(13rem / 14);
 }
-.gw-input:focus { border-color: var(--line-3); }
-.gw-input:disabled { color: var(--muted); }
-.gw-line { overflow-wrap: anywhere; color: var(--muted); }
-.gw-line.ok { color: var(--ok); }
+.gw-input:focus, .pk-input:focus { border-color: var(--line-3); }
+.gw-input:disabled, .pk-input:disabled { color: var(--muted); }
+.gw-line, .pk-line { overflow-wrap: anywhere; color: var(--muted); }
+.gw-line.ok, .pk-line.ok { color: var(--ok); }
 .gw-line.warn { color: var(--warn); }
-.gw-line.bad, .gw-problem { color: var(--bad); }
+.gw-line.bad, .pk-line.bad, .gw-problem { color: var(--bad); }
 .gw-problem.missing-dependency, .gw-problem.permission { color: var(--warn); }

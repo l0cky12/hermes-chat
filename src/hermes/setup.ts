@@ -421,6 +421,25 @@ export type ProviderSetup = { keys: ProviderKey[]; ready: string[]; unsupported?
  * couldn't check it. Hermes's own message isn't passed on, as a provider's can quote part of the key. */
 export type SavedKey = { verified: boolean };
 
+/**
+ * `text` as long as it repeats no 8 characters of `key`, or of a key that short in full. Rust already keeps the
+ * provider's and Hermes's own words out of a key's errors, since they can quote it; this checks again before anything
+ * is shown, so no part of a key reaches the screen even if a message slips through.
+ */
+export function withoutKey(text: string, key: string): string {
+  const k = key.trim();
+  if (!k) return text;
+  const n = Math.min(8, k.length);
+  for (let i = 0; i + n <= k.length; i++) if (text.includes(k.slice(i, i + n))) return "Hermes's answer isn't shown, as it may repeat the key.";
+  return text;
+}
+
+/** What a saved key came to, in words, for the provider `label`. */
+export const savedKeyText = (saved: SavedKey, label: string) =>
+  saved.verified
+    ? `Saved. ${label} accepted the key.`
+    : `Saved, but Hermes couldn't check the key with ${label}. If it's wrong, ${label} will turn down Hermes's first request.`;
+
 /** The providers most owners start with, listed first. */
 const FEATURED = ["openrouter", "anthropic", "openai-api", "gemini", "deepseek", "xai"];
 
