@@ -5,8 +5,8 @@ type State = { error?: Error; where?: string };
 /**
  * Catches an error thrown while React draws anything below it, so the window shows what went wrong and a way back
  * instead of going blank: without a boundary React unmounts the whole tree (ADR 0092). React reports the error to the
- * console as well, so Logs → This app keeps it. Try again draws the children anew with the app's state as it is;
- * `reload` (the page reload by default) starts the app over.
+ * console as well, so Logs → This app keeps it. `reload` (the page reload by default) starts the app over; it reconnects
+ * from what this computer saved, and drafts are saved as they are typed.
  */
 export class ErrorBoundary extends Component<{ children: ReactNode; reload?: () => void }, State> {
   state: State = {};
@@ -34,12 +34,9 @@ export class ErrorBoundary extends Component<{ children: ReactNode; reload?: () 
             <summary>Details</summary>
             <pre>{detail}</pre>
           </details>
-          <p className="muted small">Try again draws the window once more, keeping your chats and drafts as they are. Reload starts the app over.</p>
+          <p className="muted small">Reload starts the app over. Your drafts are saved as you type, and the connection is made again from what this computer saved.</p>
           <div className="crash-actions">
-            <button className="btn primary" onClick={() => this.setState({ error: undefined, where: undefined })}>
-              Try again
-            </button>
-            <button className="btn" onClick={() => (this.props.reload ?? (() => location.reload()))()}>
+            <button className="btn primary" onClick={() => (this.props.reload ?? (() => location.reload()))()}>
               Reload
             </button>
           </div>

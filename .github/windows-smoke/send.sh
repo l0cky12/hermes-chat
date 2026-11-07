@@ -34,7 +34,7 @@ evidence() {
   curl -s "$URL/__state" >"$EV/$1-server-state.json" || true
   # The WebView2's targets and processes: a renderer that died shows here, with no page target.
   curl -s "http://127.0.0.1:$CDP_PORT/json/list" >"$EV/$1-targets.json" 2>/dev/null || true
-  tasklist | grep -i "hermes-chat|msedgewebview2" >"$EV/$1-processes.txt" 2>&1 || true
+  tasklist | grep -iE "hermes-chat|msedgewebview2" >"$EV/$1-processes.txt" 2>&1 || true
 }
 cleanup() {
   log "cleanup"
