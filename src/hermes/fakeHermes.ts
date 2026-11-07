@@ -3022,6 +3022,8 @@ export class FakeKanban {
   missing = false;
   /** How long after a task moves the poller wakes its chat. */
   wakeDelayMs = 0;
+  /** How the wake turn is sent: at once in one go unless set, as the stand-in streams it (bridge.ts). */
+  wakeWith?: (runtimeId: string, stored: string, text: string) => void;
   private seq = 0;
   private runSeq = 0;
 
@@ -3061,6 +3063,7 @@ export class FakeKanban {
     const wake = () => {
       if (!t.subscribed || this.server.turns.has(runtime) || this.server.stopped.has(runtime) || !t.session_id) return;
       const text = `Results are in for ${t.id} (${status}): ${t.title}. Here is the synthesis.`;
+      if (this.wakeWith) return this.wakeWith(runtime, t.session_id, text);
       this.server.event(runtime, "message.start");
       this.server.event(runtime, "message.delta", { text });
       this.server.storeMessage(t.session_id, { role: "assistant", text });
