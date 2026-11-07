@@ -572,7 +572,7 @@ export class Hermes {
    * have (ADR 0002). While a chat is here, this flag beats the one the server lists. */
   private pinWanted = new Map<string, boolean>();
   /** The latest write of each chat's pinned flag, so a chat's writes go out one at a time, in order. */
-  private pinWrites = new Map<string, Promise<void>>();
+  private pinWrites = new Map<string, Promise<boolean>>();
   /** Chats whose pinned flag was written since the list sync under way read the list, which may predate the write. */
   private pinnedSinceListRead = new Set<string>();
   /** Chats renamed since the list sync under way read the list, which may predate the rename. */
@@ -2739,12 +2739,31 @@ export class Hermes {
 
   /** Moves a chat to Settled here at once, and unpins it on the server (ADR 0002). `unsettle` undoes it. */
   settle(chatId: string): Promise<void> {
-    return this.setSettled(chatId, true);
+    return this.setSettled(chatId, true).then(() => undefined);
+  }
+
+  /**
+   * Settles each chat at once, all writes going out together, and resolves to the ids whose write didn't go in. Such a
+   * chat is back in Active and isn't written again, unless the owner moved it meanwhile. A chat already Settled or gone
+   * counts as settled.
+   */
+  async settleAll(chatIds: string[]): Promise<string[]> {
+    const wrote = await Promise.all(
+      chatIds.map(async (id) => {
+        if (await this.setSettled(id, true)) return true;
+        if (this.pinWanted.get(id) === false) {
+          this.pinWanted.delete(id);
+          this.patchChat(id, (c) => ({ ...c, settled: false }));
+        }
+        return false;
+      }),
+    );
+    return chatIds.filter((_, i) => !wrote[i]);
   }
 
   /** Moves a chat to Active here at once, and pins it on the server. `settle` undoes it. */
   unsettle(chatId: string): Promise<void> {
-    return this.setSettled(chatId, false);
+    return this.setSettled(chatId, false).then(() => undefined);
   }
 
   /**
@@ -3834,9 +3853,10 @@ export class Hermes {
     return this.archiveWanted.get(r.id) ?? !!r.archived;
   }
 
-  private setSettled(chatId: string, settled: boolean): Promise<void> {
+  /** Resolves to false only when the write to Hermes failed. */
+  private setSettled(chatId: string, settled: boolean): Promise<boolean> {
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
-    if (!chat || chat.settled === settled) return Promise.resolve();
+    if (!chat || chat.settled === settled) return Promise.resolve(true);
     this.pinWanted.set(chatId, !settled);
     this.patchChat(chatId, (c) => ({ ...c, settled }));
     return this.writePin(chatId);
@@ -3847,21 +3867,27 @@ export class Hermes {
    * out, so a quick Undo leaves the server where the owner left the chat. A failed write stays wanted: the chat stays
    * where the owner put it here, and the next finished turn or refresh tries again. A chat with a turn running may
    * not be stored yet, so its failure isn't reported until the end of the turn. `profile` is the chat's, which the
-   * owner may have switched away from by the time the write goes out.
+   * owner may have switched away from by the time the write goes out. Resolves to false when the write failed; a refused
+   * edit, kept on this computer instead, resolves to true.
    */
-  private writePin(chatId: string, profile = this.profile): Promise<void> {
-    const write = (this.pinWrites.get(chatId) ?? Promise.resolve()).then(async () => {
+  private writePin(chatId: string, profile = this.profile): Promise<boolean> {
+    const write = (this.pinWrites.get(chatId) ?? Promise.resolve(true)).then(async () => {
       const pinned = this.pinWanted.get(chatId);
-      if (pinned === undefined) return;
+      if (pinned === undefined) return true;
       const running = this.snapshot.chats.find((c) => c.id === chatId)?.running;
       try {
         await this.patchSession(chatId, profile, { pinned });
         this.pinnedSinceListRead.add(chatId);
         if (this.pinWanted.get(chatId) === pinned) this.pinWanted.delete(chatId);
         this.patchChat(chatId, (c) => (c.settledHere ? { ...c, settledHere: undefined } : c));
+        return true;
       } catch (e) {
-        if (e instanceof EditRefusedError) return this.keepSettledHere(chatId, profile, pinned);
+        if (e instanceof EditRefusedError) {
+          this.keepSettledHere(chatId, profile, pinned);
+          return true;
+        }
         if (!running) this.update({ syncError: `Couldn't keep a chat ${pinned ? "Active" : "Settled"} on the server: ${(e as Error).message}` });
+        return false;
       }
     });
     this.pinWrites.set(chatId, write);
