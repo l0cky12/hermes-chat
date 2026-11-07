@@ -165,12 +165,21 @@ function failReply(sid: string) {
 }
 
 function endSubagent(id: string, status: string) {
-  const d = delegated.get(id);
+  // One a "delegate" prompt started here, or one FakeHermes started for a "background" prompt.
+  const d = delegated.get(id) ?? fakeStarted(id);
   if (!d) return false;
   delegated.delete(id);
   server.subagents[d.stored] = (server.subagents[d.stored] ?? []).filter((r) => r.subagent_id !== id);
   server.event(d.sid, "subagent.complete", { ...d.payload, status, summary: `Stand-in subagent ${status}.` });
   return true;
+}
+
+function fakeStarted(id: string) {
+  for (const [stored, rows] of Object.entries(server.subagents)) {
+    const { owner, tail: _, ...payload } = rows.find((r) => r.subagent_id === id) ?? {};
+    if (typeof owner === "string") return { sid: owner, stored, payload };
+  }
+  return undefined;
 }
 
 let pipe: Pipe | undefined;
