@@ -1130,6 +1130,11 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .restarting-overlay { position: fixed; inset: 0; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 70%, transparent); font-size: calc(14rem / 14); z-index: 100; }
 .recovery-failed { max-width: 480px; padding: 24px; }
 .recovery-failed p { margin: 0 0 12px; line-height: 1.55; }
+.crash-message { color: var(--bad); word-break: break-word; }
+.crash-details { margin: 0 0 12px; font-size: calc(12rem / 14); }
+.crash-details summary { cursor: pointer; color: var(--muted); }
+.crash-details pre { max-height: 240px; overflow: auto; margin: 8px 0 0; padding: 10px; border-radius: 8px; background: var(--raised-2); white-space: pre-wrap; word-break: break-word; }
+.crash-actions { display: flex; gap: 8px; }
 .select {
   height: 32px; padding: 0 8px; border-radius: 8px; background: var(--raised-2); border: 1px solid var(--line); color: var(--text);
   font: inherit; font-size: calc(13rem / 14); outline: none;
