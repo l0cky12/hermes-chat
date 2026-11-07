@@ -197,13 +197,23 @@ describe("Dropping files on the pane (HTML5, as on Windows)", () => {
     await setUp();
     expect(fileDrag("dragEnter", [])).toBe(false);
     expect(overlay()).not.toBeNull();
-    fireEvent.dragLeave(pane());
+    fireEvent.dragLeave(pane(), { dataTransfer: { types: ["text/uri-list"], files: [] } });
+    expect(overlay()).not.toBeNull();
+    fireEvent.dragLeave(pane(), { dataTransfer: { types: ["Files"], files: [] } });
     expect(overlay()).toBeNull();
     expect(fileDrag("dragOver", [])).toBe(false);
     expect(overlay()).not.toBeNull();
     fileDrag("drop", [new File(["x"], "a.txt")]);
     expect(overlay()).toBeNull();
     await waitFor(() => expect(chips()).toHaveLength(1));
+  });
+
+  it("keeps a dropped file's own name, even one a paste would take for a screenshot", async () => {
+    const { staged } = await setUp();
+    fileDrag("drop", [new File(["png"], "image.png", { type: "image/png" })]);
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    expect(staged.map((s) => s.name)).toEqual(["image.png"]);
+    expect(chips()[0].querySelector(".chip-name")?.textContent).toBe("image.png");
   });
 
   it("leaves a dragged chat to the pane's chat drop target", async () => {

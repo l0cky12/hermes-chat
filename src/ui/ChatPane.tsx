@@ -1356,7 +1356,7 @@ function Composer({
 
   // A pasted file, or one dropped on Windows, has no path of its own: Rust saves its bytes to a temp file, which then
   // attaches like a drop. One too big for Hermes is refused before its bytes are read into the webview.
-  const stageFiles = (incoming: File[] | Promise<File[]>) => busy(async () => {
+  const stageFiles = (incoming: File[] | Promise<File[]>, nameOf = pastedName) => busy(async () => {
     try {
       const files = await incoming;
       const tooBig = files.filter((f) => f.size > LIMITS.file.bytes);
@@ -1364,11 +1364,11 @@ function Composer({
         files
           .filter((f) => !tooBig.includes(f))
           .map(async (f) =>
-            invoke<string>("stage_clipboard_file", await f.arrayBuffer(), { headers: { "x-name": encodeURIComponent(pastedName(f)) } }),
+            invoke<string>("stage_clipboard_file", await f.arrayBuffer(), { headers: { "x-name": encodeURIComponent(nameOf(f)) } }),
           ),
       );
       await add(paths);
-      const notes = tooBig.map((f) => overLimitNote(pastedName(f), f.size, LIMITS.file));
+      const notes = tooBig.map((f) => overLimitNote(nameOf(f), f.size, LIMITS.file));
       if (notes.length) setRefused((cur) => (paths.length ? [...cur, ...notes] : notes));
     } catch (e) {
       setRefused([`Couldn't attach the files: ${e instanceof Error ? e.message : String(e)}`]);
@@ -1390,12 +1390,13 @@ function Composer({
       e.dataTransfer!.dropEffect = "copy";
       setDragging(true);
     };
-    const leave = (e: DragEvent) => zone.contains(e.relatedTarget as Node) || setDragging(false);
+    const leave = (e: DragEvent) => hasFiles(e) && !zone.contains(e.relatedTarget as Node) && setDragging(false);
     const drop = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
       setDragging(false);
-      void stageRef.current(Array.from(e.dataTransfer!.files));
+      // A dropped file keeps its own name; only a paste's generic `image.png` is a screenshot to rename.
+      void stageRef.current(Array.from(e.dataTransfer!.files), (f) => f.name);
     };
     zone.addEventListener("dragenter", over);
     zone.addEventListener("dragover", over);
