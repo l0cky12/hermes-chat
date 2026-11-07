@@ -3470,7 +3470,7 @@ function ChatView({
           if (why) return why;
           // The queue keeps its screenshots now, until they go or the owner removes the message (chatCache.ts).
           screenshots?.hold(attachments.map((a) => a.path));
-          savedDrafts.set(shownDraft, "");
+          savedDrafts.take(shownDraft);
           return undefined;
         },
         edit: (id, text) => hermes.editQueued(chat.id, id, text),
@@ -3554,7 +3554,7 @@ function ChatView({
       if (commandsRunning.has(key)) throw new Error("A command typed in this chat is still running.");
       commandsRunning.add(key);
       const typed = savedDrafts.get(key);
-      const done = () => savedDrafts.get(key) === typed && savedDrafts.set(key, "");
+      const done = () => savedDrafts.get(key) === typed && savedDrafts.take(key);
       const here = () => still() && stillIn();
       try {
         if (def.name === "new") {
@@ -3612,7 +3612,7 @@ function ChatView({
     steer: async (text) => {
       const key = shownDraft;
       const typed = savedDrafts.get(key);
-      const done = () => savedDrafts.get(key) === typed && savedDrafts.set(key, "");
+      const done = () => savedDrafts.get(key) === typed && savedDrafts.take(key);
       if (await hermes.steer(chat.id, text) === "steered") {
         done();
         return undefined;
