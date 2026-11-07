@@ -107,7 +107,7 @@ export const DEFAULT_UI_PREFS: Readonly<UIPrefs> = Object.freeze({
   terminalKind: "server",
   followUp: "queue",
   idleCompact: Object.freeze({ enabled: false, percent: 70, idleMinutes: 15 }),
-  chatSectionsShown: ["pinned", "inbox", "working", "snoozed", "settled"] as SectionKey[],
+  chatSectionsShown: SECTION_KEYS.filter((k) => k !== "archived"),
   chatSectionsCollapsed: ["snoozed", "archived", "settled"] as SectionKey[],
   agentOffice: "building",
   inboxAutoDismissDays: null,

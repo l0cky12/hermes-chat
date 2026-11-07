@@ -349,7 +349,7 @@ export function chatSections(
 ): ChatSections {
   const recent = (c: Chat) => lastActive(c, snoozes, now, since);
   const byRecent = (a: Chat, b: Chat) => recent(b) - recent(a);
-  const s: ChatSections = { pinned: [], inbox: [], working: [], snoozed: [], archived: [], settled: [] };
+  const s: ChatSections = { pinned: [], inbox: [], snoozed: [], archived: [], working: [], settled: [] };
   for (const c of chats) {
     if (c.archived) s.archived.push(c);
     else if (pins[c.id] !== undefined) s.pinned.push(c);
