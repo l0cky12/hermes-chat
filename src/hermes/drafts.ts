@@ -2,7 +2,12 @@
 // and chat, so switching chats or restarting the app doesn't lose it. Text only: attachments stay in the composer
 // until it closes. A sent message Hermes didn't take, or may not have, isn't a draft: it stays in its chat, kept in
 // the chat's outbox (transport.ts `Outgoing`), until the owner retries or dismisses it.
+//
+// Each Draft keeps its own undo history here, in memory only: the webview's history can't be used in the composer,
+// since text the app writes (a slash pick, a Draft shown again on a chat switch, another pane on the same Draft)
+// breaks it (ADR 0094).
 import { type ScopeSource, scopeParts } from "./connections";
+import { type History, emptyHistory, record, redo, undo } from "./editHistory";
 import { persist } from "./unsaved";
 
 export const DRAFT_PREFIX = "hermes-chat.draft.";
@@ -18,9 +23,15 @@ export function draftKey(connection: ScopeSource, profile: string, chatId: strin
 
 export type Drafts = {
   get(key: string): string;
-  /** Keeps the text; empty text deletes the draft. */
-  set(key: string, text: string): void;
-  /** Empties the draft as its message goes, and returns what it held. */
+  /**
+   * Keeps the text, an undo step unless it is unchanged; empty text deletes the draft. `typing`: the owner typed it,
+   * so it joins the step under way unless they paused.
+   */
+  set(key: string, text: string, how?: "typing" | "change"): void;
+  /** Steps the Draft back or forward and returns its text then, or undefined when there's nothing to step. */
+  undo(key: string): string | undefined;
+  redo(key: string): string | undefined;
+  /** Empties the draft as its message goes, and returns what it held. Its undo history goes too. */
   take(key: string): string;
   /** Puts back text that didn't go, unless the owner has typed something new there meanwhile. */
   putBack(key: string, text: string): void;
@@ -31,8 +42,9 @@ export type Drafts = {
  * Drafts kept in `storage`. They're read from memory once loaded, so a store that is full or can't be written still
  * keeps them until the app closes.
  */
-export function drafts(storage: DraftStorage): Drafts {
+export function drafts(storage: DraftStorage, now = Date.now): Drafts {
   const texts = new Map<string, string>();
+  const histories = new Map<string, History<{ text: string }>>();
   const listeners = new Set<() => void>();
   const notify = () => listeners.forEach((fn) => fn());
   const get = (key: string) => {
@@ -48,20 +60,35 @@ export function drafts(storage: DraftStorage): Drafts {
     return text;
   };
 
-  const set = (key: string, text: string) => {
-    if (get(key) === text) return;
+  const write = (key: string, text: string) => {
     texts.set(key, text);
     // A failed write keeps it in memory, and for an update's restart (unsaved.ts).
     persist(() => storage, key, text || null);
     notify();
   };
+  const set = (key: string, text: string, how: "typing" | "change" = "change") => {
+    const before = get(key);
+    if (before === text) return;
+    histories.set(key, record(histories.get(key) ?? emptyHistory(), { text: before }, how, now()));
+    write(key, text);
+  };
+  const step = (key: string, by: typeof undo) => {
+    const moved = by(histories.get(key) ?? emptyHistory(), { text: get(key) });
+    if (!moved) return undefined;
+    histories.set(key, moved.history);
+    write(key, moved.state.text);
+    return moved.state.text;
+  };
 
   return {
     get,
     set,
+    undo: (key) => step(key, undo),
+    redo: (key) => step(key, redo),
     take(key) {
       const text = get(key);
       set(key, "");
+      histories.delete(key);
       return text;
     },
     putBack(key, text) {
