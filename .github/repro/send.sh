@@ -31,6 +31,9 @@ evidence() {
     curl -s -X POST "http://127.0.0.1:$DRIVER_PORT/session/$sid/se/log" -H 'content-type: application/json' -d '{"type":"browser"}' >"$EV/$1-console.json" || true
   fi
   curl -s "$URL/__state" >"$EV/$1-server-state.json" || true
+  # The WebView2's targets and processes: a renderer that died shows here, with no page target.
+  curl -s "http://127.0.0.1:$CDP_PORT/json/list" >"$EV/$1-targets.json" 2>/dev/null || true
+  tasklist | grep -i "hermes-chat|msedgewebview2" >"$EV/$1-processes.txt" 2>&1 || true
 }
 cleanup() {
   log "cleanup"
@@ -91,6 +94,8 @@ echo "$session" >"$EV/session.json"
 sid=$(node -e 'const v=JSON.parse(process.argv[1]).value; if(!v||!v.sessionId){console.error(process.argv[1]);process.exit(1)} console.log(v.sessionId)' "$session") || { echo "no WebDriver session"; cat "$EV/driver.log"; exit 1; }
 echo -n "$sid" >"$RUN/session"
 log "WebDriver session $sid"
+# No command may hang on a page that stopped answering: 10 s for a script, 20 s for a load.
+curl -s -X POST "http://127.0.0.1:$DRIVER_PORT/session/$sid/timeouts" -H 'content-type: application/json' -d '{"script":10000,"pageLoad":20000,"implicit":0}' >/dev/null || true
 
 wd wait button "Get started" 90000 || { evidence 00-no-welcome; exit 1; }
 # A buffer for everything the page throws from now on: uncaught errors (React 19 reports a render error through
