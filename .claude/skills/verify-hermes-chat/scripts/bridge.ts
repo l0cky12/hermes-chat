@@ -12,6 +12,9 @@
 //   `session.interrupt` (the composer's Stop) ends the reply's turn with `message.complete` status `interrupted`, as
 //   Hermes does, so a reply that runs on (a "delegate" prompt's) can be stopped.
 //   `POST /__subagent?id=<subagent id>&status=completed|failed` ends one as Hermes reports it (a test's control).
+//   `POST /__live?profile=<p>&id=<chat id>&status=working|waiting|end[&title=<t>]` runs a reply in another profile, as
+//   `session.active_list` reports one: the chat is stored in that profile, listed as working or waiting, and `end`
+//   takes it off the list and leaves it Unread there (a test's control).
 // HV_INBOX=1 gives the `work` profile two Unread chats for the Rail inbox: one last active 3 days ago, one an hour ago.
 // HV_LIST=<n> adds n Active, read chats to `default`, one an hour apart, so its Inbox is longer than the list panel.
 // HV_DELAY_MS=<ms> holds each /api/ answer that long, as a distant server's round trip would.
@@ -219,6 +222,18 @@ const http = createServer(async (req, res) => {
   if (url.pathname === "/__subagent" && req.method === "POST") {
     const id = url.searchParams.get("id") ?? "";
     return endSubagent(id, url.searchParams.get("status") ?? "completed") ? json(200, { ok: true }) : json(404, { detail: `No running stand-in subagent ${id}` });
+  }
+  if (url.pathname === "/__live" && req.method === "POST") {
+    const [profile, id, status] = ["profile", "id", "status"].map((k) => url.searchParams.get(k) ?? "");
+    if (!(profile in server.otherProfiles) || !id || !["working", "waiting", "end"].includes(status)) return json(400, { detail: "Needs profile (another profile), id and status working|waiting|end" });
+    const t = Date.now() / 1000;
+    const list = server.otherProfiles[profile];
+    const stored = list.find((r) => r.id === id) ?? (list.push(row(id, 0, { title: url.searchParams.get("title") ?? `Chat ${id}`, last_read_at: 0 })), list[list.length - 1]);
+    stored.last_active = t;
+    server.liveSessions = server.liveSessions.filter((l) => l.session_key !== id);
+    if (status !== "end") server.liveSessions.push({ id: `rt-${id}`, session_key: id, status, last_active: t, started_at: t, title: stored.title ?? "" });
+    save();
+    return json(200, { ok: true, live: server.liveSessions.length });
   }
   if (url.pathname === "/auth/password-login") {
     const b = JSON.parse(body ?? "{}");
