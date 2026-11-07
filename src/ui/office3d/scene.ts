@@ -1,13 +1,14 @@
 // The office's building as a three.js scene (ADR 0089). The only way in from the app: OfficeBuilding.tsx loads this
 // file with import(), so three.js is its own chunk, fetched when the office first opens. It draws what officeFloor
-// decided and decides nothing itself. Every frame goes through the pacer: none unless something changed or moves, at
-// most 30 a second, none while asleep.
+// decided and decides nothing itself, beyond walking each agent from where it was to where the floor now puts it.
+// Every frame goes through the pacer: none unless something changed or moves, at most 30 a second, none while asleep.
 import { DirectionalLight, HemisphereLight, PerspectiveCamera, Plane, Raycaster, Scene, Vector2, Vector3, WebGLRenderer, Color } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { PLAN, type BuildingRoom, type Floor } from "../../hermes/officeFloor";
-import { buildBuilding, PALETTE, type Mode } from "./building";
+import { buildBuilding, buildTower, PALETTE, type Mode } from "./building";
 import { buildFigures } from "./figures";
 import { createPacer } from "./pacer";
+import { createCrowd } from "./walk";
 
 /** A point on the canvas, in CSS pixels from its top left. `off`: behind the camera or outside the view. */
 export type ScreenPoint = { x: number; y: number; off: boolean };
@@ -15,17 +16,28 @@ export type ScreenPoint = { x: number; y: number; off: boolean };
 export type SceneEvents = {
   /** A click on a character, or on nothing (undefined). */
   onPick(key: string | undefined): void;
-  /** After each drawn frame: where each character's tag, each room's name and the front door are on the canvas. */
-  onDrawn(tags: ReadonlyMap<string, ScreenPoint>, rooms: Readonly<Record<BuildingRoom, ScreenPoint>>, door: ScreenPoint): void;
+  /** A click on one of the tower's floors, by its index in `setTower`'s list. */
+  onFloor(index: number): void;
+  /**
+   * After each drawn frame: where each character's tag, each room's name, the front door and each tower floor's label
+   * are on the canvas.
+   */
+  onDrawn(tags: ReadonlyMap<string, ScreenPoint>, rooms: Readonly<Record<BuildingRoom, ScreenPoint>>, door: ScreenPoint, tower: readonly ScreenPoint[]): void;
   onFrame(frames: number): void;
   /** The scene can't draw any more, and why, in words for the owner. */
   onLost(why: string): void;
 };
 
 export type OfficeScene = {
-  setFloor(floor: Floor): void;
+  /**
+   * The floor `profile` is now. Each of its agents that moved walks to its new spot, a new one walks in from the front
+   * door, and one no longer there walks out of it. A floor of another profile replaces the last at once.
+   */
+  setFloor(floor: Floor, profile: string): void;
+  /** The tower's closed floors, the first at the bottom; lit where something needs the owner. */
+  setTower(floors: readonly { lit: boolean }[]): void;
   setMode(mode: Mode): void;
-  /** Whether things may move: typing arms and camera moves. Off for reduced motion. */
+  /** Whether things may move: typing arms, walks and camera moves. Off for reduced motion. */
   setMotion(moves: boolean): void;
   setSelected(key: string | undefined): void;
   resetCamera(): void;
@@ -55,11 +67,12 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
   let mode = start.mode;
   let moves = start.moves;
   const building = buildBuilding(mode);
+  const tower = buildTower(mode);
   const figures = buildFigures();
   const hemi = new HemisphereLight(0xffffff, 0x888888, PALETTE[mode].fill);
   const sun = new DirectionalLight(0xffffff, PALETTE[mode].sun);
   sun.position.set(8, 20, 6);
-  scene.add(building.group, figures.group, hemi, sun);
+  scene.add(building.group, tower.group, figures.group, hemi, sun);
   const paint = () => {
     renderer.setClearColor(new Color(PALETTE[mode].sky));
     hemi.intensity = PALETTE[mode].fill;
@@ -91,6 +104,16 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
   });
 
   let floor: Floor | undefined;
+  let towerSize = 0;
+  const crowd = createCrowd();
+  /** Puts every agent where it is at `t`, and keeps frames coming while any walks. */
+  const place = (t: number) => {
+    const now = crowd.at(t);
+    figures.set(now.placed, now.onFloor);
+    pacer.animating("walking", now.walking);
+    return now.walking;
+  };
+  let walks = false;
   const tag = new Vector3();
   const size = new Vector2();
   const toScreen = (p: Vector3): ScreenPoint => {
@@ -116,13 +139,15 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
         pacer.animating("camera", false);
       }
     }
+    if (walks) walks = place(now);
     pacer.animating("typing", figures.animate(now, moves), TYPING_FPS);
     renderer.render(scene, camera);
     renderer.getSize(size);
     const tags = new Map<string, ReturnType<typeof toScreen>>();
     floor?.characters.forEach((c, i) => tags.set(c.key, toScreen(figures.tagAt(i, tag))));
     const rooms = Object.fromEntries((Object.keys(PLAN.rooms) as BuildingRoom[]).map((r) => [r, toScreen(roomCentre(r).setY(0.05))])) as Record<BuildingRoom, ScreenPoint>;
-    events.onDrawn(tags, rooms, toScreen(new Vector3(12.6, 0.05, 0)));
+    const labels = Array.from({ length: towerSize }, (_, i) => toScreen(tower.labelAt(i, tag)));
+    events.onDrawn(tags, rooms, toScreen(new Vector3(12.6, 0.05, 0)), labels);
   }
 
   /** Moves the camera to `to` over TWEEN_MS, or at once when nothing may move. */
@@ -149,7 +174,10 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
     raycaster.setFromCamera(ndc(e), camera);
     const hit = raycaster.intersectObjects(figures.pickable, false)[0];
-    events.onPick(hit?.instanceId === undefined ? undefined : figures.keyAt(hit.instanceId));
+    const key = hit?.instanceId === undefined ? undefined : figures.keyAt(hit.instanceId);
+    const slab = key === undefined ? raycaster.intersectObjects(tower.pickable(), false)[0] : undefined;
+    if (slab) events.onFloor(slab.object.userData.floor as number);
+    else events.onPick(key);
   };
   // A double click on a room zooms to it, keeping the direction the camera looks from.
   const onDouble = (e: MouseEvent) => {
@@ -189,22 +217,34 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
   resize();
 
   return {
-    setFloor(next) {
+    setFloor(next, profile) {
+      const t = performance.now();
       floor = next;
-      figures.set(next.characters);
+      crowd.set(next.characters, profile, t, moves);
+      walks = place(t);
       pacer.animating("typing", moves && next.characters.some((c) => c.pose === "typing" && !c.stale), TYPING_FPS);
+      pacer.invalidate();
+    },
+    setTower(floors) {
+      towerSize = floors.length;
+      tower.set(floors);
       pacer.invalidate();
     },
     setMode(next) {
       if (next === mode) return;
       mode = next;
       building.recolor(mode);
+      tower.recolor(mode);
       paint();
       pacer.invalidate();
     },
     setMotion(next) {
       moves = next;
-      if (!moves) pacer.animating("typing", false);
+      if (!moves) {
+        pacer.animating("typing", false);
+        crowd.stop();
+        walks = place(performance.now());
+      }
       pacer.invalidate();
     },
     setSelected(key) {
@@ -222,6 +262,7 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
       canvas.removeEventListener("dblclick", onDouble);
       canvas.removeEventListener("webglcontextlost", onLost);
       building.dispose();
+      tower.dispose();
       figures.dispose();
       renderer.dispose();
       // dispose() keeps the WebGL context, and WebKit holds each one until it is lost: free it, so opening the office

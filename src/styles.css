@@ -2327,7 +2327,7 @@ label.memory-pick { cursor: pointer; }
 .office-building { position: relative; flex: 1; min-height: 0; overflow: hidden; }
 .office-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; touch-action: none; }
 .office-overlay { position: absolute; inset: 0; pointer-events: none; }
-.office-room-label, .office-tag, .office-more { position: absolute; left: 0; top: 0; }
+.office-room-label, .office-tag, .office-more, .office-floor-tag { position: absolute; left: 0; top: 0; }
 .office-overlay [data-off] { opacity: 0; pointer-events: none !important; }
 .office-room-label {
   translate: -50% -50%; color: var(--faint); font-size: calc(11rem / 14); font-weight: 600; letter-spacing: 0.06em;
@@ -2352,6 +2352,18 @@ label.memory-pick { cursor: pointer; }
 .office-tag.is-stale .office-dot { background: var(--faint); box-shadow: none; }
 .office-more { translate: -50% -100%; pointer-events: auto; padding: 4px 10px; border: 1px solid var(--line-3); border-radius: 4px; background: var(--raised); color: var(--text); font-size: calc(12rem / 14); font-weight: 600; }
 .office-more:hover { background: var(--raised-2); }
+/* A tower floor's label, on the side of its slab: the profile, how many agents are on it, and "!" when one needs the owner. */
+.office-floor-tag {
+  translate: -50% -50%; pointer-events: auto; display: inline-flex; align-items: center; gap: 6px; padding: 1px 7px;
+  border: 1px solid var(--line-3); border-radius: 4px; background: color-mix(in srgb, var(--raised) 90%, transparent);
+  color: var(--text); font-size: calc(11rem / 14); line-height: 16px; white-space: nowrap;
+}
+.office-floor-tag:hover { background: var(--raised-2); }
+.office-floor-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.office-floor-tag.lit { border-color: var(--warn); }
+.office-floor-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+.office-floor-alert { color: var(--warn); font-weight: 700; }
+.office-floor-open { color: var(--muted); font-size: calc(11.5rem / 14); font-weight: 600; }
 .office-tools { position: absolute; right: 12px; bottom: 12px; display: flex; align-items: center; gap: 10px; }
 .office-tools .btn { display: inline-flex; align-items: center; gap: 5px; }
 .office-hint { color: var(--faint); font-size: calc(11.5rem / 14); }

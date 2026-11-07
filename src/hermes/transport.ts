@@ -117,8 +117,13 @@ const MAX_PAGES = 20;
 const MODELS_TIMEOUT_MS = 30_000;
 /** Checking another profile for Unread chats reads one page of its most recent ones. */
 const OTHER_PAGE_SIZE = 50;
-/** A `session.active_list` check asked for sooner than this after the last one, on the same connection, is skipped. */
-const LIVE_MIN_GAP_MS = 15_000;
+/**
+ * A `session.active_list` check asked for sooner than this after the last one, on the same connection, is skipped. The
+ * office asks this often.
+ */
+export const LIVE_MIN_GAP_MS = 15_000;
+/** A check asked for on a LIVE_MIN_GAP_MS timer can come a little early by the clock; it isn't skipped for that. */
+const LIVE_SLACK_MS = 1_000;
 /** The most live sessions of unknown profile one check looks up, and the profiles it asks at once for each. */
 const LOOKUPS_PER_CHECK = 3;
 const LOOKUP_AT_ONCE = 4;
@@ -1393,10 +1398,10 @@ export class Hermes {
    * same connection under way is joined; one asked for within 15 seconds of the last is skipped. A server without
    * the method is asked no more. An answer from a connection since dropped is dropped too.
    */
-  private checkLive(): Promise<void> {
+  checkLive(): Promise<void> {
     const gen = this.generation;
     if (!this.connectedPipe() || this.snapshot.live?.unsupported) return Promise.resolve();
-    if (this.liveCheck?.gen === gen && (this.liveCheck.done || Date.now() - this.liveCheck.at < LIVE_MIN_GAP_MS)) return this.liveCheck.done ?? Promise.resolve();
+    if (this.liveCheck?.gen === gen && (this.liveCheck.done || Date.now() - this.liveCheck.at < LIVE_MIN_GAP_MS - LIVE_SLACK_MS)) return this.liveCheck.done ?? Promise.resolve();
     const done = (async () => {
       try {
         const res = obj(await this.request("session.active_list", {}));

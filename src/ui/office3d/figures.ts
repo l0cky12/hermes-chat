@@ -1,9 +1,19 @@
 // The agents as faceless low-poly people (ADR 0089): a rounded body and arms in their team's color, a plain ball for a
-// head, posed for their room. Each part is one instanced mesh for every character, so forty cost a handful of draw
-// calls. Only a typing character's arms move, and only from `animate`, which the pacer calls inside a frame.
+// head, posed for their room, or walking. Each part is one instanced mesh for every character, so forty cost a handful
+// of draw calls. Only a typing character's arms move by themselves, from `animate`, which the pacer calls inside a frame;
+// a walking one is placed again on each frame of its walk.
 import { CapsuleGeometry, CircleGeometry, Color, Euler, Group, IcosahedronGeometry, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshLambertMaterial, OctahedronGeometry, Quaternion, RingGeometry, Vector3, BoxGeometry } from "three";
 import { FLOOR_CAP, TEAM_COLORS, type Character, type Pose } from "../../hermes/officeFloor";
 import { FIGURE_SCALE } from "./building";
+
+/**
+ * A character as drawn: where the floor seats it, or where its walk has got to. `stride` swings a walker's arms.
+ * Characters past the floor's are leaving the building: they can't be picked.
+ */
+export type Placed = Pick<Character, "key" | "color" | "stale" | "spot"> & { pose: Pose | "walking"; stride?: number };
+
+/** Characters on the floor, and as many again walking out of the building. */
+const CAPACITY = FLOOR_CAP * 2;
 
 const HEAD = new Color("#d9dce1");
 const STALE = new Color("#9aa0a8");
@@ -32,7 +42,7 @@ const standing: Pick<Figure, "body" | "head"> = {
 const shoulder = (side: -1 | 1, y: number, z = 0): [number, number, number] => [side * (BODY_R + 0.04), y, z];
 
 /** Each pose's parts, in the character's own frame: on the floor at its seat, facing +z. Arms hang from the shoulder. */
-const FIGURE: Record<Pose, Figure> = {
+const FIGURE: Record<Pose | "walking", Figure> = {
   typing: { ...sitting(0.05), arms: [{ at: shoulder(-1, 1.0), turn: [-1.3, 0, 0] }, { at: shoulder(1, 1.0), turn: [-1.3, 0, 0] }] },
   "hand-up": { ...standing, arms: [{ at: shoulder(-1, 0.95), turn: [0, 0, -0.12] }, { at: shoulder(1, 0.98), turn: [Math.PI - 0.15, 0, 0.1] }], marker: "ask" },
   slumped: {
@@ -43,7 +53,11 @@ const FIGURE: Record<Pose, Figure> = {
   },
   couch: { ...sitting(-0.18), arms: [{ at: shoulder(-1, 0.98, -0.08), turn: [-0.3, 0, -0.3] }, { at: shoulder(1, 0.98, -0.08), turn: [-0.3, 0, 0.3] }] },
   door: { ...standing, arms: [{ at: shoulder(-1, 0.95), turn: [0, 0, -0.12] }, { at: shoulder(1, 0.95), turn: [0, 0, 0.12] }] },
+  walking: { ...standing, arms: [{ at: shoulder(-1, 0.95), turn: [0, 0, -0.12] }, { at: shoulder(1, 0.95), turn: [0, 0, 0.12] }] },
 };
+
+/** A walker's arms swing back and forth, opposite each other, with its stride. */
+const SWING = 0.5;
 
 const v = new Vector3();
 const s = new Vector3();
@@ -61,8 +75,8 @@ function partMatrix(base: Matrix4, p: Part, extraX = 0, out = new Matrix4()): Ma
 
 export type Figures = {
   group: Group;
-  /** Places the characters; drawn on the next frame. */
-  set(characters: readonly Character[]): void;
+  /** Places the characters; drawn on the next frame. The first `onFloor` are the floor's; the rest walk out. */
+  set(characters: readonly Placed[], onFloor?: number): void;
   /** Moves typing arms for time `t` (ms). Whether any character types, so the scene knows to keep drawing. */
   animate(t: number, moves: boolean): boolean;
   select(key: string | undefined): void;
@@ -78,7 +92,7 @@ export function buildFigures(): Figures {
   const group = new Group();
   const lambert = () => new MeshLambertMaterial({ color: 0xffffff });
   const make = (geo: CapsuleGeometry | IcosahedronGeometry | OctahedronGeometry | BoxGeometry | CircleGeometry, mat: MeshLambertMaterial | MeshBasicMaterial) => {
-    const mesh = new InstancedMesh(geo, mat, FLOOR_CAP);
+    const mesh = new InstancedMesh(geo, mat, CAPACITY);
     mesh.count = 0;
     mesh.frustumCulled = false;
     group.add(mesh);
@@ -96,7 +110,8 @@ export function buildFigures(): Figures {
   ring.visible = false;
   group.add(ring);
 
-  let shown: readonly Character[] = [];
+  let shown: readonly Placed[] = [];
+  let pickable = 0;
   /** The selected character, whose ring follows it to wherever the next floor puts it. */
   let picked: string | undefined;
   const ringOn = () => {
@@ -110,8 +125,9 @@ export function buildFigures(): Figures {
   return {
     group,
     pickable: [body, head],
-    set(characters) {
-      shown = characters.slice(0, FLOOR_CAP);
+    set(characters, onFloor = characters.length) {
+      shown = characters.slice(0, CAPACITY);
+      pickable = Math.min(onFloor, shown.length);
       typing.length = 0;
       let arms = 0;
       let bangs = 0;
@@ -126,10 +142,10 @@ export function buildFigures(): Figures {
         head.setMatrixAt(i, partMatrix(base, f.head, 0, m));
         head.setColorAt(i, c.stale ? STALE_HEAD : HEAD);
         shadow.setMatrixAt(i, m.copy(base).multiply(local.makeTranslation(0, 0.015, c.pose === "slumped" ? 0.1 : 0)));
-        for (const a of f.arms) {
-          arm.setMatrixAt(arms, partMatrix(base, a, 0, m));
+        f.arms.forEach((a, side) => {
+          arm.setMatrixAt(arms, partMatrix(base, a, c.pose === "walking" ? Math.sin(c.stride ?? 0) * SWING * (side ? 1 : -1) : 0, m));
           arm.setColorAt(arms++, tint);
-        }
+        });
         if (c.pose === "typing" && !c.stale) typing.push(i);
         const above = new Matrix4().multiplyMatrices(base, local.makeTranslation(0, f.head.at[1] + 0.32, f.head.at[2]));
         if (f.marker === "ask") {
@@ -173,7 +189,7 @@ export function buildFigures(): Figures {
       picked = key;
       ringOn();
     },
-    keyAt: (instance) => shown[instance]?.key,
+    keyAt: (instance) => (instance < pickable ? shown[instance]?.key : undefined),
     tagAt(i, out) {
       const c = shown[i];
       const f = FIGURE[c.pose];

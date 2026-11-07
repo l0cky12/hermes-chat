@@ -64,10 +64,9 @@ function wallSegments(): { x1: number; z1: number; x2: number; z2: number }[] {
     }
     out.push({ x1: from, z1: z, x2, z2: z });
   };
-  const { rooms, hallway } = PLAN;
-  const doorX = (r: Bounds) => r.x + r.w / 2;
-  run(hallway.z, -12, 12, [PLAN.workroomDoor.x, doorX(rooms.waiting)]);
-  run(hallway.z + hallway.d, -12, 12, [doorX(rooms.trouble), doorX(rooms.lounge)]);
+  const { rooms, hallway, doors } = PLAN;
+  run(hallway.z, -12, 12, [doors.workroom.x, doors.waiting.x]);
+  run(hallway.z + hallway.d, -12, 12, [doors.trouble.x, doors.lounge.x]);
   run(-8, -12, 12, []);
   run(8, -12, 12, []);
   out.push({ x1: -12, z1: -8, x2: -12, z2: 8 });
@@ -191,6 +190,61 @@ export function buildBuilding(mode: Mode): Building {
         if (o instanceof Mesh) o.geometry.dispose();
       });
       Object.values(m).forEach((v) => (v instanceof MeshLambertMaterial || v instanceof MeshBasicMaterial ? v.dispose() : Object.values(v).forEach((f) => f.dispose())));
+    },
+  };
+}
+
+/** The tower beside the building: a closed floor for each profile not shown, the first at the bottom. */
+export const TOWER = { x: -16, z: -4.5, w: 3, d: 3, floorH: 0.9, gap: 0.12 } as const;
+
+export type Tower = {
+  group: Group;
+  /** One closed floor for each entry, lit when something there needs the owner. */
+  set(floors: readonly { lit: boolean }[]): void;
+  recolor(mode: Mode): void;
+  /** The floors a click can hit; a hit's `userData.floor` is its index. */
+  pickable(): Mesh[];
+  /** Where floor `i`'s label goes: the middle of its side that faces the building's front. */
+  labelAt(i: number, out: Vector3): Vector3;
+  dispose(): void;
+};
+
+export function buildTower(mode: Mode): Tower {
+  const group = new Group();
+  const geo = new BoxGeometry(TOWER.w, TOWER.floorH, TOWER.d);
+  const plain = new MeshLambertMaterial({ color: PALETTE[mode].wall });
+  const lit = new MeshLambertMaterial({ color: PALETTE[mode].mark });
+  const shadow = new Mesh(new PlaneGeometry(TOWER.w + 0.8, TOWER.d + 0.8).rotateX(-Math.PI / 2), new MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: PALETTE[mode].shadow, depthWrite: false }));
+  shadow.position.set(TOWER.x, 0.012, TOWER.z);
+  let slabs: Mesh[] = [];
+  const y = (i: number) => i * (TOWER.floorH + TOWER.gap) + TOWER.floorH / 2;
+  return {
+    group,
+    set(floors) {
+      for (const s of slabs) group.remove(s);
+      slabs = floors.map((f, i) => {
+        const slab = new Mesh(geo, f.lit ? lit : plain);
+        slab.position.set(TOWER.x, y(i), TOWER.z);
+        slab.userData.floor = i;
+        group.add(slab);
+        return slab;
+      });
+      if (floors.length) group.add(shadow);
+      else group.remove(shadow);
+    },
+    recolor(next) {
+      plain.color = new Color(PALETTE[next].wall);
+      lit.color = new Color(PALETTE[next].mark);
+      (shadow.material as MeshBasicMaterial).opacity = PALETTE[next].shadow;
+    },
+    pickable: () => slabs,
+    labelAt: (i, out) => out.set(TOWER.x, y(i), TOWER.z + TOWER.d / 2 + 0.05),
+    dispose() {
+      geo.dispose();
+      plain.dispose();
+      lit.dispose();
+      shadow.geometry.dispose();
+      (shadow.material as MeshBasicMaterial).dispose();
     },
   };
 }

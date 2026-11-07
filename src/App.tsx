@@ -1,7 +1,7 @@
 import { type ReactNode, type RefObject, Suspense, lazy, useCallback, useLayoutEffect, useMemo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { ArrowLeft, ArrowRight, Columns2, FolderCog, GitBranch, PanelBottom, PanelLeft, PanelRight, PanelTop, X } from "lucide-react";
-import { CONNECT_STOPPED, RenameConflict, connect, openSaved, readSaved, toSource, type Delivery, type Hermes } from "./hermes/transport";
+import { CONNECT_STOPPED, LIVE_MIN_GAP_MS, RenameConflict, connect, openSaved, readSaved, toSource, type Delivery, type Hermes } from "./hermes/transport";
 import { invoke } from "@tauri-apps/api/core";
 import type { CommandHost } from "./ui/SlashCommands";
 import { STEER, type ServerCommandList } from "./hermes/commands";
@@ -17,7 +17,6 @@ import { PersonaStore, personaKey } from "./hermes/personaStore";
 import { sending, unsaved, type Sending } from "./hermes/unsaved";
 import { connOf, restoreBlocked, savedBackupEnv } from "./hermes/backup";
 import { chatToReopen, forgetOpenChat, rememberOpenChat } from "./hermes/uiPrefs";
-import { EMPTY_FLOOR_MEMORY } from "./hermes/officeFloor";
 import { PROJECTS_KEY, projectLinks, projectScope } from "./hermes/projectLinks";
 import { ProjectsStore, type Project } from "./hermes/projects";
 import { instructionsMessage, modelProblem, resolveNewChat, savedDefaults, type ProjectDefaults } from "./hermes/projectDefaults";
@@ -45,6 +44,7 @@ import { ChatLinkNotice, type LinkNoticeView } from "./ui/ChatLinkNotice";
 import { Inbox } from "./ui/Inbox";
 import { Bots } from "./ui/Bots";
 import { Office } from "./ui/Office";
+import { EMPTY_OFFICE_MEMORY } from "./ui/OfficeBuilding";
 import { officeRooms, type Desk, type Room } from "./hermes/office";
 import type { SubagentId } from "./hermes/subagents";
 import { botActivity, isBotChat, isBotChatTitle, newInBotChatNote, type Bot } from "./hermes/bots";
@@ -1074,7 +1074,7 @@ export function Main({
   const officeShown = officeOpen && agentOffice !== "off";
   // Who sits where in the building. It outlives the building's view, so hidden to the tray, minimized, behind Settings
   // or switched to List and back, each agent comes back to the desk it had.
-  const officeFloorMemory = useRef(EMPTY_FLOOR_MEMORY);
+  const officeFloorMemory = useRef(EMPTY_OFFICE_MEMORY);
   const catalog = models?.profile === profile ? models : undefined;
   const sticky: ModelPick | undefined = modelPicks[pref] ?? (modelPicker?.profile === pref ? withoutProfile(modelPicker) : catalog?.defaultPick);
 
@@ -1977,15 +1977,22 @@ export function Main({
   // The office is drawn, and its rooms worked out, only while it can be seen: hidden to the tray or minimized, it isn't.
   const officeVisible = officeShown && !windowHidden && !pageHidden;
 
-  // The inbox, the Bots view and the office ask for fresh checks as they open, and keep asking while open: they show
-  // what is live.
-  const liveWatched = inboxOpen || botsOpen || officeVisible;
+  // The inbox and the Bots view ask for fresh checks as they open, and keep asking while open: they show what is live.
+  const liveWatched = inboxOpen || botsOpen;
   useEffect(() => {
     if (!liveWatched) return;
     void hermes.checkOtherProfiles();
     const timer = setInterval(() => void hermes.checkOtherProfiles(), INBOX_CHECK_EVERY_MS);
     return () => clearInterval(timer);
   }, [hermes, liveWatched]);
+  // The office keeps every profile's floor live from `session.active_list` alone, as often as the transport allows,
+  // while it can be seen (ADR 0089). It leaves the heavier read of the other profiles' chat lists at CHECK_EVERY_MS.
+  useEffect(() => {
+    if (!officeVisible) return;
+    void hermes.checkLive();
+    const timer = setInterval(() => void hermes.checkLive(), LIVE_MIN_GAP_MS);
+    return () => clearInterval(timer);
+  }, [hermes, officeVisible]);
 
   // Unread chats in the other profiles are polled, so the switcher can be up to CHECK_EVERY_MS behind.
   useEffect(() => {
@@ -2685,6 +2692,7 @@ export function Main({
                 onView={(view) => setUIPrefs({ agentOffice: view })}
                 server={where ?? "the server"}
                 profile={profile}
+                profiles={Object.keys(others.byName)}
                 connected={status === "connected"}
                 leaving={leavingNote(profile, chats)}
                 onOpen={openDesk}
