@@ -39,11 +39,6 @@ export const TASK_MEANS: Record<KanbanStatus, "outstanding" | "needsOwner" | "ov
   archived: "over",
 };
 
-const NEEDS_OWNER: Record<Extract<KanbanStatus, "blocked" | "review">, string> = {
-  blocked: "A dispatched task is blocked.",
-  review: "A dispatched task is waiting for review.",
-};
-
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 /**
@@ -87,7 +82,7 @@ function subagentsLeft(c: Chat, ignored?: ReadonlySet<string>): number {
 export function handoffOf(c: Chat, ignored: ReadonlySet<string> | undefined, now: number): Handoff | undefined {
   const tasks = (c.tasks ?? []).filter((t) => !ignored?.has(t.id));
   const needs = tasks.find((t) => TASK_MEANS[t.status] === "needsOwner");
-  if (needs) return { kind: "needsOwner", task: needs, reason: NEEDS_OWNER[needs.status as keyof typeof NEEDS_OWNER] };
+  if (needs) return { kind: "needsOwner", task: needs, reason: needs.status === "blocked" ? "A dispatched task is blocked." : "A dispatched task is waiting for review." };
   const held = tasks.filter((t) => holds(t, now));
   const subagents = c.running ? 0 : subagentsLeft(c, ignored);
   if (!held.length && !subagents) return undefined;

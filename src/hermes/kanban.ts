@@ -51,8 +51,8 @@ export class KanbanApi {
       if (answered404(e)) return undefined;
       throw e;
     }
-    const row = isObj(res) && isObj(res.task) ? { ...res.task, ...(Array.isArray(res.runs) && !("runs" in res.task) && { runs: res.runs }) } : undefined;
-    return parseTask(row, slug, now);
+    // The detail carries the runs beside the task.
+    return isObj(res) && isObj(res.task) ? parseTask({ runs: res.runs, ...res.task }, slug, now) : undefined;
   }
 }
 
