@@ -1,5 +1,5 @@
 // Undo and redo keys. WebKitGTK, the webview on Linux, binds no key to undo or redo, so the app wires them itself
-// (ADR 0094): the composer and the Artifact editor step their own histories, and every other text field steps the
+// (ADR 0095): the composer and the Artifact editor step their own histories, and every other text field steps the
 // webview's.
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { composing } from "./bits";
