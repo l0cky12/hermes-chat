@@ -105,6 +105,7 @@ wd eval "window.__errs = [];
   addEventListener('error', (e) => __errs.push({ type: 'error', message: e.message, file: e.filename, line: e.lineno, col: e.colno, stack: e.error && e.error.stack }));
   addEventListener('unhandledrejection', (e) => __errs.push({ type: 'unhandledrejection', reason: String((e.reason && e.reason.stack) || e.reason) }));
   const ce = console.error; console.error = (...a) => { __errs.push({ type: 'console.error', args: a.map((x) => (x && x.stack) || String(x)) }); ce.apply(console, a); };
+  const cw = console.warn; console.warn = (...a) => { __errs.push({ type: 'console.warn', args: a.map((x) => (x && x.stack) || String(x)) }); cw.apply(console, a); };
   return navigator.userAgent;" | tee "$EV/user-agent.txt"
 wd shot 00-welcome
 wd handles >"$EV/00-handles.txt"
