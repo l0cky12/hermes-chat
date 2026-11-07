@@ -105,7 +105,6 @@ describe("Composer drafts", () => {
 
 describe("Undo in a Draft", () => {
   const key = draftKey(nas, "default", "chat-1");
-  /** A store on a clock the test moves. */
   function clocked() {
     const clock = { now: 0 };
     return { clock, d: drafts(memoryStorage(), () => clock.now) };

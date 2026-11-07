@@ -1,5 +1,5 @@
 // Undo and redo for a text the owner edits, with no I/O: the artifact editor keeps one per open file (artifactEdit.ts
-// `Snapshot`), the composer one per Draft (drafts.ts). A state is the text plus whatever the editor keeps with it.
+// `Snapshot`), the composer one per Draft (drafts.ts).
 
 /** How long a pause in typing starts a new undo step, as editors do; anything but typing is always its own step. */
 export const TYPING_PAUSE_MS = 1000;
@@ -25,11 +25,11 @@ function trimmed<S extends { text: string }>(past: S[]): S[] {
   return out;
 }
 
-/**
- * The history after a change away from `before`. `typing`: the owner typed it, so it joins the step under way unless
- * they paused; anything else (a Hermes edit applied, a version restored, a merge) is a step of its own.
- */
-export function record<S extends { text: string }>(h: History<S>, before: S, kind: "typing" | "change", now: number): History<S> {
+/** `typing`: the owner typed it, so it joins the step under way unless they paused; any other change is a step of its own. */
+export type EditKind = "typing" | "change";
+
+/** The history after a change away from `before`. */
+export function record<S extends { text: string }>(h: History<S>, before: S, kind: EditKind, now: number): History<S> {
   if (kind === "typing" && h.typingAt !== undefined && now - h.typingAt < TYPING_PAUSE_MS && h.past.length) return { ...h, future: [], typingAt: now };
   return { past: trimmed([...h.past, before]), future: [], typingAt: kind === "typing" ? now : undefined };
 }

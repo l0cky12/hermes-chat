@@ -2,11 +2,11 @@
 // (ADR 0095): the composer and the Artifact editor step their own histories, and every other text field steps the
 // webview's.
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { EditKind } from "../hermes/editHistory";
 import { composing } from "./bits";
 
 export type EditStep = "undo" | "redo";
 
-/** Ctrl+Z (Cmd+Z) undoes; Ctrl+Shift+Z and Ctrl+Y redo. */
 export function editStep(e: KeyboardEvent | ReactKeyboardEvent): EditStep | undefined {
   if (!(e.ctrlKey || e.metaKey) || e.altKey) return undefined;
   const k = e.key.toLowerCase();
@@ -17,7 +17,6 @@ export function editStep(e: KeyboardEvent | ReactKeyboardEvent): EditStep | unde
 
 const TEXT_INPUTS = new Set(["text", "search", "url", "tel", "email", "password", "number"]);
 
-/** Whether `target` takes typed text, so Ctrl+Z there is text undo. */
 export function isTextField(target: EventTarget | null): boolean {
   if (target instanceof HTMLTextAreaElement) return true;
   if (target instanceof HTMLInputElement) return TEXT_INPUTS.has(target.type);
@@ -35,7 +34,7 @@ const TYPING = new Set([
 ]);
 
 /** How an `input` event changed a text: typing joins the undo step under way; a cut, paste or drop is its own. */
-export const inputKind = (e: Event): "typing" | "change" => (e instanceof InputEvent && TYPING.has(e.inputType) ? "typing" : "change");
+export const inputKind = (e: Event): EditKind => (e instanceof InputEvent && TYPING.has(e.inputType) ? "typing" : "change");
 
 /** Where the caret goes after an undo or redo turned `before` into `after`: the end of the part that changed. */
 export function caretAfter(before: string, after: string): number {

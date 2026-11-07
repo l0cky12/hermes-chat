@@ -21,6 +21,7 @@ import { SideQuestionPair } from "./SideQuestions";
 import { Markdown } from "./Markdown";
 import { SourceIcon, Spinner, StoredTime, composing, highlight } from "./bits";
 import { caretAfter, editStep, inputKind, type EditStep } from "./editKeys";
+import type { EditKind } from "../hermes/editHistory";
 import { wakeFull } from "../hermes/snooze";
 import { stagedFiles } from "../hermes/unsaved";
 import { AttachmentChip, Previews, readPreview } from "./previews";
@@ -331,8 +332,7 @@ export function ChatPane({
   status: ConnectionStatus;
   alsoPostsIn?: Source;
   draft: string;
-  /** `how`: typed, so it joins the undo step under way, or any other change. */
-  onDraft: (text: string, how?: "typing" | "change") => void;
+  onDraft: (text: string, how?: EditKind) => void;
   /** Undoes or redoes the Draft, and says its text then, or undefined when there was nothing to step. */
   onDraftStep: (step: EditStep) => string | undefined;
   onRetry: (itemId: string) => void;
@@ -1195,8 +1195,7 @@ function Composer({
   alsoPostsIn?: Source;
   /** `onSend` empties it. */
   text: string;
-  onText: (text: string, how?: "typing" | "change") => void;
-  /** The text keeps its own undo history, since the webview's breaks when the app writes the text (ADR 0094). */
+  onText: (text: string, how?: EditKind) => void;
   onStep: (step: EditStep) => string | undefined;
   onAttach: (paths: string[]) => Promise<AttachCheck>;
   onSend: (text: string, attachments: Attachment[], skill?: SkillCall) => void;
@@ -1390,7 +1389,7 @@ function Composer({
     const after = onStep(which);
     if (after !== undefined) caretTo.current = { text: after, at: caretAfter(before, after) };
   };
-  // The webview's own Undo and Redo, from its context menu, would step its history: ours runs instead.
+  // Undo and Redo from WebView2's context menu (Windows) would step the webview's history: ours runs instead.
   const stepRef = useRef(step);
   stepRef.current = step;
   useEffect(() => {

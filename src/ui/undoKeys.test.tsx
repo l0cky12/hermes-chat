@@ -32,7 +32,6 @@ afterEach(async () => {
 // Drafts outlive a test in memory, so each launch is its own connection, with Drafts of its own.
 let launches = 0;
 
-/** The app signed in to a fake Hermes, with the chat "Nightly backup" open. */
 async function launch() {
   const server = new FakeHermes();
   server.sessions = [row("backup", 1, { pinned: true, title: "Nightly backup" }), row("deploy", 2, { pinned: true, title: "Deploy notes" })];
