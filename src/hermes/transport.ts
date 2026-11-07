@@ -1155,6 +1155,17 @@ export class Hermes {
     return saved;
   }
 
+  /**
+   * Removes a model provider's API key from the shown profile's Hermes (`Pipe.removeProviderKey`), then reads its model
+   * list again, so the model picker stops offering that provider.
+   */
+  async removeProviderKey(envVar: string): Promise<void> {
+    if (!this.pipe) throw new Error("Not connected to Hermes.");
+    await this.pipe.removeProviderKey(this.profile, envVar);
+    if (this.snapshot.models?.profile === this.profile) this.update({ models: undefined });
+    void this.loadModels();
+  }
+
   /** The server's profiles by name, as dashboard REST lists them. One sign-in covers them all (research doc). */
   async profiles(): Promise<string[]> {
     const res = (await this.rest("GET", "api/profiles")) as ProfileList;

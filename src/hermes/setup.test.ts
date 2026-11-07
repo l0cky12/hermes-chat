@@ -256,4 +256,19 @@ describe("Model provider keys", () => {
     expect(await hermes.saveProviderKey("ANTHROPIC_API_KEY", "sk-offline")).toEqual({ verified: false });
     await hermes.close();
   });
+
+  it("removes a key for the shown profile, and reads the models again", async () => {
+    const server = new FakeHermes();
+    const hermes = await connect(server.openPipe);
+    await hermes.loadModels();
+    const asked = server.requests.filter((r) => r.method === "model.options").length;
+    await hermes.removeProviderKey("OPENROUTER_API_KEY");
+    expect(server.removedKeys).toEqual([{ profile: "default", envVar: "OPENROUTER_API_KEY" }]);
+    await hermes.idle();
+    expect(server.requests.filter((r) => r.method === "model.options").length).toBe(asked + 1);
+    expect((await hermes.providerSetup()).keys.find((k) => k.provider === "openrouter")?.isSet).toBe(false);
+    await expect(hermes.removeProviderKey("TELEGRAM_BOT_TOKEN")).rejects.toThrow("doesn't relay");
+    expect(server.removedKeys).toHaveLength(1);
+    await hermes.close();
+  });
 });
