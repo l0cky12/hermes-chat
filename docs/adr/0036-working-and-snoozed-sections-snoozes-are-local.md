@@ -11,7 +11,7 @@ The list now shows each chat in one place, worked out from what the app already 
 
 The word "Active" no longer labels anything in the list. It stays the name of the state that is stored as Hermes's `pinned` flag, and the toast after unsettling says "Unsettled".
 
-Snoozing is in a chat's right-click menu: 1 hour, 3 hours, Tomorrow (9:00), Next week (the coming Monday, 9:00), and Custom…, which asks for a date and time or a duration (up to a year). A snoozed chat's menu also offers Unsnooze. Settled chats can't be snoozed. Settling a snoozed chat forgets the snooze; Undo puts it back.
+Snoozing is in a chat's right-click menu: 1 hour, 3 hours, Tomorrow (9:00), Next week (the coming Monday, 9:00), and Custom…, which asks for a date and time or a duration (up to a year). A snoozed chat's menu offers only Unsnooze, so to change the time the owner unsnoozes first. Settled chats can't be snoozed. Settling a snoozed chat forgets the snooze; Undo puts it back.
 
 ## Decisions
 

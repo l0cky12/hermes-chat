@@ -99,6 +99,7 @@ export function ChatMenu({
   onClose: () => void;
 }) {
   const now = Date.now();
+  const snoozedUntil = snooze?.until !== undefined && snooze.until > now ? snooze.until : undefined;
   return (
     <Menu label={`Actions for ${chat.title}`} x={x} y={y} onClose={onClose}>
       <button
@@ -198,9 +199,9 @@ export function ChatMenu({
       {snooze && (
         <div role="group" aria-label="Snooze" className="menu-group">
           <div className="menu-heading" aria-hidden>
-            {snooze.until && snooze.until > now ? `Snoozed until ${wakeFull(snooze.until)}` : "Snooze"}
+            {snoozedUntil !== undefined ? `Snoozed until ${wakeFull(snoozedUntil)}` : "Snooze"}
           </div>
-          {snooze.until && snooze.until > now && (
+          {snoozedUntil !== undefined ? (
             <button
               role="menuitem"
               className="menu-item"
@@ -214,37 +215,40 @@ export function ChatMenu({
               </span>
               <span className="menu-label">Unsnooze</span>
             </button>
+          ) : (
+            <>
+              {snoozePresets(now).map((p) => (
+                <button
+                  key={p.key}
+                  role="menuitem"
+                  className="menu-item"
+                  title={`Until ${wakeFull(p.until)}`}
+                  onClick={() => {
+                    onClose();
+                    snooze.onSnooze(p.until);
+                  }}
+                >
+                  <span className="menu-icon">
+                    <AlarmClock size={15} />
+                  </span>
+                  <span className="menu-label">{p.label}</span>
+                </button>
+              ))}
+              <button
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  onClose();
+                  snooze.onCustom();
+                }}
+              >
+                <span className="menu-icon">
+                  <CalendarClock size={15} />
+                </span>
+                <span className="menu-label">Custom…</span>
+              </button>
+            </>
           )}
-          {snoozePresets(now).map((p) => (
-            <button
-              key={p.key}
-              role="menuitem"
-              className="menu-item"
-              title={`Until ${wakeFull(p.until)}`}
-              onClick={() => {
-                onClose();
-                snooze.onSnooze(p.until);
-              }}
-            >
-              <span className="menu-icon">
-                <AlarmClock size={15} />
-              </span>
-              <span className="menu-label">{p.label}</span>
-            </button>
-          ))}
-          <button
-            role="menuitem"
-            className="menu-item"
-            onClick={() => {
-              onClose();
-              snooze.onCustom();
-            }}
-          >
-            <span className="menu-icon">
-              <CalendarClock size={15} />
-            </span>
-            <span className="menu-label">Custom…</span>
-          </button>
         </div>
       )}
       {!!projects?.list.length && (
