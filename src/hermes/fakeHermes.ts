@@ -338,6 +338,8 @@ export class FakeHermes {
    * (`hermes_cli/web_routers/cron.py` at the deployed `bf0203a`, as probed with a throwaway HERMES_HOME).
    */
   cron: FakeCron = new FakeCron(this);
+  /** The kanban plugin's board and tasks (`plugins/kanban/dashboard/plugin_api.py` at Hermes 0.22.6), and the wakes its poller sends. */
+  kanban: FakeKanban = new FakeKanban(this);
   webhooks: FakeWebhooks = new FakeWebhooks();
   /** The `?profile=` each `/api/ws` connection was opened with, in order. */
   readonly wsProfiles: string[] = [];
@@ -804,7 +806,13 @@ export class FakeHermes {
       const stored = this.runtime.get(runtimeId);
       if (stored) this.storeMessage(stored, { role: "user", text: String(r.params.text), row_id: this.userRowId });
       if (drop === "stored") return this.drop();
+      this.turns.add(runtimeId);
+      this.stopped.delete(runtimeId);
       this.respond(r.id, { status: "streaming", ...(this.userRowId !== undefined && { user_row_id: this.userRowId }) });
+      // Work handed off and the turn ended (issue #287): a kanban task, or background subagents.
+      const prompt = String(r.params.text ?? "");
+      if (stored && /dispatch/i.test(prompt)) queueMicrotask(() => this.kanban.dispatchReply(runtimeId, stored, prompt));
+      else if (stored && /background/i.test(prompt)) queueMicrotask(() => this.backgroundReply(runtimeId, stored));
     },
     // Attachments stage server-side for the session's next turn (research doc §7; `tui_gateway/methods_prompt.py`
     // at the deployed `bf0203a`). Images join `attached_images`; other files land in the session's
@@ -909,6 +917,7 @@ export class FakeHermes {
       const sid = String(r.params.session_id);
       if (!this.runtime.has(sid)) return this.fail(r.id, 4001, "session not found");
       this.respond(r.id, { status: "interrupted" });
+      this.stopped.add(sid);
       // The interrupt withdraws whatever the session was waiting on.
       for (const [id, q] of this.openRequests) if (q.sid === sid) this.cancelRequest(id, "interrupted");
     },
@@ -1625,6 +1634,7 @@ export class FakeHermes {
       (method === "DELETE" && profilePath ? () => this.deleteProfile(decodeURIComponent(profilePath[1])) : undefined) ??
       this.webhooks.route(req) ??
       this.cron.route(req) ??
+      this.kanban.route(req) ??
       this.skills.route(req) ??
       this.learningRoute(req) ??
       this.memoryProviders.route(req) ??
@@ -2053,9 +2063,34 @@ export class FakeHermes {
     this.frame({ jsonrpc: "2.0", id, error: { code, message } });
   }
 
+  /** The runtime sessions with a turn running, as far as this fake has heard: started by a prompt or `message.start`, ended by `message.complete` or `error`. */
+  readonly turns = new Set<string>();
+  /** The runtime sessions the owner stopped, until their next prompt: the poller starts no wake turn in them (`_notif_claim_turn`). */
+  readonly stopped = new Set<string>();
+
   event(sessionId: string, type: string, payload: Record<string, unknown> = {}) {
+    if (type === "message.start") this.turns.add(sessionId);
+    if (type === "message.complete" || type === "error") this.turns.delete(sessionId);
     this.frame({ jsonrpc: "2.0", method: "event", params: { type, session_id: sessionId, payload } });
   }
+
+  /** A reply that starts two background subagents, as `delegate_task` in background mode reports them, and ends its turn while they run. */
+  private backgroundReply(runtimeId: string, stored: string) {
+    this.event(runtimeId, "message.start");
+    const ids: string[] = [];
+    for (const goal of ["Read the auth code", "Read the tests"]) {
+      const subagent_id = `sa-${++this.subagentSeq}`;
+      ids.push(subagent_id);
+      const payload = { subagent_id, goal, task_index: ids.length - 1, task_count: 2, depth: 0, delegation_id: `dlg-${runtimeId}`, model: "stand-in-model" };
+      (this.subagents[stored] ??= []).push({ ...payload, owner: runtimeId, status: "running", accepting_steer: true, started_at: now() });
+      this.event(runtimeId, "subagent.start", payload);
+    }
+    const text = `Two subagents are on it in the background (${ids.join(", ")}). I'll report when they finish.`;
+    this.event(runtimeId, "message.delta", { text });
+    this.storeMessage(stored, { role: "assistant", text });
+    this.event(runtimeId, "message.complete", { text, status: "complete" });
+  }
+  private subagentSeq = 0;
 
   approvalInfo(sid: string): Record<string, unknown> {
     if (!this.approvalModes) return {};
@@ -2953,4 +2988,130 @@ export class FakeWebhooks {
     }
     return notFound();
   }
+}
+
+/** A task row as the kanban plugin stores and lists it, as far as this app reads it. Times are Unix seconds. */
+export type KanbanRow = {
+  id: string;
+  board: string;
+  status: string;
+  title: string;
+  assignee: string | null;
+  session_id: string | null;
+  created_at: number;
+  started_at: number | null;
+  current_run_id: string | null;
+  subscribed: boolean;
+  runs: { id: string; status: string }[];
+};
+
+const KANBAN_COLUMNS = ["triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done", "archived"];
+/** The statuses whose task events wake the subscribed chat (`session_notifications.py` `_KANBAN_WAKE_EVENTS`). */
+const KANBAN_WAKES: Record<string, string> = { done: "✔", blocked: "⛔", archived: "📦", review: "👀" };
+
+/**
+ * The kanban plugin's REST (`GET /api/plugins/kanban/boards`, `board?board=`, `tasks/{id}?board=`) over in-memory
+ * boards, and its poller's wakes: `move` changes a task's status as a worker or the owner would, and the chat that
+ * created it, when live and subscribed, hears a `status.update` and then a new turn, as Hermes starts one when no
+ * turn is running. `dispatchReply` is the reply a `kanban_create` prompt gets.
+ */
+export class FakeKanban {
+  boards: Record<string, { name: string; tasks: KanbanRow[] }> = { default: { name: "Default", tasks: [] } };
+  current = "default";
+  /** No kanban plugin: every route answers 404 Not Found. */
+  missing = false;
+  /** How long after a task moves the poller wakes its chat. */
+  wakeDelayMs = 0;
+  private seq = 0;
+  private runSeq = 0;
+
+  constructor(private server: FakeHermes) {}
+
+  /** A task on `board`, made the way `kanban_create` makes one. */
+  add(board: string, fields: Partial<KanbanRow> & { title: string }): KanbanRow {
+    const row: KanbanRow = { id: `t_${(++this.seq).toString(16).padStart(8, "0")}`, board, status: "ready", assignee: null, session_id: null, created_at: Math.floor(now()), started_at: null, current_run_id: null, subscribed: true, runs: [], ...fields };
+    (this.boards[board] ??= { name: board, tasks: [] }).tasks.push(row);
+    return row;
+  }
+
+  find(id: string): KanbanRow | undefined {
+    return Object.values(this.boards).flatMap((b) => b.tasks).find((t) => t.id === id);
+  }
+
+  /** Deletes the task, as the owner would on the board. */
+  remove(id: string) {
+    for (const b of Object.values(this.boards)) b.tasks = b.tasks.filter((t) => t.id !== id);
+  }
+
+  /** Moves the task to `status`, with a run when a worker picks it up, and wakes its chat as Hermes's poller does. */
+  move(id: string, status: string): boolean {
+    const t = this.find(id);
+    if (!t) return false;
+    t.status = status;
+    if (status === "running" && !t.started_at) {
+      t.started_at = Math.floor(now());
+      t.current_run_id = `run_${++this.runSeq}`;
+      t.runs.push({ id: t.current_run_id, status: "running" });
+    }
+    if (status === "done" || status === "blocked" || status === "review" || status === "archived") t.current_run_id = null;
+    const mark = KANBAN_WAKES[status];
+    const runtime = t.session_id ? this.server.runtimeIdOf(t.session_id) : undefined;
+    if (!mark || !runtime) return true;
+    this.server.event(runtime, "status.update", { kind: "process", text: `${mark} [${t.board}] @${t.assignee ?? "unassigned"} Kanban ${t.id} ${status} — ${t.title}` });
+    const wake = () => {
+      if (!t.subscribed || this.server.turns.has(runtime) || this.server.stopped.has(runtime) || !t.session_id) return;
+      const text = `Results are in for ${t.id} (${status}): ${t.title}. Here is the synthesis.`;
+      this.server.event(runtime, "message.start");
+      this.server.event(runtime, "message.delta", { text });
+      this.server.storeMessage(t.session_id, { role: "assistant", text });
+      this.server.event(runtime, "message.complete", { text, status: "complete" });
+    };
+    setTimeout(wake, this.wakeDelayMs);
+    return true;
+  }
+
+  /** The reply to a prompt that dispatches: a `kanban_create` call with Hermes's result shape, a word about it, and the turn's end. */
+  dispatchReply(runtimeId: string, stored: string, prompt: string) {
+    const title = prompt.replace(/dispatch/i, "").trim() || "Research task";
+    const task = this.add(this.current, { title, assignee: "researcher", session_id: stored });
+    const tool_id = `kc-${task.id}`;
+    const args = { title, assignee: "researcher" };
+    this.server.event(runtimeId, "message.start");
+    this.server.event(runtimeId, "tool.start", { tool_id, name: "kanban_create", args, preview: title });
+    const result = { ok: true, task_id: task.id, status: task.status, workspace_kind: "project", workspace_path: "/srv/work", project_id: "p_1", gated: false, subscribed: true };
+    this.server.event(runtimeId, "tool.complete", { tool_id, name: "kanban_create", duration_s: 0.1, result: JSON.stringify(result) });
+    const text = `Research task dispatched (${task.id}). I'll synthesize the findings when it returns.`;
+    this.server.event(runtimeId, "message.delta", { text });
+    this.server.storeMessage(stored, { role: "assistant", text });
+    this.server.event(runtimeId, "message.complete", { text, status: "complete" });
+  }
+
+  route(req: RestRequest): (() => unknown) | undefined {
+    const m = /^\/api\/plugins\/kanban\/(boards|board|tasks)(?:\/([^/]+))?$/.exec(req.path);
+    if (!m || req.method !== "GET" || this.missing) return undefined;
+    const [, what, rawId] = m;
+    return () => {
+      if (what === "boards")
+        return {
+          boards: Object.entries(this.boards).map(([slug, b]) => ({ slug, name: b.name, archived: false, is_current: slug === this.current, counts: {}, total: b.tasks.length })),
+          current: this.current,
+        };
+      const slug = req.query.get("board") ?? this.current;
+      const board = this.boards[slug];
+      if (!board) this.refuse(404, `board '${slug}' does not exist`);
+      if (what === "board") return { columns: KANBAN_COLUMNS.map((name) => ({ name, tasks: board.tasks.filter((t) => t.status === name).map(listed) })), assignees: [], tenants: [], latest_event_id: 0, now: now() };
+      const task = board.tasks.find((t) => t.id === decodeURIComponent(rawId ?? ""));
+      if (!task) this.refuse(404, `task '${rawId}' does not exist`);
+      return { task: listed(task), events: [], runs: task.runs, comments: [], links: [] };
+    };
+  }
+
+  private refuse(status: number, detail: unknown): never {
+    throw new Error(`The dashboard answered ${status}: ${JSON.stringify({ detail })}`);
+  }
+}
+
+/** A task as the routes list it: the stored row less what the plugin keeps to itself. */
+function listed({ subscribed: _, ...t }: KanbanRow) {
+  return t;
 }
