@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { handoffs } from "./dispatched";
 import { FakeHermes, row } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
 import { INBOX_PREFIX, inboxAcks, inboxEntries, needsOwner, type InboxEntry, type InboxKind } from "./inbox";
@@ -45,6 +46,25 @@ function storage() {
 afterEach(() => void vi.useRealTimers());
 
 describe("The inbox", () => {
+  it("lists a chat waiting on work it handed off as running, not finished, and a task that needs the owner as asking", async () => {
+    vi.useFakeTimers();
+    const { server, hermes } = await signedIn();
+    const id = await hermes.newChat();
+    await hermes.send(id, "dispatch a research task");
+    await vi.advanceTimersByTimeAsync(0);
+    const chats = hermes.getSnapshot().chats.map((c) => (c.id === id ? { ...c, unread: true } : c));
+    const sources = (now: number) => ({ profile: "default", chats, connected: true, others: { byName: {} }, handoffs: handoffs(chats, {}, now) });
+    const waiting = inboxEntries(sources(Date.now())).entries.filter((e) => e.chatId === id);
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]).toMatchObject({ key: `running default ${id}`, kind: "running", waiting: true, summary: "Hermes is waiting on work it handed off.", stale: false });
+    const task = server.kanban.boards.default.tasks.at(-1)!;
+    server.kanban.move(task.id, "blocked");
+    await vi.advanceTimersByTimeAsync(0);
+    const stuck = hermes.getSnapshot().chats;
+    const asking = inboxEntries({ profile: "default", chats: stuck, connected: true, others: { byName: {} }, handoffs: handoffs(stuck, {}, Date.now()) }).entries.filter((e) => e.chatId === id);
+    expect(asking.map((e) => [e.key, e.kind, e.summary, e.itemId])).toEqual([[`handoff default ${id} ${task.id} blocked`, "approval", "A dispatched task is blocked.", undefined]]);
+  });
+
   it("shows work finished and asking for approval in background profiles, each with its profile, chat and time", async () => {
     const { server, hermes } = await signedIn();
     const busyAt = nowS() - 5;

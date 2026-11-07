@@ -173,6 +173,8 @@ kbd {
 /* A collapsed section's rows stay mounted, hidden; .row's own display would otherwise show them. */
 .row[hidden] { display: none; }
 .row-pin { flex: none; display: inline-flex; color: var(--faint); }
+.row-wait { display: inline-flex; color: var(--accent); }
+.row-owner { display: inline-flex; color: var(--warn); margin-right: 4px; }
 .row-wake { font-variant-numeric: tabular-nums; }
 .row-meta .row-wake + * { margin-left: 6px; }
 .sync-error { color: var(--warn); font-size: calc(12rem / 14); padding: 6px 10px 10px; }
@@ -2332,7 +2334,7 @@ label.memory-pick { cursor: pointer; }
 .office-list-room .office-room-name { padding: 10px 8px 2px; }
 .office-room-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .office-room-profile { flex: none; font-weight: 400; color: var(--faint); font-size: calc(11.5rem / 14); }
-.office-row.state-running .inbox-kind { color: var(--accent); }
+.office-row.state-running .inbox-kind, .office-row.state-waiting .inbox-kind { color: var(--accent); }
 .office-row.state-approval .inbox-kind, .office-row.state-uncertain .inbox-kind { color: var(--warn); }
 .office-row.state-failed .inbox-kind { color: var(--bad); }
 .office-row.state-completed .inbox-kind { color: var(--ok); }

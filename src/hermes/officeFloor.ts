@@ -10,6 +10,8 @@ export type BuildingRoom = "workroom" | "waiting" | "trouble" | "lounge";
 export const ROOM_OF: Record<DeskState, BuildingRoom> = {
   running: "workroom",
   queued: "workroom",
+  // With its team: the team's dispatched work is what runs. The Waiting room is for waiting on the owner.
+  waiting: "workroom",
   approval: "waiting",
   uncertain: "waiting",
   failed: "trouble",
@@ -21,8 +23,8 @@ export const ROOM_OF: Record<DeskState, BuildingRoom> = {
   unknown: "lounge",
 };
 
-/** How an agent is posed: at a desk typing, standing at the Workroom door, hand up, slumped at a desk, on a couch. */
-export type Pose = "typing" | "door" | "hand-up" | "slumped" | "couch";
+/** How an agent is posed: at a desk typing, or seated there waiting, standing at the Workroom door, hand up, slumped at a desk, on a couch. */
+export type Pose = "typing" | "seated" | "door" | "hand-up" | "slumped" | "couch";
 
 const POSE_IN: Record<BuildingRoom, Pose> = { workroom: "typing", waiting: "hand-up", trouble: "slumped", lounge: "couch" };
 
@@ -132,16 +134,19 @@ export type Floor = { characters: Character[]; more: number; memory: FloorMemory
 /** Which agents are drawn when not all fit: those that need the owner first, then those at work, then the rest. */
 const KEEP_ORDER: readonly BuildingRoom[] = ["waiting", "trouble", "workroom", "lounge"];
 
-const works = (s: DeskState) => s === "running" || s === "queued";
+const works = (s: DeskState) => s === "running" || s === "queued" || s === "waiting";
+/** At a desk in the Workroom: typing, or seated while the work it handed off runs. */
+const seated = (s: DeskState) => s === "running" || s === "waiting";
 
 /**
  * Every agent in `rooms` on the one floor, in the room its state gives, at a seat, in its team's color. Pure: the same
  * rooms and memory give the same floor, and feeding the returned memory back with the same rooms changes nothing.
  * Characters come in the order `rooms` lists them.
  *
- * - A team keeps the pods it holds while any of its agents is running or queued; it takes the lowest free pods when it
- *   needs more, and lets them all go once none of its agents works. An agent keeps its desk while it runs.
- * - A running agent with no free desk in its team's pods, and every queued agent, stands in line at the Workroom door.
+ * - A team keeps the pods it holds while any of its agents is running, waiting or queued; it takes the lowest free pods
+ *   when it needs more, and lets them all go once none of its agents works. An agent keeps its desk while it runs.
+ * - A running or waiting agent with no free desk in its team's pods, and every queued agent, stands in line at the
+ *   Workroom door.
  * - A team keeps its color while it is on the floor; a new team takes the color fewest teams wear.
  * - At most `cap` characters, and no more than a room has seats. Those not drawn are counted in `more`.
  */
@@ -176,7 +181,7 @@ export function officeFloor(rooms: readonly Room[], memory: FloorMemory, cap = F
 
   // Pods: a working team keeps what it holds, then teams in order take the lowest free pods they still need.
   const running = new Map<string, Agent[]>();
-  for (const a of agents) if (drawn.has(a) && a.desk.state === "running") running.set(a.room.key, [...(running.get(a.room.key) ?? []), a]);
+  for (const a of agents) if (drawn.has(a) && seated(a.desk.state)) running.set(a.room.key, [...(running.get(a.room.key) ?? []), a]);
   const pods = new Map<string, number[]>();
   const held = new Set<number>();
   for (const r of rooms) {
@@ -219,8 +224,10 @@ export function officeFloor(rooms: readonly Room[], memory: FloorMemory, cap = F
     const desk = desks.get(a.desk.key);
     let spot: Spot | undefined;
     let pose: Pose = POSE_IN[a.place];
-    if (desk !== undefined) spot = PLAN.seats.workroom[desk];
-    else if (a.place === "workroom") {
+    if (desk !== undefined) {
+      spot = PLAN.seats.workroom[desk];
+      if (a.desk.state === "waiting") pose = "seated";
+    } else if (a.place === "workroom") {
       spot = PLAN.door[next.door++];
       pose = "door";
     } else spot = PLAN.seats[a.place][next[a.place]++];

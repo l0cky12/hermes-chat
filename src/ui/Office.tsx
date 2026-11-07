@@ -4,7 +4,7 @@
 // chat's Subagents panel. Nothing here answers, approves, retries or starts anything. App mounts it only while it is
 // open and the window can be seen.
 import { useEffect, useId, useRef, useState, type FocusEvent, type KeyboardEvent, type RefObject } from "react";
-import { Building2, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleHelp, CircleStop, Clock, Coffee, List, Loader, ShieldAlert, X } from "lucide-react";
+import { Building2, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleHelp, CircleStop, Clock, Coffee, Hourglass, List, Loader, ShieldAlert, X } from "lucide-react";
 import { officeTally, type Desk, type DeskState, type Room } from "../hermes/office";
 import type { FloorMemory } from "../hermes/officeFloor";
 import type { OfficeView } from "../hermes/uiPrefs";
@@ -15,6 +15,7 @@ import { STATE_LABEL, deskLabel } from "./officeText";
 const STATE_ICON: Record<DeskState, typeof X> = {
   queued: Clock,
   running: Loader,
+  waiting: Hourglass,
   approval: ShieldAlert,
   failed: CircleAlert,
   uncertain: CircleHelp,

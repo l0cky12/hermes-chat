@@ -49,6 +49,7 @@ import { officeRooms, type Desk, type Room } from "./hermes/office";
 import type { SubagentId } from "./hermes/subagents";
 import { botActivity, isBotChat, isBotChatTitle, newInBotChatNote, type Bot } from "./hermes/bots";
 import { inboxAcks, inboxEntries, inboxScope, needsOwner, type InboxEntry } from "./hermes/inbox";
+import { handoffs as handoffsOf, nextHandoffChange, outstandingIds } from "./hermes/dispatched";
 import { ChatPane, type FollowUpHost, type JumpTarget } from "./ui/ChatPane";
 import type { ChatPin } from "./ui/ChatMenu";
 import { BranchDialog, BranchedFrom } from "./ui/Branch";
@@ -67,7 +68,7 @@ import { SearchPalette } from "./ui/Search";
 import { SavedFilters, TagManager } from "./ui/Tags";
 import { useSnoozeClock } from "./ui/Snooze";
 import { TagsStore, savedTagsFile, type SavedFilter } from "./hermes/tags";
-import { AttentionClock, ClearedStore, PINS_KEY, PinStore, SNOOZE_KEY, SnoozeStore, chatSections, heldClears, wakeFull } from "./hermes/snooze";
+import { AttentionClock, ClearedStore, PINS_KEY, PinStore, SNOOZE_KEY, STOP_WAITING_KEY, SnoozeStore, StopWaitingStore, chatSections, heldClears, wakeFull } from "./hermes/snooze";
 import { IDLE_COMPACT_CHECK_MS, IdleCompactor, idleCompactionNote } from "./hermes/idleCompact";
 import { runFilter } from "./hermes/chatFilter";
 import { SettingsScreen, type PersonaWiring } from "./ui/Settings";
@@ -1198,6 +1199,28 @@ export function Main({
     window.addEventListener("storage", changed);
     return () => window.removeEventListener("storage", changed);
   }, [pinStore]);
+  // The work the owner stopped waiting on, kept the same way (dispatched.ts).
+  const stopStore = useMemo(() => new StopWaitingStore(localStorage, scope), [scope]);
+  const stops = useSyncExternalStore(stopStore.subscribe, stopStore.getSnapshot);
+  useEffect(() => {
+    const changed = (e: StorageEvent) => e.key === STOP_WAITING_KEY && stopStore.reread();
+    window.addEventListener("storage", changed);
+    return () => window.removeEventListener("storage", changed);
+  }, [stopStore]);
+  // Each chat's dispatched work, worked out once a render. A handoff can change with nothing else happening (a wake
+  // grace ending, a task going stale), so the next such time is waited for.
+  const [handoffTick, setHandoffTick] = useState(0);
+  const handoffMap = useMemo(() => handoffsOf(chats, stops, Date.now()), [chats, stops, handoffTick]);
+  useEffect(() => {
+    const at = nextHandoffChange(chats, stops, Date.now());
+    if (at === undefined) return;
+    const timer = setTimeout(() => setHandoffTick((n) => n + 1), Math.max(0, at - Date.now()) + 1);
+    return () => clearTimeout(timer);
+  }, [handoffMap]);
+  const stopWaiting = (id: string) => {
+    const chat = chats.find((c) => c.id === id);
+    if (chat) stopStore.stop(id, outstandingIds(chat));
+  };
   // A pinned chat the list doesn't reach (quiet for over a month) is looked up once and kept in the list; one Hermes no
   // longer has is unpinned.
   const pinsLookedUp = useMemo(() => new Set<string>(), [scope]);
@@ -1212,7 +1235,7 @@ export function Main({
       );
     }
   }, [pins, chats, status, switching, pinStore]);
-  attention.observe(chats, Date.now(), status === "connected");
+  attention.observe(chats, Date.now(), status === "connected", handoffMap);
   const tagChange = (fn: () => Promise<unknown>) =>
     fn().catch((e) => setToast({ text: (e as Error).message, at: Date.now() }));
   const openSearch = (start?: SavedFilter) => {
@@ -1308,7 +1331,7 @@ export function Main({
     void refreshOutputs();
   }, [outputsOpen, status, outputsIndex, shownOutputsScope, outputsChatKey]);
   const where = routeLabel(route) ?? addressLabel(connection);
-  const inbox = inboxEntries({ profile, chats, connected: status === "connected", others, live, seen });
+  const inbox = inboxEntries({ profile, chats, connected: status === "connected", others, live, seen, handoffs: handoffMap });
   const inboxShown = inbox.entries.filter((e) => !acks.isDismissed(e, dismissed));
   // Writes only when a resumed chat shows cards a dismissed waiting session covered.
   useEffect(() => acks.keepCovered(inbox.entries));
@@ -2223,7 +2246,7 @@ export function Main({
       const onChat = !covering && !previewCovers && !projectScreenOpen && !searchOpen;
       if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
         if (!onChat || e.defaultPrevented || (e.target as Element | null)?.tagName === "SELECT") return;
-        const { pinned, inbox, working } = chatSections(listed, snoozes, Date.now(), attention.since, pins);
+        const { pinned, inbox, working } = chatSections(listed, snoozes, Date.now(), attention.since, pins, handoffMap);
         const order = [...pinned, ...inbox, ...working];
         const at = order.findIndex((c) => c.id === active.chatId);
         const next = order[at < 0 ? 0 : at + (e.key === "ArrowDown" ? 1 : -1)];
@@ -2630,6 +2653,8 @@ export function Main({
           attentionSince={attention.since}
           pins={pins}
           onPin={pinChat}
+          handoffs={handoffMap}
+          onStopWaiting={stopWaiting}
           onSnooze={(id, until) => snoozeChat(id, until)}
           onWake={(id) => snoozeChat(id, undefined)}
           onArchive={setArchived}
