@@ -246,6 +246,8 @@ export type Figures = {
   /** Moves typing arms for time `t` (ms). Whether any character types, so the scene knows to keep drawing. */
   animate(t: number, moves: boolean): boolean;
   select(key: string | undefined): void;
+  /** Faces are drawn only when the camera is near enough to see them. */
+  showFaces(on: boolean): void;
   /** The meshes a click can hit, and which character an instance of them is. */
   pickable: InstancedMesh[];
   keyAt(instance: number): string | undefined;
@@ -389,6 +391,9 @@ export function buildFigures(): Figures {
     select(key) {
       picked = key;
       ringOn();
+    },
+    showFaces(on) {
+      face.visible = on;
     },
     keyAt: (instance) => shown[instance]?.key,
     tagAt(i, out) {

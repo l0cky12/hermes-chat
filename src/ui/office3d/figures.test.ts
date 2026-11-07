@@ -253,6 +253,14 @@ describe("The office's characters", () => {
     expect(Float32Array.from(mesh("forearm").instanceMatrix.array.slice(0, 32))).not.toEqual(lifted);
   });
 
+  it("shows faces only when told the camera is close", () => {
+    const { figures, mesh } = drawn(MIXED.characters);
+    figures.showFaces(false);
+    expect(mesh("face").visible).toBe(false);
+    figures.showFaces(true);
+    expect(mesh("face").visible).toBe(true);
+  });
+
   it("keeps the selection ring under the selected agent when the floor moves it, and drops it when the agent goes", () => {
     const queued = officeFloor([team("a", "running", "queued")], EMPTY_FLOOR_MEMORY);
     const started = officeFloor([team("a", "running", "running")], queued.memory);

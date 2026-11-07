@@ -40,6 +40,8 @@ const MIN_DISTANCE = 7;
 const MAX_DISTANCE = 44;
 const HOME = { target: new Vector3(0, 0, 0.5), position: new Vector3(15, 27, 23) };
 const TWEEN_MS = 450;
+/** Faces show nearer than this to the point the camera turns about: there an eye is about four pixels across. */
+const FACE_DISTANCE = 18;
 /** Typing needs a few distinct poses a second, not smooth motion: each frame of it redraws the whole building. */
 const TYPING_FPS = 6;
 
@@ -117,6 +119,7 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
       }
     }
     pacer.animating("typing", figures.animate(now, moves), TYPING_FPS);
+    figures.showFaces(camera.position.distanceTo(controls.target) < FACE_DISTANCE);
     renderer.render(scene, camera);
     renderer.getSize(size);
     const tags = new Map<string, ReturnType<typeof toScreen>>();
