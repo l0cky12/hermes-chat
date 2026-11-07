@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SavedSignIn } from "./account";
 import { type DraftStorage, draftKey, drafts } from "./drafts";
+import { TYPING_PAUSE_MS } from "./editHistory";
 
 /** localStorage as the app sees it: it outlives a restart. `full` makes every write fail. */
 function memoryStorage() {
@@ -99,5 +100,96 @@ describe("Composer drafts", () => {
     const key = draftKey(nas, "default", "chat-1");
     d.set(key, "still here");
     expect(d.get(key)).toBe("still here");
+  });
+});
+
+describe("Undo in a Draft", () => {
+  const key = draftKey(nas, "default", "chat-1");
+  /** A store on a clock the test moves. */
+  function clocked() {
+    const clock = { now: 0 };
+    return { clock, d: drafts(memoryStorage(), () => clock.now) };
+  }
+  const typeIn = (d: ReturnType<typeof drafts>, clock: { now: number }, text: string) => {
+    for (let i = 1; i <= text.length; i++) {
+      clock.now += 50;
+      d.set(key, d.get(key) + text.slice(i - 1, i), "typing");
+    }
+  };
+
+  it("makes a burst of typing one step, and a pause a new one", () => {
+    const { clock, d } = clocked();
+    typeIn(d, clock, "hello");
+    clock.now += TYPING_PAUSE_MS + 1;
+    typeIn(d, clock, " world");
+    expect(d.undo(key)).toBe("hello");
+    expect(d.get(key)).toBe("hello");
+    expect(d.undo(key)).toBe("");
+    expect(d.undo(key)).toBeUndefined();
+    expect(d.get(key)).toBe("");
+  });
+
+  it("makes anything but typing a step of its own", () => {
+    const { clock, d } = clocked();
+    typeIn(d, clock, "/bt");
+    d.set(key, "/btw ");
+    typeIn(d, clock, "why");
+    expect(d.undo(key)).toBe("/btw ");
+    expect(d.undo(key)).toBe("/bt");
+    expect(d.undo(key)).toBe("");
+  });
+
+  it("redoes what was undone, and a new edit drops it", () => {
+    const { d } = clocked();
+    d.set(key, "one");
+    d.set(key, "two");
+    d.undo(key);
+    d.undo(key);
+    expect(d.redo(key)).toBe("one");
+    expect(d.redo(key)).toBe("two");
+    expect(d.redo(key)).toBeUndefined();
+    d.undo(key);
+    d.set(key, "three");
+    expect(d.redo(key)).toBeUndefined();
+    expect(d.undo(key)).toBe("one");
+  });
+
+  it("writes an undone step like any edit: kept in storage and told to subscribers", () => {
+    const storage = memoryStorage();
+    const d = drafts(storage);
+    d.set(key, "first");
+    d.set(key, "second");
+    let calls = 0;
+    d.subscribe(() => calls++);
+    d.undo(key);
+    expect(calls).toBe(1);
+    expect(drafts(storage).get(key)).toBe("first");
+  });
+
+  it("forgets the history once the message goes, so undo can't bring the sent text back", () => {
+    const { d } = clocked();
+    d.set(key, "Restart nginx");
+    d.take(key);
+    expect(d.undo(key)).toBeUndefined();
+    expect(d.get(key)).toBe("");
+  });
+
+  it("keeps each Draft's history to itself", () => {
+    const { d } = clocked();
+    const other = draftKey(nas, "default", "chat-2");
+    d.set(key, "for chat 1");
+    d.set(other, "for chat 2");
+    expect(d.undo(key)).toBe("");
+    expect(d.get(other)).toBe("for chat 2");
+    expect(d.undo(other)).toBe("");
+    expect(d.undo(key)).toBeUndefined();
+  });
+
+  it("makes no step for a write that changes nothing", () => {
+    const { d } = clocked();
+    d.set(key, "same");
+    d.set(key, "same");
+    expect(d.undo(key)).toBe("");
+    expect(d.undo(key)).toBeUndefined();
   });
 });
