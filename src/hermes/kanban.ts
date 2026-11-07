@@ -170,6 +170,8 @@ export class KanbanWatch {
     if (!this.running) return;
     const epoch = this.epoch;
     this.scanned = true;
+    // A task added while the boards were being read may be missing from them: only earlier ones can be gone.
+    const before = new Set(this.tracked.keys());
     let boards: KanbanBoard[];
     try {
       const read = await this.deps.api.boards();
@@ -199,6 +201,7 @@ export class KanbanWatch {
     for (const [id, was] of this.tracked) {
       const is = seen.get(id);
       if (is) changed = this.merge(was, is, now) || changed;
+      else if (!before.has(id)) continue;
       else if (readBoards.has(was.task.board) || !boards.some((b) => b.slug === was.task.board)) {
         this.tracked.delete(id);
         changed = true;

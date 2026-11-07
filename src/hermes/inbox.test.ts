@@ -62,7 +62,7 @@ describe("The inbox", () => {
     await vi.advanceTimersByTimeAsync(0);
     const stuck = hermes.getSnapshot().chats;
     const asking = inboxEntries({ profile: "default", chats: stuck, connected: true, others: { byName: {} }, handoffs: handoffs(stuck, {}, Date.now()) }).entries.filter((e) => e.chatId === id);
-    expect(asking.map((e) => [e.key, e.kind, e.summary, e.itemId])).toEqual([[`handoff default ${id} ${task.id} blocked`, "approval", "A dispatched task is blocked.", undefined]]);
+    expect(asking.map((e) => [e.key, e.kind, e.summary, e.itemId, e.taskId])).toEqual([[`handoff default ${id} ${task.id} blocked`, "approval", "A dispatched task is blocked.", undefined, task.id]]);
   });
 
   it("shows work finished and asking for approval in background profiles, each with its profile, chat and time", async () => {

@@ -34,6 +34,8 @@ export type InboxEntry = {
   ended?: boolean;
   /** Running work that is a wait on work the chat handed off (dispatched.ts), not a reply being written. */
   waiting?: boolean;
+  /** The id of the dispatched task that needs the owner, for an entry about one. */
+  taskId?: string;
   /** From a check that failed, or while not connected: as last seen. */
   stale?: boolean;
   /**
@@ -96,7 +98,7 @@ export function inboxEntries({ profile, chats, connected, others, live, seen, ha
     // A reply held up by an Approval is listed as waiting, as a live session in another profile is.
     if (c.running && !c.items.some(isWaiting)) add({ ...base, key: `running ${profile} ${c.id}`, kind: "running", at: c.updatedAt, summary: "Hermes is working on a reply.", stale: false });
     else if (handoff?.kind === "waiting") add({ ...base, key: `running ${profile} ${c.id}`, kind: "running", at: c.updatedAt, summary: "Hermes is waiting on work it handed off.", waiting: true });
-    if (handoff?.kind === "needsOwner") add({ ...base, key: `handoff ${profile} ${c.id} ${handoff.task.id} ${handoff.task.status}`, kind: "approval", at: 0, summary: handoff.reason });
+    if (handoff?.kind === "needsOwner") add({ ...base, key: `handoff ${profile} ${c.id} ${handoff.task.id} ${handoff.task.status}`, kind: "approval", at: 0, taskId: handoff.task.id, summary: handoff.reason });
     for (const i of c.items) {
       if (i.kind === "approval" && !i.answer && (i.ended || isWaiting(i))) {
         const ended = !isWaiting(i);

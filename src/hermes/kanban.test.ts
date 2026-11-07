@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { STALLED_MS, WAKE_GRACE_MS, handoffOf, handoffs, waitingLabel, type Handoff } from "./dispatched";
 import { FakeHermes, row } from "./fakeHermes";
-import { POLL_EVERY_MS, SCAN_EVERY_MS } from "./kanban";
+import { KanbanWatch, POLL_EVERY_MS, SCAN_EVERY_MS, type SeenTask } from "./kanban";
 import { chatSections } from "./snooze";
 import { connect, type Hermes } from "./transport";
 
@@ -236,5 +236,29 @@ describe("a reply that starts background subagents", () => {
     server.event(runtime, "subagent.complete", { subagent_id: "sa-2", status: "failed" });
     expect(handoff(id)).toBeUndefined();
     expect(section(id)).toBe("inbox");
+  });
+});
+
+describe("a board read that was under way when a task was dispatched", () => {
+  it("keeps the new task, though the board it read didn't have it yet", async () => {
+    let answer!: (tasks: SeenTask[]) => void;
+    const published: string[][] = [];
+    const watch = new KanbanWatch({
+      api: {
+        boards: async () => ({ boards: [{ slug: "default", current: true, archived: false }], current: "default" }),
+        board: () => new Promise<SeenTask[]>((resolve) => (answer = resolve)),
+        task: async () => undefined,
+      },
+      sessions: () => new Set(["chat-1"]),
+      publish: (by) => published.push([...by.values()].flat().map((t) => t.id)),
+    });
+    watch.start();
+    watch.chatsListed();
+    await Promise.resolve();
+    watch.add({ id: "t_new", board: "default", status: "ready", createdAt: Date.now(), picked: false }, "chat-1");
+    answer([]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(published.at(-1)).toEqual(["t_new"]);
+    watch.stop();
   });
 });

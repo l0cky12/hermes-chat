@@ -1342,7 +1342,9 @@ export function Main({
   // A restore reloads the app on what it wrote, so it waits for replies and Approvals, here or in another profile, and
   // for any draft or queue this computer couldn't keep (ADR 0038).
   const workingRef = useRef(false);
-  const working = chats.some((c) => c.running || c.items.some(isWaiting)) || inbox.entries.some((e) => e.kind === "running" || (e.kind === "approval" && !e.ended));
+  // Work a chat handed off can run or sit blocked for days on Hermes, and a restore doesn't touch it, so it doesn't hold one up.
+  const working =
+    chats.some((c) => c.running || c.items.some(isWaiting)) || inbox.entries.some((e) => (e.kind === "running" && !e.waiting) || (e.kind === "approval" && !e.ended && !e.taskId));
   workingRef.current = working;
   // Read when the restore dialog renders and again just before it writes: sends and refused writes aren't React state.
   const restoreBusy = () => restoreBlocked({ working: workingRef.current, unsaved: unsaved.size, sending: sending.size });
