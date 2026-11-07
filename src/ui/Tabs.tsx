@@ -97,9 +97,13 @@ export function TabStrip({
   // While a drop would land here: before which tab (undefined: at the end, unmeasured).
   const [over, setOver] = useState<{ index?: number } | null>(null);
   const [menuAt, setMenuAt] = useState<{ id: string | null; x: number; y: number } | null>(null);
-  // The tab shown is scrolled into sight when the strip is wider than the pane.
+  // The tab shown is scrolled into sight when the strip is wider than the pane. A block body: scrollIntoView returns a
+  // Promise on WebView2 (Chromium 156+), and an effect that returned it gave React a cleanup that isn't a function, so
+  // the next tab change threw and React dropped the whole tree (#308).
   const list = useRef<HTMLDivElement>(null);
-  useEffect(() => list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" }), [current, tabs.length]);
+  useEffect(() => {
+    list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [current, tabs.length]);
   const actions = menuAt ? menu(menuAt.id) : [];
   return (
     <div

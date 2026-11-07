@@ -18,4 +18,4 @@ Hermes Chat began as a Linux-only app (D-Bus, GTK, X11, WebKitGTK, `std::os::uni
 
 ## Known limits
 
-The installer is unsigned, so Windows SmartScreen warns on first run. Windows code was compile-checked from Linux and is exercised only by the Windows job.
+The installer is unsigned, so Windows SmartScreen warns on first run. Windows code was compile-checked from Linux. The Windows job runs the Rust unit tests and the build; `windows-smoke.yml` (`workflow_dispatch`) drives a real sign-in and send through the built app's WebView2 against the stand-in dashboard, with screenshots and the page's errors as artifacts (#308).

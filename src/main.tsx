@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { ErrorBoundary } from "./ui/ErrorBoundary";
 import { restoreDraftsAfterRestart } from "./hermes/tauriUpdates";
 import { syncScreenshotOutbox } from "./hermes/tauriScreenshot";
 import { captureAppDiagnostics } from "./hermes/logs";
@@ -36,7 +37,9 @@ void restoreDraftsAfterRestart().then((failed) => {
   void syncScreenshotOutbox().catch(() => {});
   root.render(
     <StrictMode>
-      <App />
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
     </StrictMode>,
   );
 });
