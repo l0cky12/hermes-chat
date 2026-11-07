@@ -24,7 +24,7 @@ Where the list shows an Active chat while Hermes is writing a reply in it and is
 _Avoid_: running (fine in conversation), busy, in progress
 
 **Snoozed**:
-An Active chat the owner has put out of the way until a time they chose. It sits in the Snoozed section after Working, collapsed until the owner opens it, soonest to wake first, and shows when it wakes. When that time comes it goes back to the Inbox, as new as when it woke. Snoozes are kept on this computer only, for each connection and profile; Hermes and other Hermes clients don't see them (ADR 0036).
+An Active chat the owner has put out of the way until a time they chose. It sits in the Snoozed section after the Inbox, collapsed until the owner opens it, soonest to wake first, and shows when it wakes. When that time comes it goes back to the Inbox, as new as when it woke. Snoozes are kept on this computer only, for each connection and profile; Hermes and other Hermes clients don't see them (ADR 0036).
 _Avoid_: hidden, deferred, reminder
 
 **Inbox**:
@@ -40,7 +40,7 @@ The owner's actions, from a chat's right-click menu or its header's More menu (P
 _Avoid_: favourite, star (starred models are the model picker's), sticky
 
 **Chat list section**:
-One of the chat list's groups: Pinned, Inbox, Working, Snoozed and Archived in the list's scroll, in that order, then Settled, a drawer at the list's foot that opens upward with its own scroll (ADR 0090). Each chat is in exactly one. Each has a header with its count that collapses or expands it; which are collapsed is kept on this computer across restarts. Settings → General picks which sections show, any mix but never none; a chat in a hidden section is still found by Search (ADR 0063).
+One of the chat list's groups: Pinned, Inbox, Snoozed, Archived and Working in the list's scroll, in that order, so Working sits right above Settled, then Settled, a drawer at the list's foot that opens upward with its own scroll (ADR 0090). Each chat is in exactly one. Each has a header with its count that collapses or expands it; which are collapsed is kept on this computer across restarts. Settings → General picks which sections show, any mix but never none; a chat in a hidden section is still found by Search (ADR 0063).
 _Avoid_: group, folder, tab
 
 **Snooze** / **Unsnooze**:

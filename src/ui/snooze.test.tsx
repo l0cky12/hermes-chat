@@ -112,7 +112,7 @@ const titles = (section: string) =>
   [...document.querySelectorAll(`.row[data-section="${section}"]:not([hidden]) .row-open .row-title`)].map((t) => t.textContent);
 
 describe("The chat list's sections", () => {
-  it("shows no Active label: what needs you is in the Inbox, then Working, Snoozed and Settled", async () => {
+  it("shows no Active label: what needs you is in the Inbox, then Snoozed, Working and Settled", async () => {
     const user = userEvent.setup();
     render(
       <List
