@@ -1,0 +1,61 @@
+<!doctype html><html><head>
+<meta http-equiv="Content-Security-Policy" content="frame-src http: https:; object-src 'none'">
+</head><body><div id=box></div><script>
+const report = (k, v) => fetch('/result/' + k, {method: 'POST', body: JSON.stringify(v)});
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+function widestTimerGap(ms) {
+  return new Promise(res => { let last = performance.now(), max = 0;
+    const id = setInterval(() => { const n = performance.now(); max = Math.max(max, n - last); last = n; }, 20);
+    setTimeout(() => { clearInterval(id); res(Math.round(max)); }, ms); });
+}
+const BEAT = location.origin + '/beat';
+const BEAT_WS = 'ws://' + location.host + '/beat';
+const STRICT_CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; worker-src blob:">`;
+function frame(html) { const f = document.createElement('iframe'); f.setAttribute('sandbox', 'allow-scripts'); f.srcdoc = html; box.append(f); return f; }
+window.addEventListener('message', e => { if (e.data && e.data.k) report(e.data.k, e.data.v); });
+const startWorker = (code) => `<script>
+  const w = new Worker(URL.createObjectURL(new Blob([${JSON.stringify(code)}], {type: 'text/javascript'})));
+  w.onmessage = m => parent.postMessage(m.data, '*');
+<\/script>`;
+
+const T4_WORKER = `(async () => {
+  const out = {origin: self.origin};
+  try { await fetch('${BEAT}?leak=worker-fetch'); out.fetch = 'reached'; } catch (e) { out.fetch = 'blocked: ' + e; }
+  try { const x = new XMLHttpRequest(); x.open('GET', '${BEAT}?leak=worker-xhr', false); x.send(); out.xhr = 'reached'; } catch (e) { out.xhr = 'blocked: ' + e; }
+  try { importScripts('${BEAT}?leak=worker-import'); out.importScripts = 'reached'; } catch (e) { out.importScripts = 'blocked: ' + e; }
+  try { new WebSocket('${BEAT_WS}?leak=worker-ws'); out.webSocket = 'opened'; } catch (e) { out.webSocket = 'blocked: ' + e; }
+  try { new Worker(URL.createObjectURL(new Blob(["fetch('${BEAT}?leak=nested-worker-fetch')"]))); out.nestedWorker = 'started'; } catch (e) { out.nestedWorker = 'blocked: ' + e; }
+  try { indexedDB.open('x'); out.indexedDB = 'opened'; } catch (e) { out.indexedDB = 'blocked: ' + e; }
+  try { eval('1'); out.eval = 'ran'; } catch (e) { out.eval = 'blocked: ' + e; }
+  await new Promise(r => setTimeout(r, 500));
+  postMessage({k: 'T4-worker', v: out});
+})()`;
+
+const T4_FRAME = `<script>
+  const out = {origin: self.origin};
+  try { out.parentDocument = !!parent.document; } catch (e) { out.parentDocument = 'blocked'; }
+  try { out.localStorage = typeof localStorage.length; } catch (e) { out.localStorage = 'blocked'; }
+  new Image().src = '${BEAT}?leak=frame-img';
+  parent.postMessage({k: 'T4-frame', v: out}, '*');
+  setTimeout(() => { location.href = '${BEAT}?leak=frame-self-navigation'; }, 1500);
+<\/script>`;
+
+(async () => {
+  frame(`<script>setTimeout(() => { const t = Date.now(); while (Date.now() - t < 2000) {} }, 200)<\/script>`);
+  report('T1-busy-loop-in-frame-widest-app-timer-gap-ms', await widestTimerGap(3000));
+  box.innerHTML = '';
+
+  frame(startWorker("const t = Date.now(); while (Date.now() - t < 2000) {} postMessage({k: 'T2-worker-loop-ended', v: true})"));
+  report('T2-busy-loop-in-worker-widest-app-timer-gap-ms', await widestTimerGap(3000));
+  box.innerHTML = '';
+
+  const f3 = frame(startWorker(`let n = 0; for (;;) { const t = Date.now(); while (Date.now() - t < 200) {} const x = new XMLHttpRequest(); x.open('GET', '${BEAT}?T3-beat=' + (n++), false); try { x.send(); } catch (e) {} }`));
+  await sleep(1500);
+  report('T3-frame-removed', true); f3.remove();
+  await sleep(2000);
+
+  frame(STRICT_CSP + startWorker(T4_WORKER) + T4_FRAME);
+  await sleep(2500);
+  report('done', true);
+})();
+</script></body></html>
