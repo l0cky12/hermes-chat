@@ -1,24 +1,29 @@
 #!/usr/bin/env bash
-# Temporary (#308). Starts the stand-in dashboard and tauri-driver (msedgedriver underneath), drives the real Windows
-# app through wd.mjs: Welcome -> Setup -> signed in -> open "Nightly backup failing" -> type -> Enter. Collects
-# evidence at every step into $HV_RUN/evidence, and never stops at the first failure: the point is the evidence.
+# Temporary (#308). Starts the stand-in dashboard, the real Windows app with WebView2's remote debugging port on, and
+# msedgedriver attached to that port (Microsoft's "attach" approach: the app sets its own WebView2 user data folder, so
+# msedgedriver's "launch" approach through tauri-driver waited in vain for DevToolsActivePort in a folder of its own).
+# Then drives the app through wd.mjs: Welcome -> Setup -> signed in -> open "Nightly backup failing" -> type -> Enter.
+# Collects evidence at every step into $HV_RUN/evidence, and never stops at the first failure: the point is the evidence.
 set -uo pipefail
 REPO=$(git rev-parse --show-toplevel)
 S=$REPO/.claude/skills/verify-hermes-chat/scripts
+HERE=$REPO/.github/repro
 RUN=${HV_RUN:?}
 EV=$RUN/evidence
 mkdir -p "$EV"
-APP=$REPO/src-tauri/target/release/hermes-chat.exe
+APP=${APP:-$REPO/src-tauri/target/release/hermes-chat.exe}
 [ -f "$APP" ] || { echo "no app at $APP"; exit 1; }
-BRIDGE_PORT=47991 DRIVER_PORT=4444 NATIVE_PORT=4445
+BRIDGE_PORT=47991 DRIVER_PORT=4444 CDP_PORT=9333
 URL=http://127.0.0.1:$BRIDGE_PORT
-BRIDGE_PID= DRIVER_PID=
+BRIDGE_PID= DRIVER_PID= APP_PID=
 
 log() { echo "[$(date +%T)] $*"; }
 wd() { log "\$ wd $*"; node "$S/wd.mjs" "$@"; local rc=$?; [ $rc = 0 ] || log "   -> wd exit $rc"; return $rc; }
+desktop() { pwsh -NoProfile -File "$HERE/desktop.ps1" "$EV/$1-desktop.png" >/dev/null 2>&1 || log "no desktop shot"; }
 # Everything we can read at a moment, under one prefix.
 evidence() {
   wd shot "$1" || true
+  desktop "$1"
   wd html "$1" || true
   wd eval 'return window.__errs ?? "no buffer"' >"$EV/$1-errors.json" 2>&1 || true
   if [ -f "$RUN/session" ]; then
@@ -29,10 +34,10 @@ evidence() {
 }
 cleanup() {
   log "cleanup"
-  wd close || true
+  [ -f "$RUN/session" ] && wd close || true
   [ -n "$DRIVER_PID" ] && kill "$DRIVER_PID" 2>/dev/null
+  [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null
   [ -n "$BRIDGE_PID" ] && kill "$BRIDGE_PID" 2>/dev/null
-  # msedgedriver and the app may outlive tauri-driver.
   taskkill //F //IM msedgedriver.exe >/dev/null 2>&1 || true
   taskkill //F //IM hermes-chat.exe >/dev/null 2>&1 || true
   cp "$RUN/state.env" "$EV/" 2>/dev/null || true
@@ -48,12 +53,29 @@ for i in $(seq 1 100); do grep -q "stand-in dashboard ready" "$EV/bridge.log" 2>
 grep -q "stand-in dashboard ready" "$EV/bridge.log" || { echo "stand-in didn't start"; cat "$EV/bridge.log"; exit 1; }
 log "stand-in at $URL"
 
-# tauri-driver proxies WebDriver to msedgedriver, which launches the app and attaches to its WebView2.
-export HERMES_CHAT_NEW_INSTANCE=1
-tauri-driver --port "$DRIVER_PORT" --native-port "$NATIVE_PORT" --native-driver "${EDGEDRIVER:?}" >"$EV/driver.log" 2>&1 &
+# The app, started here so its output is kept. WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS is WebView2's override for the
+# browser process's arguments, honoured whatever the app passes itself; it turns on the DevTools port msedgedriver
+# attaches to. HERMES_CHAT_NEW_INSTANCE keeps it from handing over to another Hermes Chat.
+env HERMES_CHAT_NEW_INSTANCE=1 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=$CDP_PORT" "$APP" >"$EV/app-stdout.log" 2>"$EV/app-stderr.log" &
+APP_PID=$!
+log "app pid $APP_PID"
+for i in $(seq 1 150); do curl -sf "http://127.0.0.1:$CDP_PORT/json/version" >"$EV/cdp-version.json" 2>/dev/null && break; sleep 0.2; done
+curl -s "http://127.0.0.1:$CDP_PORT/json/list" >"$EV/cdp-targets.json" 2>/dev/null
+tasklist | grep -i "hermes-chat\|msedgewebview2\|msedgedriver" >"$EV/processes.txt" 2>&1 || true
+ls -la "$LOCALAPPDATA/net.l0cky12.hermes-chat/EBWebView" >"$EV/webview-udf.txt" 2>&1 || true
+desktop 00-launched
+if ! [ -s "$EV/cdp-version.json" ]; then
+  echo "the app's WebView2 never answered on port $CDP_PORT"
+  echo "=== app-stderr.log"; cat "$EV/app-stderr.log"; echo "=== processes"; cat "$EV/processes.txt"; echo "=== udf"; cat "$EV/webview-udf.txt"
+  exit 1
+fi
+log "WebView2 DevTools: $(cat "$EV/cdp-version.json" | tr -d '\n' | cut -c1-200)"
+
+# msedgedriver, attached to that WebView2 (debuggerAddress), gives the W3C WebDriver wd.mjs speaks.
+"${EDGEDRIVER:?}" --port=$DRIVER_PORT >"$EV/driver.log" 2>&1 &
 DRIVER_PID=$!
 for i in $(seq 1 100); do curl -sf "http://127.0.0.1:$DRIVER_PORT/status" >/dev/null && break; sleep 0.2; done
-curl -sf "http://127.0.0.1:$DRIVER_PORT/status" >/dev/null || { echo "tauri-driver didn't answer"; cat "$EV/driver.log"; exit 1; }
+curl -sf "http://127.0.0.1:$DRIVER_PORT/status" >/dev/null || { echo "msedgedriver didn't answer"; cat "$EV/driver.log"; exit 1; }
 
 cat >"$RUN/state.env" <<STATE
 DRIVER_PORT='$DRIVER_PORT'
@@ -61,8 +83,13 @@ EVIDENCE='$EV'
 APP='$APP'
 DASHBOARD_URL='$URL'
 STATE
+session=$(curl -s -X POST "http://127.0.0.1:$DRIVER_PORT/session" -H 'content-type: application/json' \
+  -d "{\"capabilities\":{\"alwaysMatch\":{\"browserName\":\"webview2\",\"ms:edgeOptions\":{\"debuggerAddress\":\"localhost:$CDP_PORT\",\"webviewOptions\":{}}}}}")
+echo "$session" >"$EV/session.json"
+sid=$(node -e 'const v=JSON.parse(process.argv[1]).value; if(!v||!v.sessionId){console.error(process.argv[1]);process.exit(1)} console.log(v.sessionId)' "$session") || { echo "no WebDriver session"; cat "$EV/driver.log"; exit 1; }
+echo -n "$sid" >"$RUN/session"
+log "WebDriver session $sid"
 
-wd open || { cat "$EV/driver.log"; exit 1; }
 wd wait button "Get started" 90000 || { evidence 00-no-welcome; exit 1; }
 # A buffer for everything the page throws from now on: uncaught errors (React 19 reports a render error through
 # reportError, which fires `error` on window), unhandled rejections and console.error.
@@ -117,4 +144,5 @@ if wd wait .msg.user "And the next one?" 15000; then echo "BUTTON_MESSAGE_SHOWN=
 evidence 09-after-button-send
 echo "=== result"; cat "$EV/result.txt"
 echo "=== errors after send"; cat "$EV/07-after-send-errors.json"
+echo "=== app stderr"; cat "$EV/app-stderr.log"
 echo "=== bridge.log tail"; tail -40 "$EV/bridge.log"
