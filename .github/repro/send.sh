@@ -89,12 +89,13 @@ APP='$APP'
 DASHBOARD_URL='$URL'
 STATE
 session=$(curl -s -X POST "http://127.0.0.1:$DRIVER_PORT/session" -H 'content-type: application/json' \
-  -d "{\"capabilities\":{\"alwaysMatch\":{\"browserName\":\"webview2\",\"ms:edgeOptions\":{\"debuggerAddress\":\"localhost:$CDP_PORT\"}}}}")
+  -d "{\"capabilities\":{\"alwaysMatch\":{\"browserName\":\"webview2\",\"pageLoadStrategy\":\"none\",\"ms:edgeOptions\":{\"debuggerAddress\":\"localhost:$CDP_PORT\"}}}}")
 echo "$session" >"$EV/session.json"
 sid=$(node -e 'const v=JSON.parse(process.argv[1]).value; if(!v||!v.sessionId){console.error(process.argv[1]);process.exit(1)} console.log(v.sessionId)' "$session") || { echo "no WebDriver session"; cat "$EV/driver.log"; exit 1; }
 echo -n "$sid" >"$RUN/session"
 log "WebDriver session $sid"
-# No command may hang on a page that stopped answering: 10 s for a script, 20 s for a load.
+# No command may hang on a page that stopped answering: 10 s for a script, 20 s for a load (and pageLoadStrategy none
+# above, so a load the driver thinks is pending never holds a command; run 4 hung that way for 30 min).
 curl -s -X POST "http://127.0.0.1:$DRIVER_PORT/session/$sid/timeouts" -H 'content-type: application/json' -d '{"script":10000,"pageLoad":20000,"implicit":0}' >/dev/null || true
 
 wd wait button "Get started" 90000 || { evidence 00-no-welcome; exit 1; }
