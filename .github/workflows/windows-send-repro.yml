@@ -29,8 +29,8 @@ jobs:
           workspaces: src-tauri
           shared-key: nsis
       - run: npm ci
-      - name: Build the app (release, frontend embedded, no installer)
-        run: npx tauri build --no-bundle
+      - name: Build the app (release, frontend embedded, no installer, WebView2 DevTools port on)
+        run: npx tauri build --no-bundle --config .github/repro/tauri.repro.conf.json
       - name: The built app, for a run on another Windows machine
         uses: actions/upload-artifact@v4
         with:

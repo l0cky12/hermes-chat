@@ -53,10 +53,11 @@ for i in $(seq 1 100); do grep -q "stand-in dashboard ready" "$EV/bridge.log" 2>
 grep -q "stand-in dashboard ready" "$EV/bridge.log" || { echo "stand-in didn't start"; cat "$EV/bridge.log"; exit 1; }
 log "stand-in at $URL"
 
-# The app, started here so its output is kept. WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS is WebView2's override for the
-# browser process's arguments, honoured whatever the app passes itself; it turns on the DevTools port msedgedriver
-# attaches to. HERMES_CHAT_NEW_INSTANCE keeps it from handing over to another Hermes Chat.
-env HERMES_CHAT_NEW_INSTANCE=1 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=$CDP_PORT" "$APP" >"$EV/app-stdout.log" 2>"$EV/app-stderr.log" &
+# The app, started here so its output is kept. Its WebView2 listens on the DevTools port msedgedriver attaches to:
+# tauri.repro.conf.json puts --remote-debugging-port in its browser arguments, since the WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+# override did nothing against the arguments wry sets (run 2). HERMES_CHAT_NEW_INSTANCE keeps it from handing over to
+# another Hermes Chat.
+env HERMES_CHAT_NEW_INSTANCE=1 "$APP" >"$EV/app-stdout.log" 2>"$EV/app-stderr.log" &
 APP_PID=$!
 log "app pid $APP_PID"
 for i in $(seq 1 150); do curl -sf "http://127.0.0.1:$CDP_PORT/json/version" >"$EV/cdp-version.json" 2>/dev/null && break; sleep 0.2; done
