@@ -144,7 +144,10 @@ const lostSide = (q: SideQuestion): SideQuestion =>
 const MiB = 1024 * 1024;
 /** The most legacy `image.attach_bytes` and `file.attach` take (research doc §7). PDFs go as files: `pdf.attach`
  * needs `pdftoppm`, which the live server doesn't have. */
-const LIMITS = { image: { bytes: 25 * MiB, what: "images" }, file: { bytes: 256 * MiB, what: "files" } };
+export const LIMITS = { image: { bytes: 25 * MiB, what: "images" }, file: { bytes: 256 * MiB, what: "files" } };
+/** What the owner is told about a file over its limit. */
+export const overLimitNote = (name: string, size: number, limit: (typeof LIMITS)[keyof typeof LIMITS]) =>
+  `${name} is ${(size / MiB).toFixed(1)} MB. Hermes takes ${limit.what} up to ${limit.bytes / MiB} MB.`;
 /** The images Hermes looks at (`cli._IMAGE_EXTENSIONS`); anything else is staged as a file. */
 const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp)$/i;
 /** What the official desktop app asks when an image is sent with no text. */
@@ -2448,8 +2451,7 @@ export class Hermes {
       }
       const kind = IMAGE_EXTENSIONS.test(f.name) ? "image" : "file";
       const limit = LIMITS[kind];
-      if (f.size > limit.bytes)
-        refused.push(`${f.name} is ${(f.size / MiB).toFixed(1)} MB. Hermes takes ${limit.what} up to ${limit.bytes / MiB} MB.`);
+      if (f.size > limit.bytes) refused.push(overLimitNote(f.name, f.size, limit));
       else attachments.push({ path: f.path, name: f.name, size: f.size, kind });
     }
     return { attachments, refused };
