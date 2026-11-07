@@ -11,7 +11,7 @@ A **Snapshot** is that published copy. It is one immutable page, made from the E
 Read in the local Hermes source (`~/.hermes/hermes-agent` at `b200f5bc`, 2026-11-03, which contains the `f0d94882` that ADR 0076 read) on 2026-11-07. Nothing below was run against a live dashboard.
 
 - **Hermes serves no chat content to anyone signed out.** The sign-in gate lets through only sign-in pages, static assets and a fixed list of status and config reads (`_GATE_PUBLIC_PREFIXES` in `hermes_cli/dashboard_auth/middleware.py`, `PUBLIC_API_PATHS` in `hermes_cli/dashboard_auth/public_paths.py`). Every file route is behind the gate too, and its download tickets last 60 seconds (`hermes_cli/web_server_file_tickets.py`).
-- **A dashboard plugin can't serve it either.** A plugin's routes are mounted under `/api/plugins/<name>/`, behind the same gate, and nothing in a plugin's manifest exempts them (`_plugin_api_runtime_gate` in `hermes_cli/web_server.py`). So the third option in ADR 0062 doesn't help here.
+- **A dashboard plugin can't serve it either.** A plugin's API routes are mounted under `/api/plugins/<name>/`, and the gate covers them as it covers every `/api/` path. Nothing in a plugin's manifest exempts them. A plugin's static files, `.html` among them, are served without a sign-in from `/dashboard-plugins/` (`serve_plugin_asset` in `hermes_cli/web_routers/dashboard_ui.py`, a prefix in `_GATE_PUBLIC_PREFIXES`). Snapshots kept there would still be on the dashboard, which #92 says not to expose. A static file also has no expiry and no revoke the owner could manage from here. So the third option in ADR 0062 doesn't help here.
 - **Upstream is closing public access, not opening it.** `should_require_auth` (`hermes_cli/web_server_boundary.py`) ignores `--insecure` "since the June 2026 hermes-0day campaign" and treats LAN addresses as public.
 - **Most connections can't be reached by other people anyway.** A connection reaches its dashboard through SSH, Tailscale, a LAN or a web address (ADR 0056). For a page on the dashboard to reach other people, the owner would have to expose the dashboard to the internet. Issue #92 rules that out ("do not expose the private dashboard").
 
@@ -28,7 +28,7 @@ A snapshot is one object, `<prefix>/<id>.html`. The object's metadata is the man
 | Field | Where it lives | What it is |
 |---|---|---|
 | `id` | The object key | 26 characters of base32 from 128 random bits, made before the upload, so a retry writes the same key. |
-| `title` | `x-amz-meta-title`, percent-encoded | The title line as the page has it, after redaction. |
+| `title` | `x-amz-meta-title`, percent-encoded | The title line as the page has it, after redaction, cut to 200 characters. S3 limits user metadata to 2 KB. |
 | `created`, `expires` | `x-amz-meta-created`, `x-amz-meta-expires` | UTC times. `expires` is always set (see Expiry). |
 | `sha256` | `x-amz-meta-sha256` | The SHA-256 of the page's bytes as published. |
 | The page | The object's body | The HTML the owner saw in the preview, byte for byte. |
@@ -36,18 +36,18 @@ A snapshot is one object, `<prefix>/<id>.html`. The object's metadata is the man
 In the app the record is a typed `Snapshot` with one state, never a set of booleans:
 
 - **Live.** The link works until `expires`.
-- **Expired.** The host refuses the link. The object is deleted the next time the list loads.
+- **Expired.** The host refuses the link. The list deletes the object as it loads, so the owner sees this state only when that delete failed. The row then offers Revoke.
 - **Changed.** The body's SHA-256 no longer matches `sha256`, so something other than this app wrote it. The list offers Revoke only.
 
-A revoked snapshot has no state. It is gone from the bucket and gone from the list.
+A revoked snapshot has no state. No version of its key is left in the bucket, so it is gone from the list.
 
-The host settings are the endpoint, region, bucket, prefix (`hermes-chat-snapshots/` by default) and the access key's id. They are kept per computer in the app's config folder. The secret key is kept in the system keyring. Snapshots go to one bucket whatever connection or profile they came from.
+The host settings are the endpoint, region, bucket, prefix (`hermes-chat-snapshots/` by default) and the access key's id. They are kept per computer, in one keyring entry with the secret key, as ADR 0058 keeps a token with the addresses it was entered for. Rust uses the secret only with the endpoint, region, bucket and key id saved beside it. A change to any of them needs the secret typed again, so a secret is never sent to an edited endpoint. The webview learns the settings, never the secret. Snapshots go to one bucket whatever connection or profile they came from.
 
 ### Sharing a snapshot
 
 1. **Share snapshot…** in the chat header's More menu opens the Export dialog (ADR 0076) with Publish… in place of Save…. Every pick works as it does for an export. One default changes: Hermes's thinking starts unticked, as tool calls and attachment names already do.
 2. **Publish… opens a confirm step.** It names the destination before anything leaves this computer: the host's address, the bucket and the prefix. It shows the expiry, the page itself, and two warnings. Detection can miss a secret. Anyone with the link can read the page until it ends, and a copy someone saves can't be recalled.
-3. **The preview is the page.** The confirm step shows the exact bytes to upload in an `<iframe sandbox srcdoc>` that runs no script. Tests compare the bytes handed to Rust with the `srcdoc`.
+3. **The preview is the page.** The confirm step shows the exact bytes to upload in ADR 0007's frame for HTML: `srcdoc`, `sandbox=""` with no tokens, and `referrerpolicy="no-referrer"`. Tests parse the frame's `srcdoc` attribute and compare it with the bytes handed to Rust.
 4. **Publish uploads, and only Publish does.** With no host set, the dialog says so, links to Settings → Snapshots, and still offers Save as a file.
 
 ### The page
@@ -55,24 +55,24 @@ The host settings are the endpoint, region, bucket, prefix (`hermes-chat-snapsho
 The webview builds the page from the Export dialog's Markdown. It uses the transcript's own Markdown pipeline (`src/ui/markdownPipeline.ts`) rendered to static markup.
 
 - Raw HTML in a message stays text. It is never markup.
-- Links keep only `https:`, `http:` and `mailto:` addresses, with `rel="noopener noreferrer"`. Images aren't loaded. Each shows as its alt text and address, so a viewer's browser fetches nothing a message names.
-- The page has no script and loads nothing. Its `<meta http-equiv="Content-Security-Policy">` is `default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`, with the stylesheet inline.
+- Links keep only absolute `https:`, `http:` and `mailto:` addresses, with `rel="noopener noreferrer"`. Any other link, a protocol-relative `//host` and a `data:` address among them, stays text. `markdownPipeline.ts` doesn't filter schemes today, and react-markdown's default leaves `//host` alone, so the page needs its own filter. Images aren't loaded. Each shows as its alt text and address, so a viewer's browser fetches nothing a message names.
+- The page has no script and loads nothing. The first elements in its `<head>`, before the title and any text from the chat, are `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">` and `<meta name="referrer" content="no-referrer">`. The second keeps a viewer's browser from sending the presigned link as a `Referer` when a link in the page is followed. The stylesheet is inline.
 - The upload sets `Content-Type: text/html; charset=utf-8`, `Content-Disposition: inline` and `Cache-Control: private, no-store`, so a shared cache can't keep serving a revoked page.
 
 ### Upload, read back and revoke
 
 Rust holds the secret key and makes every request to the host, as it does for Hermes's own secrets (ADR 0058). The webview never has the secret key. The webview hands Rust the page's bytes, title and expiry. Rust gives back the snapshot, or an error that says whether the page certainly wasn't sent.
 
-- **Publish** is a `PUT` with `If-None-Match: *`, so a snapshot is never written over. AWS documents a `412` for a key that exists ("How to prevent object overwrites with conditional writes"). R2's presigned-URL page doesn't mention it, so the live run checks the owner's host. Rust then reads the object back, compares its SHA-256, and only then returns the link. A lost answer is settled by reading that key. Retrying with the same key and bytes can't make a second copy, and a `412` on retry means the first `PUT` arrived.
+- **Publish** is a `PUT` with `If-None-Match: *`, so a snapshot is never written over. AWS documents a `412` for a key that exists ("How to prevent object overwrites with conditional writes"). R2's presigned-URL page doesn't mention it, so the live run checks the owner's host. Rust then reads the object back and returns the link only when the body's SHA-256 matches the bytes it uploaded. A lost answer or a `412` is settled the same way, by reading the key. A matching body means the snapshot is Live. A key with no object means "not published", and only then. A read that fails, or a body that differs, means the page may have been sent, and Rust says so. Retrying with the same key and bytes can't make a second copy.
 - **Copy link** in the list signs a fresh link that ends at the same `expires`. The owner can copy a link again without making a copy that lives longer.
-- **Revoke** is a `DELETE`, then a read of the key. The list drops the snapshot only once the host says the key is gone. Otherwise it says Revoke may not have worked and keeps the row.
+- **Revoke** deletes every version of the key, then lists the key's versions again. A plain `DELETE` isn't enough. Backblaze B2 versions every bucket, and on B2, or on an S3 bucket with versioning on, a `DELETE` without a version id only adds a delete marker or hides the file, while older versions keep the page. A `GET` that then fails proves nothing about those versions. The list drops the snapshot only once no version of the key is left. Otherwise it says Revoke may not have worked and keeps the row.
 - **Settings → Snapshots** has the host card (with **Test**, which lists the prefix and writes nothing) and the list: title, created, expiry state, Copy link and Revoke. The list is read from the bucket each time the screen opens, so it shows snapshots published from any computer that uses the same bucket. An answer for host settings that have since changed is dropped.
 
 ### Expiry
 
 A link lasts 1 hour, 1 day (the default) or 7 days. The maximum is 7 days because AWS and Cloudflare R2 accept a presigned link for at most 7 days (AWS, "Download and upload objects with presigned URLs"; Cloudflare, "R2 presigned URLs"). AWS also ends a link early when the key that signed it is deleted or deactivated, so on AWS rotating the key revokes every snapshot at once. Other hosts weren't checked. "Never expires" isn't offered, because that would need a public bucket and an expiry that only this app enforces. See Open questions.
 
-The host stops honoring a link at its expiry, even with this app closed. The object stays in the bucket until the list next loads and deletes it, or until a lifecycle rule the owner sets on the bucket deletes it. This app never changes a bucket's settings.
+The host stops honoring a link at its expiry, even with this app closed. The object stays in the bucket until the list next loads and deletes every version of it, as Revoke does, or until a lifecycle rule the owner sets on the bucket deletes it. This app never changes a bucket's settings.
 
 ### Attachments
 
@@ -87,17 +87,16 @@ No snapshot request goes to Hermes, so a snapshot needs no Hermes version or cap
 | Data | Where | Who can read it | Removed by |
 |---|---|---|---|
 | The page and its metadata | The owner's bucket | The owner's key, and anyone with a live link to that page only | Revoke, the list deleting an expired one, or the owner |
-| Host settings, without the secret | `$XDG_CONFIG_HOME/net.l0cky12.hermes-chat/` | This computer | Clearing them in Settings → Snapshots |
-| The secret key | The system keyring | This app's Rust side | Clearing them in Settings → Snapshots |
+| Host settings and the secret key, in one entry | The system keyring | This app's Rust side. The webview gets the settings, never the secret. | Clearing them in Settings → Snapshots |
 | A link someone saved, or the page they saved | Their computer | Them | Nobody. The confirm step says so. |
 
 ## How #92's checks would be verified
 
 - **Redacted text is absent from the payload.** Unit tests check the bytes handed to the publish command: they equal the preview's `srcdoc` and don't contain any redacted text. A live run reads the object back from a real bucket and searches it for each redacted text.
-- **Management authorization, expiry and revocation.** Rust tests run against a stand-in S3 built on axum, which the Rust tests already use. They cover a refused credential, a `412` on a repeated key, a lost answer settled by a read, a `DELETE` read back, and the list deleting an expired object. A live run against a real bucket checks a link before and after Revoke, and a 1-hour link after its hour. Attachment access holds because there are no attachment objects yet.
-- **Malicious content, publication failure and later edits.** Fixtures with `<script>`, `<img onerror>`, `javascript:` links, `<iframe>`, `<base>`, `<meta>` and broken Markdown must render as text or as inert markup. A failed `PUT` must show "not published". A message sent after Publish must leave the object's SHA-256 unchanged.
-- **Existing behavior.** The full suite, plus a verify-hermes-chat run that sends a message, takes an Approval, and switches profile after a Publish.
-- **Documentation.** The README's storage table gains the rows above. The README says that no Hermes version is needed, and that the live runs used one host.
+- **Management authorization, expiry and revocation.** Rust tests run against a stand-in S3 built on axum, which the Rust tests already use. They cover a refused credential, a `412` on a repeated key, a lost answer settled by a read, a secret refused for an edited endpoint, and the list deleting an expired object. Revoke is tested on a versioned key, where a plain `GET` already fails but an older version still holds the page. A live run against a real bucket checks a link before and after Revoke, lists the key's versions after Revoke, and checks a 1-hour link after its hour. Attachment access holds because there are no attachment objects yet.
+- **Malicious content, publication failure and later edits.** Fixtures with `<script>`, `<img onerror>`, `javascript:`, `data:` and protocol-relative `//host` links, `<iframe>`, `<base>`, `<meta>` and broken Markdown must render as text or as inert markup. A test checks that the two `<meta>` elements come first in `<head>`. A `PUT` refused with the key still absent must show "not published". A lost answer, a failed read and a body that differs must each show that the page may have been sent. A message sent after Publish must leave the object's SHA-256 unchanged.
+- **Existing behavior.** The full suite, plus a verify-hermes-chat run that sends a message, takes an Approval, and switches profile after a Publish. The snapshot stays in the list after the switch, because one bucket serves every profile and connection.
+- **Documentation.** The README's storage table gains the rows above. The README says that no Hermes version is needed, that the live runs used one host, and which permissions the key needs (Open question 4). `GLOSSARY.md` gains Snapshot and Snapshot host. Its Export entry says that a snapshot uploads the file it previews, and its avoid line stops saying that snapshots wait for a hosting service.
 
 ## Considered options
 
@@ -105,19 +104,20 @@ No snapshot request goes to Hermes, so a snapshot needs no Hermes version or cap
 - **A dashboard plugin this app installs.** Rejected. Plugin routes always sit behind the sign-in.
 - **A secret GitHub Gist.** This is the cheapest option. It needs one token with the `gist` scope, GitHub renders and cleans the Markdown, and deleting the gist revokes it. But it can't expire, it holds text only, a signed-in viewer can fork it before Revoke, and the data always goes to GitHub. It is the best alternative if the owner wants something today and doesn't need expiry.
 - **A public bucket with unguessable keys and no signing.** The links would be shorter and could last any time. But expiry would happen only when this app runs, and a bucket listing setting the owner gets wrong would expose every snapshot.
-- **This app serves the page, or a paste service hosts it.** The first is rejected in ADR 0062. The second can't be revoked, as Hermes's own debug share shows.
+- **This app serves the page.** Rejected in ADR 0062.
+- **A paste service.** Hermes's debug share (`hermes_cli/debug.py`) uploads to paste.rs, deletes each paste after 6 hours, and falls back to dpaste.com, whose pastes it can't delete. A paste is public text with no list for the owner to manage, and the fallback can't be revoked at all.
 - **The AWS SDK for Rust.** Its dependency tree is heavy for five calls. A small signing crate such as `rusty-s3` with the existing `reqwest` is enough. That choice belongs to the implementation PR.
 
 ## Open questions for the owner
 
 1. **Which Snapshot host?** The default is an S3-compatible bucket you name. The alternatives are a secret GitHub Gist (no expiry, data on GitHub), or waiting for a Hermes publication route upstream. Nothing is built until you answer.
-2. **Is 7 days long enough?** Anything longer needs a public bucket, and an expiry that only this app enforces when it runs. The default is no, so 7 days is the maximum.
+2. **Is 7 days long enough?** Anything longer needs a public bucket, and an expiry that only this app enforces when it runs. The default is yes: 7 days is the maximum.
 3. **Should attachment files ever be published?** The default is not in this stage. If yes, they become their own issue, with the prefix design above.
-4. **Is a link that shows the bucket's host, the bucket and the access key's id acceptable?** A presigned link carries all three. The default is yes, with the README telling you to use a key limited to `GetObject`, `PutObject`, `DeleteObject` and `ListBucket` on the prefix.
+4. **Is a link that shows the bucket's host, the bucket and the access key's id acceptable?** A presigned link carries all three. The default is yes, with the README telling you to use a key limited to the prefix, with `GetObject`, `PutObject`, `DeleteObject`, `DeleteObjectVersion`, `ListBucket` and `ListBucketVersions`. Revoke needs the two version permissions.
 
 ## Consequences
 
 - Sharing needs a bucket and a key that the owner sets up outside this app. Until then, Share snapshot offers only Save.
 - A link names the host and the bucket, and works for anyone who has it until it ends. Every link ends within 7 days.
-- Revoke is as good as the host's delete. A page someone already saved stays with them.
+- Revoke is as good as the host's delete of every version. A page someone already saved stays with them.
 - The page is this app's HTML, so its safety is this app's to test. GitHub's Markdown cleaning would do that work under the Gist option.
