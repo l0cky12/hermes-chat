@@ -82,9 +82,16 @@ describe("The office's characters", () => {
     const floor = officeFloor(Array.from({ length: 10 }, (_, t) => team(`t${t}`, "running", t % 2 ? "running" : "failed", "approval", "completed")), EMPTY_FLOOR_MEMORY);
     const n = floor.characters.length;
     expect(n).toBe(FLOOR_CAP);
-    const { mesh, figures } = drawn(floor.characters);
+    const { mesh, matrix, figures } = drawn(floor.characters);
     for (const part of ["torso", "head", "face"]) expect(mesh(part).count).toBe(n);
     for (const part of ["upper-arm", "forearm", "thigh", "shin", "shoe"]) expect(mesh(part).count).toBe(2 * n);
+    // The last character's limbs are drawn too, at its own seat: with one slot per character, past the twentieth they had none.
+    const last = floor.characters[n - 1].spot;
+    for (const part of ["upper-arm", "forearm", "thigh", "shin", "shoe"])
+      for (const at of [2 * n - 2, 2 * n - 1]) {
+        const p = positionOf(matrix(part, at));
+        expect(Math.hypot(p.x - last.x, p.z - last.z), part).toBeLessThan(1);
+      }
     const bald = floor.characters.filter((c) => lookOf(c.key).hair === "bald").length;
     expect(mesh("hair-short").count + mesh("hair-long").count + mesh("hair-bun").count).toBe(n - bald);
     // Every part is one mesh for all the characters, so what is drawn is a fixed list, not a list per person.
