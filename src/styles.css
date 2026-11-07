@@ -2109,7 +2109,7 @@ label.memory-pick { cursor: pointer; }
 .files-banner {
   display: flex; align-items: center; gap: 8px; margin: 10px 18px 0; padding: 8px 10px; border-radius: 8px; font-size: calc(12.5rem / 14); flex: none;
 }
-.files-banner > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.files-banner > span:not(.spinner) { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .files-banner.warn { background: rgba(245, 184, 74, 0.1); color: var(--warn); }
 .files-banner.err { background: rgba(248, 113, 113, 0.1); color: var(--bad); }
 .files-banner .icon-btn { width: 24px; height: 24px; color: inherit; }
