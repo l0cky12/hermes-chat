@@ -72,7 +72,8 @@ if ! [ -s "$EV/cdp-version.json" ]; then
 fi
 log "WebView2 DevTools: $(cat "$EV/cdp-version.json" | tr -d '\n' | cut -c1-200)"
 
-# msedgedriver, attached to that WebView2 (debuggerAddress), gives the W3C WebDriver wd.mjs speaks.
+# msedgedriver, attached to that WebView2 (debuggerAddress; webviewOptions is for its launch mode only and is refused
+# here, run 3), gives the W3C WebDriver wd.mjs speaks.
 "${EDGEDRIVER:?}" --port=$DRIVER_PORT >"$EV/driver.log" 2>&1 &
 DRIVER_PID=$!
 for i in $(seq 1 100); do curl -sf "http://127.0.0.1:$DRIVER_PORT/status" >/dev/null && break; sleep 0.2; done
@@ -85,7 +86,7 @@ APP='$APP'
 DASHBOARD_URL='$URL'
 STATE
 session=$(curl -s -X POST "http://127.0.0.1:$DRIVER_PORT/session" -H 'content-type: application/json' \
-  -d "{\"capabilities\":{\"alwaysMatch\":{\"browserName\":\"webview2\",\"ms:edgeOptions\":{\"debuggerAddress\":\"localhost:$CDP_PORT\",\"webviewOptions\":{}}}}}")
+  -d "{\"capabilities\":{\"alwaysMatch\":{\"browserName\":\"webview2\",\"ms:edgeOptions\":{\"debuggerAddress\":\"localhost:$CDP_PORT\"}}}}")
 echo "$session" >"$EV/session.json"
 sid=$(node -e 'const v=JSON.parse(process.argv[1]).value; if(!v||!v.sessionId){console.error(process.argv[1]);process.exit(1)} console.log(v.sessionId)' "$session") || { echo "no WebDriver session"; cat "$EV/driver.log"; exit 1; }
 echo -n "$sid" >"$RUN/session"
