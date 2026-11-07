@@ -15,6 +15,7 @@
 // HV_INBOX=1 gives the `work` profile two Unread chats for the Rail inbox: one last active 3 days ago, one an hour ago.
 // HV_LIST=<n> adds n Active, read chats to `default`, one an hour apart, so its Inbox is longer than the list panel.
 // HV_DELAY_MS=<ms> holds each /api/ answer that long, as a distant server's round trip would.
+// HV_FAIL_PATCH=<id>,<id> answers 503 to every edit (PATCH) of those sessions, as a server that fails a write does.
 // Read-only check of what the server holds (the side-effect proof): `GET /__state` returns sessions and transcripts.
 // The same JSON is rewritten to <state-file> after every change, so it survives the bridge being stopped.
 import { createHash } from "node:crypto";
@@ -55,6 +56,11 @@ for (let i = 0; i < Number(process.env.HV_LIST ?? 0); i++) {
   server.storeMessage(`list${i + 1}`, { role: "user", text: `${title}?` });
   server.storeMessage(`list${i + 1}`, { role: "assistant", text: "Checked. Nothing to do for now." });
 }
+
+for (const id of (process.env.HV_FAIL_PATCH ?? "").split(",").filter(Boolean))
+  server.rest[`PATCH /api/sessions/${id}`] = () => {
+    throw new Error(`The dashboard answered 503: {"detail":"Stand-in refuses edits of ${id}"}`);
+  };
 
 // Settings → MCP servers (ADR 0068): a second profile, servers of each kind, one from a plugin, Test results and a catalog.
 server.otherProfiles = { work: [] };
