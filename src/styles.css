@@ -1416,6 +1416,8 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .model-pick > .select:disabled { opacity: 0.55; }
 .model-num { width: 90px; height: 32px; padding: 0 10px; border-radius: 8px; background: var(--raised-2); border: 1px solid var(--line); outline: none; font-size: calc(13rem / 14); }
 .model-num:focus-visible { border-color: var(--line-2); }
+.model-num.days { width: 72px; }
+.model-num[aria-invalid="true"] { border-color: var(--bad); }
 .check { display: inline-flex; align-items: center; gap: 8px; height: 32px; color: var(--text); font-size: calc(13rem / 14); }
 .check input { accent-color: var(--accent); width: 15px; height: 15px; }
 /* A part's state and its Discard and Apply, or the guardrail asked in their place, on its card's last line. */
