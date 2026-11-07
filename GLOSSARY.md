@@ -9,7 +9,7 @@ One Hermes conversation as this app shows it, with its full message history.
 _Avoid_: session (Hermes's word for the same thing; keep it for server-side talk), conversation, thread
 
 **Active**:
-The state of a chat the owner is currently working in: any chat that isn't Settled. The list doesn't label it. An Active chat shows in the Inbox when it needs the owner or is done, in Working while Hermes replies in it, and in Snoozed while it is snoozed (ADR 0036, ADR 0063). A chat becomes Active when the owner starts it in this app, or when the owner sends a message in it from this app.
+The state of a chat the owner is currently working in: any chat that isn't Settled. The list doesn't label it. An Active chat shows in the Inbox when it needs the owner or is done, in Working while Hermes replies in it or waits on work it handed off, and in Snoozed while it is snoozed (ADR 0036, ADR 0063). A chat becomes Active when the owner starts it in this app, or when the owner sends a message in it from this app.
 _Avoid_: open, live, current
 
 **Settled**:
@@ -20,15 +20,19 @@ _Avoid_: archived, done, closed
 The owner's manual actions, from a chat's row or its right-click menu, that move a chat from Active to Settled, and back to the Inbox. On the row both are the same icon-only button, named when hovered. Settling is how a chat is cleared from the Inbox (ADR 0090). Settling a snoozed chat forgets the snooze. **Settle all**, on the Inbox's header, settles every chat the Inbox shows at once, after a question that counts the ones with an Approval waiting or a failure (issue #303, ADR 0090).
 
 **Working**:
-Where the list shows an Active chat while Hermes is writing a reply in it and isn't waiting on the owner. Nobody puts a chat there: it moves there when a reply starts, and back to the Inbox once Hermes asks the owner something (an Approval) or the reply ends. A Settled or snoozed chat stays where it is while Hermes works in it.
+Where the list shows an Active chat while Hermes is writing a reply in it, or the chat has Dispatched work outstanding, and Hermes isn't waiting on the owner. Nobody puts a chat there: it moves there when a reply starts, and back to the Inbox once Hermes asks the owner something (an Approval), or once no reply runs and no Dispatched work is outstanding. A reply running shows a spinner on the row; Dispatched work with no reply running shows an hourglass (ADR 0094). A Settled or snoozed chat stays where it is while Hermes works in it.
 _Avoid_: running (fine in conversation), busy, in progress
+
+**Dispatched work**:
+Work a chat's reply handed to another agent before it ended its turn: a kanban task it created that is still outstanding (triage, to do, scheduled, ready or running on Hermes's board), or a Subagent of its own that is queued or running after the reply ended. Hermes starts a new turn in the chat when the work comes back, and that turn writes the answer. While a chat has some, it stays in Working. A task that is blocked or waiting for review needs the owner instead, and the chat goes to the Inbox with that reason. **Stop waiting**, in the row's menu, ignores the work outstanding now, on this computer only; a newer dispatch counts again, and nothing on Hermes is cancelled (ADR 0094).
+_Avoid_: background job, pending task, handoff (fine in conversation)
 
 **Snoozed**:
 An Active chat the owner has put out of the way until a time they chose. It sits in the Snoozed section after the Inbox, collapsed until the owner opens it, soonest to wake first, and shows when it wakes. When that time comes it goes back to the Inbox, as new as when it woke. Snoozes are kept on this computer only, for each connection and profile; Hermes and other Hermes clients don't see them (ADR 0036).
 _Avoid_: hidden, deferred, reminder
 
 **Inbox**:
-The first section of the chat list: the Active chats in the profile shown that need the owner or have finished, newest first: an Approval waiting, a failure, a reply done, something new. A chat stays there until the owner settles it (clearing it from the Inbox) or snoozes it, or a reply starts in it (ADR 0063, ADR 0090).
+The first section of the chat list: the Active chats in the profile shown that need the owner or have finished, newest first: an Approval waiting, a failure, a reply done, a dispatched task that is blocked or waiting for review, something new. A chat that handed work off reaches it only once that work is done and Hermes's follow-up reply has ended (ADR 0094). A chat stays there until the owner settles it (clearing it from the Inbox) or snoozes it, or a reply starts in it (ADR 0063, ADR 0090).
 _Avoid_: top of the list (its name before ADR 0063), feed
 
 **Clear from the Inbox**:
@@ -248,7 +252,7 @@ An agent Hermes started from a chat's reply to do part of its work (Hermes's `de
 _Avoid_: child agent, worker, delegate (in the UI). Subagent model settings in Settings → Model pick models, not running work
 
 **Office** / **Desk**:
-The agent office, opened from the rail in place of the chat panes: every agent at work on the connection, one for each chat's reply, in the state the Rail inbox gives it, and one for each of its Subagents. **Building** (the default) draws them as faceless low-poly people in a 3D building with four rooms by state: the **Workroom** (running, and queued at its door), the **Waiting room** (waiting for an Approval, or a message that may not have sent), the **Trouble room** (failed) and the **Lounge** (everything else). Each chat's agents are a **team**, in one team color, and a team keeps its group of Workroom desks while any of its agents works. Clicking an agent opens its **card**, whose only action is Open chat. **List** shows the same agents as rows, and is what a computer without WebGL gets (ADR 0089). An agent opens its chat, or the subagent in the chat's Subagents panel; it never approves or starts anything. One that can't be checked shows "as last seen", and only Hermes's word that a subagent completed makes it Finished (ADR 0077). A **Desk** is one agent's entry in `officeRooms`, the data both views draw.
+The agent office, opened from the rail in place of the chat panes: every agent at work on the connection, one for each chat's reply, in the state the Rail inbox gives it, and one for each of its Subagents. **Building** (the default) draws them as faceless low-poly people in a 3D building with four rooms by state: the **Workroom** (running, queued at its door, and a reply waiting on its Dispatched work), the **Waiting room** (waiting for an Approval, or a message that may not have sent), the **Trouble room** (failed) and the **Lounge** (everything else). Each chat's agents are a **team**, in one team color, and a team keeps its group of Workroom desks while any of its agents works. Clicking an agent opens its **card**, whose only action is Open chat. **List** shows the same agents as rows, and is what a computer without WebGL gets (ADR 0089). An agent opens its chat, or the subagent in the chat's Subagents panel; it never approves or starts anything. One that can't be checked shows "as last seen", and only Hermes's word that a subagent completed makes it Finished (ADR 0077). A **Desk** is one agent's entry in `officeRooms`, the data both views draw.
 
 **Approval**:
 Hermes asking the owner before it runs a command it counts as dangerous. It shows as a card in the chat, and the reply waits until the owner approves or denies it, Hermes stops waiting, or the reply is stopped. The card offers only the answers Hermes offers: once, for the rest of the chat, always, or deny. The two broader grants ask the owner to confirm first.
@@ -271,7 +275,7 @@ Hermes's messaging gateway: the process on the server that connects a profile to
 _Avoid_: channel (a place inside Telegram or Discord), bridge, integration, gateway in front of the dashboard (that's what Extra request headers are for)
 
 **Rail inbox**:
-The list, opened from the rail's Inbox button, of what needs the owner or has finished in any profile on the server: a reply running, an Approval waiting, a failure or Failed message, or a chat with something new. Each entry names its profile and chat, says when, and opens the chat in its profile. Nothing is answered, retried or sent from it. Dismissing an entry takes it out of the rail inbox only, on this computer: the chat stays Unread, Active or Settled, and Archived or not, as it was. An entry shows again only for something newer. Completed entries can also be dismissed all at once with Clear done, or on their own once older than a time set in Settings, off until set (ADR 0088). Running work in other profiles shows only for chats the dashboard itself runs (ADR 0019).
+The list, opened from the rail's Inbox button, of what needs the owner or has finished in any profile on the server: a reply running, a chat waiting on its Dispatched work (listed as running, "Hermes is waiting on work it handed off."), an Approval waiting, a dispatched task that needs the owner, a failure or Failed message, or a chat with something new. Each entry names its profile and chat, says when, and opens the chat in its profile. Nothing is answered, retried or sent from it. Dismissing an entry takes it out of the rail inbox only, on this computer: the chat stays Unread, Active or Settled, and Archived or not, as it was. An entry shows again only for something newer. Completed entries can also be dismissed all at once with Clear done, or on their own once older than a time set in Settings, off until set (ADR 0088). Running work in other profiles shows only for chats the dashboard itself runs (ADR 0019).
 _Avoid_: notifications, activity, feed
 
 **Chat link**:
