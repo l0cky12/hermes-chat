@@ -4,7 +4,7 @@
 // so it shows once. Dismissing an entry is kept on this computer, per connection, and touches nothing else: not
 // Unread, Active or Settled, nor Archived.
 import { type ScopeSource, connectionScope } from "./connections";
-import type { Chat, LiveSessions, OtherProfiles, Source } from "./model";
+import type { Chat, Item, LiveSessions, OtherProfiles, Source } from "./model";
 import { isOutgoing, isWaiting } from "./model";
 
 /**
@@ -70,6 +70,8 @@ export type InboxFilter = keyof typeof INBOX_FILTERS;
 
 /** An error item a chat shows for a chat that couldn't be loaded: not work that failed (transport.ts `LOAD_ERROR_ID`). */
 const LOAD_ERROR_ID = "load-error";
+
+export const isFailure = (i: Item): boolean => (i.kind === "error" && i.id !== LOAD_ERROR_ID) || (isOutgoing(i) && i.outgoing.state !== "sending");
 
 /**
  * The inbox's entries, newest first within each kind, and how many live sessions couldn't be put with one chat: ones
