@@ -7,7 +7,7 @@
 // since text the app writes (a slash pick, a Draft shown again on a chat switch, another pane on the same Draft)
 // breaks it (ADR 0095).
 import { type ScopeSource, scopeParts } from "./connections";
-import { type History, emptyHistory, record, redo, undo } from "./editHistory";
+import { type EditKind, type History, emptyHistory, record, redo, undo } from "./editHistory";
 import { persist } from "./unsaved";
 
 export const DRAFT_PREFIX = "hermes-chat.draft.";
@@ -23,11 +23,8 @@ export function draftKey(connection: ScopeSource, profile: string, chatId: strin
 
 export type Drafts = {
   get(key: string): string;
-  /**
-   * Keeps the text, an undo step unless it is unchanged; empty text deletes the draft. `typing`: the owner typed it,
-   * so it joins the step under way unless they paused.
-   */
-  set(key: string, text: string, how?: "typing" | "change"): void;
+  /** Keeps the text, an undo step unless it is unchanged; empty text deletes the draft. */
+  set(key: string, text: string, how?: EditKind): void;
   /** Steps the Draft back or forward and returns its text then, or undefined when there's nothing to step. */
   undo(key: string): string | undefined;
   redo(key: string): string | undefined;
@@ -66,7 +63,7 @@ export function drafts(storage: DraftStorage, now = Date.now): Drafts {
     persist(() => storage, key, text || null);
     notify();
   };
-  const set = (key: string, text: string, how: "typing" | "change" = "change") => {
+  const set = (key: string, text: string, how: EditKind = "change") => {
     const before = get(key);
     if (before === text) return;
     histories.set(key, record(histories.get(key) ?? emptyHistory(), { text: before }, how, now()));
