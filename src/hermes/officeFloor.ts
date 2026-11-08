@@ -245,7 +245,7 @@ export function officeFloor(rooms: readonly Room[], memory: FloorMemory, now: nu
   // Spots: desks as assigned; the door line in order; the other rooms' seats in order.
   const next: Record<BuildingRoom | "door", number> = { workroom: 0, waiting: 0, trouble: 0, lounge: 0, door: 0 };
   const characters: Character[] = [];
-  let more = agents.length - drawn.size;
+  let freed = 0;
   for (const a of agents) {
     if (!drawn.has(a)) continue;
     const desk = desks.get(a.desk.key);
@@ -256,13 +256,24 @@ export function officeFloor(rooms: readonly Room[], memory: FloorMemory, now: nu
       spot = PLAN.door[next.door++];
       pose = "door";
     } else spot = PLAN.seats[a.place][next[a.place]++];
-    // A running agent with no desk and a full line at the door isn't drawn.
+    // A running agent with no desk and a full line at the door isn't drawn, and its place in the cap goes to another.
     if (!spot) {
-      more++;
+      freed++;
       continue;
     }
     characters.push({ key: a.desk.key, room: a.room, desk: a.desk, color: colors.get(a.room.key)!, place: a.place, spot, pose, stale: !!a.desk.stale });
   }
+  // The Workroom and its door are full by now, so only another room's agents can take those places.
+  for (const a of byNeed) {
+    if (freed === 0) break;
+    if (drawn.has(a) || a.place === "workroom" || used[a.place] >= PLAN.seats[a.place].length) continue;
+    used[a.place]++;
+    freed--;
+    characters.push({ key: a.desk.key, room: a.room, desk: a.desk, color: colors.get(a.room.key)!, place: a.place, spot: PLAN.seats[a.place][next[a.place]++], pose: POSE_IN[a.place], stale: !!a.desk.stale });
+  }
+  const order = new Map(agents.map((a) => [a.desk.key, a.order]));
+  characters.sort((x, y) => order.get(x.key)! - order.get(y.key)!);
+  const more = agents.length - characters.length;
 
   return { characters, more, memory: same(memory, { colors, pods, desks, since }), ...(wakeAt < Infinity && { wakeAt }) };
 }
