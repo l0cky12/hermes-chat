@@ -25,7 +25,7 @@ use reqwest::{header, redirect, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
@@ -133,6 +133,9 @@ pub enum TransportError {
     /// Plain http:// to an address that isn't this computer, a LAN or Tailscale (ADR 0056).
     #[error("Plain http:// is only used on this computer, a LAN or Tailscale, and {0} is a public address. Use https:// or SSH to reach it.")]
     PlainHttpPublic(String),
+    /// Plain http:// to an address in 100.64.0.0/10 that this computer doesn't reach over Tailscale (ADR 0004).
+    #[error("Plain http:// is only used on this computer, a LAN or Tailscale, and this computer doesn't reach {0} over Tailscale. Turn Tailscale on here, or use https:// or SSH to reach it.")]
+    PlainHttpNotTailscale(String),
     #[error("The dashboard sent Hermes Chat on to another site, whose address isn't shown, as it may repeat your password, token or extra request headers. Hermes Chat doesn't follow it there, so nothing is sent to it. If a gateway such as Cloudflare Access is in front of the dashboard, check the headers it needs.")]
     RedirectedHidden,
 }
@@ -447,14 +450,12 @@ where
     Ok(DirectUrl { base, addresses })
 }
 
-/// Whether `ip` is this computer, a private LAN range, link-local, or Tailscale (100.64.0.0/10, or fd7a:115c:a1e0::/48,
-/// which the unique-local fc00::/7 holds): the only places a plain http:// route goes (ADR 0056).
+/// Whether `ip` is this computer, a private LAN range, link-local, or Tailscale's IPv6 range (fd7a:115c:a1e0::/48,
+/// which the unique-local fc00::/7 holds). Tailscale's IPv4 range, 100.64.0.0/10, isn't one of them: carrier-grade NAT
+/// uses it too, so a plain http:// route goes there only over Tailscale (`check_plain_http`, ADR 0004 and 0056).
 pub fn is_local_or_private(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => {
-            let [a, b, ..] = v4.octets();
-            v4.is_loopback() || v4.is_private() || v4.is_link_local() || (a == 100 && (64..=127).contains(&b))
-        }
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
         IpAddr::V6(v6) => {
             let first = v6.segments()[0];
             v6.is_loopback()
@@ -466,26 +467,55 @@ pub fn is_local_or_private(ip: IpAddr) -> bool {
 }
 
 /// Refuses a plain http:// dashboard whose host is, or resolves to, anything but this computer, a LAN or Tailscale:
-/// the password would cross the internet unencrypted (ADR 0056). https:// goes anywhere.
+/// the password would cross the internet, or a carrier's network, unencrypted (ADR 0004 and 0056). https:// goes
+/// anywhere.
 pub fn check_plain_http(direct: &DirectUrl) -> Result<(), TransportError> {
+    check_plain_http_from(direct, source_toward)
+}
+
+/// `check_plain_http`, with `source` naming the address this computer sends from to reach an address.
+pub fn check_plain_http_from(direct: &DirectUrl, source: impl Fn(IpAddr) -> Option<IpAddr>) -> Result<(), TransportError> {
     if direct.base.scheme() != "http" {
         return Ok(());
     }
     let host = direct.base.host_str().unwrap_or_default().to_owned();
-    let literal = match direct.base.host() {
-        Some(url::Host::Ipv4(ip)) => Some(IpAddr::V4(ip)),
-        Some(url::Host::Ipv6(ip)) => Some(IpAddr::V6(ip)),
-        _ => None,
+    let addresses = match direct.base.host() {
+        Some(url::Host::Ipv4(ip)) => vec![IpAddr::V4(ip)],
+        Some(url::Host::Ipv6(ip)) => vec![IpAddr::V6(ip)],
+        _ => direct.addresses.clone(),
     };
-    let local = match literal {
-        Some(ip) => is_local_or_private(ip),
-        None => !direct.addresses.is_empty() && direct.addresses.iter().all(|ip| is_local_or_private(*ip)),
-    };
-    if local {
-        Ok(())
-    } else {
-        Err(TransportError::PlainHttpPublic(host))
+    if addresses.is_empty() {
+        return Err(TransportError::PlainHttpPublic(host));
     }
+    // Tailscale reaches a peer's 100.64.0.0/10 address from this computer's own; a carrier's network doesn't.
+    let over_tailscale = |ip: IpAddr| in_tailscale_v4(ip) && source(ip).is_some_and(in_tailscale_v4);
+    match addresses.iter().find(|ip| !is_local_or_private(**ip) && !over_tailscale(**ip)) {
+        None => Ok(()),
+        Some(ip) if in_tailscale_v4(*ip) => Err(TransportError::PlainHttpNotTailscale(host)),
+        Some(_) => Err(TransportError::PlainHttpPublic(host)),
+    }
+}
+
+/// Whether `ip` is in 100.64.0.0/10, which Tailscale and carrier-grade NAT both use, written as IPv4 or IPv4-mapped.
+fn in_tailscale_v4(ip: IpAddr) -> bool {
+    let v4 = match ip {
+        IpAddr::V4(v4) => v4,
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => v4,
+            None => return false,
+        },
+    };
+    let [a, b, ..] = v4.octets();
+    a == 100 && (64..=127).contains(&b)
+}
+
+/// The address this computer sends from to reach `ip`, as its routing table picks it. Connecting a UDP socket sends
+/// nothing.
+fn source_toward(ip: IpAddr) -> Option<IpAddr> {
+    let any: IpAddr = if ip.is_ipv4() { Ipv4Addr::UNSPECIFIED.into() } else { Ipv6Addr::UNSPECIFIED.into() };
+    let socket = std::net::UdpSocket::bind((any, 0)).ok()?;
+    socket.connect((ip, 9)).ok()?;
+    Some(socket.local_addr().ok()?.ip())
 }
 
 /// A Hermes install's id as this app keeps it: a hash, so the id itself, which `/api/status` shows anyone who asks,

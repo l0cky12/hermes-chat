@@ -2609,6 +2609,32 @@ fn plain_http_goes_only_to_this_computer_a_lan_or_tailscale() {
     }
 }
 
+#[test]
+fn plain_http_to_100_64_goes_only_over_tailscale() {
+    let direct = |url: &str, addresses: &[&str]| transport::DirectUrl {
+        base: Url::parse(url).unwrap(),
+        addresses: addresses.iter().map(|a| a.parse().unwrap()).collect(),
+    };
+    let tailnet = |_: IpAddr| Some("100.119.13.105".parse().unwrap());
+    let carrier = |_: IpAddr| Some("10.2.1.121".parse().unwrap());
+    let both = |ip: IpAddr| Some(if ip.to_string() == "100.100.64.121" { "100.119.13.105" } else { "10.2.1.121" }.parse().unwrap());
+    for url in ["http://100.100.64.121:9119/", "http://[::ffff:100.100.64.121]:9119/"] {
+        assert!(transport::check_plain_http_from(&direct(url, &[]), tailnet).is_ok(), "{url}");
+    }
+    assert!(transport::check_plain_http_from(&direct("http://hermes:9119/", &["100.100.64.121", "192.168.1.10"]), both).is_ok());
+    assert!(transport::check_plain_http_from(&direct("https://100.100.64.121/", &[]), carrier).is_ok());
+    for (url, addresses) in [("http://100.64.0.1:9119/", &[][..]), ("http://hermes:9119/", &["100.100.64.121", "100.64.0.1"][..])] {
+        let refused = transport::check_plain_http_from(&direct(url, addresses), both).unwrap_err();
+        assert!(matches!(refused, TransportError::PlainHttpNotTailscale(_)), "{url}: {refused:?}");
+        let said = refused.to_string();
+        assert!(said.starts_with("Plain http:// is only used") && said.contains("over Tailscale"), "{said}");
+    }
+    // 100.64.0.1 is no tailnet peer, so the routing table sends it out through the LAN's gateway.
+    let real = transport::check_plain_http(&direct("http://100.64.0.1:9119/", &[])).unwrap_err();
+    assert!(matches!(real, TransportError::PlainHttpNotTailscale(_)), "{real:?}");
+    assert!(transport::check_plain_http(&direct("http://127.0.0.1:9119/", &[])).is_ok());
+}
+
 #[tokio::test]
 async fn a_plain_http_route_to_a_public_address_is_refused() {
     let direct = |url: &str, addresses: &[&str]| transport::DirectUrl {
@@ -2617,7 +2643,6 @@ async fn a_plain_http_route_to_a_public_address_is_refused() {
     };
     assert!(transport::check_plain_http(&direct("http://192.168.1.10:9119/", &[])).is_ok());
     assert!(transport::check_plain_http(&direct("http://[fd7a:115c:a1e0::9]:9119/", &[])).is_ok());
-    assert!(transport::check_plain_http(&direct("http://hermes:9119/", &["100.100.64.121"])).is_ok());
     assert!(transport::check_plain_http(&direct("https://hermes.example.com/", &["203.0.113.7"])).is_ok());
     let refused = transport::check_plain_http(&direct("http://203.0.113.7:9119/", &[])).unwrap_err().to_string();
     assert!(refused.contains("203.0.113.7 is a public address"), "{refused}");
