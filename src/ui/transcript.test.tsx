@@ -32,6 +32,7 @@ function pane(chat: Chat, findTarget?: FindTarget, onAnswer: Answer = () => {}) 
       status="connected"
       draft=""
       onDraft={() => {}}
+      onDraftStep={() => undefined}
       onRetry={() => {}}
       onEdit={() => {}}
       onDismiss={() => {}}

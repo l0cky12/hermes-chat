@@ -214,6 +214,7 @@ describe("Import transcripts", () => {
         status="connected"
         draft=""
         onDraft={() => {}}
+        onDraftStep={() => undefined}
         onRetry={() => {}}
         onEdit={() => {}}
         onDismiss={() => {}}

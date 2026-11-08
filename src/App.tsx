@@ -83,6 +83,7 @@ import { UsageAnalytics } from "./ui/UsageAnalytics";
 import { note, type RemoteLog } from "./hermes/logs";
 import { OutputsIndex, outputsIn, sessionOf, splitPath, type Output } from "./hermes/outputs";
 import { STATUS_LABEL, composing, routeLabel } from "./ui/bits";
+import { editStep, isTextField } from "./ui/editKeys";
 import { ProjectScreen, ProjectSwitcher, type ProjectUnread } from "./ui/Projects";
 import { ScheduledJobs } from "./ui/ScheduledJobs";
 import { TroubleshootStore, startTroubleshoot } from "./hermes/troubleshoot";
@@ -2226,6 +2227,16 @@ export function Main({
     // typed with focus outside an input can answer an Approval or stop a reply.
     const onKey = (e: KeyboardEvent) => {
       if (covered || composing(e)) return;
+      // Ctrl+Z outside a text field runs the notice's Undo, as its button does; in one it is always text undo.
+      const step = editStep(e);
+      if (step) {
+        if (step === "undo" && toast?.undo && !e.defaultPrevented && !isTextField(e.target) && !document.querySelector('[aria-modal="true"]')) {
+          e.preventDefault();
+          toast.undo();
+          setToast(null);
+        }
+        return;
+      }
       if (screenshotShortcut && shortcutOf(e) === screenshotShortcut && !checkShortcut(screenshotShortcut).error) {
         e.preventDefault();
         if (!e.repeat) takeScreenshot();
@@ -3471,7 +3482,7 @@ function ChatView({
           if (why) return why;
           // The queue keeps its screenshots now, until they go or the owner removes the message (chatCache.ts).
           screenshots?.hold(attachments.map((a) => a.path));
-          savedDrafts.set(shownDraft, "");
+          savedDrafts.take(shownDraft);
           return undefined;
         },
         edit: (id, text) => hermes.editQueued(chat.id, id, text),
@@ -3555,7 +3566,7 @@ function ChatView({
       if (commandsRunning.has(key)) throw new Error("A command typed in this chat is still running.");
       commandsRunning.add(key);
       const typed = savedDrafts.get(key);
-      const done = () => savedDrafts.get(key) === typed && savedDrafts.set(key, "");
+      const done = () => savedDrafts.get(key) === typed && savedDrafts.take(key);
       const here = () => still() && stillIn();
       try {
         if (def.name === "new") {
@@ -3613,7 +3624,7 @@ function ChatView({
     steer: async (text) => {
       const key = shownDraft;
       const typed = savedDrafts.get(key);
-      const done = () => savedDrafts.get(key) === typed && savedDrafts.set(key, "");
+      const done = () => savedDrafts.get(key) === typed && savedDrafts.take(key);
       if (await hermes.steer(chat.id, text) === "steered") {
         done();
         return undefined;
@@ -3683,7 +3694,8 @@ function ChatView({
       status={status}
       alsoPostsIn={hermes.alsoPostsIn(chat.id)}
       draft={composerText}
-      onDraft={(text) => savedDrafts.set(shownDraft, text)}
+      onDraft={(text, how) => savedDrafts.set(shownDraft, text, how)}
+      onDraftStep={(step) => savedDrafts[step](shownDraft)}
       onRetry={retry}
       onEdit={edit}
       onDismiss={(itemId) => hermes.dismiss(chat.id, itemId)}

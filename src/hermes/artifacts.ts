@@ -34,19 +34,16 @@ import {
   VERSIONS_MAX_CHARS,
   askInput,
   askMaxTokens,
-  emptyHistory,
   keep,
   proposed,
-  record,
-  redo,
   replacementFrom,
   staleBecause,
-  undo,
   wholeChars,
-  type History,
   type KeptVersion,
   type Proposal,
+  type Snapshot,
 } from "./artifactEdit";
+import { emptyHistory, record, redo, undo, type History } from "./editHistory";
 
 /**
  * Which file an artifact is. `scope`: the connection and profile it was opened in (projects.ts `projectScope`), so
@@ -229,7 +226,7 @@ export type ArtifactSession = {
   base?: EditBase;
   draft: string;
   sel: { start: number; end: number };
-  history: History;
+  history: History<Snapshot>;
   busy?: "saving" | "copying" | "asking";
   error?: string;
   note?: string;

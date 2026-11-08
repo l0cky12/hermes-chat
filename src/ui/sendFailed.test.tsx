@@ -28,6 +28,7 @@ function pane(items: Item[], { status = "connected" as ConnectionStatus, over = 
       status={status}
       draft=""
       onDraft={() => {}}
+      onDraftStep={() => undefined}
       onRetry={on.retry}
       onEdit={on.edit}
       onDismiss={on.dismiss}
