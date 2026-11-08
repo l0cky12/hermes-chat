@@ -2987,3 +2987,27 @@ async fn a_connection_with_several_routes_limits_each_step_and_one_with_a_single
     let slow = stalling_at("/auth/password-login").await;
     assert!(tokio::time::timeout(Duration::from_secs(1), open_route(&slow, None, |_| {})).await.is_err(), "a single route gave up early");
 }
+
+/// FastAPI's 422 for a body that failed validation, which echoes the request it was sent as `input`.
+async fn echo_422(Json(body): Json<Value>) -> Response {
+    (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"detail": [{"type": "missing", "loc": ["body", "totp"], "msg": "Field required", "input": body}]})))
+        .into_response()
+}
+
+#[tokio::test]
+async fn a_failed_password_sign_in_never_shows_the_password() {
+    let echo_text = |Json(body): Json<Value>| async move { (StatusCode::BAD_GATEWAY, format!("upstream refused {body}")).into_response() };
+    let base_422 = serve(Router::new().route("/auth/password-login", post(echo_422))).await;
+    let base_text = serve(Router::new().route("/auth/password-login", post(echo_text))).await;
+    for (base, status) in [(&base_422, 422), (&base_text, 502)] {
+        for password in ["hunter2", "pässwörd-ünïcode", "Q", "bell\u{7}"] {
+            for headers in [sign_in(password).headers, access_sign_in().headers] {
+                let signing_in = SignIn { headers, ..sign_in(password) };
+                let err = sign_in_at(base, &signing_in).await.err().unwrap();
+                let shown = err.to_string();
+                assert!(matches!(&err, TransportError::Unexpected { status: s, .. } if *s == status), "{err:?}");
+                assert!(!shown.contains(password), "{password:?} shown: {shown}");
+            }
+        }
+    }
+}
