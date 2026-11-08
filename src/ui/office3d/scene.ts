@@ -18,6 +18,8 @@ export type ScreenPoint = { x: number; y: number; off: boolean };
 export type SceneEvents = {
   /** A click on a character, or on nothing (undefined). */
   onPick(key: string | undefined): void;
+  /** The pointer is over a character, or no longer (undefined). Told only when that changes. It draws nothing. */
+  onHover(key: string | undefined): void;
   /** A click on one of the tower's floors, by its index in `setTower`'s list. */
   onFloor(index: number): void;
   /**
@@ -181,18 +183,36 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     const r = canvas.getBoundingClientRect();
     return new Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   };
+  /** The nearest thing under the pointer: a character, a tower floor, or one walking out, which can't be picked. */
+  type Under = { kind: "figure"; key: string } | { kind: "floor"; index: number } | { kind: "leaving" } | { kind: "nothing" };
+  const under = (e: MouseEvent): Under => {
+    raycaster.setFromCamera(ndc(e), camera);
+    const hit = raycaster.intersectObjects([...figures.pickable, ...tower.pickable()], false)[0];
+    if (!hit) return { kind: "nothing" };
+    if (hit.object.userData.floor !== undefined) return { kind: "floor", index: hit.object.userData.floor as number };
+    const key = hit.instanceId === undefined ? undefined : figures.keyAt(hit.instanceId);
+    return key === undefined ? { kind: "leaving" } : { kind: "figure", key };
+  };
   let down: { x: number; y: number } | undefined;
   const onDown = (e: PointerEvent) => void (down = { x: e.clientX, y: e.clientY });
   const onClick = (e: MouseEvent) => {
     if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
-    raycaster.setFromCamera(ndc(e), camera);
-    // The nearest thing under the pointer: a character, a tower floor, or one walking out, which can't be picked.
-    const hit = raycaster.intersectObjects([...figures.pickable, ...tower.pickable()], false)[0];
-    if (hit?.object.userData.floor !== undefined) return events.onFloor(hit.object.userData.floor as number);
-    const key = hit?.instanceId === undefined ? undefined : figures.keyAt(hit.instanceId);
-    if (hit && key === undefined) return;
-    events.onPick(key);
+    const hit = under(e);
+    if (hit.kind === "floor") return events.onFloor(hit.index);
+    if (hit.kind !== "leaving") events.onPick(hit.kind === "figure" ? hit.key : undefined);
   };
+  // Hover changes no frame, so it never goes through the pacer.
+  let hovered: string | undefined;
+  const hover = (key: string | undefined, pointer: boolean) => {
+    canvas.style.cursor = pointer ? "pointer" : "";
+    if (key !== hovered) events.onHover((hovered = key));
+  };
+  const onMove = (e: PointerEvent) => {
+    if (e.buttons !== 0) return hover(undefined, false);
+    const hit = under(e);
+    hover(hit.kind === "figure" ? hit.key : undefined, hit.kind === "figure" || hit.kind === "floor");
+  };
+  const onLeave = () => hover(undefined, false);
   // A double click on a room zooms to it, keeping the direction the camera looks from.
   const onDouble = (e: MouseEvent) => {
     raycaster.setFromCamera(ndc(e), camera);
@@ -213,6 +233,8 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     events.onLost("The graphics card stopped drawing the office (its WebGL context was lost).");
   };
   canvas.addEventListener("pointerdown", onDown);
+  canvas.addEventListener("pointermove", onMove);
+  canvas.addEventListener("pointerleave", onLeave);
   canvas.addEventListener("click", onClick);
   canvas.addEventListener("dblclick", onDouble);
   canvas.addEventListener("webglcontextlost", onLost);
@@ -282,7 +304,10 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
       watch.disconnect();
       controls.dispose();
       canvas.removeEventListener("pointerdown", onDown);
+      canvas.removeEventListener("pointermove", onMove);
+      canvas.removeEventListener("pointerleave", onLeave);
       canvas.removeEventListener("click", onClick);
+      canvas.style.cursor = "";
       canvas.removeEventListener("dblclick", onDouble);
       canvas.removeEventListener("webglcontextlost", onLost);
       building.dispose();
