@@ -173,13 +173,12 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
   const onClick = (e: MouseEvent) => {
     if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
     raycaster.setFromCamera(ndc(e), camera);
-    const hit = raycaster.intersectObjects(figures.pickable, false)[0];
+    // The nearest thing under the pointer: a character, a tower floor, or one walking out, which can't be picked.
+    const hit = raycaster.intersectObjects([...figures.pickable, ...tower.pickable()], false)[0];
+    if (hit?.object.userData.floor !== undefined) return events.onFloor(hit.object.userData.floor as number);
     const key = hit?.instanceId === undefined ? undefined : figures.keyAt(hit.instanceId);
-    // An agent walking out of the building can't be picked, and isn't clicked through either.
     if (hit && key === undefined) return;
-    const slab = key === undefined ? raycaster.intersectObjects(tower.pickable(), false)[0] : undefined;
-    if (slab) events.onFloor(slab.object.userData.floor as number);
-    else events.onPick(key);
+    events.onPick(key);
   };
   // A double click on a room zooms to it, keeping the direction the camera looks from.
   const onDouble = (e: MouseEvent) => {

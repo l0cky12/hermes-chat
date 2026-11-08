@@ -380,6 +380,13 @@ describe("The building", () => {
     expect(agents()).toHaveLength(1);
   });
 
+  it("says only that a floor is empty when its profile has no agent, while another floor has some", async () => {
+    const { user } = office("building", { rooms: sample(), profiles: ["home"] });
+    await user.click(await screen.findByRole("button", { name: /^home: 0 agents/ }));
+    await waitFor(() => expect(drawn.scene?.profile).toBe("home"));
+    expect(document.querySelector(".office-note")!.textContent).toBe("No agent is on this floor.");
+  });
+
   it("shows an agent's card, kept up to date while open, with Open chat as its only action", async () => {
     const { onOpen, user, rerender } = office("building");
     await user.click(screen.getByRole("button", { name: /^Read the auth code, Running/ }));

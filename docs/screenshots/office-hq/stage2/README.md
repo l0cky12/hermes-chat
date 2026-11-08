@@ -1,13 +1,13 @@
 # Office HQ stage 2 (#282)
 
-Taken with the verify skill (`.claude/skills/verify-hermes-chat`) in the real app, headless (Xvfb, llvmpipe software WebGL), against the stand-in dashboard started with `HV_INBOX=1`. Another profile's reply is driven with the stand-in's `POST /__live`, as `session.active_list` reports one.
+Taken with the verify skill (`.claude/skills/verify-hermes-chat`) in the real app, headless (Xvfb, llvmpipe software WebGL), against the stand-in dashboard started with `HV_INBOX=1`. Shots 1 and 6 come from a run after the review fixes, the others from a run before them; nothing the others show changed. Another profile's reply is driven with the stand-in's `POST /__live`, as `session.active_list` reports one.
 
-1. `1-default-floor-tower.png`: the office opens on the shown profile's floor. `work` is a closed floor in the tower beside the building, with its agent count. Its two seeded Unread chats were last active 1 hour and 3 days ago, so they have gone home.
+1. `1-default-floor-tower.png`: the office opens on the shown profile's floor. `work` is a closed floor in the tower beside the building, with its agent count. Its two seeded Unread chats were last active 1 hour and 3 days ago, so they have gone home. `default` has no agent either, and its floor says so. (The keyring note at the bottom is this headless run's; it has no keyring.)
 2. `2-work-floor-typing.png`: a reply started in `work`, seen on its floor 13.4 s after it started (5.5 s in an earlier run). Looking at `work`'s floor leaves the app on `default`, and `default` is in the tower.
 3. `3-walking-to-waiting-room.png`: the reply now waits for an approval. It walks out of the Workroom and along the hallway.
 4. `4-waiting-room.png`: it arrives in the Waiting room, hand up under a "!".
 5. `5-lounge-unread.png`: the reply ended, and the Inbox's read of `work` says the chat is Unread: it sits on a Lounge couch.
-6. `6-walking-out-after-dismiss.png`: its Inbox entry dismissed, the office opened again walks it out of the Lounge toward the front door.
+6. `6-walking-out-after-dismiss.png`: its Inbox entry dismissed, the office opened again walks it off the Lounge couch toward the front door. The floor's note says why agents leave.
 7. `7-three-typing-default.png`: a delegating reply in `default`, three agents typing; `work`'s floor in the tower is lit with "!" while its reply waits for an approval.
 
 ## Requests while another profile's reply starts
