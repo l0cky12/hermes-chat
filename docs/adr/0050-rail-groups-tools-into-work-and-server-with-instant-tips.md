@@ -1,5 +1,7 @@
 # The rail groups its tools into Work and Server, with tips that show at once
 
+> **Updated by [ADR 0097](0097-the-rail-has-no-inbox-button-and-the-tray-opens-the-rail-inbox.md)** (#276). The rail no longer has an Inbox button; the Rail inbox opens from the tray's Open Inbox. The rail's top is the "H" mark, New chat, Search, Bots and Office.
+
 > **Updated by [ADR 0063](0063-the-chat-list-is-the-inbox-in-sections-that-collapse-and-settings-turns-on-and-off.md)** (#219). The rail's Inbox button opens the **Rail inbox**, the list of what needs the owner in every profile; the chat list's first section is now also called the Inbox.
 
 Issue #176: the rail had grown from ADR 0001's few app-level actions to twelve icon-only buttons of the same size and weight, in no order a person could learn. Each had only a native `title`, which shows after a delay, so telling them apart meant hovering and waiting.

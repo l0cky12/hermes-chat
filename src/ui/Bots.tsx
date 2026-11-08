@@ -1,6 +1,6 @@
 // The Bots view (ADR 0066): one row per bot, which is a Hermes profile, with its picture, name, description, its Bot
 // Chat's last message and what it is doing. A row opens the bot's Bot Chat, found by title every time (bots.ts); the
-// pen beside it starts an ordinary chat in the bot's profile. It opens from the rail like the Inbox, beside the list.
+// pen beside it starts an ordinary chat in the bot's profile.
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { ChevronDown, ChevronRight, Loader, RefreshCw, ShieldAlert, SquarePen, X } from "lucide-react";
 import { BotModeUnsupportedError, type Bot, type BotActivity } from "../hermes/bots";

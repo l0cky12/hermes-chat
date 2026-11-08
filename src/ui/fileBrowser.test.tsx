@@ -7,7 +7,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
-import type { TrayWiring } from "../hermes/tauriTray";
+import { FakeTray } from "../hermes/fakeTray";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
@@ -45,22 +45,7 @@ function server() {
   return s;
 }
 
-/** The tray's menu picks, as Rust sends them once it has shown the window (tray.rs). */
-function stubTray() {
-  const picks = { newChat: new Set<() => void>(), inbox: new Set<() => void>() };
-  const on = (set: Set<() => void>) => (fn: () => void) => (set.add(fn), () => void set.delete(fn));
-  const wiring: TrayWiring = {
-    status: async () => ({ closeToTray: true, tray: "shown" }),
-    setCloseToTray: async (on) => ({ closeToTray: on, tray: "shown" }),
-    onStatus: () => () => {},
-    onNewChat: on(picks.newChat),
-    onOpenInbox: on(picks.inbox),
-    reportInbox: () => {},
-  };
-  return { wiring, pick: (item: keyof typeof picks) => act(() => picks[item].forEach((f) => f())) };
-}
-
-async function launch(s: FakeHermes, tray = stubTray().wiring) {
+async function launch(s: FakeHermes, tray = new FakeTray({ closeToTray: true, tray: "shown" })) {
   const hermes = await connect(s.openPipe);
   running.push(hermes);
   render(<Main hermes={hermes} tray={tray} connection={{ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }} onSignOut={async () => {}} />);
@@ -623,8 +608,8 @@ describe("Server files: editing text", () => {
 
   it("keeps the edit when the tray's New chat or Open Inbox is picked: the window only comes forward", async () => {
     const s = server();
-    const tray = stubTray();
-    const { user } = await launch(s, tray.wiring);
+    const tray = new FakeTray({ closeToTray: true, tray: "shown" });
+    const { user } = await launch(s, tray);
     const area = await openEditor(user);
     await user.type(area, "draft");
     tray.pick("newChat");

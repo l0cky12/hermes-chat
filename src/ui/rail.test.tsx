@@ -18,7 +18,6 @@ function rail(over: Partial<Parameters<typeof Rail>[0]> = {}) {
     onToggleList: noop,
     onNew: vi.fn(),
     onSearch: noop,
-    onInbox: noop,
     onOutputs: noop,
     onSettings: noop,
     onJobs: noop,
@@ -34,10 +33,11 @@ const names = (el: HTMLElement) => within(el).getAllByRole("button").map((b) => 
 const tip = () => screen.queryByRole("tooltip", { hidden: true });
 
 describe("the rail", () => {
-  it("puts New chat, Search and Inbox first, then the Server group, with Settings at the foot", () => {
+  it("puts New chat and Search first, then the Server group, with Settings at the foot", () => {
     const { container } = rail();
     const top = container.querySelector(".rail-top") as HTMLElement;
-    expect(names(top)).toEqual(["Hide or show chats", "New chat (Ctrl+N)", "Search all chats (Ctrl+K)", "Inbox"]);
+    expect(names(top)).toEqual(["Hide or show chats", "New chat (Ctrl+N)", "Search all chats (Ctrl+K)"]);
+    expect(screen.queryByRole("button", { name: /^Inbox/ })).toBeNull();
     expect(names(screen.getByRole("group", { name: "Server" }))).toEqual(["Outputs", "Repository", "Scheduled jobs", "Automations", "Usage"]);
     // Server files and the Terminal are the side panel's tabs, not rail buttons.
     expect(screen.queryByRole("group", { name: "Work" })).toBeNull();
@@ -104,12 +104,11 @@ describe("the rail", () => {
   });
 
   it("gives each button its tip's line as its description", () => {
-    rail({ inboxCount: 2, updateWaiting: true });
+    rail({ updateWaiting: true });
     expect(screen.getByRole("button", { name: "Automations", description: "Tasks started by GitHub events" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Outputs", description: "Files Hermes made" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Settings: an update is ready", description: "An update is ready" })).toBeTruthy();
     // A line the name already says isn't said twice.
-    expect(screen.getByRole("button", { name: "Inbox, 2 need you", description: "" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /^Connected/, description: "" })).toBeTruthy();
   });
 
@@ -161,12 +160,12 @@ describe("the rail", () => {
   });
 
   it("keeps a tip that stays up in step with the button", async () => {
-    const { user, rerender, props } = rail({ inboxCount: 0 });
-    await user.hover(screen.getByRole("button", { name: "Inbox" }));
-    expect(tip()?.textContent).toBe("InboxWhat needs you in any profile");
-    rerender(<Rail {...props} inboxCount={3} />);
-    expect(screen.getByRole("button", { name: "Inbox, 3 need you" })).toBeTruthy();
-    expect(tip()?.textContent).toBe("Inbox3 need you");
+    const { user, rerender, props } = rail({ updateWaiting: false });
+    await user.hover(screen.getByRole("button", { name: "Settings" }));
+    expect(tip()?.textContent).toBe("SettingsCtrl+,Import, backup and more");
+    rerender(<Rail {...props} updateWaiting />);
+    expect(screen.getByRole("button", { name: "Settings: an update is ready" })).toBeTruthy();
+    expect(tip()?.textContent).toBe("SettingsCtrl+,An update is ready");
   });
 
   it("puts the connection's full wording in its tip", async () => {

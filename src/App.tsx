@@ -1996,7 +1996,12 @@ export function Main({
   const trayNewChat = useRef(() => {});
   trayNewChat.current = () => trayCovered() || newChat();
   const trayInbox = useRef(() => {});
-  trayInbox.current = () => trayCovered() || setInboxOpen(true);
+  trayInbox.current = () => {
+    if (trayCovered()) return;
+    setBotsOpen(false);
+    setOfficeOpen(false);
+    setInboxOpen(true);
+  };
   useEffect(() => tray.onNewChat(() => trayNewChat.current()), [tray]);
   useEffect(() => tray.onOpenInbox(() => trayInbox.current()), [tray]);
   useEffect(() => tray.reportInbox(inboxCount), [tray, inboxCount]);
@@ -2482,13 +2487,6 @@ export function Main({
           })
         }
         outputsOpen={outputsOpen && !settingsOpen && !projectScreenOpen}
-        onInbox={() => {
-          setBotsOpen(false);
-          setOfficeOpen(false);
-          setInboxOpen((o) => !o);
-        }}
-        inboxOpen={inboxOpen}
-        inboxCount={inboxCount}
         // Hidden for a Hermes without Bot Mode, once the view that found out has closed.
         onBots={
           caps.caps.botMode.state === "unsupported" && !botsOpen

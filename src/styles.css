@@ -2254,11 +2254,6 @@ label.memory-pick { cursor: pointer; }
   .files-goto input { width: 150px; }
 }
 /* inbox */
-.inbox-btn { position: relative; }
-.inbox-btn .badge {
-  position: absolute; top: 1px; right: -3px; min-width: 16px; padding: 0 4px; line-height: 15px; text-align: center;
-  background: var(--accent); color: var(--on-accent); font-size: calc(10rem / 14);
-}
 .inbox {
   position: fixed; top: 0; bottom: 0; left: 60px; z-index: 30; width: 380px; max-width: calc(100vw - 60px);
   background: var(--raised); border-right: 1px solid var(--line-2); box-shadow: 10px 0 30px rgba(0, 0, 0, 0.35);

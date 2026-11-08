@@ -1,5 +1,7 @@
 # The side panel alone holds Server files and the Terminal, splitting has no buttons, and the Inbox closes on a click away
 
+> **Updated by [ADR 0097](0097-the-rail-has-no-inbox-button-and-the-tray-opens-the-rail-inbox.md)** (#276). The Inbox button no longer exists, so the Inbox closes on a press outside it or on Escape, and opens from the tray's Open Inbox.
+
 > **Updated by [ADR 0063](0063-the-chat-list-is-the-inbox-in-sections-that-collapse-and-settings-turns-on-and-off.md)** (#219). "The Inbox" here is the **Rail inbox**, opened from the rail. The chat list beside the chat is now in sections, the first of them the Inbox; the Side panel is unchanged.
 
 The rail's Work group (ADR 0050) had Server files and the Terminal, which only opened the side panel at a tab it already shows (ADR 0039): two ways to the same place. Each pane's tab strip had Split right and Split down buttons beside the side panel's, three similar icons at the window's right edge. And the Inbox stayed open over the chat list while the owner went to another rail tool, so it had to be closed by its own button.

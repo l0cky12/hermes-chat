@@ -3,7 +3,7 @@
 // rail's foot. Right-clicking a chat opens its menu (ChatMenu.tsx).
 import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Hourglass, Inbox as InboxIcon, LockOpen, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
+import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Hourglass, LockOpen, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
 import { waitingLabel, type Handoff } from "../hermes/dispatched";
 import type { Chat, ConnectionStatus, OtherProfile, OtherProfiles } from "../hermes/model";
 import { SOURCE_LABEL, isWaiting } from "../hermes/model";
@@ -33,9 +33,6 @@ export function Rail({
   onToggleList,
   onNew,
   onSearch,
-  onInbox,
-  inboxOpen = false,
-  inboxCount = 0,
   onBots,
   botsOpen = false,
   botsNeedYou = false,
@@ -67,10 +64,6 @@ export function Rail({
   onToggleList: () => void;
   onNew: () => void;
   onSearch: () => void;
-  /** Opens or closes the inbox (Inbox.tsx); `inboxCount`: its entries that need the owner. */
-  onInbox?: () => void;
-  inboxOpen?: boolean;
-  inboxCount?: number;
   /** Opens or closes the Bots view (Bots.tsx, ADR 0066); none when this Hermes has no Bot Mode. `botsNeedYou`: a bot waits on the owner. */
   onBots?: () => void;
   botsOpen?: boolean;
@@ -114,7 +107,6 @@ export function Rail({
     .join(" · ");
   const connLabel = [STATUS_LABEL[status], connNote].filter(Boolean).join(" · ");
   const { shown, bind, hide, tipProps, descriptions } = useRailTip();
-  const needs = inboxCount ? `${inboxCount} need${inboxCount === 1 ? "s" : ""} you` : undefined;
   const server = [
     onOutputs && (
       <button key="outputs" className={`icon-btn ${outputsOpen ? "on" : ""}`} aria-label="Outputs" aria-pressed={outputsOpen} onClick={onOutputs} {...bind("outputs", { label: "Outputs", note: "Files Hermes made" })}>
@@ -155,18 +147,6 @@ export function Rail({
         <button className="icon-btn rail-primary" aria-label="Search all chats (Ctrl+K)" aria-keyshortcuts="Control+K" onClick={onSearch} {...bind("search", { label: "Search all chats", keys: "Ctrl+K" })}>
           <Search size={18} />
         </button>
-        {onInbox && (
-          <button
-            className={`icon-btn rail-primary inbox-btn ${inboxOpen ? "on" : ""}`}
-            aria-label={needs ? `Inbox, ${needs}` : "Inbox"}
-            aria-expanded={inboxOpen}
-            onClick={onInbox}
-            {...bind("inbox", { label: "Inbox", note: needs ?? "What needs you in any profile", describe: !needs })}
-          >
-            <InboxIcon size={18} />
-            {inboxCount > 0 && <span className="badge" aria-hidden>{inboxCount > 99 ? "99+" : inboxCount}</span>}
-          </button>
-        )}
         {onBots && (
           <button
             className={`icon-btn rail-primary bots-btn ${botsOpen ? "on" : ""}`}
@@ -273,7 +253,6 @@ function useRailTip() {
     if (to instanceof Node && into()?.contains(to)) return;
     hide();
   };
-  // Rebuilt each render, so a tip that stays up shows the button's wording as it is now (an Inbox count, a session).
   const tips: Record<string, RailTip> = {};
   const noteId = (key: string) => `${id}-tip-${key}`;
   const bind = (key: string, t: RailTip) => {
