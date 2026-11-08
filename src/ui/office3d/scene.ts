@@ -40,6 +40,8 @@ const MIN_DISTANCE = 7;
 const MAX_DISTANCE = 44;
 const HOME = { target: new Vector3(0, 0, 0.5), position: new Vector3(15, 27, 23) };
 const TWEEN_MS = 450;
+/** Faces show nearer than this to the point the camera turns about: there an eye is about four pixels across. */
+const FACE_DISTANCE = 18;
 /** Typing needs a few distinct poses a second, not smooth motion: each frame of it redraws the whole building. */
 const TYPING_FPS = 6;
 
@@ -117,6 +119,7 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
       }
     }
     pacer.animating("typing", figures.animate(now, moves), TYPING_FPS);
+    figures.showFaces(camera.position.distanceTo(controls.target) < FACE_DISTANCE);
     renderer.render(scene, camera);
     renderer.getSize(size);
     const tags = new Map<string, ReturnType<typeof toScreen>>();
@@ -149,7 +152,7 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
     raycaster.setFromCamera(ndc(e), camera);
     const hit = raycaster.intersectObjects(figures.pickable, false)[0];
-    events.onPick(hit?.instanceId === undefined ? undefined : figures.keyAt(hit.instanceId));
+    events.onPick(hit?.instanceId === undefined ? undefined : figures.keyAt(hit.object, hit.instanceId));
   };
   // A double click on a room zooms to it, keeping the direction the camera looks from.
   const onDouble = (e: MouseEvent) => {

@@ -7,6 +7,9 @@
 //   wd.mjs wait  <css> [text] [ms]   wait until an element matching css (and containing text) is displayed
 //   wd.mjs gone  <css> [text] [ms]   wait until no displayed element matches
 //   wd.mjs click <css> [text]        click the first displayed match (real pointer input through WebKit automation)
+//   wd.mjs wheel <css> [text] -- <dy> [below]   turn the scroll wheel by dy pixels over the match's middle, or `below`
+//                                    pixels under it (negative dy: away from you, which zooms the office in toward that
+//                                    point; `below` reaches the character under an office name tag)
 //   wd.mjs rightclick <css> [text]   right-click the match with real X input (xdotool), which opens a context menu
 //   wd.mjs fill  <css> [text] -- <value>   clear the field, then type value as key presses
 //   wd.mjs select <css> [text] -- <option>   pick a native <select> option by its text (the popup itself never renders)
@@ -126,6 +129,18 @@ try {
       await wd("POST", s(`/element/${await one(css, text)}/click`), {});
       console.log("clicked");
       break;
+    case "wheel": {
+      if (dashdash < 0) die("wheel needs `-- <dy>`");
+      const middle = "const r = arguments[0].getBoundingClientRect(); return [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)];";
+      const [x, y] = await exec(middle, [{ [ELEMENT]: await one(css, text) }]);
+      const below = Number(args[dashdash + 2] ?? 0);
+      await wd("POST", s("/actions"), {
+        actions: [{ type: "wheel", id: "wheel", actions: [{ type: "scroll", origin: "viewport", x, y: y + below, deltaX: 0, deltaY: Number(args[dashdash + 1]) }] }],
+      });
+      await wd("DELETE", s("/actions"));
+      console.log("scrolled");
+      break;
+    }
     case "rightclick": {
       // Not WebDriver pointer actions: WebKitWebDriver releases button 2 as a mouseup of button 0 plus a click, so a
       // right-click on a link would also follow it. Real X input through `hv x` sends exactly what a mouse sends.
