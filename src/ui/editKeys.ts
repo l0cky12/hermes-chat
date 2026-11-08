@@ -37,6 +37,10 @@ const TYPING = new Set([
 // The inputs whose text the webview's history holds. A date or time input is a text field for Ctrl+Z, but has none.
 const HISTORY_INPUTS = new Set(["text", "search", "url", "tel", "email", "password", "number"]);
 
+// Only WebKitGTK lacks the keys. WebView2 binds them, and its own undo fires the beforeinput the guard below cancels;
+// an execCommand undo there fires none, and stepped the composer from an empty Search field (#301).
+const LINUX = /linux/i;
+
 const keepsWebviewHistory = (target: EventTarget | null): boolean =>
   target instanceof HTMLTextAreaElement ||
   (target instanceof HTMLInputElement && HISTORY_INPUTS.has(target.type)) ||
@@ -69,7 +73,7 @@ export const isTextEdit = (e: KeyboardEvent | ReactKeyboardEvent): boolean => !!
 export function followEditKeys(): void {
   window.addEventListener("keydown", (e) => {
     const step = editStep(e);
-    if (!step || e.defaultPrevented || composing(e) || !keepsWebviewHistory(e.target)) return;
+    if (!step || e.defaultPrevented || composing(e) || !keepsWebviewHistory(e.target) || !LINUX.test(navigator.userAgent)) return;
     e.preventDefault();
     document.execCommand(step);
   });
