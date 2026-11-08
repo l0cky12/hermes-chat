@@ -244,7 +244,14 @@ export function OfficeBuilding({
       {!scene ? (
         <div className="office-note inbox-note">Opening the building…</div>
       ) : (
-        floor.characters.length === 0 && floor.more === 0 && <div className="office-note inbox-note">No agent is at work. One shows here while a reply runs, waits for you or failed, and for each subagent it starts.</div>
+        floor.characters.length === 0 &&
+        floor.more === 0 && (
+          <div className="office-note inbox-note">
+            {rooms.length === 0
+              ? "No agent is at work. One shows here while a reply runs, waits for you or failed, and for each subagent it starts."
+              : "No agent is on this floor. Finished agents go home 30 minutes after their last change, or once dismissed in the inbox. List shows every agent."}
+          </div>
+        )
       )}
       <div className="office-overlay">
         {(Object.keys(ROOM_NAME) as BuildingRoom[]).map((r) => (

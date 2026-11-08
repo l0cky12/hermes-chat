@@ -175,6 +175,8 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     raycaster.setFromCamera(ndc(e), camera);
     const hit = raycaster.intersectObjects(figures.pickable, false)[0];
     const key = hit?.instanceId === undefined ? undefined : figures.keyAt(hit.instanceId);
+    // An agent walking out of the building can't be picked, and isn't clicked through either.
+    if (hit && key === undefined) return;
     const slab = key === undefined ? raycaster.intersectObjects(tower.pickable(), false)[0] : undefined;
     if (slab) events.onFloor(slab.object.userData.floor as number);
     else events.onPick(key);

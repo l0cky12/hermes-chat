@@ -368,6 +368,18 @@ describe("The building", () => {
     expect(document.querySelector(".office-floor-open")!.textContent).toBe("work's floor, looked at from default");
   });
 
+  it("says where the agents are when none is on the open floor, while the header and List still count them", async () => {
+    const done: Room = { key: "default old", profile: "default", chatId: "old", title: "Old chat", desks: [{ key: "default old reply", agent: { kind: "reply" }, name: "The chat's reply", state: "unread", doing: { text: "Something new.", at: Date.now() - 2 * 60 * 60_000 } }] };
+    office("building", { rooms: [done] });
+    await waitFor(() => expect(drawn.scene?.floor).toBeTruthy());
+    expect(agents()).toEqual([]);
+    expect(screen.getByText(/^No agent is on this floor\. Finished agents go home 30 minutes after their last change/)).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Office" }).textContent).toContain("1 agent");
+    cleanup();
+    office("list", { rooms: [done] });
+    expect(agents()).toHaveLength(1);
+  });
+
   it("shows an agent's card, kept up to date while open, with Open chat as its only action", async () => {
     const { onOpen, user, rerender } = office("building");
     await user.click(screen.getByRole("button", { name: /^Read the auth code, Running/ }));
