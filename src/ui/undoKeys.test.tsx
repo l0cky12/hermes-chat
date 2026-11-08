@@ -219,4 +219,17 @@ describe("Ctrl+Z for the notice's Undo", () => {
     expect(notice()?.textContent).toContain("Settled: Deploy notes");
     expect(titles("inbox")).toEqual(["Nightly backup"]);
   });
+
+  it("never runs it from a date field", async () => {
+    const run = webviewHistory();
+    const { user, hermes } = await settled();
+    await user.click(screen.getByRole("button", { name: "Usage" }));
+    await user.selectOptions(await screen.findByRole("combobox", { name: "Period" }), "Dates…");
+    await user.click(screen.getByLabelText("From"));
+    await user.keyboard(UNDO);
+    await act(async () => void (await hermes.idle()));
+    expect(run).toHaveBeenCalledWith("undo");
+    expect(screen.getByText("Settled: Deploy notes")).toBeTruthy();
+    expect(titles("inbox")).toEqual(["Nightly backup"]);
+  });
 });
