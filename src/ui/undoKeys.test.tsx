@@ -175,6 +175,21 @@ describe("Ctrl+Z in other text fields", () => {
     expect(run.mock.calls).toEqual([["undo"], ["redo"], ["redo"]]);
   });
 
+  it("leaves the keys to the webview where it binds them itself", async () => {
+    const run = webviewHistory();
+    const linux = navigator.userAgent;
+    Object.defineProperty(navigator, "userAgent", { value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Edg/156.0", configurable: true });
+    try {
+      const { user } = await launch();
+      await user.keyboard("{Control>}k{/Control}");
+      await user.keyboard("backup");
+      await user.keyboard(UNDO);
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(navigator, "userAgent", { value: linux, configurable: true });
+    }
+  });
+
   it("undoes in a dialog's field too, though the dialog keeps the app's shortcuts in", async () => {
     const run = webviewHistory();
     const { user } = await launch();
