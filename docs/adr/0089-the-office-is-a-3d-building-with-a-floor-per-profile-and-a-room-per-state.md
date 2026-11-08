@@ -41,7 +41,7 @@ The owner doesn't like how the agent office looks. The Desks view (ADR 0077) is 
 - **Nothing is drawn while it can't be seen.** A closed, minimized, tray-hidden or unfocused office draws no frames. A closed office isn't mounted at all, as now.
 - **Cheap to draw.** No live shadows (a soft shadow is painted under each character and piece of furniture), simple materials, instanced characters and furniture, and a device pixel ratio capped at 1.5 on Normal.
 - **three.js loads with the office.** It is one pinned dependency, loaded only when the office first opens, so it costs nothing until then.
-- **An Office quality setting.** Settings → Chats → Office has **Normal** (the default) and **Low**. Low draws at most 15 frames a second at a pixel ratio of 1, and agents appear in their new room instead of walking. Off stays available.
+- **An Office quality setting.** Settings → Chats → Office has **Normal** (the default) and **Low**, and the office has the same switch, which applies at once (Settings takes the office's place, so a change there shows when the office opens again). Low draws at most 15 frames a second at a pixel ratio of 1, agents type at 3 frames a second instead of 6, and they appear in their new room instead of walking. Typing is most of what an open office costs, and on a screen at pixel ratio 1 the slower typing is all that makes Low cheaper while agents work. Off stays available.
 - **Proof in the PR.** Each stage's PR measures the app's CPU with the office closed, open with nothing moving, and open with agents typing, on the owner's Arch machine and in the verify skill's headless app.
 
 ### What it reads

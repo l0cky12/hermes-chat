@@ -55,17 +55,18 @@ export type OfficeScene = {
 /**
  * What each quality allows. Normal holds the device pixel ratio at 1.5 at most: past it the cost grows faster than
  * anyone can see. Low is for a computer where the office costs too much: no walking, and a frame cheaper to draw.
+ * Typing needs a few distinct poses a second, not smooth motion, and each of its frames redraws the whole building.
+ * It is most of what an open office costs, so Low types at half the pace: on a screen at pixel ratio 1, that is all
+ * that makes Low cheaper while agents work.
  */
-const QUALITY: Record<OfficeQuality, { maxFps: number; maxDpr: number; walks: boolean }> = {
-  normal: { maxFps: 30, maxDpr: 1.5, walks: true },
-  low: { maxFps: 15, maxDpr: 1, walks: false },
+const QUALITY: Record<OfficeQuality, { maxFps: number; maxDpr: number; walks: boolean; typingFps: number }> = {
+  normal: { maxFps: 30, maxDpr: 1.5, walks: true, typingFps: 6 },
+  low: { maxFps: 15, maxDpr: 1, walks: false, typingFps: 3 },
 };
 const MIN_DISTANCE = 7;
 const MAX_DISTANCE = 44;
 const HOME = { target: new Vector3(0, 0, 0.5), position: new Vector3(15, 27, 23) };
 const TWEEN_MS = 450;
-/** Typing needs a few distinct poses a second, not smooth motion: each frame of it redraws the whole building. */
-const TYPING_FPS = 6;
 
 export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents, start: { mode: Mode; moves: boolean; quality: OfficeQuality }): OfficeScene {
   // The last frame drawn has to stay on screen until the next one, which may be minutes away: WebKitGTK otherwise
@@ -155,7 +156,8 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
       }
     }
     if (walks) walks = place(now);
-    pacer.animating("typing", figures.animate(now, moves), TYPING_FPS);
+    const { typingFps } = QUALITY[quality];
+    pacer.animating("typing", figures.animate(now, moves, 1000 / typingFps), typingFps);
     renderer.render(scene, camera);
     renderer.getSize(size);
     const tags = new Map<string, ReturnType<typeof toScreen>>();
@@ -258,7 +260,7 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
       floor = next;
       crowd.set(next.characters, profile, t, walking());
       walks = place(t);
-      pacer.animating("typing", moves && next.characters.some((c) => c.pose === "typing" && !c.stale), TYPING_FPS);
+      pacer.animating("typing", moves && next.characters.some((c) => c.pose === "typing" && !c.stale), QUALITY[quality].typingFps);
       pacer.invalidate();
     },
     setTower(floors) {

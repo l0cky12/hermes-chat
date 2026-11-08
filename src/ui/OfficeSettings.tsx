@@ -46,7 +46,7 @@ export function OfficeSettings() {
       <SettingRow
         name="Office quality"
         nameId="office-quality-label"
-        hint="Low draws at most 15 frames a second at a lower resolution, and agents appear in their new room instead of walking. It applies to Building."
+        hint="Low draws at most 15 frames a second at a lower resolution, agents type at half the pace, and they appear in their new room instead of walking. It applies to Building, and the office has the same switch."
         control={
           <div className="segmented" role="group" aria-labelledby="office-quality-label">
             {QUALITIES.map((c) => (

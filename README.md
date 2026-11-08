@@ -317,7 +317,7 @@ The building costs nothing until the office first opens: three.js, its one 3D li
 
 **List** shows the same agents as rows, with the same names for a screen reader and the same Open chat.
 
-Settings → General → Chats → **Office** picks **Building**, **List** or **Off**; Off removes the rail button. **Office quality** picks **Normal** or **Low**: Low draws at most 15 frames a second at a lower resolution, and agents appear in their new room instead of walking. It applies at once. The choice is kept on this computer; an earlier **Desks** or **Scene** choice reads as Building. See [ADR 0077](docs/adr/0077-the-agent-office-is-desks-drawn-from-the-inbox-and-subagent-trees.md) and [ADR 0089](docs/adr/0089-the-office-is-a-3d-building-with-a-floor-per-profile-and-a-room-per-state.md).
+Settings → General → Chats → **Office** picks **Building**, **List** or **Off**; Off removes the rail button. **Office quality** picks **Normal** or **Low**: Low draws at most 15 frames a second at a lower resolution, agents type at half the pace, and they appear in their new room instead of walking. The office has the same switch beside **Reset view**, which applies at once. The choice is kept on this computer; an earlier **Desks** or **Scene** choice reads as Building. See [ADR 0077](docs/adr/0077-the-agent-office-is-desks-drawn-from-the-inbox-and-subagent-trees.md) and [ADR 0089](docs/adr/0089-the-office-is-a-3d-building-with-a-floor-per-profile-and-a-room-per-state.md).
 
 ### Import transcripts
 
