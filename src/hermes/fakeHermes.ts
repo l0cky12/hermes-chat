@@ -510,6 +510,10 @@ export class FakeHermes {
   env?: Record<string, Record<string, unknown>> = fakeEnv();
   /** Provider keys saved through `saveProviderKey`, as (profile, env var, key). */
   readonly savedKeys: { profile: string; envVar: string; key: string }[] = [];
+  /** Provider keys removed through `removeProviderKey`, as (profile, env var). */
+  readonly removedKeys: { profile: string; envVar: string }[] = [];
+  /** Set to make `removeProviderKey` fail with this message, as Hermes refusing or still listing the key does. */
+  removeKeyFails?: string;
   /** What the provider says of a key: `sk-bad` is turned down, `sk-offline` can't be checked, anything else passes. */
   checkKey = (key: string): { ok: boolean; reachable: boolean; message: string } =>
     key === "sk-bad"
@@ -1598,6 +1602,8 @@ export class FakeHermes {
       mcpEdit: (profile, edit) => this.mcp.edit(profile, edit),
       // Mirrors the Rust side's `Dashboard::save_provider_key`: only a listed provider secret, checked, then saved.
       saveProviderKey: async (profile, envVar, key) => this.saveProviderKey(profile, envVar, key),
+      // Mirrors `Dashboard::remove_provider_key`: only a listed provider secret, then it reads unset.
+      removeProviderKey: async (profile, envVar) => this.removeProviderKey(profile, envVar),
       // Mirrors `Dashboard::get_limited`: any GET the relay takes, refused once the answer passes the limit.
       getLimited: async (pathAndQuery, maxBytes) => {
         const body = await restCall("GET", pathAndQuery);
@@ -1741,6 +1747,15 @@ export class FakeHermes {
     this.savedKeys.push({ profile, envVar, key: value });
     this.env![envVar] = { ...row, is_set: true, redacted_value: `${value.slice(0, 3)}…${value.slice(-2)}` };
     return { verified: checked.ok && checked.reachable };
+  }
+
+  private removeProviderKey(profile: string, envVar: string) {
+    const row = this.env?.[envVar];
+    if (!row || !row.provider || row.is_password !== true || row.channel_managed === true)
+      throw new Error(`Hermes Chat doesn't relay ${envVar}: Hermes doesn't list it as a model provider's key.`);
+    if (this.removeKeyFails) throw new Error(this.removeKeyFails);
+    this.removedKeys.push({ profile, envVar });
+    this.env![envVar] = { ...row, is_set: false, redacted_value: null };
   }
 
   /**

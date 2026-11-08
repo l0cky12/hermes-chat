@@ -49,7 +49,7 @@ import { readBack, sendImport, type PlannedChat } from "./importTranscripts";
 import { memoryApi, type MemoryApi } from "./memory";
 import { MemoryProvidersApi } from "./memoryProviders";
 import { SkillsApi } from "./skills";
-import { CapabilityStore, CapabilityUnsupportedError } from "./capabilities";
+import { CapabilityStore, CapabilityUnsupportedError, failureOf, isNoRoute } from "./capabilities";
 import { BOT_CHAT_TITLE, BotChats, BotModeUnsupportedError, isBotChat, isBotChatTitle, rosterOf, type Bot } from "./bots";
 import type { OpenPipe, Pipe, PipeEvent, RestMethod, Route, Speech, Transcript, VoiceSetup } from "./pipe";
 import { RemoteFilesError, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, SESSION_GONE, previewSupport, remoteFiles, type EditIo, type RemoteFiles } from "./remoteFiles";
@@ -1149,8 +1149,8 @@ export class Hermes {
     try {
       rows = await timeLimit(env, PROVIDERS_TIMEOUT_MS);
     } catch (e) {
-      // No answer in time is worth trying again; an answer saying no means this server can't take keys from here.
-      if (!answered) throw e;
+      // Only a route the server doesn't have means it can't take keys from here; any other failure is worth trying again.
+      if (!answered || !isNoRoute(failureOf(e))) throw e;
       return { keys: [], ready, unsupported: (e as Error).message };
     }
     return { keys: providerKeys(rows), ready };
@@ -1161,11 +1161,54 @@ export class Hermes {
    * again, so the new provider's models can be picked.
    */
   async saveProviderKey(envVar: string, key: string): Promise<SavedKey> {
-    if (!this.pipe) throw new Error("Not connected to Hermes.");
-    const saved = await this.pipe.saveProviderKey(this.profile, envVar, key);
-    if (this.snapshot.models?.profile === this.profile) this.update({ models: undefined });
-    void this.loadModels();
-    return saved;
+    const profile = this.profile;
+    return this.oneKeyChangeAtATime(profile, (pipe) => pipe.saveProviderKey(profile, envVar, key));
+  }
+
+  /**
+   * Removes a model provider's API key from the shown profile's Hermes (`Pipe.removeProviderKey`), then reads its model
+   * list again, so the model picker stops offering that provider.
+   */
+  async removeProviderKey(envVar: string): Promise<void> {
+    const profile = this.profile;
+    return this.oneKeyChangeAtATime(profile, (pipe) => pipe.removeProviderKey(profile, envVar));
+  }
+
+  /**
+   * Resolves once every key change sent for the shown profile has settled. Settings → Providers can close and open
+   * again while one still runs in Rust, and a list read before it lands would show the key as it was (ADR 0095).
+   */
+  async keyChangesSettled(): Promise<void> {
+    await this.keyChanges.get(this.profile);
+  }
+
+  /** Per profile, the last key change sent, settled or not. */
+  private readonly keyChanges = new Map<string, Promise<void>>();
+
+  /**
+   * Runs `change` once every key change sent before it for `profile` has settled, so a save and a removal from two
+   * openings of the screen reach Hermes in the order they were made, never interleaved. Then the models are read again.
+   */
+  private oneKeyChangeAtATime<T>(profile: string, change: (pipe: Pipe) => Promise<T>): Promise<T> {
+    const run = async () => {
+      if (!this.pipe) throw new Error("Not connected to Hermes.");
+      try {
+        return await change(this.pipe);
+      } finally {
+        // Also after a failure: one that timed out may have changed the key on the server anyway.
+        if (this.snapshot.models?.profile === profile) this.update({ models: undefined });
+        void this.loadModels();
+      }
+    };
+    const before = this.keyChanges.get(profile) ?? Promise.resolve();
+    const next = before.then(run, run);
+    const settled = next.then(
+      () => {},
+      () => {},
+    );
+    this.keyChanges.set(profile, settled);
+    void settled.then(() => this.keyChanges.get(profile) === settled && this.keyChanges.delete(profile));
+    return next;
   }
 
   /** The server's profiles by name, as dashboard REST lists them. One sign-in covers them all (research doc). */

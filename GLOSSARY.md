@@ -331,8 +331,8 @@ The steps that connect Hermes Chat to a Hermes server: the server, the dashboard
 _Avoid_: onboarding (fine in conversation, not in the app), wizard, first-run (that's only when setup opens by itself)
 
 **Provider key**:
-A model provider's API key that the owner gives Hermes through Setup. The provider checks it first. Hermes keeps it in the profile's `.env` on the server, and Hermes Chat never stores it.
-_Avoid_: token, secret, credential (too broad)
+A model provider's API key that the owner gives Hermes, through Setup or Settings → Providers. The provider checks it first. Hermes keeps it in the profile's `.env` on the server, and Hermes Chat never stores it. Settings → Providers lists the shown profile's saved keys by Hermes's redacted preview, replaces a key, and removes one after asking; a removed key leaves the list only once Hermes reads back as not having it (ADR 0095). A subscription sign-in and a custom endpoint aren't Provider keys.
+_Avoid_: token, secret, credential (too broad), login (a subscription sign-in isn't a key)
 **Usage**:
 The tokens a chat's model calls took in and gave out: input, cache read and written, output and its reasoning, and how many calls. A chat's usage is Hermes's own total for every call in it, from any client and across model changes. A reply's usage is shown only for a reply this app watched from start to finish, and is kept as long as its Saved copy.
 _Avoid_: tokens (alone, for the whole breakdown), stats

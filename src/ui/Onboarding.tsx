@@ -6,7 +6,7 @@ import { Check, CircleAlert, Globe, KeyRound, Minus, Plus, ShieldAlert, ShieldCh
 import type { ExtraHeader, Methods, SignInDetails } from "../hermes/tauriPipe";
 import type { Kept } from "../hermes/account";
 import type { Hermes } from "../hermes/transport";
-import { STAGES, missing, stageLabel, testConnection, testRoutes, type Probe, type ProviderKey, type ProviderSetup, type RouteTest, type TestOutcome } from "../hermes/setup";
+import { STAGES, missing, savedKeyText, stageLabel, testConnection, testRoutes, withoutKey, type Probe, type ProviderKey, type ProviderSetup, type RouteTest, type TestOutcome } from "../hermes/setup";
 import { routeLabel } from "./bits";
 import { NAME_MAX, defaultName, routesSummary } from "../hermes/connections";
 import { RouteTests, RoutesEditor, finishRoutes, routesReady, type Reach } from "./Routes";
@@ -31,19 +31,6 @@ const STEP_LABEL: Record<Step, string> = { welcome: "Welcome", server: "Server",
 type Test = { state: "idle" } | { state: "testing"; routes?: RouteTest[] } | { state: "done"; outcome: TestOutcome; routes?: RouteTest[] };
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
-/**
- * `text` as long as it repeats no 8 characters of `key`, or of a key that short in full. Rust already keeps the
- * provider's and Hermes's own words out of a key's errors, since they can quote it; this checks again before anything
- * is shown, so no part of a key reaches the screen even if a message slips through.
- */
-export function withoutKey(text: string, key: string): string {
-  const k = key.trim();
-  if (!k) return text;
-  const n = Math.min(8, k.length);
-  for (let i = 0; i + n <= k.length; i++) if (text.includes(k.slice(i, i + n))) return "Hermes's answer isn't shown, as it may repeat the key.";
-  return text;
-}
 
 export function Onboarding({
   mode,
@@ -800,9 +787,7 @@ function ProviderKeys({
       setKeySaved(true);
       setResult({
         ok: true,
-        text: r.verified
-          ? `Saved. ${pick.label} accepted the key.`
-          : `Saved, but Hermes couldn't check the key with ${pick.label}. If it's wrong, ${pick.label} will turn down Hermes's first request.`,
+        text: savedKeyText(r, pick.label),
       });
     } catch (e) {
       if (live(scope)) setResult({ ok: false, text: `Not saved: ${withoutKey(messageOf(e), key)}` });

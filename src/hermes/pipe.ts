@@ -102,6 +102,12 @@ export interface Pipe {
    * it down (src-tauri `Dashboard::save_provider_key`).
    */
   saveProviderKey(profile: string, envVar: string, key: string): Promise<SavedKey>;
+  /**
+   * Removes a model provider's API key from `profile`'s Hermes. Only an env var Hermes lists as a provider's secret is
+   * removed, one that is already gone counts as removed, and it rejects if Hermes still lists the key afterwards. The
+   * window's REST relay refuses `DELETE api/env`, so this is the only way (src-tauri `Dashboard::remove_provider_key`).
+   */
+  removeProviderKey(profile: string, envVar: string): Promise<void>;
   /** Sends a recording to Hermes to transcribe with `profile`'s speech-to-text provider. */
   transcribe(profile: string, audio: Uint8Array, mime: string): Promise<Transcript>;
   /** Asks Hermes to read `text` aloud with `profile`'s text-to-speech provider. */

@@ -12,7 +12,8 @@
 //! A direct connection can carry extra request headers for a gateway in front of the dashboard, such as Cloudflare
 //! Access, on every request and the WebSocket handshake (ADR 0006).
 //! Setup uses two more things here: `probe`, which tests a sign-in without keeping it, and
-//! `Dashboard::save_provider_key`, which gives Hermes a model provider's API key.
+//! `Dashboard::save_provider_key`, which gives Hermes a model provider's API key, and `Dashboard::remove_provider_key`,
+//! which takes one away (Settings → Providers, ADR 0095).
 //! Before any password goes out, `read_server` reads the dashboard's public `/api/status` and `identify` checks it is
 //! a Hermes dashboard, and the same one the connection signed in to before (ADR 0056).
 
@@ -104,6 +105,11 @@ pub enum TransportError {
     KeyRejected(String),
     #[error("Hermes didn't finish checking and saving the key within {0} s. It may have saved it anyway: the list of providers shows what Hermes has.")]
     KeyTimedOut(u64),
+    #[error("Hermes didn't finish removing the key within {0} s. It may have removed it anyway: the list of keys shows what Hermes has.")]
+    KeyRemovalTimedOut(u64),
+    /// `DELETE /api/env` answered, but `GET /api/env` still lists the key as set (ADR 0095).
+    #[error("Hermes still lists the {0} key as set after removing it. It may keep the key somewhere else on the server.")]
+    KeyStillSet(String),
     #[error("This Hermes server can't {0}: it has no {1} route. Updating Hermes adds it.")]
     NoVoiceRoute(&'static str, &'static str),
     #[error("{0}")]
@@ -1272,6 +1278,8 @@ impl Dashboard {
     /// (`memory_provider_write`, ADR 0045), and Settings → Voice's provider pick and key save (`voice_provider_write`,
     /// ADR 0055), Settings → MCP servers' add, switch, test, sign-in and catalog install (`mcp::relayed`, ADR 0068), and
     /// Settings → Gateways' Telegram and Discord save and status check (`gateway_write`, ADR 0073).
+    /// `DELETE api/env` is refused whatever the body: a key leaves the server only through
+    /// `Dashboard::remove_provider_key`, which checks that it is a model provider's (ADR 0095).
     /// Returns the response body on 2xx.
     pub async fn request(&self, method: &str, path_and_query: &str, body: Option<String>) -> Result<String, TransportError> {
         let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
@@ -1306,6 +1314,9 @@ impl Dashboard {
         // Server files are read-only (ADR 0012): nothing but GET goes to the server's file routes, checked on the
         // path as the server will route it, so `api/./files` or `api/%66iles` can't slip past.
         if method != Method::GET && is_file_route(&routed) {
+            return Err(TransportError::NotRelayed(format!("{method} {path}")));
+        }
+        if method == Method::DELETE && is_env_route(&routed) {
             return Err(TransportError::NotRelayed(format!("{method} {path}")));
         }
         let mut req = self.signed(method, url);
@@ -1936,6 +1947,13 @@ fn is_file_route(path: &str) -> bool {
     segs.next() == Some("api") && matches!(segs.next(), Some("files" | "fs"))
 }
 
+/// The dashboard's routes on the profile's `.env`: `api/env` and anything under it. Empty segments are skipped, as
+/// `is_file_route` does.
+fn is_env_route(path: &str) -> bool {
+    let mut segs = path.split('/').filter(|seg| !seg.is_empty());
+    segs.next() == Some("api") && segs.next() == Some("env")
+}
+
 /// The toolset name Settings → Toolsets sends, with an `enabled` that is neither true nor false, to learn whether the
 /// server has the toggle route without changing anything: FastAPI refuses the body before the route runs.
 pub const TOOLSET_PROBE_NAME: &str = "__hermes_chat_probe__";
@@ -2504,6 +2522,18 @@ fn provider_key_name(key: &str) -> bool {
     shape && !key.starts_with("HERMES_") && (key.ends_with("_KEY") || key.ends_with("_TOKEN"))
 }
 
+/// Whether `GET /api/env` lists `key` as a model provider's secret, the only kind of key this app writes or removes.
+fn require_provider_secret(env: &serde_json::Value, key: &str) -> Result<(), TransportError> {
+    let row = &env[key];
+    let is_provider_secret =
+        row["provider"].as_str().is_some_and(|p| !p.is_empty()) && row["is_password"] == json!(true) && row["channel_managed"] != json!(true);
+    if is_provider_secret {
+        Ok(())
+    } else {
+        Err(TransportError::NotRelayed(format!("{key}: Hermes doesn't list it as a model provider's key")))
+    }
+}
+
 impl Dashboard {
     /// Gives the profile's Hermes a model provider's API key, the way the dashboard's Keys page does
     /// (`hermes_cli/web_routers/config_env.py` at the deployed `bf0203a`):
@@ -2535,20 +2565,7 @@ impl Dashboard {
         }
         // The key never follows a redirect to another site, extra headers or not.
         let http = client_kept_to_origin(&self.headers, true)?;
-        let scoped = |path: &str| {
-            let mut url = endpoint(&self.base, path);
-            url.query_pairs_mut().append_pair("profile", profile);
-            url
-        };
-
-        let env: serde_json::Value = serde_json::from_str(&self.call(&http, Method::GET, scoped("api/env"), None, true).await?)
-            .map_err(|e| TransportError::Unexpected { status: 200, body: format!("GET /api/env: {e}") })?;
-        let row = &env[key];
-        let is_provider_secret =
-            row["provider"].as_str().is_some_and(|p| !p.is_empty()) && row["is_password"] == json!(true) && row["channel_managed"] != json!(true);
-        if !is_provider_secret {
-            return Err(TransportError::NotRelayed(format!("{key}: Hermes doesn't list it as a model provider's key")));
-        }
+        require_provider_secret(&self.read_env(&http, profile).await?, key)?;
 
         let body = json!({"key": key, "value": value}).to_string();
         let checked = self.call(&http, Method::POST, endpoint(&self.base, "api/providers/validate"), Some(body), false).await?;
@@ -2562,8 +2579,52 @@ impl Dashboard {
         }
 
         let body = json!({"key": key, "value": value, "provider_setup": true}).to_string();
-        self.call(&http, Method::PUT, scoped("api/env"), Some(body), false).await?;
+        self.call(&http, Method::PUT, self.env_url(profile), Some(body), false).await?;
         Ok(SavedKey { verified: checked.ok && checked.reachable })
+    }
+
+    /// Takes a model provider's API key out of the profile's Hermes, for Settings → Providers (ADR 0095):
+    ///
+    /// 1. `GET /api/env?profile=` must list `key` as a provider's secret, as `save_provider_key` requires.
+    /// 2. `DELETE /api/env?profile=` with `{"key"}` removes it from the profile's `.env` on the server. A 404, which is
+    ///    how Hermes says the key isn't set (`<KEY> not found in .env`), counts as removed.
+    /// 3. `GET /api/env?profile=` again must show the key unset, or this says Hermes still lists it.
+    pub async fn remove_provider_key(&self, profile: &str, key: &str) -> Result<(), TransportError> {
+        self.remove_provider_key_within(profile, key, KEY_SAVE_LIMIT).await
+    }
+
+    /// `remove_provider_key`, giving up after `limit`, every request and answer included.
+    pub async fn remove_provider_key_within(&self, profile: &str, key: &str, limit: Duration) -> Result<(), TransportError> {
+        tokio::time::timeout(limit, self.check_and_remove_key(profile, key)).await.unwrap_or(Err(TransportError::KeyRemovalTimedOut(limit.as_secs())))
+    }
+
+    async fn check_and_remove_key(&self, profile: &str, key: &str) -> Result<(), TransportError> {
+        if !provider_key_name(key) {
+            return Err(TransportError::NotRelayed(format!("{key}: not a model provider's key")));
+        }
+        let http = client_kept_to_origin(&self.headers, true)?;
+        require_provider_secret(&self.read_env(&http, profile).await?, key)?;
+
+        let body = json!({"key": key}).to_string();
+        match self.call(&http, Method::DELETE, self.env_url(profile), Some(body), true).await {
+            Ok(_) | Err(TransportError::Unexpected { status: 404, .. }) => {}
+            Err(e) => return Err(e),
+        }
+        if self.read_env(&http, profile).await?[key]["is_set"] == json!(true) {
+            return Err(TransportError::KeyStillSet(key.to_owned()));
+        }
+        Ok(())
+    }
+
+    fn env_url(&self, profile: &str) -> Url {
+        let mut url = endpoint(&self.base, "api/env");
+        url.query_pairs_mut().append_pair("profile", profile);
+        url
+    }
+
+    async fn read_env(&self, http: &reqwest::Client, profile: &str) -> Result<serde_json::Value, TransportError> {
+        serde_json::from_str(&self.call(http, Method::GET, self.env_url(profile), None, true).await?)
+            .map_err(|e| TransportError::Unexpected { status: 200, body: format!("GET /api/env: {e}") })
     }
 
     /// One signed-in call that the app itself makes, with a JSON body; the webview's are `request`. `show_failure`:

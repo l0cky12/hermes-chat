@@ -138,6 +138,7 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
       statFiles: (paths) => invoke<LocalFile[]>("hermes_stat_files", { paths }),
       sendFile: (head, path, tail, maxBytes) => invoke<void>("hermes_send_file", { head, path, tail, maxBytes }).catch(asError),
       saveProviderKey: (profile, key, value) => invoke<SavedKey>("hermes_save_provider_key", { profile, key, value }).catch(asError),
+      removeProviderKey: (profile, key) => invoke<void>("hermes_remove_provider_key", { profile, key }).catch(asError),
       // The recording goes as the raw body, not as a JSON list of numbers.
       transcribe: (profile, audio, mime) =>
         invoke<Transcript>("hermes_transcribe", audio, {
