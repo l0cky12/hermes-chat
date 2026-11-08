@@ -535,6 +535,8 @@ Before it shows the sign-in fields, the app reads the dashboard's public `/api/s
 
 ### Signing in and out
 
+Before the password or token goes anywhere, the app reads the dashboard's public `/api/status`, on every route. Only an answer that is a Hermes status gets the password. Anything else gets nothing: a 404 from a router page or another web app, a page that isn't Hermes's status, a server error, a refusal, or a redirect to another site. The sign-in then stops at reaching the dashboard and says why (ADR 0056). A gateway in front of the dashboard, such as Cloudflare Access, must let `/api/status` through.
+
 After a successful sign-in, the password is saved in the system keyring for that connection, and the app signs in with it at each launch. **Settings → General → Sign out** deletes the saved password. It keeps the target, URL, username, and extra headers, so the sign-in screen asks only for the password. If the keyring can't save, the sign-in still works, and the app says the password wasn't kept. A saved password is used only for the address it was saved with: after you change a connection's SSH target, URL, or username, you type the password again.
 
 ### Saved connections

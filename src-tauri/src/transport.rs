@@ -499,9 +499,8 @@ pub fn server_id(install_id: &str) -> String {
 /// Reads an `/api/status` body: it must be a Hermes dashboard's, which always carries its version or its sign-in gate,
 /// and when it names its install and `expect` is set, the install must be that one. The server's id when it names
 /// one. None of this sends the password (ADR 0056).
-pub fn identify(status: Option<&str>, expect: Option<&str>) -> Result<Option<String>, TransportError> {
-    let Some(text) = status else { return Ok(None) };
-    let v: serde_json::Value = serde_json::from_str(text).map_err(|_| TransportError::NotHermes)?;
+pub fn identify(status: &str, expect: Option<&str>) -> Result<Option<String>, TransportError> {
+    let v: serde_json::Value = serde_json::from_str(status).map_err(|_| TransportError::NotHermes)?;
     let o = v.as_object().ok_or(TransportError::NotHermes)?;
     if !o.get("version").is_some_and(serde_json::Value::is_string) && !o.get("auth_required").is_some_and(serde_json::Value::is_boolean) {
         return Err(TransportError::NotHermes);
@@ -514,32 +513,29 @@ pub fn identify(status: Option<&str>, expect: Option<&str>) -> Result<Option<Str
 }
 
 /// `GET /api/status` at `base`, which a Hermes dashboard answers without a sign-in, with the body read inside the
-/// limit too, since a server can send its headers and then stall. None when it answered something else than 2xx, or
-/// a redirect within its own site. A refusal (401, 403) is an error: the route is public on a Hermes dashboard, so
-/// that is something in front of it, such as Cloudflare Access without its headers.
-async fn read_status(http: &reqwest::Client, base: &Url, headers: &HeaderMap) -> Result<Option<String>, TransportError> {
+/// limit too, since a server can send its headers and then stall. Only a 2xx is a status: a Hermes dashboard always
+/// serves it, so anything else gets no password (ADR 0056). A refusal (401, 403), a server error and a redirect to
+/// another site keep their own errors, as they come from something in front of the dashboard or a dashboard that
+/// is failing; any other answer is `NotHermes`.
+async fn read_status(http: &reqwest::Client, base: &Url, headers: &HeaderMap) -> Result<String, TransportError> {
     let resp = http.get(endpoint(base, "api/status")).send().await.map_err(unreachable)?;
-    if resp.status().is_redirection() {
+    let status = resp.status();
+    if status.is_success() {
+        return resp.text().await.map_err(unreachable);
+    }
+    let kept = matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) || status.is_server_error();
+    Err(match unexpected(resp, headers).await {
         // Stopped at another site (`same_origin_redirects`), such as a gateway's login page.
-        return match unexpected(resp, headers).await {
-            e @ (TransportError::Redirected(_) | TransportError::RedirectedHidden) => Err(e),
-            _ => Ok(None),
-        };
-    }
-    if matches!(resp.status(), StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
-        return Err(unexpected(resp, headers).await);
-    }
-    if !resp.status().is_success() {
-        return Ok(None);
-    }
-    resp.text().await.map(Some).map_err(unreachable)
+        e @ (TransportError::Redirected(_) | TransportError::RedirectedHidden) => e,
+        e if kept => e,
+        _ => TransportError::NotHermes,
+    })
 }
 
-/// What `read_server` found: the `/api/status` body, if one was read, and the server's id (`server_id`), if it named
-/// its install.
+/// What `read_server` found: the `/api/status` body, and the server's id (`server_id`), if it named its install.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ServerSeen {
-    pub status: Option<String>,
+    pub status: String,
     pub server: Option<String>,
 }
 
@@ -549,7 +545,7 @@ pub async fn read_server(http: &reqwest::Client, base: &Url, headers: &HeaderMap
     let status = tokio::time::timeout(wait, read_status(http, base, headers))
         .await
         .map_err(|_| TransportError::Unreachable(format!("the dashboard didn't answer within {}s.", wait.as_secs())))??;
-    let server = identify(status.as_deref(), expect)?;
+    let server = identify(&status, expect)?;
     Ok(ServerSeen { status, server })
 }
 
@@ -607,7 +603,7 @@ pub async fn open_route(
     // (#271). It carries no credential, and the status check still passes before one is sent.
     let http = client(&sign_in.headers)?;
     let seen = steps.run(Step::Status, read_server(&http, base, &sign_in.headers, expect, reach)).await?;
-    offered(sign_in, seen.status.as_deref())?;
+    offered(sign_in, Some(&seen.status))?;
     let signing_in = within(limits.map(|l| l.sign_in), Dashboard::sign_in(http, base, sign_in), |s| {
         TransportError::Unreachable(format!("the sign-in didn't answer within {s}s."))
     });
@@ -2393,11 +2389,11 @@ impl ProbeFailure {
     }
 }
 
-/// A connection test that went through: the dashboard's `GET /api/status` body (none if it didn't answer one) and
-/// the first frame `/api/ws` sent, which the webview checks is a legacy `gateway.ready`.
+/// A connection test that went through: the dashboard's `GET /api/status` body and the first frame `/api/ws` sent,
+/// which the webview checks is a legacy `gateway.ready`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Probed {
-    pub status: Option<String>,
+    pub status: String,
     pub ready: String,
     /// The server's id (`server_id`), when its status named its install.
     pub server: Option<String>,
@@ -2437,9 +2433,9 @@ pub async fn probe_expecting(
         Ok(Err(e)) => return Err(ProbeFailure::new(Stage::Reach, e.to_string())),
         Ok(Ok(status)) => status,
     };
-    let server = identify(status.as_deref(), expect).map_err(|e| ProbeFailure { stage: Stage::Reach, message: e.to_string(), status: status.clone() })?;
-    let fail = |stage, message: String| ProbeFailure { stage, message, status: status.clone() };
-    offered(sign_in, status.as_deref()).map_err(|e| fail(Stage::SignIn, e.to_string()))?;
+    let server = identify(&status, expect).map_err(|e| ProbeFailure { stage: Stage::Reach, message: e.to_string(), status: Some(status.clone()) })?;
+    let fail = |stage, message: String| ProbeFailure { stage, message, status: Some(status.clone()) };
+    offered(sign_in, Some(&status)).map_err(|e| fail(Stage::SignIn, e.to_string()))?;
     let dashboard = match tokio::time::timeout(step, Dashboard::sign_in(http, base, sign_in)).await {
         Err(_) => return Err(fail(Stage::SignIn, timed_out("The dashboard's sign-in"))),
         Ok(Err(e)) => return Err(fail(Stage::SignIn, e.to_string())),
