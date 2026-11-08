@@ -249,7 +249,7 @@ All stage the attachment server-side for the next turn of a session (`tui_gatewa
 - `file.attach` quotes a `ref_path` that has whitespace, brackets or quotes, trying `` ` ``, then `"`, then `'` (`_format_ref_value`, `prompt_attachments.py:174-181`). The client puts `ref_text` in the prompt as-is.
 - The official desktop app, in remote mode, sends images with `image.attach_bytes` and other files with `file.attach {data_url, name}`. It prepends the `@file:` refs, one per line, then a blank line, then the text. An image sent with no text gets the prompt "What do you see in this image?" (`apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts:280-302`).
 
-Hermes Chat follows the desktop app (T12). Images go up to 25 MiB and other files, PDFs included, up to 256 MiB. Rust reads each file from its real path (from Tauri's native drop event or the file picker) and splices its base64 into the frame, so the bytes never pass through the webview.
+Hermes Chat follows the desktop app (T12). Images go up to 25 MiB and other files, PDFs included, up to 256 MiB. Rust reads each file from its real path (from Tauri's native drop event or the file picker) and splices its base64 into the frame, so the bytes never pass through the webview. The exceptions are a pasted file and, on Windows, a dropped one (ADR 0094): the page has only its bytes, which Rust saves to a private temp file before it goes the same way.
 
 ### Dashboard REST (browser path)
 
