@@ -9,8 +9,9 @@ import { Markdown } from "./Markdown";
 import { SettingRow, SettingsSection } from "./SettingRows";
 import { StatusBarSetting } from "./StatusBar";
 import { ThemeSettings } from "./ThemePicker";
+import { useChordLabel } from "./keybindings";
 
-const UI_SAMPLE = "Chats that need attention sit at the top; settled ones wait below. Press Ctrl+K to search every chat.";
+const uiSample = (searchKey: string) => `Chats that need attention sit at the top; settled ones wait below. Press ${searchKey} to search every chat.`;
 const CODE_SAMPLE = [
   "```ts",
   "// 0O 1lI: one long line shows what Word wrap does.",
@@ -88,6 +89,7 @@ function FontRow({
 
 export function AppearanceSettings({ store, listFonts }: { store: AppearanceStore; listFonts: () => Promise<Fonts> }) {
   const a = useSyncExternalStore(store.subscribe, store.get);
+  const searchKey = useChordLabel("search");
   const [fonts, setFonts] = useState<Fonts>({ all: [], mono: [] });
   useEffect(() => {
     let live = true;
@@ -113,7 +115,7 @@ export function AppearanceSettings({ store, listFonts }: { store: AppearanceStor
           <SizeSelect label="Interface font size" value={a.uiSize} sizes={UI_SIZES} onChange={(uiSize) => set({ uiSize })} />
         </FontRow>
         <div className="set-block">
-          <div className="appearance-preview ui-preview">{UI_SAMPLE}</div>
+          <div className="appearance-preview ui-preview">{uiSample(searchKey)}</div>
         </div>
 
         <FontRow

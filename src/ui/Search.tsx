@@ -8,7 +8,7 @@ import { SOURCE_LABEL, type Found, type Source } from "../hermes/model";
 import { previewBulk, type BulkPreview, type ScopeTags } from "../hermes/tags";
 import { SourceIcon, Spinner, highlight, relTime, useReturnFocus } from "./bits";
 import { isTextEdit } from "./editKeys";
-import { pick } from "./keybindings";
+import { chordLabel, pick, useBindings } from "./keybindings";
 import { trapTab } from "./modal";
 
 /** Typing this long without a pause sends the search. */
@@ -74,6 +74,7 @@ export function SearchPalette({
   passKey?: (e: KeyboardEvent) => boolean;
 }) {
   const [filter, setFilter] = useState<ChatFilter>(initial ?? {});
+  const keys = useBindings();
   const [filtersOpen, setFiltersOpen] = useState(!!initial && Object.keys(tidyFilter({ ...initial, text: undefined })).length > 0);
   const tidy = tidyFilter(filter);
   const key = JSON.stringify(tidy);
@@ -178,7 +179,7 @@ export function SearchPalette({
           >
             <ListFilter size={14} aria-hidden /> Filters{parts.length ? ` (${parts.length})` : ""}
           </button>
-          <kbd>Esc</kbd>
+          <kbd>{chordLabel(keys.paletteClose[0])}</kbd>
         </div>
         {filtersOpen && <FilterBar id={filtersId} filter={filter} tags={tags} onChange={set} onManageTags={onManageTags} />}
         {parts.length > 0 && (

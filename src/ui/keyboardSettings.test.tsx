@@ -237,6 +237,32 @@ describe("The Keyboard Shortcuts page", () => {
   });
 });
 
+describe("Hints", () => {
+  it("name the current chord in the rail's tips, the empty chat, the composer and the palette", async () => {
+    const s = await signedIn({ newChat: ["Ctrl+Shift+N"], search: ["Alt+S"], send: ["Ctrl+Enter"], newLine: ["Enter"], paletteClose: ["Ctrl+Escape"] });
+    const newChat = button("New chat (Ctrl+Shift+N)");
+    expect(newChat.getAttribute("aria-keyshortcuts")).toBe("Control+Shift+N");
+    expect(button("Search all chats (Alt+S)").getAttribute("aria-keyshortcuts")).toBe("Alt+S");
+    await s.user.hover(newChat);
+    expect(screen.getByRole("tooltip", { hidden: true }).textContent).toContain("Ctrl+Shift+N");
+    expect(screen.getByRole("list", { name: "Keyboard shortcuts" }).textContent).toContain("Ctrl Shift N");
+    expect(screen.getByRole("list", { name: "Keyboard shortcuts" }).textContent).toContain("Alt S");
+    expect(screen.getByText("Ctrl+Enter to send · Enter for a new line")).toBeTruthy();
+    await s.user.keyboard("{Alt>}s{/Alt}");
+    expect(within(palette()!).getByText("Ctrl+Esc", { selector: "kbd" })).toBeTruthy();
+  });
+
+  it("follow a change made on the page without a restart", async () => {
+    const s = await signedIn();
+    await onKeyboardPage(s);
+    await s.user.click(button(/^Change New chat/));
+    await s.user.keyboard("{Control>}{Shift>}n{/Shift}{/Control}");
+    await s.user.click(button("Save"));
+    expect(button("New chat (Ctrl+Shift+N)")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "New chat (Ctrl+N)" })).toBeNull();
+  });
+});
+
 describe("The screenshot recorder", () => {
   it("accepts Ctrl+K once Search moved off it", async () => {
     const s = await signedIn({ search: ["Ctrl+J"] });

@@ -30,7 +30,7 @@ import { desktopSummon, type SummonApi } from "./hermes/summon";
 import { onDesktopScreenshot, screenshotSupport, showWindow, syncScreenshotOutbox, tauriScreenshots, type ScreenshotSupport } from "./hermes/tauriScreenshot";
 import { ConnectionManager, RailConnections, RemoveConnection, SwitchConnection } from "./ui/Connections";
 import { checkShortcut, shortcutLabel, shortcutOf } from "./ui/shortcut";
-import { pickApp } from "./ui/keybindings";
+import { chordLabel, pickApp, useBindings } from "./ui/keybindings";
 
 import { reachRoute, tauriPipe, tauriProbe, tauriReach, type SignInDetails } from "./hermes/tauriPipe";
 import { AttemptLog, tauriAttemptStore } from "./hermes/attempts";
@@ -1073,6 +1073,7 @@ export function Main({
   // computer only and never becomes the profile's default. Picked in another profile, it gives way to this profile's
   // own model. A chat on screen shows the model it runs on, and a pick there switches that chat alone.
   const { modelPicker, modelPicks, modelFavorites, previewWidth, screenshotShortcut, agentOffice, inboxAutoDismissDays } = useSyncExternalStore(subscribeUIPrefs, getUIPrefs);
+  const keys = useBindings();
   const officeShown = officeOpen && agentOffice !== "off";
   // Who sits where in the building. It outlives the building's view, so hidden to the tray, minimized, behind Settings
   // or switched to List and back, each agent comes back to the desk it had.
@@ -1612,8 +1613,8 @@ export function Main({
       return kept.map((k) => k.action);
     };
     const along = items([
-      { drop: { pane: p.key, zone: "tab", index: at - 1 }, label: "Move tab left", icon: <ArrowLeft size={15} />, keys: shown ? "Ctrl+Shift+PgUp" : undefined },
-      { drop: { pane: p.key, zone: "tab", index: at + 2 }, label: "Move tab right", icon: <ArrowRight size={15} />, keys: shown ? "Ctrl+Shift+PgDn" : undefined },
+      { drop: { pane: p.key, zone: "tab", index: at - 1 }, label: "Move tab left", icon: <ArrowLeft size={15} />, keys: shown ? chordLabel(keys.moveTabLeft[0]) : undefined },
+      { drop: { pane: p.key, zone: "tab", index: at + 2 }, label: "Move tab right", icon: <ArrowRight size={15} />, keys: shown ? chordLabel(keys.moveTabRight[0]) : undefined },
     ]);
     // Into the other pane's tabs first, as that is the plainest; then the edges of the tab's own pane.
     const elsewhere = items([
@@ -2431,7 +2432,7 @@ export function Main({
         />,
         // Splitting is Ctrl+\, a tab's menu, or dragging a tab to an edge (ADR 0055); a split pane keeps its Close.
         split && (
-          <button className="icon-btn" title={`Close the ${paneNames(splitDir)[i].toLowerCase()} pane${isActive ? "" : " (Ctrl+\\)"}`} aria-label={`Close the ${paneNames(splitDir)[i].toLowerCase()} pane`} onClick={() => closePane(p.key)}>
+          <button className="icon-btn" title={`Close the ${paneNames(splitDir)[i].toLowerCase()} pane${isActive ? "" : ` (${chordLabel(keys.toggleSplit[0])})`}`} aria-label={`Close the ${paneNames(splitDir)[i].toLowerCase()} pane`} onClick={() => closePane(p.key)}>
             <X size={16} />
           </button>
         )

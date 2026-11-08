@@ -19,7 +19,7 @@ import type { ProfileCloneApi } from "../hermes/profileClone";
 import { ArchiveButton, STATUS_LABEL, SettleButton, SourceIcon, Spinner, composing, relTime, routeLabel, useReturnFocus } from "./bits";
 import { viaLabel } from "../hermes/routes";
 import { dragChat, dragChatEnd } from "./Tabs";
-import { pick } from "./keybindings";
+import { ariaKeys, chordLabel, chordParts, pick, useBindings } from "./keybindings";
 
 
 
@@ -100,6 +100,8 @@ export function Rail({
   connectionsMenu?: ReactNode;
 }) {
   const where = routeLabel(route);
+  const keys = useBindings();
+  const label = (id: "toggleList" | "newChat" | "search" | "settings") => chordLabel(keys[id][0]);
   // The connection's full wording lives only in its tip (ADR 0001).
   const connNote = [
     route?.via && [connectionName, viaLabel(route.via)].filter(Boolean).join(" · "),
@@ -145,13 +147,13 @@ export function Rail({
   const parts = (
     <>
       <div className="rail-top">
-        <button className="rail-brand" aria-label="Hide or show chats" aria-keyshortcuts="Control+B" onClick={onToggleList} {...bind("brand", { label: "Hide or show chats", keys: "Ctrl+B" })}>
+        <button className="rail-brand" aria-label="Hide or show chats" aria-keyshortcuts={ariaKeys(keys.toggleList)} onClick={onToggleList} {...bind("brand", { label: "Hide or show chats", keys: label("toggleList") })}>
           H
         </button>
-        <button className="icon-btn rail-primary" aria-label="New chat (Ctrl+N)" aria-keyshortcuts="Control+N" onClick={onNew} {...bind("new", { label: "New chat", keys: "Ctrl+N" })}>
+        <button className="icon-btn rail-primary" aria-label={`New chat (${label("newChat")})`} aria-keyshortcuts={ariaKeys(keys.newChat)} onClick={onNew} {...bind("new", { label: "New chat", keys: label("newChat") })}>
           <SquarePen size={18} />
         </button>
-        <button className="icon-btn rail-primary" aria-label="Search all chats (Ctrl+K)" aria-keyshortcuts="Control+K" onClick={onSearch} {...bind("search", { label: "Search all chats", keys: "Ctrl+K" })}>
+        <button className="icon-btn rail-primary" aria-label={`Search all chats (${label("search")})`} aria-keyshortcuts={ariaKeys(keys.search)} onClick={onSearch} {...bind("search", { label: "Search all chats", keys: label("search") })}>
           <Search size={18} />
         </button>
         {onInbox && (
@@ -207,10 +209,10 @@ export function Rail({
         <button
           className={`icon-btn settings-btn ${settingsOpen ? "on" : ""}`}
           aria-label={updateWaiting ? "Settings: an update is ready" : "Settings"}
-          aria-keyshortcuts="Control+,"
+          aria-keyshortcuts={ariaKeys(keys.settings)}
           aria-pressed={settingsOpen}
           onClick={onSettings}
-          {...bind("settings", { label: "Settings", keys: "Ctrl+,", note: updateWaiting ? "An update is ready" : "Import, backup and more" })}
+          {...bind("settings", { label: "Settings", keys: label("settings"), note: updateWaiting ? "An update is ready" : "Import, backup and more" })}
         >
           <Settings size={18} />
           {updateWaiting && <span className="dot update-dot" />}
@@ -1017,6 +1019,7 @@ export function ChatList({
   onSearch?: () => void;
 }) {
   const { chatSectionsShown: shown, chatSectionsCollapsed: collapsed } = useSyncExternalStore(subscribeUIPrefs, getUIPrefs);
+  const keys = useBindings();
   const setCollapsed = (key: SectionKey, on: boolean) => {
     const now = getUIPrefs().chatSectionsCollapsed;
     if (now.includes(key) !== on) setUIPrefs({ chatSectionsCollapsed: on ? [...now, key] : now.filter((k) => k !== key) });
@@ -1108,14 +1111,14 @@ export function ChatList({
             <button className="sb-action primary" onClick={onNew}>
               <SquarePen size={15} />
               <span>New chat</span>
-              <kbd aria-hidden>Ctrl N</kbd>
+              <kbd aria-hidden>{chordParts(keys.newChat[0]).join(" ")}</kbd>
             </button>
           )}
           {onSearch && (
             <button className="sb-action" onClick={onSearch}>
               <Search size={15} />
               <span>Search chats</span>
-              <kbd aria-hidden>Ctrl K</kbd>
+              <kbd aria-hidden>{chordParts(keys.search[0]).join(" ")}</kbd>
             </button>
           )}
         </div>
