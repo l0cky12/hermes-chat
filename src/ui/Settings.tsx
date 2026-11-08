@@ -2,7 +2,7 @@
 // launch, screenshots, updates, the local cache, older history, importing transcripts, and backups. Appearance: how the app looks on this
 // computer (AppearanceSettings.tsx). Model: the profile's models on Hermes (ModelSettings.tsx), and Idle compaction on this computer
 // (IdleCompactSettings.tsx). Providers: the profile's model provider API keys on Hermes, listed, added, replaced and removed
-// (ProviderSettings.tsx, ADR 0094). Voice: Dictation, Read aloud and voice
+// (ProviderSettings.tsx, ADR 0095). Voice: Dictation, Read aloud and voice
 // conversations, and the profile's speech providers on Hermes (VoiceProviderSettings.tsx). Toolsets: which tools
 // Hermes offers the model in the profile (ToolsetSettings.tsx). Persona: the profile's SOUL.md on Hermes
 // (PersonaSettings.tsx). Memory: what Hermes remembers for the profile (MemorySettings.tsx). Skills: the profile's
@@ -234,7 +234,7 @@ export function SettingsScreen({
   mcp?: McpApi;
   /** Each profile's Telegram and Discord gateways on Hermes (ADR 0073); without it there is no Gateways tab. */
   gateways?: GatewaysApi;
-  /** The shown profile's provider API keys on Hermes (ADR 0094); without it there is no Providers tab. */
+  /** The shown profile's provider API keys on Hermes (ADR 0095); without it there is no Providers tab. */
   providers?: ProviderKeysApi;
   /** Opens a page in the browser: an MCP server's OAuth sign-in. */
   openUrl?: (url: string) => Promise<void> | void;

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Settings → Providers on screen (ProviderSettings.tsx, ADR 0094), against the fake dashboard's `GET /api/env`: the saved
+// Settings → Providers on screen (ProviderSettings.tsx, ADR 0095), against the fake dashboard's `GET /api/env`: the saved
 // keys with Hermes's redacted previews, adding and replacing a key with each result in words, removing one after asking
 // and only once a read shows it gone, a server that can't take keys, and answers for another profile dropped. Every key
 // here is synthetic, and none may appear anywhere on screen.

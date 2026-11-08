@@ -1,4 +1,4 @@
-// Settings → Providers (ADR 0094): the shown profile's model provider API keys on Hermes. Saved keys show as Hermes's
+// Settings → Providers (ADR 0095): the shown profile's model provider API keys on Hermes. Saved keys show as Hermes's
 // redacted preview and can be replaced or removed; a key for another provider is added below. Checking and saving go
 // through Rust (`hermes_save_provider_key`), and so does removing, which reads the list back (`hermes_remove_provider_key`):
 // a key leaves this screen only once Hermes shows it unset. The typed key is never shown, not even in an error.

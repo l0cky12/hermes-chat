@@ -13,7 +13,7 @@
 //! Access, on every request and the WebSocket handshake (ADR 0006).
 //! Setup uses two more things here: `probe`, which tests a sign-in without keeping it, and
 //! `Dashboard::save_provider_key`, which gives Hermes a model provider's API key, and `Dashboard::remove_provider_key`,
-//! which takes one away (Settings → Providers, ADR 0094).
+//! which takes one away (Settings → Providers, ADR 0095).
 //! Before any password goes out, `read_server` reads the dashboard's public `/api/status` and `identify` checks it is
 //! a Hermes dashboard, and the same one the connection signed in to before (ADR 0056).
 
@@ -107,7 +107,7 @@ pub enum TransportError {
     KeyTimedOut(u64),
     #[error("Hermes didn't finish removing the key within {0} s. It may have removed it anyway: the list of keys shows what Hermes has.")]
     KeyRemovalTimedOut(u64),
-    /// `DELETE /api/env` answered, but `GET /api/env` still lists the key as set (ADR 0094).
+    /// `DELETE /api/env` answered, but `GET /api/env` still lists the key as set (ADR 0095).
     #[error("Hermes still lists the {0} key as set after removing it. It may keep the key somewhere else on the server.")]
     KeyStillSet(String),
     #[error("This Hermes server can't {0}: it has no {1} route. Updating Hermes adds it.")]
@@ -1279,7 +1279,7 @@ impl Dashboard {
     /// ADR 0055), Settings → MCP servers' add, switch, test, sign-in and catalog install (`mcp::relayed`, ADR 0068), and
     /// Settings → Gateways' Telegram and Discord save and status check (`gateway_write`, ADR 0073).
     /// `DELETE api/env` is refused whatever the body: a key leaves the server only through
-    /// `Dashboard::remove_provider_key`, which checks that it is a model provider's (ADR 0094).
+    /// `Dashboard::remove_provider_key`, which checks that it is a model provider's (ADR 0095).
     /// Returns the response body on 2xx.
     pub async fn request(&self, method: &str, path_and_query: &str, body: Option<String>) -> Result<String, TransportError> {
         let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
@@ -2583,7 +2583,7 @@ impl Dashboard {
         Ok(SavedKey { verified: checked.ok && checked.reachable })
     }
 
-    /// Takes a model provider's API key out of the profile's Hermes, for Settings → Providers (ADR 0094):
+    /// Takes a model provider's API key out of the profile's Hermes, for Settings → Providers (ADR 0095):
     ///
     /// 1. `GET /api/env?profile=` must list `key` as a provider's secret, as `save_provider_key` requires.
     /// 2. `DELETE /api/env?profile=` with `{"key"}` removes it from the profile's `.env` on the server. A 404, which is

@@ -3369,7 +3369,7 @@ p.logs-status { margin: 0 0 8px; line-height: 1.5; }
 .export-pick > span { flex-basis: 100%; }
 .export-pick-problem { color: var(--warn); }
 
-/* ---------- Settings → Gateways (GatewaySettings.tsx, ADR 0073) and Providers (ProviderSettings.tsx, ADR 0094) ---------- */
+/* ---------- Settings → Gateways (GatewaySettings.tsx, ADR 0073) and Providers (ProviderSettings.tsx, ADR 0095) ---------- */
 .gw-input, .pk-input {
   width: 100%; background: var(--raised); border: 1px solid var(--line-2); border-radius: 9px; padding: 9px 12px; outline: none; color: var(--text);
   font-family: var(--mono); font-size: calc(13rem / 14);
