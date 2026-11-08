@@ -65,6 +65,17 @@ function webviewHistory() {
   return run;
 }
 
+/** The webview's undo as WebKit and WebView2 run it: the page's last edit is stepped, here the composer's. */
+function pageWideHistory() {
+  const run = vi.fn((command: string) => {
+    const inputType = command === "undo" ? "historyUndo" : "historyRedo";
+    act(() => void composer().dispatchEvent(new InputEvent("beforeinput", { inputType, cancelable: true, bubbles: true })));
+    return true;
+  });
+  Object.defineProperty(document, "execCommand", { value: run, configurable: true });
+  return run;
+}
+
 describe("Undo and redo in the composer", () => {
   it("undoes typing, and Ctrl+Shift+Z and Ctrl+Y redo it", async () => {
     const { user } = await launch();
@@ -178,6 +189,34 @@ describe("Ctrl+Z in other text fields", () => {
   });
 });
 
+describe("Ctrl+Z never reaches past the focused field", () => {
+  it("leaves the composer alone when another field has nothing to undo", async () => {
+    const run = pageWideHistory();
+    const { user } = await launch();
+    await user.click(composer());
+    await user.keyboard("keep me");
+    await user.keyboard("{Control>}k{/Control}");
+    await user.keyboard(UNDO);
+    expect(run).toHaveBeenCalledWith("undo");
+    await user.keyboard("{Escape}");
+    expect(composer().value).toBe("keep me");
+  });
+
+  it("leaves the composer alone from a date field, which keeps no text history", async () => {
+    const run = pageWideHistory();
+    const { user } = await launch();
+    await user.click(composer());
+    await user.keyboard("keep me");
+    await user.click(screen.getByRole("button", { name: "Usage" }));
+    await user.selectOptions(await screen.findByRole("combobox", { name: "Period" }), "Dates…");
+    await user.click(screen.getByLabelText("From"));
+    await user.keyboard(UNDO);
+    expect(run).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Usage" }));
+    expect(composer().value).toBe("keep me");
+  });
+});
+
 describe("Ctrl+Z for the notice's Undo", () => {
   async function settled() {
     const s = await launch();
@@ -228,7 +267,7 @@ describe("Ctrl+Z for the notice's Undo", () => {
     await user.click(screen.getByLabelText("From"));
     await user.keyboard(UNDO);
     await act(async () => void (await hermes.idle()));
-    expect(run).toHaveBeenCalledWith("undo");
+    expect(run).not.toHaveBeenCalled();
     expect(screen.getByText("Settled: Deploy notes")).toBeTruthy();
     expect(titles("inbox")).toEqual(["Nightly backup"]);
   });
