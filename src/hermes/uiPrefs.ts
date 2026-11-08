@@ -1,7 +1,8 @@
 // Display preferences for this computer: the theme, whether the last chat reopens at launch and which chat each profile
 // had open, whether reasoning shows, the model last picked and the starred models, which items the status bar shows,
 // the screenshot shortcut and preview pane width, which computer the Terminal opens on, what sending does while a
-// reply runs, Idle compaction, which of the chat list's sections show and which are collapsed, and how the agent office shows. All preferences live in one versioned localStorage document.
+// reply runs, Idle compaction, which of the chat list's sections show and which are collapsed, how the agent office shows,
+// and the keyboard shortcuts the owner changed. All preferences live in one versioned localStorage document.
 // it (chatCache.ts) and later settings add fields here rather than new keys. Nothing here goes to Hermes. Every
 // settings feature reads and writes through this module.
 
@@ -64,6 +65,12 @@ export type UIPrefs = {
   agentOffice: OfficeView;
   /** How many days a finished entry stays in the inbox before it is dismissed on its own, as if by hand; null: never. */
   inboxAutoDismissDays: number | null;
+  /**
+   * The keyboard shortcuts the owner changed (ui/keybindings.ts, ADR 0097): each command's chords, by command id. Only
+   * overrides, so a command never changed takes whatever default this version gives it. Checked for shape here only;
+   * keybindings.ts drops an id or chord it doesn't accept.
+   */
+  keybindings: Record<string, string[]>;
 };
 
 export type OfficeView = "building" | "list" | "off";
@@ -108,6 +115,7 @@ export const DEFAULT_UI_PREFS: Readonly<UIPrefs> = Object.freeze({
   chatSectionsCollapsed: ["snoozed", "archived", "settled"] as SectionKey[],
   agentOffice: "building",
   inboxAutoDismissDays: null,
+  keybindings: Object.freeze({}) as Record<string, string[]>,
 });
 
 /** A stored document as read, before its fields are checked. */
@@ -228,6 +236,17 @@ function toLastOpenChat(v: unknown): Record<string, string> | undefined {
   return Object.fromEntries(entries.slice(0, LAST_OPEN_LIMIT)) as Record<string, string>;
 }
 
+const KEYBINDINGS_LIMIT = 100;
+const CHORDS_LIMIT = 8;
+
+function toKeybindings(v: unknown): Record<string, string[]> | undefined {
+  if (!isDoc(v)) return undefined;
+  const entries = Object.entries(v)
+    .filter(([id, chords]) => str(id, 60) !== undefined && Array.isArray(chords) && chords.length > 0 && chords.every((c) => str(c, 60) !== undefined))
+    .map(([id, chords]) => [id, (chords as string[]).slice(0, CHORDS_LIMIT)]);
+  return Object.fromEntries(entries.slice(0, KEYBINDINGS_LIMIT));
+}
+
 /** The prefs `doc` holds, each field that is missing or not a valid value taken from `d`: the defaults, unless given. */
 export function readUIPrefs(doc: UIPrefsDoc, d: Readonly<UIPrefs> = DEFAULT_UI_PREFS): UIPrefs {
   const pick = toModelPick(doc.modelPicker);
@@ -255,6 +274,7 @@ export function readUIPrefs(doc: UIPrefsDoc, d: Readonly<UIPrefs> = DEFAULT_UI_P
       doc.inboxAutoDismissDays === null || (typeof doc.inboxAutoDismissDays === "number" && Number.isFinite(doc.inboxAutoDismissDays) && doc.inboxAutoDismissDays > 0)
         ? doc.inboxAutoDismissDays
         : d.inboxAutoDismissDays,
+    keybindings: toKeybindings(doc.keybindings) ?? { ...d.keybindings },
   };
 }
 

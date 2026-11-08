@@ -1,6 +1,7 @@
 // Shortcuts the owner sets: how a key press is written down, and which ones are refused or warned about.
 import { describe, expect, it } from "vitest";
 import { isShortcut } from "../hermes/uiPrefs";
+import { bindingsOf } from "./keybindings";
 import { checkShortcut, shortcutLabel, shortcutOf } from "./shortcut";
 
 const press = (key: string, code: string, mods: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean } = {}) => ({
@@ -53,14 +54,18 @@ describe("Shortcuts that clash", () => {
     expect(checkShortcut("F9")).toEqual({});
   });
 
-  it("refuses Hermes Chat's own shortcuts, whatever else is held", () => {
-    expect(checkShortcut("Ctrl+K").error).toBe("Ctrl+K already opens Search in Hermes Chat.");
-    expect(checkShortcut("Ctrl+Shift+N").error).toBe("Ctrl+Shift+N already starts a new chat in Hermes Chat.");
-    expect(checkShortcut("Ctrl+Alt+B").error).toMatch(/chat list/);
-    expect(checkShortcut("Super+F").error).toMatch(/finds in the chat/);
-    expect(checkShortcut("Ctrl+1").error).toMatch(/left pane/);
-    expect(checkShortcut("Super+2").error).toMatch(/right pane/);
+  it("refuses Hermes Chat's own shortcuts as they are now, with Super read as Ctrl", () => {
+    expect(checkShortcut("Ctrl+K").error).toBe("Ctrl+K already runs Search all chats in Hermes Chat (Settings → Keyboard Shortcuts).");
+    expect(checkShortcut("Super+F").error).toMatch(/Find in the chat/);
+    expect(checkShortcut("Ctrl+1").error).toMatch(/left/);
+    expect(checkShortcut("Super+2").error).toMatch(/right/);
+    expect(checkShortcut("Ctrl+Shift+PageUp").error).toMatch(/Move the tab left/);
+    expect(checkShortcut("Ctrl+Shift+N")).toEqual({});
+    expect(checkShortcut("Ctrl+Alt+B")).toEqual({});
     expect(checkShortcut("Ctrl+Shift+1")).toEqual({});
+    const moved = bindingsOf({ search: ["Ctrl+J"] }, null);
+    expect(checkShortcut("Ctrl+K", moved)).toEqual({});
+    expect(checkShortcut("Ctrl+J", moved).error).toMatch(/Search all chats/);
   });
 
   it("refuses editing shortcuts and the desktop's own fixed ones", () => {

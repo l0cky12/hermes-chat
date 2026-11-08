@@ -6,8 +6,9 @@ import { ListFilter, Search, Tag as TagIcon, X } from "lucide-react";
 import { STATE_LABEL, isEmptyFilter, tidyFilter, type ChatFilter, type ChatState, type FilterOutcome } from "../hermes/chatFilter";
 import { SOURCE_LABEL, type Found, type Source } from "../hermes/model";
 import { previewBulk, type BulkPreview, type ScopeTags } from "../hermes/tags";
-import { SourceIcon, Spinner, composing, highlight, relTime, useReturnFocus } from "./bits";
+import { SourceIcon, Spinner, highlight, relTime, useReturnFocus } from "./bits";
 import { isTextEdit } from "./editKeys";
+import { chordLabel, pick, useBindings } from "./keybindings";
 import { trapTab } from "./modal";
 
 /** Typing this long without a pause sends the search. */
@@ -73,6 +74,7 @@ export function SearchPalette({
   passKey?: (e: KeyboardEvent) => boolean;
 }) {
   const [filter, setFilter] = useState<ChatFilter>(initial ?? {});
+  const keys = useBindings();
   const [filtersOpen, setFiltersOpen] = useState(!!initial && Object.keys(tidyFilter({ ...initial, text: undefined })).length > 0);
   const tidy = tidyFilter(filter);
   const key = JSON.stringify(tidy);
@@ -144,7 +146,7 @@ export function SearchPalette({
         onKeyDown={(e) => {
           if (!passKey(e) && !isTextEdit(e)) e.stopPropagation();
           trapTab(e, box.current);
-          if (e.key !== "Escape" || composing(e)) return;
+          if (pick(e, "palette") !== "paletteClose") return;
           if (panel) closePanel();
           else onClose();
         }}
@@ -159,14 +161,14 @@ export function SearchPalette({
             value={filter.text ?? ""}
             onChange={(e) => set({ text: e.target.value })}
             onKeyDown={(e) => {
-              if (composing(e)) return;
-              if (e.key === "ArrowDown") {
+              const command = pick(e, "palette");
+              if (command === "paletteDown") {
                 e.preventDefault();
                 setSel((s) => Math.min(s + 1, found.length - 1));
-              } else if (e.key === "ArrowUp") {
+              } else if (command === "paletteUp") {
                 e.preventDefault();
                 setSel((s) => Math.max(s - 1, 0));
-              } else if (e.key === "Enter" && !stale && found[sel]) onPick(found[sel]);
+              } else if (command === "paletteOpen" && !stale && found[sel]) onPick(found[sel]);
             }}
           />
           <button
@@ -177,7 +179,7 @@ export function SearchPalette({
           >
             <ListFilter size={14} aria-hidden /> Filters{parts.length ? ` (${parts.length})` : ""}
           </button>
-          <kbd>Esc</kbd>
+          <kbd>{chordLabel(keys.paletteClose[0])}</kbd>
         </div>
         {filtersOpen && <FilterBar id={filtersId} filter={filter} tags={tags} onChange={set} onManageTags={onManageTags} />}
         {parts.length > 0 && (

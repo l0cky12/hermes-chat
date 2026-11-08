@@ -78,13 +78,15 @@ describe("Settings tabs", () => {
 
   it("move with the arrow keys, Home and End, with only the selected tab in the Tab order", async () => {
     settings();
-    const [general, appearance, model] = screen.getAllByRole("tab");
-    expect([general.tabIndex, appearance.tabIndex, model.tabIndex]).toEqual([0, -1, -1]);
+    const [general, appearance, keyboard, model] = screen.getAllByRole("tab");
+    expect([general.tabIndex, appearance.tabIndex, keyboard.tabIndex, model.tabIndex]).toEqual([0, -1, -1, -1]);
     general.focus();
     await userEvent.keyboard("{ArrowRight}");
     expect(appearance.getAttribute("aria-selected")).toBe("true");
     expect(document.activeElement).toBe(appearance);
-    expect([general.tabIndex, appearance.tabIndex, model.tabIndex]).toEqual([-1, 0, -1]);
+    expect([general.tabIndex, appearance.tabIndex, keyboard.tabIndex, model.tabIndex]).toEqual([-1, 0, -1, -1]);
+    await userEvent.keyboard("{ArrowRight}");
+    expect(document.activeElement).toBe(keyboard);
     await userEvent.keyboard("{ArrowRight}");
     expect(document.activeElement).toBe(model);
     await userEvent.keyboard("{ArrowRight}");
