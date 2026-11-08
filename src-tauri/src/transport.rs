@@ -133,7 +133,7 @@ pub enum TransportError {
     /// Plain http:// to an address that isn't this computer, a LAN or Tailscale (ADR 0056).
     #[error("Plain http:// is only used on this computer, a LAN or Tailscale, and {0} is a public address. Use https:// or SSH to reach it.")]
     PlainHttpPublic(String),
-    #[error("The dashboard sent Hermes Chat on to another site, whose address isn't shown, as it may repeat your extra request headers. Hermes Chat doesn't follow it there, so your headers aren't sent to it. If a gateway such as Cloudflare Access is in front of the dashboard, check the headers it needs.")]
+    #[error("The dashboard sent Hermes Chat on to another site, whose address isn't shown, as it may repeat your password, token or extra request headers. Hermes Chat doesn't follow it there, so nothing is sent to it. If a gateway such as Cloudflare Access is in front of the dashboard, check the headers it needs.")]
     RedirectedHidden,
 }
 
@@ -1118,7 +1118,16 @@ impl Dashboard {
                     s if s.is_success() => {}
                     StatusCode::UNAUTHORIZED => return Err(TransportError::BadCredentials),
                     StatusCode::TOO_MANY_REQUESTS => return Err(TransportError::RateLimited),
-                    _ => return Err(unexpected(login, &sign_in.headers).await),
+                    status => {
+                        // The password went in this body alone, and a 422 or a gateway can echo it back.
+                        let Ok(mut secret) = HeaderValue::from_bytes(password.as_bytes()) else {
+                            return Err(TransportError::Unexpected { status: status.as_u16(), body: HIDDEN.into() });
+                        };
+                        secret.set_sensitive(true);
+                        let mut hide = sign_in.headers.clone();
+                        hide.append(HeaderName::from_static("x-hermes-chat-password"), secret);
+                        return Err(unexpected(login, &hide).await);
+                    }
                 }
                 dashboard.keep_cookies(&login);
                 Ok(dashboard)
@@ -1216,7 +1225,7 @@ impl Dashboard {
                         Some(Ok(Message::Close(frame))) => {
                             break frame.map_or("closed by the server".into(), |f| {
                                 // A gateway in front of the dashboard may close with the header values it turned down.
-                                let why = if repeats_header(&f.reason, &headers) { HIDDEN_FOR_HEADERS } else { f.reason.as_str() };
+                                let why = if repeats_header(&f.reason, &headers) { HIDDEN } else { f.reason.as_str() };
                                 format!("closed by the server ({} {why})", f.code)
                             });
                         }
@@ -2277,28 +2286,29 @@ pub fn profile_create_allowed(body: Option<&str>) -> bool {
 }
 
 /// Said in place of an error body that can't be shown.
-const HIDDEN_FOR_HEADERS: &str = "(not shown, as it may repeat your extra request headers)";
+const HIDDEN: &str = "(not shown, as it may repeat your password, token or extra request headers)";
 
 /// How much of a header value `repeats_header` counts as repeating it.
 const HEADER_PIECE: usize = 8;
 
-/// Whether `text` repeats one of the owner's extra request header values, as a gateway such as Cloudflare Access can
-/// in the page it turns a request away with. Any `HEADER_PIECE` bytes of a value count, so a value cut short, as in
-/// a WebSocket close reason, still does. Header values `to_str` accepts are ASCII.
+/// Whether `text` repeats one of the values in `headers`: the owner's extra request headers, as a gateway such as
+/// Cloudflare Access can in the page it turns a request away with, or a token or password sent with them. Any
+/// `HEADER_PIECE` bytes of a value count, so a value cut short, as in a WebSocket close reason, still does.
 fn repeats_header(text: &str, headers: &HeaderMap) -> bool {
-    repeats_any(text, headers.values().filter_map(|v| v.to_str().ok()))
+    repeats_any(text.as_bytes(), headers.values().map(HeaderValue::as_bytes))
 }
 
 /// `repeats_header` for an address, whose host the URL parser lowercased.
 fn address_repeats_header(address: &str, headers: &HeaderMap) -> bool {
-    let values: Vec<String> = headers.values().filter_map(|v| v.to_str().ok()).map(str::to_ascii_lowercase).collect();
-    repeats_any(&address.to_ascii_lowercase(), values.iter().map(String::as_str))
+    let values: Vec<Vec<u8>> = headers.values().map(|v| v.as_bytes().to_ascii_lowercase()).collect();
+    repeats_any(address.to_ascii_lowercase().as_bytes(), values.iter().map(Vec::as_slice))
 }
 
-fn repeats_any<'a>(text: &str, values: impl Iterator<Item = &'a str>) -> bool {
+/// Compared as bytes: a password need not be ASCII, and a piece of it need not end on a character.
+fn repeats_any<'a>(text: &[u8], values: impl Iterator<Item = &'a [u8]>) -> bool {
     values.filter(|v| !v.is_empty()).any(|v| {
         let piece = v.len().min(HEADER_PIECE);
-        (0..=v.len() - piece).any(|i| text.contains(&v[i..i + piece]))
+        v.windows(piece).any(|p| text.windows(piece).any(|t| t == p))
     })
 }
 
@@ -2319,28 +2329,29 @@ fn strings_in(v: &serde_json::Value, out: &mut String) {
     }
 }
 
-/// An error body as it may be shown, for a request that carried `headers`. With none, its start as sent. With extra
-/// request headers, only the dashboard's own JSON `detail`, whole and repeating none of their values: a refusal (401,
-/// 403, 407) or any other page could come from a gateway in front, which can echo a value it turned down.
+/// An error body as it may be shown, for a request that carried `headers`: its extra request headers, and a token or
+/// password it sent. With none, its start as sent. Otherwise only the dashboard's own JSON `detail`, whole and
+/// repeating none of their values: a refusal (401, 403, 407) or any other page could come from a gateway in front,
+/// which can echo a value it turned down, and a 422 echoes the body it was sent.
 fn shown_body(status: StatusCode, text: &str, headers: &HeaderMap) -> String {
     if headers.is_empty() {
         return text.chars().take(300).collect();
     }
     if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::PROXY_AUTHENTICATION_REQUIRED) {
-        return HIDDEN_FOR_HEADERS.into();
+        return HIDDEN.into();
     }
     let detail = serde_json::from_str::<serde_json::Value>(text).ok().and_then(|v| v.get("detail").cloned());
-    let Some(detail) = detail else { return HIDDEN_FOR_HEADERS.into() };
+    let Some(detail) = detail else { return HIDDEN.into() };
     let mut said = String::new();
     strings_in(&detail, &mut said);
     if repeats_header(text, headers) || repeats_header(&said, headers) {
-        return HIDDEN_FOR_HEADERS.into();
+        return HIDDEN.into();
     }
     json!({ "detail": detail }).to_string().chars().take(300).collect()
 }
 
 /// A failed answer as an error, with the start of its body. Reads only the first few KB, so a huge or endless error
-/// body can't fill memory. `headers`: the extra request headers the request carried (`shown_body`).
+/// body can't fill memory. `headers`: what the request carried that mustn't be shown (`shown_body`).
 async fn unexpected(mut resp: reqwest::Response, headers: &HeaderMap) -> TransportError {
     const KEEP: usize = 4096;
     // A redirect that came back unfollowed: `same_origin_redirects` stopped it at another site.

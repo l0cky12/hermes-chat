@@ -178,7 +178,7 @@ export function explain(f: ProbeFailure, d: SignInDetails): TestOutcome & { ok: 
   // With extra request headers, Rust hides a refusal's body, or a close reason, that may repeat them, as a gateway's
   // can. Past the first request such a refusal is most likely the gateway's too, so the stage's own hints wouldn't
   // help.
-  const hidden = "\\(not shown, as it may repeat your extra request headers\\)";
+  const hidden = "\\(not shown, as it may repeat your password, token or extra request headers\\)";
   if (!ssh && d.headers?.length && has(new RegExp(`answered (401|403|407): ${hidden}|closed by the server \\(\\d+ ${hidden}\\)`)))
     return turnedAway();
 
