@@ -1449,6 +1449,14 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .shortcut-key { min-width: 132px; justify-content: center; font-family: var(--mono); }
 .shortcut-key.recording { border-color: var(--accent, var(--text)); color: var(--text); }
 .warn-note { color: var(--warn); }
+/* Keyboard Shortcuts settings (KeyboardSettings.tsx): the When condition, key chips, and a clash with another command. */
+.key-when { font-family: var(--mono); font-size: calc(11.5rem / 14); color: var(--muted); }
+.key-chips { display: inline-flex; align-items: center; gap: 3px; }
+.key-chips + .key-chips::before { content: "or"; margin: 0 5px; color: var(--faint); font-size: calc(11rem / 14); font-family: var(--ui-font, Inter), sans-serif; }
+.shortcut-key .key-chips kbd { color: var(--text); }
+.shortcut-fixed { display: inline-flex; align-items: center; min-height: 30px; }
+.key-clash { display: inline-flex; align-items: center; color: var(--warn); }
+.set-name .badge { margin-left: 8px; }
 /* projects (Projects.tsx, ADR 0007): the switcher under the profile's name, and the project screen */
 .sb-project { display: flex; padding: 0 12px 6px 14px; margin-top: -4px; }
 .project-switch { position: relative; min-width: 0; flex: 1; display: flex; align-items: center; gap: 2px; }
