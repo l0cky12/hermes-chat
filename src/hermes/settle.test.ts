@@ -214,6 +214,64 @@ describe("Settling and unsettling", () => {
   });
 });
 
+describe("Settling many chats at once", () => {
+  it("settles each chat with the row's write and resolves to none failed", async () => {
+    const { server, hermes, chat, stored } = await listed(row("a", 1, { pinned: true }), row("b", 2, { pinned: true }), row("c", 3, { pinned: true }));
+    expect(await hermes.settleAll(["a", "b"])).toEqual([]);
+    expect(patches(server).map((b) => b.pinned)).toEqual([false, false]);
+    expect(["a", "b", "c"].map((id) => stored(id).pinned)).toEqual([false, false, true]);
+    expect(["a", "b", "c"].map((id) => chat(id).settled)).toEqual([true, true, false]);
+  });
+
+  it("moves every chat at once, before the server has answered", async () => {
+    const { server, hermes, chat } = await listed(row("a", 1, { pinned: true }), row("b", 2, { pinned: true }));
+    const release = [holdPatches(server, "a"), holdPatches(server, "b")];
+    const done = hermes.settleAll(["a", "b"]);
+    await tick();
+    expect([chat("a").settled, chat("b").settled]).toEqual([true, true]);
+    release.forEach((r) => r());
+    expect(await done).toEqual([]);
+  });
+
+  it("puts a chat whose write failed back in Active, names it, and doesn't write it again", async () => {
+    const { server, hermes, chat, stored } = await listed(row("a", 1, { pinned: true }), row("b", 2, { pinned: true }));
+    server.rest["PATCH /api/sessions/b"] = () => {
+      throw new Error("The dashboard answered 503: busy");
+    };
+    expect(await hermes.settleAll(["a", "b"])).toEqual(["b"]);
+    expect([chat("a").settled, chat("b").settled]).toEqual([true, false]);
+
+    delete server.rest["PATCH /api/sessions/b"];
+    const before = patches(server).length;
+    await hermes.sync();
+    await hermes.idle();
+    expect(patches(server).length).toBe(before);
+    expect(stored("b").pinned).toBe(true);
+    expect(chat("b").settled).toBe(false);
+  });
+
+  it("leaves a failed chat the owner moved again meanwhile where they put it", async () => {
+    const { server, hermes, chat } = await listed(row("a", 1, { pinned: true }));
+    server.rest["PATCH /api/sessions/a"] = async () => {
+      await tick();
+      throw new Error("The dashboard answered 503: busy");
+    };
+    const done = hermes.settleAll(["a"]);
+    await tick();
+    void hermes.unsettle("a");
+    delete server.rest["PATCH /api/sessions/a"];
+    expect(await done).toEqual(["a"]);
+    await hermes.idle();
+    expect(chat("a").settled).toBe(false);
+  });
+
+  it("counts a chat already Settled, or gone, as settled without a write", async () => {
+    const { server, hermes } = await listed(row("a", 1), row("b", 2, { pinned: true }));
+    expect(await hermes.settleAll(["a", "nope"])).toEqual([]);
+    expect(patches(server)).toEqual([]);
+  });
+});
+
 describe("Where replies go", () => {
   it("posts replies only in Hermes clients, Telegram and Discord chats included, on the legacy protocol", async () => {
     const { hermes } = await listed(row("tg", 1, { source: "telegram" }), row("dc", 1, { source: "discord" }));

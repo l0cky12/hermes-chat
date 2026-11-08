@@ -12,6 +12,7 @@
 //   4. Snoozed: the owner snoozed it and it hasn't woken yet.
 //   5. Working: Hermes is writing a reply in it and isn't waiting on the owner.
 //   6. Otherwise it is in the Inbox: Hermes waits for the owner's answer, or is done, or it is new.
+import { isFailure } from "./inbox";
 import type { Chat } from "./model";
 import { isWaiting } from "./model";
 import type { SectionKey } from "./sectionKeys";
@@ -365,6 +366,16 @@ export function chatSections(
   s.archived.sort((a, b) => b.updatedAt - a.updatedAt);
   s.snoozed.sort((a, b) => snoozes[a.id] - snoozes[b.id]);
   return s;
+}
+
+export type InboxSettle = { ids: string[]; approvals: number; failures: number };
+
+export function inboxSettle(inbox: Chat[]): InboxSettle {
+  return {
+    ids: inbox.map((c) => c.id),
+    approvals: inbox.filter((c) => c.items.some(isWaiting)).length,
+    failures: inbox.filter((c) => c.items.some(isFailure)).length,
+  };
 }
 
 /** The next time a snooze wakes after `now`, if any. */

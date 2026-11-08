@@ -372,9 +372,11 @@ describe("Chat list by keyboard", () => {
     // The project switcher sits under the profile's name, before the chats.
     await s.user.tab();
     expect(focused()).toBe(button(/All chats/));
-    // Then the Inbox section's header, which collapses it, and its chats.
+    // Then the Inbox section's header, which collapses it, its Settle all, and its chats.
     await s.user.tab();
     expect(focused()).toBe(document.querySelector('[data-section-head="inbox"]'));
+    await s.user.tab();
+    expect(focused()).toBe(button("Settle all"));
     await s.user.tab();
     expect(focused()).toBe(rowButton("Nightly backup"));
     await s.user.keyboard("{Enter}");

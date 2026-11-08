@@ -1831,6 +1831,21 @@ export function Main({
     });
   };
 
+  // Unlike setSettled's, this Undo has no snooze to put back: Inbox chats aren't snoozed or pinned.
+  const settleAll = (ids: string[]) => {
+    const profile = hermes.profile;
+    const many = (n: number) => `${n} chat${n === 1 ? "" : "s"}`;
+    void hermes.settleAll(ids).then((failed) => {
+      if (!stillIn(profile)) return;
+      const went = ids.filter((id) => !failed.includes(id));
+      if (!went.length) return setToast({ text: `Couldn't settle ${many(ids.length)}. ${ids.length === 1 ? "It's" : "They're"} still in the Inbox.`, at: Date.now() });
+      const text = failed.length
+        ? `Settled ${many(went.length)}. ${many(failed.length)} couldn't be settled and ${failed.length === 1 ? "is" : "are"} still in the Inbox.`
+        : `Settled ${many(went.length)}`;
+      setToast({ text, undo: () => went.forEach((id) => void hermes.unsettle(id)), at: Date.now() });
+    });
+  };
+
   // Snoozing is kept on this computer only; Undo puts back what the chat had.
   const snoozeChat = (id: string, until: number | undefined) => {
     const title = chats.find((c) => c.id === id)?.title ?? "";
@@ -2610,6 +2625,7 @@ export function Main({
           onOpenIn={openIn}
           onOpenTab={(id) => openChat(id, { newTab: true })}
           onSettle={setSettled}
+          onSettleAll={settleAll}
           snoozes={snoozes}
           attentionSince={attention.since}
           pins={pins}

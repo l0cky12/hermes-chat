@@ -17,7 +17,7 @@ The state of a chat the owner has put out of the way. Settled chats sit in the S
 _Avoid_: archived, done, closed
 
 **Settle** / **Unsettle**:
-The owner's manual actions, from a chat's row or its right-click menu, that move a chat from Active to Settled, and back to the Inbox. On the row both are the same icon-only button, named when hovered. Settling is how a chat is cleared from the Inbox (ADR 0090). Settling a snoozed chat forgets the snooze.
+The owner's manual actions, from a chat's row or its right-click menu, that move a chat from Active to Settled, and back to the Inbox. On the row both are the same icon-only button, named when hovered. Settling is how a chat is cleared from the Inbox (ADR 0090). Settling a snoozed chat forgets the snooze. **Settle all**, on the Inbox's header, settles every chat the Inbox shows at once, after a question that counts the ones with an Approval waiting or a failure (issue #303, ADR 0090).
 
 **Working**:
 Where the list shows an Active chat while Hermes is writing a reply in it and isn't waiting on the owner. Nobody puts a chat there: it moves there when a reply starts, and back to the Inbox once Hermes asks the owner something (an Approval) or the reply ends. A Settled or snoozed chat stays where it is while Hermes works in it.
