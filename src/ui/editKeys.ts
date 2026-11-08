@@ -34,6 +34,14 @@ const TYPING = new Set([
   "deleteWordForward",
 ]);
 
+// The inputs whose text the webview's history holds. A date or time input is a text field for Ctrl+Z, but has none.
+const HISTORY_INPUTS = new Set(["text", "search", "url", "tel", "email", "password", "number"]);
+
+const keepsWebviewHistory = (target: EventTarget | null): boolean =>
+  target instanceof HTMLTextAreaElement ||
+  (target instanceof HTMLInputElement && HISTORY_INPUTS.has(target.type)) ||
+  (target instanceof HTMLElement && target.isContentEditable === true);
+
 /** How an `input` event changed a text: typing joins the undo step under way; a cut, paste or drop is its own. */
 export const inputKind = (e: Event): EditKind => (e instanceof InputEvent && TYPING.has(e.inputType) ? "typing" : "change");
 
@@ -61,8 +69,20 @@ export const isTextEdit = (e: KeyboardEvent | ReactKeyboardEvent): boolean => !!
 export function followEditKeys(): void {
   window.addEventListener("keydown", (e) => {
     const step = editStep(e);
-    if (!step || e.defaultPrevented || composing(e) || !isTextField(e.target)) return;
+    if (!step || e.defaultPrevented || composing(e) || !keepsWebviewHistory(e.target)) return;
     e.preventDefault();
     document.execCommand(step);
   });
+  // The webview's history is the page's, not the field's: with nothing left to undo in the focused field, its undo
+  // steps whichever field changed last, the composer included. Only the focused field is stepped.
+  window.addEventListener(
+    "beforeinput",
+    (e) => {
+      if (e.inputType !== "historyUndo" && e.inputType !== "historyRedo") return;
+      if (e.target instanceof Node && document.activeElement?.contains(e.target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+    },
+    true,
+  );
 }
