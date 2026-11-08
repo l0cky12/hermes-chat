@@ -271,4 +271,30 @@ describe("Model provider keys", () => {
     expect(server.removedKeys).toHaveLength(1);
     await hermes.close();
   });
+
+  it("sends key changes one at a time in the order they were made, and reads the list only after them", async () => {
+    const server = new FakeHermes();
+    const held: (() => void)[] = [];
+    const sent: string[] = [];
+    const hermes = await connect(async (onEvent, profile, signal) => {
+      const pipe = await server.openPipe(onEvent, profile, signal);
+      return {
+        ...pipe,
+        removeProviderKey: async (...a) => (sent.push("remove"), await new Promise<void>((go) => held.push(go)), pipe.removeProviderKey(...a)),
+        saveProviderKey: async (...a) => (sent.push("save"), pipe.saveProviderKey(...a)),
+      };
+    });
+    const removed = hermes.removeProviderKey("OPENROUTER_API_KEY");
+    const saved = hermes.saveProviderKey("OPENROUTER_API_KEY", "sk-or-v1-replacement-0001");
+    const listed = hermes.providerSetup();
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    expect(sent).toEqual(["remove"]);
+
+    held.splice(0).forEach((go) => go());
+    await removed;
+    await saved;
+    expect(sent).toEqual(["remove", "save"]);
+    expect((await listed).keys.find((k) => k.provider === "openrouter")?.isSet).toBe(true);
+    await hermes.close();
+  });
 });

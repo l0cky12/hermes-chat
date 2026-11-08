@@ -342,6 +342,80 @@ describe("Settings → Providers for another profile", () => {
     // The save went where it was asked for, the default profile, never work.
     expect(s.savedKeys.map((k) => k.profile)).toEqual(["default"]);
   });
+
+  const heldRemoval = (s: FakeHermes, held: (() => void)[]): OpenPipe => async (onEvent, profile, signal) => {
+    const pipe = await s.openPipe(onEvent, profile, signal);
+    return { ...pipe, removeProviderKey: async (...a) => (await new Promise<void>((go) => held.push(go)), pipe.removeProviderKey(...a)) };
+  };
+  const removeOpenRouter = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(screen.getByRole("button", { name: "Remove the OpenRouter key" }));
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Remove" }));
+  };
+
+  it("drops a removal's re-read that would land after the connection under the screen changed", async () => {
+    const a = new FakeHermes();
+    const held: (() => void)[] = [];
+    const ha = await connect(heldRemoval(a, held), "default");
+    const b = new FakeHermes();
+    b.env = workEnv();
+    const hb = await connect(b.openPipe, "default");
+    running.push(ha, hb);
+    const user = userEvent.setup();
+    const { rerender } = render(<Screen hermes={ha} />);
+    await screen.findByLabelText("Provider");
+    await removeOpenRouter(user);
+    await waitFor(() => expect(held).toHaveLength(1));
+    rerender(<Screen hermes={hb} />);
+    await waitFor(() => expect(savedRow("Anthropic")).toBeTruthy());
+    const reads = a.restRequests.filter((r) => r.path === "/api/env").length;
+
+    await act(async () => held.splice(0).forEach((go) => go()));
+    await waitFor(() => expect(a.removedKeys).toHaveLength(1));
+    expect(a.restRequests.filter((r) => r.path === "/api/env").length).toBe(reads);
+    expect(savedRow("Anthropic")).toBeTruthy();
+    expect(savedRow("OpenRouter")).toBeNull();
+    expect(screen.queryByText(/Removed the OpenRouter key/)).toBeNull();
+  });
+
+  it("opened again while a removal from before still runs, waits for it and then shows the key gone", async () => {
+    const s = new FakeHermes();
+    const held: (() => void)[] = [];
+    const { hermes, user } = await shown({ s, open: heldRemoval(s, held) });
+    await screen.findByLabelText("Provider");
+    await removeOpenRouter(user);
+    await waitFor(() => expect(held).toHaveLength(1));
+
+    cleanup();
+    render(<Screen hermes={hermes} />);
+    await screen.findByText(/Asking Hermes/);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByRole("button", { name: "Replace the OpenRouter key" })).toBeNull();
+
+    await act(async () => held.splice(0).forEach((go) => go()));
+    await screen.findByLabelText("Provider");
+    expect(savedRow("OpenRouter")).toBeNull();
+    expect(s.removedKeys).toEqual([{ profile: "default", envVar: "OPENROUTER_API_KEY" }]);
+  });
+
+  it("trusts a read of the list after a removal that timed out once the key was already gone", async () => {
+    const s = new FakeHermes();
+    const open: OpenPipe = async (onEvent, profile, signal) => {
+      const pipe = await s.openPipe(onEvent, profile, signal);
+      return {
+        ...pipe,
+        removeProviderKey: async (...a) => {
+          await pipe.removeProviderKey(...a);
+          throw new Error("Hermes didn't finish removing the key within 30 s. It may have removed it anyway: the list of keys shows what Hermes has.");
+        },
+      };
+    };
+    const { user } = await shown({ s, open });
+    await screen.findByLabelText("Provider");
+    await removeOpenRouter(user);
+    await waitFor(() => expect(savedRow("OpenRouter")).toBeNull());
+    expect(screen.getByText("Removed the OpenRouter key from the default profile.")).toBeTruthy();
+    expect(screen.queryByText(/Not removed/)).toBeNull();
+  });
 });
 
 describe("The Providers tab in Settings", () => {

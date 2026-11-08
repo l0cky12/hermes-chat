@@ -10,7 +10,7 @@ import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
 import { Spinner } from "./bits";
 
 /** What Settings → Providers needs of the connection: the key calls, and the profile they write for. */
-export type ProviderKeysApi = Pick<Hermes, "providerSetup" | "saveProviderKey" | "removeProviderKey" | "profile">;
+export type ProviderKeysApi = Pick<Hermes, "providerSetup" | "saveProviderKey" | "removeProviderKey" | "keyChangesSettled" | "profile">;
 
 /** What the one action on the screen is doing: at most one, so no two keys are ever changed at once. */
 type Ui =
@@ -44,11 +44,17 @@ export function ProviderSettings({ hermes, profile, connected, openModel }: { he
   const reads = useRef(0);
   const live = (scope: number) => scope === scopes.current;
 
-  /** Reads the list again. Resolves with what Hermes answered, even if a later read has replaced it on screen; undefined when it failed. */
-  const load = (): Promise<ProviderSetup | undefined> => {
-    const scope = scopes.current;
+  /**
+   * Reads the list again for `scope`. Resolves with what Hermes answered, even if a later read has replaced it on
+   * screen; undefined when it failed, or when `scope` is no longer the one shown.
+   */
+  const load = (scope = scopes.current): Promise<ProviderSetup | undefined> => {
+    if (!live(scope)) return Promise.resolve(undefined);
     const read = ++reads.current;
-    return hermes.providerSetup().then(
+    return hermes
+      .keyChangesSettled()
+      .then(() => hermes.providerSetup())
+      .then(
       (s) => {
         if (live(scope) && read === reads.current) {
           setSetup(s);
@@ -94,7 +100,7 @@ export function ProviderSettings({ hermes, profile, connected, openModel }: { he
       return;
     }
     setUi(IDLE);
-    void load();
+    void load(scope);
   };
 
   const remove = async (k: ProviderKey) => {
@@ -102,21 +108,25 @@ export function ProviderSettings({ hermes, profile, connected, openModel }: { he
     const scope = scopes.current;
     setUi({ kind: "removing", provider: k.provider });
     setNote(undefined);
+    let failed: string | undefined;
     try {
       await hermes.removeProviderKey(k.envVar);
     } catch (e) {
-      if (!live(scope)) return;
-      setNote({ where: `row:${k.provider}`, ok: false, text: `Not removed: ${messageOf(e)}` });
-      setUi(IDLE);
-      return;
+      failed = messageOf(e);
     }
-    // The row goes only once a read of the list shows the key unset.
-    const after = await load();
+    if (!live(scope)) return;
+    // Whatever the removal answered, the list decides: one that timed out after the delete may have removed the key.
+    const after = await load(scope);
     if (!live(scope)) return;
     setUi(IDLE);
-    if (!after) setNote({ where: "list", ok: false, text: `Removed the ${k.label} key, but the list couldn't be read again to confirm it.` });
+    if (!after)
+      setNote(
+        failed
+          ? { where: `row:${k.provider}`, ok: false, text: `Not removed: ${failed} The list couldn't be read again, so what it shows may be out of date.` }
+          : { where: "list", ok: false, text: `Removed the ${k.label} key, but the list couldn't be read again to confirm it.` },
+      );
     else if (after.keys.find((x) => x.provider === k.provider)?.isSet)
-      setNote({ where: `row:${k.provider}`, ok: false, text: `Not removed: Hermes still lists a ${k.label} key. It may be set another way on the server.` });
+      setNote({ where: `row:${k.provider}`, ok: false, text: `Not removed: ${failed ?? `Hermes still lists a ${k.label} key. It may be set another way on the server.`}` });
     else setNote({ where: "list", ok: true, text: `Removed the ${k.label} key from the ${profile} profile.` });
   };
 
