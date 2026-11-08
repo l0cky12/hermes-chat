@@ -15,11 +15,12 @@ export function editStep(e: KeyboardEvent | ReactKeyboardEvent): EditStep | unde
   return undefined;
 }
 
-const TEXT_INPUTS = new Set(["text", "search", "url", "tel", "email", "password", "number"]);
+// Every other input takes typed text, dates and times included.
+const NOT_TEXT_INPUTS = new Set(["button", "checkbox", "color", "file", "hidden", "image", "radio", "range", "reset", "submit"]);
 
 export function isTextField(target: EventTarget | null): boolean {
   if (target instanceof HTMLTextAreaElement) return true;
-  if (target instanceof HTMLInputElement) return TEXT_INPUTS.has(target.type);
+  if (target instanceof HTMLInputElement) return !NOT_TEXT_INPUTS.has(target.type);
   return target instanceof HTMLElement && target.isContentEditable === true;
 }
 

@@ -24,7 +24,11 @@ describe("Edit keys", () => {
     expect(isTextField(el("<textarea></textarea>"))).toBe(true);
     expect(isTextField(el("<input>"))).toBe(true);
     expect(isTextField(el('<input type="search">'))).toBe(true);
+    expect(isTextField(el('<input type="date">'))).toBe(true);
+    expect(isTextField(el('<input type="datetime-local">'))).toBe(true);
+    expect(isTextField(el('<input type="time">'))).toBe(true);
     expect(isTextField(el('<input type="checkbox">'))).toBe(false);
+    expect(isTextField(el('<input type="range">'))).toBe(false);
     expect(isTextField(el("<button>Undo</button>"))).toBe(false);
     expect(isTextField(document.body)).toBe(false);
   });
