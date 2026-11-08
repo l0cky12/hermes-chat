@@ -15,7 +15,7 @@ export type Stage = "address" | "reach" | "sign-in" | "chat" | "cancelled";
 export const STAGES = ["address", "reach", "sign-in", "chat"] as const satisfies readonly Stage[];
 
 /** A connection test that went through, as Rust reports it: the raw `GET /api/status` body and first `/api/ws` frame. */
-export type Probed = { route: Route; status?: string | null; ready: string };
+export type Probed = { route: Route; status: string; ready: string };
 
 /** A connection test that failed, as Rust reports it. */
 export type ProbeFailure = { stage: Stage; message: string; status?: string | null };

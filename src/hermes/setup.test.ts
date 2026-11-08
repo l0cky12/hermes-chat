@@ -38,7 +38,7 @@ describe("Testing a connection", () => {
     const route = { kind: "url" as const, url: url.url, addresses: ["203.0.113.5"] };
     expect(await testConnection(answering({ route, status: STATUS, ready: READY }), url)).toEqual({ ok: true, route, unsecure: true, version: "0.22.5" });
     const tailnet = { kind: "url" as const, url: "http://hermes:9119", addresses: ["100.100.64.121"] };
-    expect(await testConnection(answering({ route: tailnet, status: null, ready: READY }), url)).toMatchObject({ ok: true, unsecure: false, version: undefined });
+    expect(await testConnection(answering({ route: tailnet, status: '{"auth_required":true}', ready: READY }), url)).toMatchObject({ ok: true, unsecure: false, version: undefined });
   });
 
   it("fails on a server that speaks the canonical protocol", async () => {
