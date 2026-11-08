@@ -42,7 +42,7 @@ afterEach(() => {
 
 describe("reading", () => {
   it("is the defaults when nothing is stored", () => {
-    expect(getUIPrefs()).toEqual({ theme: "system", reopenLastChat: true, checkUpdatesOnLaunch: true, lastOpenChat: {}, reasoningBlocks: true, modelPicker: null, modelPicks: {}, modelFavorites: [], statusBar: ["context", "model", "status"], previewWidth: null, screenshotShortcut: "Ctrl+Shift+S", templates: [], terminalKind: "server", followUp: "queue", idleCompact: { enabled: false, percent: 70, idleMinutes: 15 }, chatSectionsShown: ["pinned", "inbox", "working", "snoozed", "settled"], chatSectionsCollapsed: ["snoozed", "archived", "settled"], agentOffice: "building", inboxAutoDismissDays: null });
+    expect(getUIPrefs()).toEqual({ theme: "system", reopenLastChat: true, checkUpdatesOnLaunch: true, lastOpenChat: {}, reasoningBlocks: true, modelPicker: null, modelPicks: {}, modelFavorites: [], statusBar: ["context", "model", "status"], previewWidth: null, screenshotShortcut: "Ctrl+Shift+S", templates: [], terminalKind: "server", followUp: "queue", idleCompact: { enabled: false, percent: 70, idleMinutes: 15 }, chatSectionsShown: ["pinned", "inbox", "working", "snoozed", "settled"], chatSectionsCollapsed: ["snoozed", "archived", "settled"], agentOffice: "building", officeQuality: "normal", inboxAutoDismissDays: null });
     expect(getUIPrefs()).toEqual(DEFAULT_UI_PREFS);
   });
 
@@ -73,6 +73,7 @@ describe("reading", () => {
         chatSectionsShown: ["settled", "bogus", "inbox", "settled"],
         chatSectionsCollapsed: "inbox",
         agentOffice: "floor",
+        officeQuality: "ultra",
         inboxAutoDismissDays: "7",
       }),
     );
@@ -92,6 +93,7 @@ describe("reading", () => {
       chatSectionsShown: ["pinned", "inbox", "settled"],
       chatSectionsCollapsed: ["snoozed", "archived", "settled"],
       agentOffice: "building",
+      officeQuality: "normal",
       inboxAutoDismissDays: null,
     });
   });
@@ -298,6 +300,13 @@ describe("migration", () => {
     for (const [saved, read] of [["desks", "building"], ["scene", "building"], ["list", "list"], ["off", "off"]]) {
       localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ v: 2, agentOffice: saved }));
       expect(getUIPrefs().agentOffice).toBe(read);
+    }
+  });
+
+  it("keeps the office's quality, and reads one it doesn't know as Normal", () => {
+    for (const [saved, read] of [["low", "low"], ["normal", "normal"], ["ultra", "normal"], [3, "normal"]]) {
+      localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ v: UI_PREFS_VERSION, officeQuality: saved }));
+      expect(getUIPrefs().officeQuality).toBe(read);
     }
   });
 

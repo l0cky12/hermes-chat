@@ -13,9 +13,10 @@ import { officeRooms, type Room } from "../hermes/office";
 import type { Floor } from "../hermes/officeFloor";
 import { SUBAGENTS_MAX, onSubagentEvent, type SubagentTree } from "../hermes/subagents";
 import { connect, type Hermes } from "../hermes/transport";
-import { setUIPrefs } from "../hermes/uiPrefs";
+import { getUIPrefs, setUIPrefs } from "../hermes/uiPrefs";
 import { Main } from "../App";
 import { Office } from "./Office";
+import { OfficeSettings } from "./OfficeSettings";
 import { EMPTY_OFFICE_MEMORY, unstacked } from "./OfficeBuilding";
 import { setWindowHidden } from "./windowState";
 
@@ -25,18 +26,19 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 /** The scene the building mounted last, and what it was told. */
 const drawn = vi.hoisted(() => ({
   mounts: 0,
-  scene: undefined as undefined | { floors: string[]; floor?: Floor; profile?: string; tower?: readonly { lit: boolean }[]; moves?: boolean; awake?: boolean; selected?: string; resets: number; disposed: boolean },
+  scene: undefined as undefined | { floors: string[]; floor?: Floor; profile?: string; tower?: readonly { lit: boolean }[]; moves?: boolean; awake?: boolean; selected?: string; resets: number; disposed: boolean; quality?: string },
 }));
 vi.mock("./office3d/scene", () => ({
-  mountOfficeScene: (_canvas: HTMLCanvasElement, _events: unknown, start: { moves: boolean }) => {
+  mountOfficeScene: (_canvas: HTMLCanvasElement, _events: unknown, start: { moves: boolean; quality: string }) => {
     drawn.mounts++;
-    const s: NonNullable<typeof drawn.scene> = { floors: [], moves: start.moves, resets: 0, disposed: false };
+    const s: NonNullable<typeof drawn.scene> = { floors: [], moves: start.moves, resets: 0, disposed: false, quality: start.quality };
     drawn.scene = s;
     return {
       setFloor: (f: Floor, profile: string) => void ((s.floor = f), (s.profile = profile), s.floors.push(`${profile}: ${f.characters.map((c) => c.key).join(", ")}`)),
       setTower: (t: readonly { lit: boolean }[]) => void (s.tower = t),
       setMode: () => {},
       setMotion: (m: boolean) => void (s.moves = m),
+      setQuality: (q: string) => void (s.quality = q),
       setSelected: (k?: string) => void (s.selected = k),
       resetCamera: () => void s.resets++,
       setAwake: (a: boolean) => void (s.awake = a),
@@ -74,6 +76,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   setWindowHidden(false);
+  setUIPrefs({ officeQuality: "normal" });
   await Promise.all(running.splice(0).map((h) => h.close()));
   localStorage.clear();
 });
@@ -517,6 +520,39 @@ describe("The building", () => {
     expect(out.get("apart")).toEqual(at.get("apart"));
     expect(out.get("hidden")).toEqual(at.get("hidden"));
     expect(out.get("far")!.y).toBeLessThanOrEqual(205 - 18 - 1);
+  });
+
+  it("applies the office's quality to the open scene at once, without drawing a new one", async () => {
+    office("building");
+    await waitFor(() => expect(drawn.scene?.floor).toBeTruthy());
+    const scene = drawn.scene!;
+    expect(scene.quality).toBe("normal");
+    act(() => void setUIPrefs({ officeQuality: "low" }));
+    await waitFor(() => expect(scene.quality).toBe("low"));
+    expect(drawn.mounts).toBe(1);
+    expect(drawn.scene).toBe(scene);
+    expect(scene.disposed).toBe(false);
+    act(() => void setUIPrefs({ officeQuality: "normal" }));
+    await waitFor(() => expect(scene.quality).toBe("normal"));
+  });
+
+  it("opens the building at the quality the owner chose", async () => {
+    setUIPrefs({ officeQuality: "low" });
+    office("building");
+    await waitFor(() => expect(drawn.scene).toBeTruthy());
+    expect(drawn.scene!.quality).toBe("low");
+  });
+
+  it("offers Normal and Low in Settings, and saves the one clicked", async () => {
+    const user = userEvent.setup();
+    render(<OfficeSettings />);
+    const group = screen.getByRole("group", { name: "Office quality" });
+    expect(within(group).getByRole("button", { name: "Normal" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText(/at most 15 frames a second/)).toBeTruthy();
+    await user.click(within(group).getByRole("button", { name: "Low" }));
+    expect(getUIPrefs().officeQuality).toBe("low");
+    expect(within(group).getByRole("button", { name: "Low" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("group", { name: "Office" })).toBeTruthy();
   });
 
   it("resets the view from its button", async () => {

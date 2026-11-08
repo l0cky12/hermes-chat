@@ -1,9 +1,11 @@
 // The office's building as a three.js scene (ADR 0089). The only way in from the app: OfficeBuilding.tsx loads this
 // file with import(), so three.js is its own chunk, fetched when the office first opens. It draws what officeFloor
 // decided and decides nothing itself, beyond walking each agent from where it was to where the floor now puts it.
-// Every frame goes through the pacer: none unless something changed or moves, at most 30 a second, none while asleep.
+// Every frame goes through the pacer: none unless something changed or moves, at most QUALITY's rate a second, none
+// while asleep.
 import { DirectionalLight, HemisphereLight, PerspectiveCamera, Plane, Raycaster, Scene, Vector2, Vector3, WebGLRenderer, Color } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import type { OfficeQuality } from "../../hermes/uiPrefs";
 import { PLAN, type BuildingRoom, type Floor } from "../../hermes/officeFloor";
 import { buildBuilding, buildTower, PALETTE, type Mode } from "./building";
 import { buildFigures } from "./figures";
@@ -39,6 +41,8 @@ export type OfficeScene = {
   setMode(mode: Mode): void;
   /** Whether things may move: typing arms, walks and camera moves. Off for reduced motion. */
   setMotion(moves: boolean): void;
+  /** How much the building may cost. Applies at once; Low puts anyone walking in place. */
+  setQuality(quality: OfficeQuality): void;
   setSelected(key: string | undefined): void;
   resetCamera(): void;
   /** Whether it may draw at all: on screen and its window focused. */
@@ -46,8 +50,14 @@ export type OfficeScene = {
   dispose(): void;
 };
 
-/** The device pixel ratio is held at 1.5 at most: past it the cost grows faster than anyone can see. */
-const MAX_DPR = 1.5;
+/**
+ * What each quality allows. Normal holds the device pixel ratio at 1.5 at most: past it the cost grows faster than
+ * anyone can see. Low is for a computer where the office costs too much: no walking, and a frame cheaper to draw.
+ */
+const QUALITY: Record<OfficeQuality, { maxFps: number; maxDpr: number; walks: boolean }> = {
+  normal: { maxFps: 30, maxDpr: 1.5, walks: true },
+  low: { maxFps: 15, maxDpr: 1, walks: false },
+};
 const MIN_DISTANCE = 7;
 const MAX_DISTANCE = 44;
 const HOME = { target: new Vector3(0, 0, 0.5), position: new Vector3(15, 27, 23) };
@@ -55,17 +65,20 @@ const TWEEN_MS = 450;
 /** Typing needs a few distinct poses a second, not smooth motion: each frame of it redraws the whole building. */
 const TYPING_FPS = 6;
 
-export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents, start: { mode: Mode; moves: boolean }): OfficeScene {
+export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents, start: { mode: Mode; moves: boolean; quality: OfficeQuality }): OfficeScene {
   // The last frame drawn has to stay on screen until the next one, which may be minutes away: WebKitGTK otherwise
   // shows a cleared canvas the next time the page repaints.
   const renderer = new WebGLRenderer({ canvas, antialias: false, preserveDrawingBuffer: true, powerPreference: "low-power" });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_DPR));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, QUALITY[start.quality].maxDpr));
   const scene = new Scene();
   const camera = new PerspectiveCamera(40, 1, 0.5, 200);
   camera.position.copy(HOME.position);
 
   let mode = start.mode;
   let moves = start.moves;
+  let quality = start.quality;
+  // Whether agents walk to a new spot; otherwise they appear in it. `moves` still decides typing arms and camera moves.
+  const walking = () => moves && QUALITY[quality].walks;
   const building = buildBuilding(mode);
   const tower = buildTower(mode);
   const figures = buildFigures();
@@ -94,7 +107,7 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
   controls.update();
 
   let tween: { from: { p: Vector3; t: Vector3 }; to: { p: Vector3; t: Vector3 }; start: number } | undefined;
-  const pacer = createPacer({ draw, onFrame: events.onFrame });
+  const pacer = createPacer({ draw, onFrame: events.onFrame, maxFps: QUALITY[quality].maxFps });
   // Zooming toward the cursor moves the point the camera turns about; it stays over the building.
   controls.addEventListener("change", () => {
     controls.target.x = Math.max(-12, Math.min(12, controls.target.x));
@@ -221,7 +234,7 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     setFloor(next, profile) {
       const t = performance.now();
       floor = next;
-      crowd.set(next.characters, profile, t, moves);
+      crowd.set(next.characters, profile, t, walking());
       walks = place(t);
       pacer.animating("typing", moves && next.characters.some((c) => c.pose === "typing" && !c.stale), TYPING_FPS);
       pacer.invalidate();
@@ -241,12 +254,22 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     },
     setMotion(next) {
       moves = next;
-      if (!moves) {
-        pacer.animating("typing", false);
+      if (!moves) pacer.animating("typing", false);
+      if (!walking()) {
         crowd.stop();
         walks = place(performance.now());
       }
       pacer.invalidate();
+    },
+    setQuality(next) {
+      quality = next;
+      pacer.setMaxFps(QUALITY[quality].maxFps);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, QUALITY[quality].maxDpr));
+      if (!walking()) {
+        crowd.stop();
+        walks = place(performance.now());
+      }
+      resize();
     },
     setSelected(key) {
       figures.select(key);

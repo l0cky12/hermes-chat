@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type RefObject } from "react";
 import { RotateCcw } from "lucide-react";
 import type { Desk, Room } from "../hermes/office";
+import { getUIPrefs, subscribe } from "../hermes/uiPrefs";
 import { EMPTY_BUILDING_MEMORY, EMPTY_FLOOR_MEMORY, ROOM_OF, TEAM_COLORS, officeFloors, type BuildingMemory, type BuildingRoom, type Floor } from "../hermes/officeFloor";
 import type { OfficeScene, ScreenPoint } from "./office3d/scene";
 import { OfficeCard } from "./OfficeCard";
@@ -158,6 +159,7 @@ export function OfficeBuilding({
   const [selected, setSelected] = useState<string>();
   const mode = useSyncExternalStore(subscribeMode, modeNow);
   const moves = !useSyncExternalStore(subscribeMotion, () => !!reducedMotion()?.matches);
+  const { officeQuality: quality } = useSyncExternalStore(subscribe, getUIPrefs);
   const focused = useWindowFocused();
   const pageHidden = usePageHidden();
   const awake = focused && !pageHidden;
@@ -194,7 +196,7 @@ export function OfficeBuilding({
             onFrame: (n) => host.current?.setAttribute("data-frames", String(n)),
             onLost: (why) => live && fallback.current(why),
           },
-          { mode: modeNow(), moves: !reducedMotion()?.matches },
+          { mode: modeNow(), moves: !reducedMotion()?.matches, quality: getUIPrefs().officeQuality },
         );
         setScene(made);
       })
@@ -218,6 +220,7 @@ export function OfficeBuilding({
   useEffect(() => scene?.setTower(towerNow.current), [scene, lights]);
   useEffect(() => scene?.setMode(mode), [scene, mode]);
   useEffect(() => scene?.setMotion(moves), [scene, moves]);
+  useEffect(() => scene?.setQuality(quality), [scene, quality]);
   useEffect(() => scene?.setAwake(awake), [scene, awake]);
   useEffect(() => scene?.setSelected(selected), [scene, selected]);
 

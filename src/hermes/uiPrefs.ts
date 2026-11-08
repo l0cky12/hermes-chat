@@ -62,12 +62,17 @@ export type UIPrefs = {
   chatSectionsCollapsed: SectionKey[];
   /** How the agent office shows the agents at work: as a 3D building (ADR 0089), as a list, or not at all, with no rail button (ADR 0077). */
   agentOffice: OfficeView;
+  /** How much the office's building may cost: Low draws fewer frames at a lower resolution and has agents appear, not walk. */
+  officeQuality: OfficeQuality;
   /** How many days a finished entry stays in the inbox before it is dismissed on its own, as if by hand; null: never. */
   inboxAutoDismissDays: number | null;
 };
 
 export type OfficeView = "building" | "list" | "off";
 export const OFFICE_VIEWS: readonly OfficeView[] = ["building", "list", "off"];
+
+export type OfficeQuality = "normal" | "low";
+export const OFFICE_QUALITIES: readonly OfficeQuality[] = ["normal", "low"];
 
 export type FollowUp = "queue" | "steer";
 
@@ -110,6 +115,7 @@ export const DEFAULT_UI_PREFS: Readonly<UIPrefs> = Object.freeze({
   chatSectionsShown: ["pinned", "inbox", "working", "snoozed", "settled"] as SectionKey[],
   chatSectionsCollapsed: ["snoozed", "archived", "settled"] as SectionKey[],
   agentOffice: "building",
+  officeQuality: "normal",
   inboxAutoDismissDays: null,
 });
 
@@ -254,6 +260,7 @@ export function readUIPrefs(doc: UIPrefsDoc, d: Readonly<UIPrefs> = DEFAULT_UI_P
     chatSectionsShown: toShown(doc.chatSectionsShown) ?? [...d.chatSectionsShown],
     chatSectionsCollapsed: toSections(doc.chatSectionsCollapsed) ?? [...d.chatSectionsCollapsed],
     agentOffice: OFFICE_VIEWS.includes(doc.agentOffice as OfficeView) ? (doc.agentOffice as OfficeView) : d.agentOffice,
+    officeQuality: OFFICE_QUALITIES.includes(doc.officeQuality as OfficeQuality) ? (doc.officeQuality as OfficeQuality) : d.officeQuality,
     inboxAutoDismissDays:
       doc.inboxAutoDismissDays === null || (typeof doc.inboxAutoDismissDays === "number" && Number.isFinite(doc.inboxAutoDismissDays) && doc.inboxAutoDismissDays > 0)
         ? doc.inboxAutoDismissDays
