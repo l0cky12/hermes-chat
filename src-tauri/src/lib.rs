@@ -410,6 +410,17 @@ async fn hermes_save_provider_key(state: State<'_, AppState>, profile: String, k
     dashboard.save_provider_key(&profile, &key, &value).await.map_err(|e| e.to_string())
 }
 
+/// Takes a model provider's API key out of the signed-in Hermes for `profile` (`Dashboard::remove_provider_key`). The
+/// window's REST relay refuses `DELETE api/env`, so this is the only way (ADR 0095).
+#[tauri::command]
+async fn hermes_remove_provider_key(state: State<'_, AppState>, profile: String, key: String) -> Result<(), String> {
+    let dashboard = match &*state.0.lock().await {
+        Some(conn) => conn.dashboard.clone(),
+        None => return Err(transport::TransportError::Closed.to_string()),
+    };
+    dashboard.remove_provider_key(&profile, &key).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn hermes_send(state: State<'_, AppState>, frame: String) -> Result<(), String> {
     match &*state.0.lock().await {
@@ -1401,6 +1412,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             hermes_probe_cancel,
             hermes_reach,
             hermes_save_provider_key,
+            hermes_remove_provider_key,
             password_load,
             password_save,
             password_delete,

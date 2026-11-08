@@ -52,6 +52,8 @@ const MIN_DISTANCE = 7;
 const MAX_DISTANCE = 44;
 const HOME = { target: new Vector3(0, 0, 0.5), position: new Vector3(15, 27, 23) };
 const TWEEN_MS = 450;
+/** Faces show nearer than this to the point the camera turns about: there an eye is about four pixels across. */
+const FACE_DISTANCE = 18;
 /** Typing needs a few distinct poses a second, not smooth motion: each frame of it redraws the whole building. */
 const TYPING_FPS = 6;
 
@@ -141,6 +143,7 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     }
     if (walks) walks = place(now);
     pacer.animating("typing", figures.animate(now, moves), TYPING_FPS);
+    figures.showFaces(camera.position.distanceTo(controls.target) < FACE_DISTANCE);
     renderer.render(scene, camera);
     renderer.getSize(size);
     const tags = new Map<string, ReturnType<typeof toScreen>>();
@@ -176,7 +179,7 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     // The nearest thing under the pointer: a character, a tower floor, or one walking out, which can't be picked.
     const hit = raycaster.intersectObjects([...figures.pickable, ...tower.pickable()], false)[0];
     if (hit?.object.userData.floor !== undefined) return events.onFloor(hit.object.userData.floor as number);
-    const key = hit?.instanceId === undefined ? undefined : figures.keyAt(hit.instanceId);
+    const key = hit?.instanceId === undefined ? undefined : figures.keyAt(hit.object, hit.instanceId);
     if (hit && key === undefined) return;
     events.onPick(key);
   };

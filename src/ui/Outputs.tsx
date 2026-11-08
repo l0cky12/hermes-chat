@@ -220,12 +220,12 @@ export function OutputsScreen({
         {addState.done && <div className="files-banner ok">{addState.done}</div>}
         {snapshot.indexing && (
           <div className="files-banner" role="status">
-            <Spinner /> Reading chats for outputs: {snapshot.indexing.done} of {snapshot.indexing.total}…
+            <Spinner /> <span>Reading chats for outputs: {snapshot.indexing.done} of {snapshot.indexing.total}…</span>
           </div>
         )}
         {snapshot.checking && (
           <div className="files-banner" role="status">
-            <Spinner /> Checking whether the files are still there…
+            <Spinner /> <span>Checking whether the files are still there…</span>
           </div>
         )}
       </div>

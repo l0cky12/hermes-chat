@@ -9,18 +9,19 @@
 //   updated by running a newer installer; the updater would need a signing key this build doesn't have.
 // The webview checks GitHub for the pacman case itself (src/hermes/updates.ts).
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::ipc::Channel;
 use tauri::utils::config::BundleType;
 use tauri::utils::platform::{bundle_type, current_exe};
 use tauri::{AppHandle, Manager, State};
-use tauri_plugin_updater::{Update, UpdaterExt};
+use tauri_plugin_updater::{Update, Updater, UpdaterExt};
 use tokio::process::Command;
 use tokio::sync::{Mutex, OnceCell};
 
 #[derive(Default)]
 pub struct Updates {
+    pacman: Pacman,
     /// The owning package and its version when the app started, read once: after pacman replaces the binary the running
     /// process is still the old one.
     started: OnceCell<Option<(String, String)>>,
@@ -69,25 +70,37 @@ fn parse_query(stdout: &str) -> Option<String> {
     words.next().map(str::to_owned)
 }
 
-async fn pacman(args: &[&std::ffi::OsStr]) -> Option<String> {
-    let out = Command::new("pacman").args(args).output().await.ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
-}
+struct Pacman(PathBuf);
 
-async fn package_version(package: &str) -> Option<String> {
-    parse_query(&pacman(&["-Q".as_ref(), package.as_ref()]).await?)
-}
-
-/// The package that owns `file`, and its version. None without pacman, or for a file no package owns. Only Linux has a
-/// pacman that can own it; an MSYS2 pacman on Windows owns its own tree, never this app.
-async fn owner(file: PathBuf) -> Option<(String, String)> {
-    if !cfg!(target_os = "linux") {
-        return None;
+impl Default for Pacman {
+    fn default() -> Self {
+        Self("pacman".into())
     }
-    let package = pacman(&["-Qqo".as_ref(), file.as_os_str()]).await?;
-    let version = package_version(&package).await?;
-    Some((package, version))
 }
+
+impl Pacman {
+    async fn query(&self, args: &[&std::ffi::OsStr]) -> Option<String> {
+        let out = Command::new(&self.0).args(args).output().await.ok()?;
+        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    }
+
+    async fn version(&self, package: &str) -> Option<String> {
+        parse_query(&self.query(&["-Q".as_ref(), package.as_ref()]).await?)
+    }
+
+    /// The package that owns `file`, and its version. None without pacman, or for a file no package owns. Only Linux has a
+    /// pacman that can own it; an MSYS2 pacman on Windows owns its own tree, never this app.
+    async fn owner(&self, file: &Path) -> Option<(String, String)> {
+        if !cfg!(target_os = "linux") {
+            return None;
+        }
+        let package = self.query(&["-Qqo".as_ref(), file.as_os_str()]).await?;
+        let version = self.version(&package).await?;
+        Some((package, version))
+    }
+}
+
+const CANT_UPDATE: &str = "This copy of Hermes Chat can't update itself.";
 
 /// Running from an AppImage, which the updater replaces in place. A binary pulled out of one has no `APPIMAGE`.
 fn is_appimage() -> bool {
@@ -100,6 +113,10 @@ pub fn configured(config: &tauri::Config) -> bool {
 }
 
 impl Updates {
+    pub fn with_pacman(program: impl Into<PathBuf>) -> Self {
+        Self { pacman: Pacman(program.into()), ..Self::default() }
+    }
+
     /// Reads the owning package now, before anything can replace it.
     pub async fn start(&self) {
         self.started
@@ -110,7 +127,7 @@ impl Updates {
                     Some(appimage) if is_appimage() => PathBuf::from(appimage),
                     _ => current_exe().ok()?,
                 };
-                owner(file).await
+                self.pacman.owner(&file).await
             })
             .await;
     }
@@ -119,14 +136,59 @@ impl Updates {
         self.start().await;
         self.started.get().cloned().flatten()
     }
-}
 
-/// Whether a package owns the AppImage now, asked afresh before the updater may touch it: a package can take the file
-/// over while the app runs.
-async fn appimage_owned() -> bool {
-    match std::env::var_os("APPIMAGE") {
-        Some(appimage) => owner(PathBuf::from(appimage)).await.is_some(),
-        None => false,
+    /// Checks for an update to `appimage`, unless a package owns it, and keeps what it finds for `install`.
+    pub async fn check(&self, updater: &Updater, appimage: &Path) -> Result<Option<Available>, String> {
+        if self.pacman.owner(appimage).await.is_some() {
+            return Err(CANT_UPDATE.into());
+        }
+        let update = updater.check().await.map_err(|e| e.to_string())?;
+        let available = update.as_ref().map(|u| Available {
+            version: u.version.clone(),
+            current: u.current_version.clone(),
+            notes: u.body.clone(),
+            date: u.date.map(|d| d.to_string()),
+        });
+        *self.found.lock().await = update;
+        Ok(available)
+    }
+
+    /// Downloads the update the last check found, verifies its signature and replaces `appimage`. The app keeps running
+    /// the old version until it restarts.
+    pub async fn install(&self, appimage: &Path, mut on_progress: impl FnMut(Progress)) -> Result<(), String> {
+        // Taken out while it installs, so a second click can't start another; put back if it fails, to try again.
+        let Some(update) = self.found.lock().await.take() else {
+            return Err("Check for updates again first.".into());
+        };
+        let (mut downloaded, mut sent) = (0u64, 0u64);
+        let result = async {
+            let bytes = update
+                .download(
+                    |chunk, total| {
+                        downloaded += chunk as u64;
+                        // About 200 messages for a 100 MB download, rather than one per chunk.
+                        if downloaded - sent >= 512 * 1024 || Some(downloaded) == total {
+                            sent = downloaded;
+                            on_progress(Progress::Downloading { downloaded, total });
+                        }
+                    },
+                    || {},
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            // Asked after the download, right before the AppImage is replaced: a package can take it over meanwhile.
+            if self.pacman.owner(appimage).await.is_some() {
+                return Err("A package owns this AppImage now, so only the package manager may replace it.".to_owned());
+            }
+            on_progress(Progress::Installing);
+            update.install(bytes).map_err(|e| e.to_string())
+        }
+        .await;
+        if let Err(e) = result {
+            *self.found.lock().await = Some(update);
+            return Err(e);
+        }
+        Ok(())
     }
 }
 
@@ -134,7 +196,7 @@ async fn appimage_owned() -> bool {
 pub async fn update_install_kind(app: AppHandle, state: State<'_, Updates>) -> Result<Install, String> {
     let version = app.package_info().version.to_string();
     Ok(match state.package().await {
-        Some((package, running)) => Install::Pacman { installed: package_version(&package).await, package, running },
+        Some((package, running)) => Install::Pacman { installed: state.pacman.version(&package).await, package, running },
         None if is_appimage() => Install::AppImage { version, updater: configured(app.config()) },
         None => Install::Unmanaged { version, installer: (bundle_type() == Some(BundleType::Nsis)).then_some("nsis") },
     })
@@ -142,57 +204,22 @@ pub async fn update_install_kind(app: AppHandle, state: State<'_, Updates>) -> R
 
 #[tauri::command]
 pub async fn update_check(app: AppHandle, state: State<'_, Updates>) -> Result<Option<Available>, String> {
-    if !is_appimage() || !configured(app.config()) || appimage_owned().await {
-        return Err("This copy of Hermes Chat can't update itself.".into());
-    }
-    let update = app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?;
-    let available = update.as_ref().map(|u| Available {
-        version: u.version.clone(),
-        current: u.current_version.clone(),
-        notes: u.body.clone(),
-        date: u.date.map(|d| d.to_string()),
-    });
-    *state.found.lock().await = update;
-    Ok(available)
+    let Some(appimage) = std::env::var_os("APPIMAGE").filter(|_| is_appimage() && configured(app.config())) else {
+        return Err(CANT_UPDATE.into());
+    };
+    state.check(&app.updater().map_err(|e| e.to_string())?, Path::new(&appimage)).await
 }
 
-/// Downloads the update the last check found, verifies its signature and replaces the AppImage. The app keeps running
-/// the old version until it restarts.
 #[tauri::command]
 pub async fn update_download_and_install(state: State<'_, Updates>, on_progress: Channel<Progress>) -> Result<(), String> {
-    // Taken out while it installs, so a second click can't start another; put back if it fails, to try again.
-    let Some(update) = state.found.lock().await.take() else {
-        return Err("Check for updates again first.".into());
+    let Some(appimage) = std::env::var_os("APPIMAGE") else {
+        return Err(CANT_UPDATE.into());
     };
-    let (mut downloaded, mut sent) = (0u64, 0u64);
-    let result = async {
-        let bytes = update
-            .download(
-                |chunk, total| {
-                    downloaded += chunk as u64;
-                    // About 200 messages for a 100 MB download, rather than one per chunk.
-                    if downloaded - sent >= 512 * 1024 || Some(downloaded) == total {
-                        sent = downloaded;
-                        let _ = on_progress.send(Progress::Downloading { downloaded, total });
-                    }
-                },
-                || {},
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        // Asked after the download, right before the AppImage is replaced: a package can take it over meanwhile.
-        if appimage_owned().await {
-            return Err("A package owns this AppImage now, so only the package manager may replace it.".to_owned());
-        }
-        let _ = on_progress.send(Progress::Installing);
-        update.install(bytes).map_err(|e| e.to_string())
-    }
-    .await;
-    if let Err(e) = result {
-        *state.found.lock().await = Some(update);
-        return Err(e);
-    }
-    Ok(())
+    state
+        .install(Path::new(&appimage), |progress| {
+            let _ = on_progress.send(progress);
+        })
+        .await
 }
 
 fn drafts_file(app: &AppHandle) -> Result<PathBuf, String> {

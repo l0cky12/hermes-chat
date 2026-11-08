@@ -3,11 +3,14 @@
 // does: the files Hermes's tools wrote, for a chat, a project or the profile, and where each came from.
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+// @ts-expect-error The app has no Node types; the tests run in Node. (Vitest empties a CSS import, ?raw included.)
+import { readFileSync } from "node:fs";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, SANDBOX_NOT_FOUND, row, type TranscriptMessage } from "../hermes/fakeHermes";
 import { memoryCache } from "../hermes/memoryCache";
 import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
+import { OutputsScreen } from "./Outputs";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
@@ -381,5 +384,45 @@ describe("A file in its chat's sandbox (#223)", () => {
     await user.click(within(gone()).getByRole("button", { name: "Check again" }));
     await waitFor(() => expect(gone().querySelector(".out-avail")!.textContent).toBe("Available"));
     expect((within(gone()).getByRole("button", { name: "Edit gone.md" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe("The Outputs status banners", () => {
+  it("keep the spinner a small circle, with the text beside it taking the rest of the row (#286)", () => {
+    const sheet = document.createElement("style");
+    sheet.textContent = readFileSync("src/styles.css", "utf8") as string;
+    document.head.append(sheet);
+    try {
+      const none = () => {};
+      render(
+        <OutputsScreen
+          snapshot={{ chats: {}, added: [], waiting: 0, indexing: { done: 1, total: 4 }, checking: true }}
+          outputs={[]}
+          scope="profile"
+          scopes={{ profile: "default" }}
+          unindexed={0}
+          partialChats={0}
+          chatTitle={() => undefined}
+          status="connected"
+          canAdd={false}
+          onScope={none}
+          onRefresh={none}
+          onIndexMore={none}
+          onAdd={async () => {}}
+          onRemove={none}
+          onPreview={none}
+          onJump={none}
+          onShowFolder={none}
+          onClose={none}
+        />,
+      );
+      for (const text of ["Reading chats for outputs: 1 of 4…", "Checking whether the files are still there…"]) {
+        const label = screen.getByText(text);
+        const spinner = label.closest(".files-banner")!.querySelector(".spinner")!;
+        expect([getComputedStyle(spinner).flexGrow, getComputedStyle(spinner).width, getComputedStyle(label).flexGrow]).toEqual(["0", "11px", "1"]);
+      }
+    } finally {
+      sheet.remove();
+    }
   });
 });

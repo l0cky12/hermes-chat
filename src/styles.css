@@ -150,6 +150,15 @@ kbd {
 }
 .section-toggle:hover { color: var(--text-2); }
 .section-toggle .dot { margin-left: 6px; width: 6px; height: 6px; }
+.section-head { display: flex; align-items: flex-end; gap: 4px; padding-right: 10px; }
+.section-head .section-toggle { flex: 1; min-width: 0; width: auto; }
+.section-head:not(:first-child) > .section-toggle { padding-top: 14px; }
+.section-action {
+  flex: none; margin-bottom: 2px; padding: 2px 6px; border-radius: 5px; font-size: calc(11rem / 14); color: var(--muted); font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+.section-action:hover { color: var(--text-2); background: var(--hover); }
+.section-action:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .chev { transition: transform 0.15s; flex: none; }
 .chev.open { transform: rotate(90deg); }
 /* The sections are in the list's scroll (ADR 0063), but Settled, a drawer at its foot (ADR 0090); the ones out of the
@@ -158,12 +167,18 @@ kbd {
 .settled-drawer { flex: none; display: flex; flex-direction: column; max-height: 50%; padding: 0 10px 8px; border-top: 1px solid var(--line); }
 .settled-drawer > .section-toggle { padding-top: 10px; }
 .settled-list { overflow-y: auto; min-height: 0; }
+.settled-drawer.drop,
+.sb-scroll[data-drop="inbox"] .row[data-section="inbox"],
+.sb-scroll[data-drop="inbox"] [data-section-head="inbox"],
+.sb-scroll[data-drop="inbox"] .empty-hint[data-section="inbox"] { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .row[data-section="snoozed"] .row-title,
 .row[data-section="settled"] .row-title,
 .row[data-section="archived"] .row-title { color: var(--muted); }
 /* A collapsed section's rows stay mounted, hidden; .row's own display would otherwise show them. */
 .row[hidden] { display: none; }
 .row-pin { flex: none; display: inline-flex; color: var(--faint); }
+.row-wait { display: inline-flex; color: var(--accent); }
+.row-owner { display: inline-flex; color: var(--warn); margin-right: 4px; }
 .row-wake { font-variant-numeric: tabular-nums; }
 .row-meta .row-wake + * { margin-left: 6px; }
 .sync-error { color: var(--warn); font-size: calc(12rem / 14); padding: 6px 10px 10px; }
@@ -1130,6 +1145,11 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .restarting-overlay { position: fixed; inset: 0; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 70%, transparent); font-size: calc(14rem / 14); z-index: 100; }
 .recovery-failed { max-width: 480px; padding: 24px; }
 .recovery-failed p { margin: 0 0 12px; line-height: 1.55; }
+.crash-message { color: var(--bad); word-break: break-word; }
+.crash-details { margin: 0 0 12px; font-size: calc(12rem / 14); }
+.crash-details summary { cursor: pointer; color: var(--muted); }
+.crash-details pre { max-height: 240px; overflow: auto; margin: 8px 0 0; padding: 10px; border-radius: 8px; background: var(--raised-2); white-space: pre-wrap; word-break: break-word; }
+.crash-actions { display: flex; gap: 8px; }
 .select {
   height: 32px; padding: 0 8px; border-radius: 8px; background: var(--raised-2); border: 1px solid var(--line); color: var(--text);
   font: inherit; font-size: calc(13rem / 14); outline: none;
@@ -1411,6 +1431,8 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .model-pick > .select:disabled { opacity: 0.55; }
 .model-num { width: 90px; height: 32px; padding: 0 10px; border-radius: 8px; background: var(--raised-2); border: 1px solid var(--line); outline: none; font-size: calc(13rem / 14); }
 .model-num:focus-visible { border-color: var(--line-2); }
+.model-num.days { width: 72px; }
+.model-num[aria-invalid="true"] { border-color: var(--bad); }
 .check { display: inline-flex; align-items: center; gap: 8px; height: 32px; color: var(--text); font-size: calc(13rem / 14); }
 .check input { accent-color: var(--accent); width: 15px; height: 15px; }
 /* A part's state and its Discard and Apply, or the guardrail asked in their place, on its card's last line. */
@@ -2109,7 +2131,7 @@ label.memory-pick { cursor: pointer; }
 .files-banner {
   display: flex; align-items: center; gap: 8px; margin: 10px 18px 0; padding: 8px 10px; border-radius: 8px; font-size: calc(12.5rem / 14); flex: none;
 }
-.files-banner > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.files-banner > span:not(.spinner) { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .files-banner.warn { background: rgba(245, 184, 74, 0.1); color: var(--warn); }
 .files-banner.err { background: rgba(248, 113, 113, 0.1); color: var(--bad); }
 .files-banner .icon-btn { width: 24px; height: 24px; color: inherit; }
@@ -2316,7 +2338,7 @@ label.memory-pick { cursor: pointer; }
 .office-list-room .office-room-name { padding: 10px 8px 2px; }
 .office-room-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .office-room-profile { flex: none; font-weight: 400; color: var(--faint); font-size: calc(11.5rem / 14); }
-.office-row.state-running .inbox-kind { color: var(--accent); }
+.office-row.state-running .inbox-kind, .office-row.state-handedOff .inbox-kind { color: var(--accent); }
 .office-row.state-approval .inbox-kind, .office-row.state-uncertain .inbox-kind { color: var(--warn); }
 .office-row.state-failed .inbox-kind { color: var(--bad); }
 .office-row.state-completed .inbox-kind { color: var(--ok); }
@@ -3365,15 +3387,15 @@ p.logs-status { margin: 0 0 8px; line-height: 1.5; }
 .export-pick > span { flex-basis: 100%; }
 .export-pick-problem { color: var(--warn); }
 
-/* ---------- Settings → Gateways (GatewaySettings.tsx, ADR 0073) ---------- */
-.gw-input {
+/* ---------- Settings → Gateways (GatewaySettings.tsx, ADR 0073) and Providers (ProviderSettings.tsx, ADR 0095) ---------- */
+.gw-input, .pk-input {
   width: 100%; background: var(--raised); border: 1px solid var(--line-2); border-radius: 9px; padding: 9px 12px; outline: none; color: var(--text);
   font-family: var(--mono); font-size: calc(13rem / 14);
 }
-.gw-input:focus { border-color: var(--line-3); }
-.gw-input:disabled { color: var(--muted); }
-.gw-line { overflow-wrap: anywhere; color: var(--muted); }
-.gw-line.ok { color: var(--ok); }
+.gw-input:focus, .pk-input:focus { border-color: var(--line-3); }
+.gw-input:disabled, .pk-input:disabled { color: var(--muted); }
+.gw-line, .pk-line { overflow-wrap: anywhere; color: var(--muted); }
+.gw-line.ok, .pk-line.ok { color: var(--ok); }
 .gw-line.warn { color: var(--warn); }
-.gw-line.bad, .gw-problem { color: var(--bad); }
+.gw-line.bad, .pk-line.bad, .gw-problem { color: var(--bad); }
 .gw-problem.missing-dependency, .gw-problem.permission { color: var(--warn); }

@@ -68,7 +68,7 @@ describe("Chat list sync", () => {
     server.sessions = [...recent, ...old, row("old-pin", 90, { pinned: true })];
     const { hermes, chats } = await signedIn(server);
     await hermes.sync();
-    expect(server.restRequests.map((r) => r.query.get("offset"))).toEqual(["0", "100"]);
+    expect(server.restRequests.filter((r) => r.path === "/api/sessions").map((r) => r.query.get("offset"))).toEqual(["0", "100"]);
     expect(ids(chats())).toEqual(recent.map((r) => r.id).sort());
   });
 
@@ -111,7 +111,7 @@ describe("Chat list sync", () => {
   it("runs one more sync, not one per request, when asked while a sync is running", async () => {
     const { server, hermes } = await signedIn();
     await Promise.all([hermes.sync(), hermes.sync(), hermes.sync()]);
-    expect(server.restRequests).toHaveLength(2);
+    expect(server.restRequests.filter((r) => r.path === "/api/sessions")).toHaveLength(2);
   });
 
   it("keeps the list and reports the error when a refresh fails", async () => {

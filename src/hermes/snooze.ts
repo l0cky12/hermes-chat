@@ -10,8 +10,11 @@
 //   2. Pinned: the owner pinned it. It stays there whatever happens in it.
 //   3. Settled: the owner settled it (ADR 0002). It stays there whatever happens in it.
 //   4. Snoozed: the owner snoozed it and it hasn't woken yet.
-//   5. Working: Hermes is writing a reply in it and isn't waiting on the owner.
+//   5. Working: Hermes is writing a reply in it, or waiting on work it handed off (dispatched.ts), and isn't waiting
+//      on the owner.
 //   6. Otherwise it is in the Inbox: Hermes waits for the owner's answer, or is done, or it is new.
+import type { Handoff } from "./dispatched";
+import { isFailure } from "./inbox";
 import type { Chat } from "./model";
 import { isWaiting } from "./model";
 import type { SectionKey } from "./sectionKeys";
@@ -56,12 +59,12 @@ function toTimes(v: unknown): Record<string, number> {
 const pruned = (s: Record<string, number>, now: number) => Object.fromEntries(Object.entries(s).filter(([, until]) => until > now - WOKEN_KEPT_MS));
 
 /**
- * A time for each of one connection and profile's chats, kept in `storage` under `key`. A change that can't be stored
- * (storage full) is held in memory while the app runs. `reread` picks up another window's change. A chat set again
- * moves to the end, so the oldest are the ones dropped past `CHATS_PER_SCOPE`.
+ * A value for each of one connection and profile's chats, kept in `storage` under `key`, in a versioned document with
+ * one scope per connection and profile. `parse` reads one scope as stored and leaves out what isn't valid. A change
+ * that can't be stored (storage full) is held in memory while the app runs. `reread` picks up another window's change.
  */
-class ChatTimesStore {
-  private snap: ChatTimes = EMPTY;
+class ScopedStore<V> {
+  private snap: Readonly<Record<string, V>> = Object.freeze({});
   private cachedRaw: string | null | undefined;
   private doc: UIPrefsDoc = { v: 1 };
   private listeners = new Set<() => void>();
@@ -73,7 +76,8 @@ class ChatTimesStore {
     private key: string,
     private version: number,
     private migrations: UIPrefsMigrations,
-    private prune: (s: Record<string, number>, now: number) => Record<string, number> = (s) => s,
+    private parse: (v: unknown) => Record<string, V>,
+    private prune: (s: Record<string, V>, now: number) => Record<string, V> = (s) => s,
   ) {
     this.read();
   }
@@ -88,14 +92,6 @@ class ChatTimesStore {
   reread = () => {
     if (this.read()) this.emit();
   };
-
-  protected set(chatId: string, at: number) {
-    this.change(({ [chatId]: _, ...s }) => ({ ...s, [chatId]: at }));
-  }
-
-  protected forget(chatId: string) {
-    this.change(({ [chatId]: _, ...s }) => s);
-  }
 
   private read(): boolean {
     let raw: string | null = null;
@@ -114,15 +110,15 @@ class ChatTimesStore {
     }
     this.doc = migrateDoc(parsed, this.migrations, this.version);
     const scopes = isDoc(this.doc.scopes) ? this.doc.scopes : {};
-    const next = toTimes(scopes[this.scope]);
+    const next = this.parse(scopes[this.scope]);
     if (JSON.stringify(next) === JSON.stringify(this.snap)) return false;
     this.snap = Object.freeze(next);
     return true;
   }
 
-  protected change(fn: (s: Record<string, number>) => Record<string, number>) {
+  protected change(fn: (s: Record<string, V>) => Record<string, V>) {
     this.read();
-    const next = toTimes(this.prune(fn({ ...this.snap }), this.now()));
+    const next = this.parse(this.prune(fn({ ...this.snap }), this.now()));
     if (JSON.stringify(next) === JSON.stringify(this.snap)) return;
     this.snap = Object.freeze(next);
     // Only this scope is rewritten; other scopes, and fields a newer app wrote, are kept.
@@ -143,6 +139,21 @@ class ChatTimesStore {
 
   private emit() {
     for (const fn of this.listeners) fn();
+  }
+}
+
+/** A time for each chat (`ChatTimes`). A chat set again moves to the end, so the oldest are the ones dropped past `CHATS_PER_SCOPE`. */
+class ChatTimesStore extends ScopedStore<number> {
+  constructor(storage: SnoozeStorage, scope: string, now: () => number, key: string, version: number, migrations: UIPrefsMigrations, prune?: (s: Record<string, number>, now: number) => Record<string, number>) {
+    super(storage, scope, now, key, version, migrations, toTimes, prune);
+  }
+
+  protected set(chatId: string, at: number) {
+    this.change(({ [chatId]: _, ...s }) => ({ ...s, [chatId]: at }));
+  }
+
+  protected forget(chatId: string) {
+    this.change(({ [chatId]: _, ...s }) => s);
   }
 }
 
@@ -274,8 +285,40 @@ export function wakeLabel(until: number, now: number): string {
 export const wakeFull = (until: number) =>
   new Date(until).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
-/** Hermes is writing a reply in the chat and isn't waiting on the owner. */
-export const isWorking = (c: Chat) => !!c.running && !c.items.some(isWaiting);
+export const STOP_WAITING_KEY = "hermes-chat.stop-waiting";
+export const STOP_WAITING_VERSION = 1;
+const STOP_WAITING_MIGRATIONS: UIPrefsMigrations = { 0: (doc) => doc };
+const IDS_PER_CHAT = 200;
+
+/** One scope's stops as stored; anything that isn't a chat's list of ids is left out. */
+function toStops(v: unknown): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  if (!isDoc(v)) return out;
+  for (const [chat, ids] of Object.entries(v).slice(-CHATS_PER_SCOPE)) {
+    const kept = Array.isArray(ids) ? ids.filter((x): x is string => !!id(x)).slice(-IDS_PER_CHAT) : [];
+    if (id(chat) && kept.length) out[chat] = kept;
+  }
+  return out;
+}
+
+/**
+ * The work the owner stopped waiting on, for one connection and profile, kept in `storage` like snoozes: for each
+ * chat, the ids of the tasks and subagents outstanding when Stop waiting was pressed. The chat then counts as not
+ * waiting on them, on this computer only; newer work has new ids and counts again. Nothing is sent to Hermes.
+ */
+export class StopWaitingStore extends ScopedStore<string[]> {
+  constructor(storage: SnoozeStorage, scope: string) {
+    super(storage, scope, Date.now, STOP_WAITING_KEY, STOP_WAITING_VERSION, STOP_WAITING_MIGRATIONS, toStops);
+  }
+
+  /** Stops waiting on `ids` in the chat, on top of any it already stopped waiting on. */
+  stop(chatId: string, ids: readonly string[]) {
+    this.change((s) => ({ ...s, [chatId]: [...new Set([...(s[chatId] ?? []), ...ids])] }));
+  }
+}
+
+/** Hermes is writing a reply in the chat, or waiting on work it handed off (`h`), and isn't waiting on the owner. */
+export const isWorking = (c: Chat, h?: Handoff) => (!!c.running || h?.kind === "waiting") && !c.items.some(isWaiting);
 
 /**
  * When each chat last stopped working, as this app saw it while running: a reply ended, or Hermes stopped to ask the
@@ -289,9 +332,9 @@ export class AttentionClock {
    * Notes the chats as they are now; call it each time they change. While not `connected`, every reply shows as
    * stopped, though Hermes may still be writing it, so nothing counts as having stopped then.
    */
-  observe(chats: Chat[], now: number, connected = true) {
+  observe(chats: Chat[], now: number, connected = true, handoffs?: ReadonlyMap<string, Handoff>) {
     for (const c of chats) {
-      if (isWorking(c)) this.working.add(c.id);
+      if (isWorking(c, handoffs?.get(c.id))) this.working.add(c.id);
       else if (this.working.delete(c.id) && connected) this.since[c.id] = now;
     }
   }
@@ -338,7 +381,7 @@ export function heldClears(chats: Chat[], snoozes: Snoozes, now: number, since: 
  * Where each chat shows in the list, in the order shown. A pinned chat (`pins`) is in Pinned, in the order it was
  * pinned, whatever happens in it, unless it is Archived. The Inbox is newest first, a chat counting as new when it woke
  * from a snooze or stopped working (`lastActive`). Working, Settled and Archived are newest first; Snoozed wakes
- * soonest first.
+ * soonest first. `handoffs`: each chat's dispatched work (dispatched.ts), which keeps it in Working too.
  */
 export function chatSections(
   chats: Chat[],
@@ -346,16 +389,17 @@ export function chatSections(
   now: number,
   since: Readonly<Record<string, number>> = {},
   pins: Pins = {},
+  handoffs?: ReadonlyMap<string, Handoff>,
 ): ChatSections {
   const recent = (c: Chat) => lastActive(c, snoozes, now, since);
   const byRecent = (a: Chat, b: Chat) => recent(b) - recent(a);
-  const s: ChatSections = { pinned: [], inbox: [], working: [], snoozed: [], archived: [], settled: [] };
+  const s: ChatSections = { pinned: [], inbox: [], snoozed: [], archived: [], working: [], settled: [] };
   for (const c of chats) {
     if (c.archived) s.archived.push(c);
     else if (pins[c.id] !== undefined) s.pinned.push(c);
     else if (c.settled) s.settled.push(c);
     else if ((snoozes[c.id] ?? 0) > now) s.snoozed.push(c);
-    else if (isWorking(c)) s.working.push(c);
+    else if (isWorking(c, handoffs?.get(c.id))) s.working.push(c);
     else s.inbox.push(c);
   }
   s.pinned.sort((a, b) => pins[a.id] - pins[b.id] || (a.id < b.id ? -1 : 1));
@@ -365,6 +409,20 @@ export function chatSections(
   s.archived.sort((a, b) => b.updatedAt - a.updatedAt);
   s.snoozed.sort((a, b) => snoozes[a.id] - snoozes[b.id]);
   return s;
+}
+
+/** Where a chat list row dropped on the Settled drawer or the Inbox puts its chat: settled or not, or undefined when the drop would change nothing or the chat is archived (ADR 0090). */
+export const settleByDrop = (chat: Chat | undefined, on: "settled" | "inbox"): boolean | undefined =>
+  !chat || chat.archived || chat.settled === (on === "settled") ? undefined : on === "settled";
+
+export type InboxSettle = { ids: string[]; approvals: number; failures: number };
+
+export function inboxSettle(inbox: Chat[]): InboxSettle {
+  return {
+    ids: inbox.map((c) => c.id),
+    approvals: inbox.filter((c) => c.items.some(isWaiting)).length,
+    failures: inbox.filter((c) => c.items.some(isFailure)).length,
+  };
 }
 
 /** The next time a snooze wakes after `now`, if any. */

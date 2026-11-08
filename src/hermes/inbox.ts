@@ -4,13 +4,15 @@
 // so it shows once. Dismissing an entry is kept on this computer, per connection, and touches nothing else: not
 // Unread, Active or Settled, nor Archived.
 import { type ScopeSource, connectionScope } from "./connections";
-import type { Chat, LiveSessions, OtherProfiles, Source } from "./model";
+import type { Handoff } from "./dispatched";
+import type { Chat, Item, LiveSessions, OtherProfiles, Source } from "./model";
 import { isOutgoing, isWaiting } from "./model";
 
 /**
- * `running`: a reply is being written. `approval`: Hermes waits for the owner's answer, or did until it stopped
- * waiting (`ended`). `failed`: a reply failed, or a message didn't go. `uncertain`: a message Hermes may not have.
- * `completed`: a chat with something new in it the owner hasn't read.
+ * `running`: a reply is being written, or the chat waits on work it handed off (`waiting`). `approval`: Hermes waits
+ * for the owner's answer, or did until it stopped waiting (`ended`), or a task the chat dispatched needs the owner.
+ * `failed`: a reply failed, or a message didn't go. `uncertain`: a message Hermes may not have. `completed`: a chat
+ * with something new in it the owner hasn't read.
  */
 export type InboxKind = "running" | "approval" | "failed" | "uncertain" | "completed";
 
@@ -30,6 +32,10 @@ export type InboxEntry = {
   itemId?: string;
   /** An Approval Hermes stopped waiting on: there is nothing left to answer. */
   ended?: boolean;
+  /** Running work that is a wait on work the chat handed off (dispatched.ts), not a reply being written. */
+  waiting?: boolean;
+  /** The id of the dispatched task that needs the owner, for an entry about one. */
+  taskId?: string;
   /** From a check that failed, or while not connected: as last seen. */
   stale?: boolean;
   /**
@@ -56,6 +62,8 @@ export type InboxSources = {
   live?: LiveSessions;
   /** When each entry was first noticed, by key, kept by the caller for as long as the app runs. */
   seen?: Map<string, number>;
+  /** Each chat's dispatched work (dispatched.ts `handoffs`). */
+  handoffs?: ReadonlyMap<string, Handoff>;
 };
 
 /** What a filter shows, in the order the inbox lists the kinds. */
@@ -71,11 +79,13 @@ export type InboxFilter = keyof typeof INBOX_FILTERS;
 /** An error item a chat shows for a chat that couldn't be loaded: not work that failed (transport.ts `LOAD_ERROR_ID`). */
 const LOAD_ERROR_ID = "load-error";
 
+export const isFailure = (i: Item): boolean => (i.kind === "error" && i.id !== LOAD_ERROR_ID) || (isOutgoing(i) && i.outgoing.state !== "sending");
+
 /**
  * The inbox's entries, newest first within each kind, and how many live sessions couldn't be put with one chat: ones
  * outside the chats the checks read, or whose id more than one profile has.
  */
-export function inboxEntries({ profile, chats, connected, others, live, seen }: InboxSources): { entries: InboxEntry[]; unmatched: number } {
+export function inboxEntries({ profile, chats, connected, others, live, seen, handoffs }: InboxSources): { entries: InboxEntry[]; unmatched: number } {
   const entries = new Map<string, InboxEntry>();
   const add = (e: InboxEntry) => entries.has(e.key) || entries.set(e.key, e);
 
@@ -84,8 +94,11 @@ export function inboxEntries({ profile, chats, connected, others, live, seen }: 
   // The shown profile, as this connection sees it.
   for (const c of chats) {
     const base = { profile, chatId: c.id, title: c.title, stale: !connected };
+    const handoff = handoffs?.get(c.id);
     // A reply held up by an Approval is listed as waiting, as a live session in another profile is.
     if (c.running && !c.items.some(isWaiting)) add({ ...base, key: `running ${profile} ${c.id}`, kind: "running", at: c.updatedAt, summary: "Hermes is working on a reply.", stale: false });
+    else if (handoff?.kind === "waiting") add({ ...base, key: `running ${profile} ${c.id}`, kind: "running", at: c.updatedAt, summary: "Hermes is waiting on work it handed off.", waiting: true });
+    if (handoff?.kind === "needsOwner") add({ ...base, key: `handoff ${profile} ${c.id} ${handoff.task.id} ${handoff.task.status}`, kind: "approval", at: 0, taskId: handoff.task.id, summary: handoff.reason });
     for (const i of c.items) {
       if (i.kind === "approval" && !i.answer && (i.ended || isWaiting(i))) {
         const ended = !isWaiting(i);
@@ -106,7 +119,7 @@ export function inboxEntries({ profile, chats, connected, others, live, seen }: 
         add(sendEntry({ ...base, itemId: i.id, state: i.outgoing.state, at: i.at ?? 0 }));
       }
     }
-    if (c.unread && !c.archived)
+    if (c.unread && !c.archived && handoff?.kind !== "waiting")
       add({ ...base, key: `completed ${profile} ${c.id}`, kind: "completed", at: c.updatedAt, summary: "Something new since you last read it." });
   }
 
@@ -190,6 +203,12 @@ function sendEntry(s: { profile: string; chatId: string; title: string; itemId: 
 
 /** Whether an entry asks something of the owner, and counts on the inbox's badge: not running work, nor an ended Approval. */
 export const needsOwner = (e: InboxEntry) => e.kind !== "running" && !e.ended;
+
+/**
+ * Whether the entry is a reply or an Approval a restore must wait for. Work a chat handed off, and a dispatched task
+ * that needs the owner, can last days on Hermes, and a restore doesn't touch either.
+ */
+export const blocksRestore = (e: InboxEntry) => (e.kind === "running" && !e.waiting) || (e.kind === "approval" && !e.ended && !e.taskId);
 
 /** Whether the owner can dismiss the entry. Running work leaves the inbox on its own once it ends. */
 export const dismissable = (e: InboxEntry) => e.kind !== "running";

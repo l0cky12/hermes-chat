@@ -81,6 +81,14 @@ Needs `GET` and `PUT /api/profiles/{name}/soul`. Checked with the `GET`. Without
 
 Needs `POST /api/profiles`, which isn't checked ahead: the Clone dialog sends it only when the owner clones. A fresh clone needs its `soul`, `description` and `provider`/`model` fields (Hermes `f0d94882`). An older Hermes that ignores one of them makes the profile without it, and the dialog's read-back shows that category as not copied. Without the route Hermes answers 405, and the dialog says the server can't create profiles. Deleting a clone needs `DELETE /api/profiles/{name}`.
 
+## Provider keys
+
+Settings → Providers and Setup's key step need `GET /api/env`, which lists each provider's key as a row with `provider`, `is_password`, `channel_managed`, `is_set` and a redacted preview. Checked with that `GET`. Without it, both show a note that this server doesn't let Hermes Chat set provider keys, and offer no change; the keys are set on the server instead.
+
+Adding or replacing a key also needs `POST /api/providers/validate` and `PUT /api/env`. Without the check route, Hermes answers an error and the key isn't saved. A check that can't reach the provider still saves the key, and says so.
+
+Removing a key needs `DELETE /api/env` with `{"key"}`, which Hermes `bf0203a` has. It isn't checked ahead. A Hermes without it answers 405, since `/api/env` still exists for the other methods, and the removal fails with that answer and changes nothing. A 404 is how Hermes says the key isn't set, which counts as removed, and the app reads `GET /api/env` again either way: a key still set is reported as one Hermes still lists.
+
 ## Skills
 
 Needs `GET /api/skills`, and `PUT /api/skills/toggle` and `/api/skills/content` to change skills. Checked with the `GET`. Without it, Settings → Skills shows a note instead of the list.

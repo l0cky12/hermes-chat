@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
-// Pasting a screenshot or files into the composer attaches them like a drop. Rust saves the pasted bytes to a temp
-// file (`stage_clipboard_file`, faked here onto the fake Hermes's disk); checking, previews and sending are the real
-// path against a fake Hermes.
+// Pasting a screenshot or files into the composer, or dropping files on the pane on Windows, attaches them like picked files. Rust
+// saves the bytes to a temp file (`stage_clipboard_file`, faked here onto the fake Hermes's disk); checking, previews
+// and sending are the real path against a fake Hermes.
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes } from "../hermes/fakeHermes";
 import type { Attachment } from "../hermes/model";
 import { connect } from "../hermes/transport";
-import { ChatPane, pastedName } from "./ChatPane";
+import { ChatPane, pastedName, refuseStrayFileDrops } from "./ChatPane";
 import { stagedFiles } from "../hermes/unsaved";
 
 type Invoke = (cmd: string, args?: unknown, opts?: { headers?: Record<string, string> }) => Promise<unknown>;
@@ -56,6 +56,7 @@ async function setUp(draft = "") {
       status="connected"
       draft={draft}
       onDraft={onDraft}
+      onDraftStep={() => undefined}
       onRetry={() => {}}
       onEdit={() => {}}
       onDismiss={() => {}}
@@ -72,6 +73,11 @@ const composer = () => screen.getByPlaceholderText<HTMLTextAreaElement>("Message
 /** Pastes `files` into the composer the way the webview does; false when the paste was taken over. */
 const paste = (files: File[]) => fireEvent.paste(composer(), { clipboardData: { files, getData: () => "" } });
 const chips = () => Array.from(document.querySelectorAll(".chip"));
+const pane = () => document.querySelector<HTMLElement>(".chat")!;
+const overlay = () => screen.queryByText("Drop files to attach");
+/** A drag carrying `files` from outside the app, as the webview reports it; false when the pane took it over. */
+const fileDrag = (type: "dragEnter" | "dragOver" | "drop", files: File[]) =>
+  fireEvent[type](pane(), { dataTransfer: { types: ["Files"], files, dropEffect: "none" } });
 
 describe("Pasting into the composer", () => {
   it("attaches a pasted screenshot like a dropped image, previews it and sends it to Hermes", async () => {
@@ -145,7 +151,7 @@ describe("Pasting into the composer", () => {
     const user = userEvent.setup();
     await user.click(composer());
     await user.paste("sda 92%");
-    expect(onDraft).toHaveBeenLastCalledWith("sda 92%");
+    expect(onDraft).toHaveBeenLastCalledWith("sda 92%", "change");
     expect(paste([])).toBe(true);
     expect(staged).toEqual([]);
     expect(chips()).toHaveLength(0);
@@ -175,6 +181,90 @@ describe("Pasting into the composer", () => {
     const note = await screen.findByRole("alert");
     expect(note.textContent).toBe(`${staged[0].name} is 26.0 MB. Hermes takes images up to 25 MB.`);
     expect(chips()).toHaveLength(0);
+  });
+});
+
+describe("Dropping files on the pane (HTML5, as on Windows)", () => {
+  it("attaches a dropped file, from anywhere on the pane, and keeps its name", async () => {
+    const { staged, onSend } = await setUp("Here's the report");
+    expect(fileDrag("drop", [new File(["sda 92%"], "disk report.txt", { type: "text/plain" })])).toBe(false);
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    expect(chips()[0].querySelector(".chip-name")?.textContent).toBe("disk report.txt");
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(onSend).toHaveBeenCalledWith("Here's the report", [{ path: staged[0].path, name: "disk report.txt", size: 7, kind: "file" }]);
+  });
+
+  it("shows the drop overlay while files are over the pane, until they leave or drop", async () => {
+    await setUp();
+    expect(fileDrag("dragEnter", [])).toBe(false);
+    expect(overlay()).not.toBeNull();
+    fireEvent.dragLeave(pane(), { dataTransfer: { types: ["text/uri-list"], files: [] } });
+    expect(overlay()).not.toBeNull();
+    fireEvent.dragLeave(pane(), { dataTransfer: { types: ["Files"], files: [] } });
+    expect(overlay()).toBeNull();
+    expect(fileDrag("dragOver", [])).toBe(false);
+    expect(overlay()).not.toBeNull();
+    fileDrag("drop", [new File(["x"], "a.txt")]);
+    expect(overlay()).toBeNull();
+    await waitFor(() => expect(chips()).toHaveLength(1));
+  });
+
+  it("keeps a dropped file's own name, even one a paste would take for a screenshot", async () => {
+    const { staged } = await setUp();
+    fileDrag("drop", [new File(["png"], "image.png", { type: "image/png" })]);
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    expect(staged.map((s) => s.name)).toEqual(["image.png"]);
+    expect(chips()[0].querySelector(".chip-name")?.textContent).toBe("image.png");
+  });
+
+  it("leaves a dragged chat to the pane's chat drop target", async () => {
+    const { staged } = await setUp();
+    const chat = { types: ["application/x-hermes-chat"], files: [], getData: () => "nas" };
+    expect(fireEvent.dragOver(pane(), { dataTransfer: chat })).toBe(true);
+    expect(overlay()).toBeNull();
+    expect(fireEvent.drop(pane(), { dataTransfer: chat })).toBe(true);
+    expect(staged).toEqual([]);
+  });
+
+  it("refuses a file over Hermes's limit without reading it, and attaches the rest", async () => {
+    const { staged } = await setUp();
+    const huge = new File(["x"], "disk.img");
+    Object.defineProperty(huge, "size", { value: 300 * MiB });
+    const read = vi.spyOn(huge, "arrayBuffer");
+    fileDrag("drop", [huge, new File(["sda 92%"], "report.txt")]);
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    expect(screen.getByRole("alert").textContent).toBe("disk.img is 300.0 MB. Hermes takes files up to 256 MB.");
+    expect(read).not.toHaveBeenCalled();
+    expect(staged.map((s) => s.name)).toEqual(["report.txt"]);
+  });
+
+  it("says why when only files over the limit were dropped", async () => {
+    const { staged } = await setUp();
+    const huge = new File(["x"], "disk.img");
+    Object.defineProperty(huge, "size", { value: 300 * MiB });
+    fileDrag("drop", [huge]);
+    expect((await screen.findByRole("alert")).textContent).toBe("disk.img is 300.0 MB. Hermes takes files up to 256 MB.");
+    expect(staged).toEqual([]);
+    expect(chips()).toHaveLength(0);
+  });
+});
+
+describe("A file dropped where no pane takes it", () => {
+  it("is turned down, so the webview doesn't open it in place of the app", () => {
+    const target = new EventTarget() as unknown as Window;
+    refuseStrayFileDrops(target);
+    const drag = (type: string, types: string[], taken = false) => {
+      const e = Object.assign(new Event(type, { cancelable: true }), { dataTransfer: { types, dropEffect: "copy" } });
+      if (taken) e.preventDefault();
+      target.dispatchEvent(e);
+      return e;
+    };
+    for (const type of ["dragover", "drop"]) {
+      const files = drag(type, ["Files"]);
+      expect([files.defaultPrevented, files.dataTransfer.dropEffect]).toEqual([true, "none"]);
+      expect(drag(type, ["Files"], true).dataTransfer.dropEffect).toBe("copy");
+      expect(drag(type, ["application/x-hermes-chat"]).defaultPrevented).toBe(false);
+    }
   });
 });
 

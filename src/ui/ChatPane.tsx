@@ -1,6 +1,6 @@
 // Transcript, thinking, tool-call groups, Approval cards, find bar, composer and the Settle button, ported from the prototype.
 // Dictation and Read aloud come from Voice.tsx.
-import { createContext, memo, type ReactNode, useCallback, useContext, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, memo, type ReactNode, type RefObject, useCallback, useContext, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, CornerDownRight, EyeOff, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Square, Trash2, Wrench, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -20,6 +20,8 @@ import type { SubagentId } from "../hermes/subagents";
 import { SideQuestionPair } from "./SideQuestions";
 import { Markdown } from "./Markdown";
 import { SourceIcon, Spinner, StoredTime, composing, highlight } from "./bits";
+import { caretAfter, editStep, inputKind, type EditStep } from "./editKeys";
+import type { EditKind } from "../hermes/editHistory";
 import { wakeFull } from "../hermes/snooze";
 import { stagedFiles } from "../hermes/unsaved";
 import { AttachmentChip, Previews, readPreview } from "./previews";
@@ -27,7 +29,7 @@ import { Speaker } from "./speaker";
 import { DictationNoteView, DictationStrip, ListenButton, MicButton, type VoiceApi, listenBlocked, micBlocked, useDictation, useVoiceSetup } from "./Voice";
 import { withTranscript } from "../hermes/voice";
 import { turnSettings } from "../hermes/voiceTurns";
-import type { Delivery } from "../hermes/transport";
+import { LIMITS, overLimitNote, type Delivery } from "../hermes/transport";
 import { ConversationPanel, StartConversationButton, conversationAway, startBlocked, usePageHidden, useVoiceConversation } from "./VoiceConversation";
 import type { ConversationState, VoiceConversation } from "./conversation";
 import type { VoiceSetup } from "../hermes/pipe";
@@ -125,6 +127,20 @@ export function pastedName(f: { name: string; type: string }, now = new Date()):
   if (f.name && !/^image\.\w+$/.test(f.name)) return f.name;
   const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 19).replaceAll(":", "");
   return `clipboard-${local}.${/^\w+\/(\w+)$/.exec(f.type)?.[1] ?? "png"}`;
+}
+
+/**
+ * Turns down a file dragged anywhere a pane doesn't take it, as the sidebar. Without this, on Windows (where Tauri's
+ * native drop handler is off) the webview would open the dropped file in place of the app.
+ */
+export function refuseStrayFileDrops(target: Window = window) {
+  const refuse = (e: DragEvent) => {
+    if (e.defaultPrevented || !e.dataTransfer?.types.includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "none";
+  };
+  target.addEventListener("dragover", refuse);
+  target.addEventListener("drop", refuse);
 }
 
 /**
@@ -279,6 +295,7 @@ export function ChatPane({
   alsoPostsIn,
   draft,
   onDraft,
+  onDraftStep,
   onRetry,
   onEdit,
   onDismiss,
@@ -329,7 +346,9 @@ export function ChatPane({
   status: ConnectionStatus;
   alsoPostsIn?: Source;
   draft: string;
-  onDraft: (text: string) => void;
+  onDraft: (text: string, how?: EditKind) => void;
+  /** Undoes or redoes the Draft, and says its text then, or undefined when there was nothing to step. */
+  onDraftStep: (step: EditStep) => string | undefined;
   onRetry: (itemId: string) => void;
   onEdit: (itemId: string) => void;
   onDismiss: (itemId: string) => void;
@@ -818,6 +837,7 @@ export function ChatPane({
         alsoPostsIn={alsoPostsIn}
         text={draft}
         onText={onDraft}
+        onStep={onDraftStep}
         onAttach={onAttach}
         onSend={(...send) => {
           stickToBottom.current = true;
@@ -832,6 +852,7 @@ export function ChatPane({
           const r = rootRef.current?.getBoundingClientRect();
           return !!r && x >= r.left && x < r.right && y >= r.top && y < r.bottom;
         }}
+        dropZone={rootRef}
         voice={voice}
         voiceSetup={voiceSetup}
         conversation={conversation}
@@ -1161,12 +1182,14 @@ function Composer({
   alsoPostsIn,
   text,
   onText,
+  onStep,
   onAttach,
   onSend,
   onStop,
   modelControls,
   autoFocus = true,
   dropHere,
+  dropZone,
   voice,
   voiceSetup,
   conversation,
@@ -1188,7 +1211,8 @@ function Composer({
   alsoPostsIn?: Source;
   /** `onSend` empties it. */
   text: string;
-  onText: (text: string) => void;
+  onText: (text: string, how?: EditKind) => void;
+  onStep: (step: EditStep) => string | undefined;
   onAttach: (paths: string[]) => Promise<AttachCheck>;
   onSend: (text: string, attachments: Attachment[], skill?: SkillCall) => void;
   onStop: () => void;
@@ -1196,6 +1220,8 @@ function Composer({
   autoFocus?: boolean;
   /** Whether a drop at this point of the window, in CSS pixels, is for this composer. Left out, every drop is. */
   dropHere?: (x: number, y: number) => boolean;
+  /** Where an HTML5 file drop attaches here: the pane. */
+  dropZone: RefObject<HTMLElement | null>;
   voice?: VoiceApi;
   voiceSetup?: VoiceSetup;
   /** The pane's Voice conversation, and whether the chat has started, which one needs. */
@@ -1319,7 +1345,7 @@ function Composer({
   // Focus changes only transfer capture routing. A pane retains its staged attachments until its composer leaves.
   useEffect(() => () => screenshots?.release(staged.current.map((a) => a.path)), [screenshots]);
 
-  // Tauri's native drop event, not HTML5 drops: it gives real file paths, so Rust can read the bytes. Every composer
+  // Tauri's native drop event (off on Windows, below): it gives real file paths, so Rust can read the bytes. Every composer
   // hears every drop; with two panes, the one under the pointer takes it. Tauri gives the point in physical pixels.
   useEffect(() => {
     const unlisten = getCurrentWebview().onDragDropEvent(({ payload }) => {
@@ -1336,20 +1362,61 @@ function Composer({
     return () => void unlisten.then((stop) => stop());
   }, []);
 
-  // A pasted screenshot or file has no path of its own: Rust saves it to a temp file, which then attaches like a drop.
-  const paste = (pasted: File[] | Promise<File[]>) => busy(async () => {
+  // A pasted file, or one dropped on Windows, has no path of its own: Rust saves its bytes to a temp file, which then
+  // attaches like a drop. One too big for Hermes is refused before its bytes are read into the webview.
+  const stageFiles = (incoming: File[] | Promise<File[]>, nameOf = pastedName) => busy(async () => {
     try {
-      const files = await pasted;
+      const files = await incoming;
+      const tooBig = files.filter((f) => f.size > LIMITS.file.bytes);
       const paths = await Promise.all(
-        files.map(async (f) =>
-          invoke<string>("stage_clipboard_file", await f.arrayBuffer(), { headers: { "x-name": encodeURIComponent(pastedName(f)) } }),
-        ),
+        files
+          .filter((f) => !tooBig.includes(f))
+          .map(async (f) =>
+            invoke<string>("stage_clipboard_file", await f.arrayBuffer(), { headers: { "x-name": encodeURIComponent(nameOf(f)) } }),
+          ),
       );
       await add(paths);
+      const notes = tooBig.map((f) => overLimitNote(nameOf(f), f.size, LIMITS.file));
+      if (notes.length) setRefused((cur) => (paths.length ? [...cur, ...notes] : notes));
     } catch (e) {
-      setRefused([`Couldn't attach the pasted files: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't attach the files: ${e instanceof Error ? e.message : String(e)}`]);
     }
   });
+  const stageRef = useRef(stageFiles);
+  stageRef.current = stageFiles;
+
+  // On Windows the native drop handler is off (tauri.windows.conf.json), because there it takes every drag and a chat
+  // dragged onto a tab strip never reached the page. Files dropped there come as HTML5 drops, with bytes but no path.
+  // WebKitGTK gives an HTML5 drop from another app no files, so Linux keeps the native event above.
+  useEffect(() => {
+    const zone = dropZone.current;
+    if (!zone) return;
+    const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes("Files");
+    const over = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = "copy";
+      setDragging(true);
+    };
+    const leave = (e: DragEvent) => hasFiles(e) && !zone.contains(e.relatedTarget as Node) && setDragging(false);
+    const drop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      setDragging(false);
+      // A dropped file keeps its own name; only a paste's generic `image.png` is a screenshot to rename.
+      void stageRef.current(Array.from(e.dataTransfer!.files), (f) => f.name);
+    };
+    zone.addEventListener("dragenter", over);
+    zone.addEventListener("dragover", over);
+    zone.addEventListener("dragleave", leave);
+    zone.addEventListener("drop", drop);
+    return () => {
+      zone.removeEventListener("dragenter", over);
+      zone.removeEventListener("dragover", over);
+      zone.removeEventListener("dragleave", leave);
+      zone.removeEventListener("drop", drop);
+    };
+  }, [dropZone]);
 
   const pick = async () => {
     try {
@@ -1369,6 +1436,32 @@ function Composer({
 
   const sendable = attaching === 0 && (!!text.trim() || attachments.length > 0);
   const slash = useSlashCommands(commands, text, onText, taRef);
+  const caretTo = useRef<{ text: string; at: number }>(undefined);
+  useLayoutEffect(() => {
+    const to = caretTo.current;
+    if (!to || to.text !== text) return;
+    caretTo.current = undefined;
+    taRef.current?.setSelectionRange(to.at, to.at);
+  }, [text]);
+  const step = (which: EditStep) => {
+    const before = textRef.current;
+    const after = onStep(which);
+    if (after !== undefined) caretTo.current = { text: after, at: caretAfter(before, after) };
+  };
+  // Undo and Redo from WebView2's context menu (Windows) would step the webview's history: ours runs instead.
+  const stepRef = useRef(step);
+  stepRef.current = step;
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    const onBefore = (e: InputEvent) => {
+      if (e.inputType !== "historyUndo" && e.inputType !== "historyRedo") return;
+      e.preventDefault();
+      stepRef.current(e.inputType === "historyUndo" ? "undo" : "redo");
+    };
+    ta.addEventListener("beforeinput", onBefore);
+    return () => ta.removeEventListener("beforeinput", onBefore);
+  }, []);
   // While a reply runs a message can steer it instead of waiting in the queue. Why it can't now, if it can't: the
   // chat's (no /steer here, still loading), or the message's own (files). Offline, everything queues without a word.
   const [steering, setSteering] = useState(false);
@@ -1503,18 +1596,25 @@ function Composer({
           placeholder="Message Hermes"
           value={text}
           {...slash.inputProps}
-          onChange={(e) => onText(e.target.value)}
+          onChange={(e) => onText(e.target.value, inputKind(e.nativeEvent))}
           onPaste={(e) => {
             // Only files are taken over; text pastes as it always has.
             if (dragging) return;
             const files = Array.from(e.clipboardData.files);
             if (files.length) {
               e.preventDefault();
-              void paste(files);
-            } else if (!e.clipboardData.getData("text/plain")) void paste(clipboardImages());
+              void stageFiles(files);
+            } else if (!e.clipboardData.getData("text/plain")) void stageFiles(clipboardImages());
           }}
           onKeyDown={(e) => {
             if (slash.onKeyDown(e)) return;
+            const edit = editStep(e);
+            // Even with nothing to step, so the webview's own history never runs on this text.
+            if (edit && !composing(e)) {
+              e.preventDefault();
+              step(edit);
+              return;
+            }
             if (e.key === "Enter" && !e.shiftKey && !composing(e)) {
               e.preventDefault();
               // Enter queues or steers only while the hint below says so; Dictation hides it.

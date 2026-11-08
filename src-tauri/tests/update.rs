@@ -288,3 +288,84 @@ async fn a_staged_release_installs() {
     assert!(std::fs::read(&appimage).unwrap() == bytes, "the AppImage is the staged one");
     std::fs::remove_dir_all(appimage.parent().unwrap()).unwrap();
 }
+
+#[cfg(target_os = "linux")]
+mod owned_by_a_package {
+    use super::*;
+    use hermes_chat::update::{Progress, Updates};
+    use std::path::Path;
+    use std::sync::OnceLock;
+
+    /// Written once, before any test runs it: a script still open for writing in one test while another forks can't be
+    /// run ("Text file busy").
+    fn fake_pacman() -> &'static Path {
+        static SCRIPT: OnceLock<PathBuf> = OnceLock::new();
+        SCRIPT.get_or_init(|| {
+            let script = Path::new(env!("CARGO_TARGET_TMPDIR")).join("fake-pacman");
+            let body = "#!/bin/sh\ncase \"$1\" in\n  -Qqo) [ -e \"$2.owned\" ] && echo hermes-chat ;;\n  -Q) echo \"$2 0.2.0-1\" ;;\n  *) exit 2 ;;\nesac\n";
+            std::fs::write(&script, body).unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            script
+        })
+    }
+
+    fn owned(appimage: &Path) -> PathBuf {
+        PathBuf::from(format!("{}.owned", appimage.display()))
+    }
+
+    fn take_over(appimage: &Path) {
+        std::fs::write(owned(appimage), "").unwrap();
+    }
+
+    fn release(appimage: &Path) {
+        std::fs::remove_file(owned(appimage)).unwrap();
+    }
+
+    async fn setup(name: &str) -> (tauri::App<MockRuntime>, PathBuf, Updates) {
+        let base = serve(signed(SIGNED_A_2_0_0), Artifact::Bytes(payload())).await;
+        let appimage = installed(name);
+        let updates = Updates::with_pacman(fake_pacman());
+        (app(KEY_A, &format!("{base}/latest.json")), appimage, updates)
+    }
+
+    #[tokio::test]
+    async fn an_appimage_no_package_owns_is_replaced() {
+        let (app, appimage, updates) = setup("pkg-free").await;
+        let updater = app.updater_builder().executable_path(&appimage).build().unwrap();
+        assert!(updates.check(&updater, &appimage).await.unwrap().is_some());
+        updates.install(&appimage, |_| {}).await.unwrap();
+        assert_eq!(std::fs::read(&appimage).unwrap(), payload());
+        std::fs::remove_dir_all(appimage.parent().unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_appimage_a_package_owns_is_refused_and_left_alone() {
+        let (app, appimage, updates) = setup("pkg-owned").await;
+        take_over(&appimage);
+        let updater = app.updater_builder().executable_path(&appimage).build().unwrap();
+        assert!(updates.check(&updater, &appimage).await.is_err());
+        assert!(updates.install(&appimage, |_| {}).await.is_err());
+        assert_eq!(std::fs::read(&appimage).unwrap(), INSTALLED);
+        std::fs::remove_dir_all(appimage.parent().unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_appimage_a_package_takes_over_during_the_download_is_not_replaced() {
+        let (app, appimage, updates) = setup("pkg-takeover").await;
+        let updater = app.updater_builder().executable_path(&appimage).build().unwrap();
+        assert!(updates.check(&updater, &appimage).await.unwrap().is_some());
+        let result = updates
+            .install(&appimage, |progress| {
+                if matches!(progress, Progress::Downloading { .. }) {
+                    take_over(&appimage);
+                }
+            })
+            .await;
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&appimage).unwrap(), INSTALLED);
+        release(&appimage);
+        updates.install(&appimage, |_| {}).await.unwrap();
+        assert_eq!(std::fs::read(&appimage).unwrap(), payload());
+        std::fs::remove_dir_all(appimage.parent().unwrap()).unwrap();
+    }
+}

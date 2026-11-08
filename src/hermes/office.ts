@@ -7,13 +7,14 @@ import type { Chat } from "./model";
 import { childrenOf, type Subagent, type SubagentId, type SubagentState, type SubagentTree } from "./subagents";
 
 /**
- * What a desk's agent is doing. `approval`: the chat's reply waits for the owner's answer. `uncertain`: a message the
- * owner sent may not have reached Hermes. `completed`: Hermes said the subagent finished, never guessed. `unread`: the
- * chat has something the owner hasn't read, which alone doesn't say its reply finished. `idle`: the chat's reply
- * isn't running, and nothing about it needs the owner, but its subagents are known. `unknown`: a subagent known only as
- * the parent of another, or a reply while the app isn't connected and nothing else says how it is.
+ * What a desk's agent is doing. `waiting`: the chat's reply ended after handing work off, and waits for it
+ * (dispatched.ts). `approval`: the chat's reply waits for the owner's answer. `uncertain`: a message the owner sent may
+ * not have reached Hermes. `completed`: Hermes said the subagent finished, never guessed. `unread`: the chat has
+ * something the owner hasn't read, which alone doesn't say its reply finished. `idle`: the chat's reply isn't running,
+ * and nothing about it needs the owner, but its subagents are known. `unknown`: a subagent known only as the parent of
+ * another, or a reply while the app isn't connected and nothing else says how it is.
  */
-export type DeskState = "queued" | "running" | "approval" | "failed" | "uncertain" | "completed" | "unread" | "stopped" | "ended" | "unknown" | "idle";
+export type DeskState = "queued" | "running" | "handedOff" | "approval" | "failed" | "uncertain" | "completed" | "unread" | "stopped" | "ended" | "unknown" | "idle";
 
 export type Desk = {
   key: string;
@@ -46,8 +47,19 @@ const SUBAGENT_STATE: Record<SubagentState, DeskState> = {
   unknown: "unknown",
 };
 
-/** Which inbox entry a chat's reply desk shows when there are several: what needs the owner first. */
-const REPLY_ORDER: readonly InboxKind[] = ["approval", "running", "failed", "uncertain", "completed"];
+/**
+ * Which inbox entry a chat's reply desk shows when there are several: what needs the owner first, except that a reply
+ * running (the wake turn) shows ahead of a dispatched task that needs the owner, as the chat's row does.
+ */
+const REPLY_ORDER: readonly ((e: InboxEntry) => boolean)[] = [
+  (e) => e.kind === "approval" && !e.taskId,
+  (e) => e.kind === "running" && !e.waiting,
+  (e) => e.kind === "approval",
+  (e) => e.kind === "running",
+  (e) => e.kind === "failed",
+  (e) => e.kind === "uncertain",
+  (e) => e.kind === "completed",
+];
 // The inbox's "completed" is a chat with something unread: no event confirms that a reply finished.
 const REPLY_STATE: Record<InboxKind, DeskState> = { approval: "approval", running: "running", failed: "failed", uncertain: "uncertain", completed: "unread" };
 
@@ -118,7 +130,7 @@ export function officeRooms({
   for (const c of chats) if (c.subagents?.subagents.length) room(profile, c.id, c.title);
 
   return [...rooms.entries()].map(([key, r]) => {
-    const entry = REPLY_ORDER.map((k) => r.entries.find((e) => e.kind === k)).find((e) => !!e);
+    const entry = REPLY_ORDER.map((is) => r.entries.find(is)).find((e) => !!e);
     const stale = !connected ? NOT_CONNECTED : entry?.stale ? "As last seen: Hermes couldn't be checked." : undefined;
     const chat = r.profile === profile ? chats.find((c) => c.id === r.chatId) : undefined;
     const reply: Desk = {
@@ -126,7 +138,7 @@ export function officeRooms({
       agent: { kind: "reply", ...(entry ? { entry } : dismissed.has(key) && { dismissed: true as const }) },
       name: "The chat's reply",
       // A drop ends the app's word on whether the reply runs; it's resumed and known again once connected.
-      state: entry ? REPLY_STATE[entry.kind] : connected ? "idle" : "unknown",
+      state: entry ? (entry.waiting ? "handedOff" : REPLY_STATE[entry.kind]) : connected ? "idle" : "unknown",
       ...(entry && { doing: { text: entry.summary, at: entry.at || entry.noticedAt || 0 } }),
       ...(stale && { stale }),
       ...(chat?.model && { detail: { model: chat.model.model } }),
@@ -151,7 +163,7 @@ export function officeTally(rooms: readonly Room[]): { working: number; waiting:
   for (const r of rooms)
     for (const d of r.desks) {
       desks++;
-      if (d.state === "running" || d.state === "queued") working++;
+      if (d.state === "running" || d.state === "queued" || d.state === "handedOff") working++;
       else if (d.state === "approval") waiting++;
       else if (d.state === "failed") failed++;
     }

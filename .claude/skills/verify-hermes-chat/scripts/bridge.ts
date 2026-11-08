@@ -4,6 +4,10 @@
 // Sign-in: username `verify`, password `verify-pass`; anything else is 401 "Invalid credentials", as Hermes answers.
 // Every prompt gets a short streamed reply that starts `Stand-in reply to:` and is stored in the chat's history, except:
 //   a prompt with "delegate" in it starts two subagents, as Hermes's delegate tool reports them, and its reply runs on.
+//   With "queue" in it too, a third subagent is requested and stays queued, waiting its turn.
+//   a prompt with "dispatch" in it calls `kanban_create` (a task on the stand-in's board, `session_id` the chat's),
+//   says "Research task dispatched (t_…)" and ends its turn. The kanban routes serve the board.
+//   a prompt with "background" in it starts two background subagents and ends its turn while they run.
 //   a prompt with "approval" in it asks the owner to approve a command, and its reply waits for the answer.
 //   a prompt that starts with "fail" ends its reply with an error, as a provider failure does.
 //   with HV_LONG_REPLY=<n>, a prompt that starts with `long` gets n paragraphs of markdown (code, a list, a table),
@@ -15,9 +19,13 @@
 //   `POST /__live?profile=<p>&id=<chat id>&status=working|waiting|end[&title=<t>]` runs a reply in another profile, as
 //   `session.active_list` reports one: the chat is stored in that profile, listed as working or waiting, and `end`
 //   takes it off the list and leaves it Unread there (a test's control).
+//   `POST /__kanban?id=<task id>&status=<running|done|blocked|review|archived>` moves a task as a worker would (a test's
+//   control). `done`, `blocked` and `review` send the chat a `status.update` naming the task and, 2 s later,
+//   a streamed wake turn when the chat is live, subscribed, not stopped, and no turn runs, as Hermes's poller does.
 // HV_INBOX=1 gives the `work` profile two Unread chats for the Rail inbox: one last active 3 days ago, one an hour ago.
 // HV_LIST=<n> adds n Active, read chats to `default`, one an hour apart, so its Inbox is longer than the list panel.
 // HV_DELAY_MS=<ms> holds each /api/ answer that long, as a distant server's round trip would.
+// HV_FAIL_PATCH=<id>,<id> answers 503 to every edit (PATCH) of those sessions, as a server that fails a write does.
 // Read-only check of what the server holds (the side-effect proof): `GET /__state` returns sessions and transcripts.
 // The same JSON is rewritten to <state-file> after every change, so it survives the bridge being stopped.
 import { createHash } from "node:crypto";
@@ -59,6 +67,11 @@ for (let i = 0; i < Number(process.env.HV_LIST ?? 0); i++) {
   server.storeMessage(`list${i + 1}`, { role: "assistant", text: "Checked. Nothing to do for now." });
 }
 
+for (const id of (process.env.HV_FAIL_PATCH ?? "").split(",").filter(Boolean))
+  server.rest[`PATCH /api/sessions/${id}`] = () => {
+    throw new Error(`The dashboard answered 503: {"detail":"Stand-in refuses edits of ${id}"}`);
+  };
+
 // Settings → MCP servers (ADR 0068): a second profile, servers of each kind, one from a plugin, Test results and a catalog.
 server.otherProfiles = { work: [] };
 if (process.env.HV_INBOX === "1")
@@ -90,7 +103,7 @@ for (const name of ["restic-unlock", "nginx-rotate", "vpn-mtu", "trip-planner", 
   server.skills.add("default", { dir: `/home/liam/.hermes/skills/ops/${name}`, source: "agent", category: "ops" }, `---\nname: ${name}\ndescription: Synthetic ${name} skill.\n---\n\n## When to Use\n\nWhen asked about ${name}.\n`);
 
 // MCP servers as each profile's config holds them; the `.env` (tokens) stays out.
-const dump = () => JSON.stringify({ sessions: server.sessions, transcripts: server.transcripts, mcp: server.mcp.servers }, null, 2);
+const dump = () => JSON.stringify({ sessions: server.sessions, transcripts: server.transcripts, mcp: server.mcp.servers, kanban: server.kanban.boards }, null, 2);
 const save = () => stateFile && writeFileSync(stateFile, dump());
 save();
 
@@ -100,9 +113,9 @@ const paragraph = (i: number) =>
   `\`\`\`sh\nrestic -r sftp:backup@nas:/srv/restic unlock\nrestic -r sftp:backup@nas:/srv/restic check --read-data-subset=${i}/100\n\`\`\`\n\n` +
   `- keep-daily 7\n- keep-weekly 4\n- keep-monthly ${i % 12}\n\n| host | size | when |\n|---|---|---|\n| nas | ${i * 3} GiB | 02:00 |\n| web | ${i} GiB | 03:00 |\n`;
 
-function replyTo(sessionId: string, prompt: string) {
+function replyTo(sessionId: string, prompt: string, said?: string) {
   const long = longParagraphs > 0 && prompt.startsWith("long");
-  const text = long ? Array.from({ length: longParagraphs }, (_, i) => paragraph(i)).join("\n") : `Stand-in reply to: ${prompt.slice(0, 80)}`;
+  const text = said ?? (long ? Array.from({ length: longParagraphs }, (_, i) => paragraph(i)).join("\n") : `Stand-in reply to: ${prompt.slice(0, 80)}`);
   server.event(sessionId, "message.start");
   const words = text.split(" ");
   let at = 0;
@@ -121,13 +134,16 @@ function replyTo(sessionId: string, prompt: string) {
   setTimeout(step, 400);
 }
 
+server.kanban.wakeDelayMs = 2_000;
+server.kanban.wakeWith = (sid, _stored, text) => replyTo(sid, "", text);
+
 // The subagents a "delegate" prompt started, as `subagent.start` / `subagent.complete` payloads carry them
 // (`tools/delegate_tool.py` at the deployed `f0d94882`). Each is also in Hermes's registry, for `subagent.list`.
 const TEAM = ["Read the auth code", "Read the tests"];
 const delegated = new Map<string, { sid: string; stored: string; payload: Record<string, unknown> }>();
 let started = 0;
 
-function delegate(sid: string) {
+function delegate(sid: string, queue: boolean) {
   const stored = server.runtime.get(sid);
   if (!stored) return;
   server.event(sid, "message.start");
@@ -139,6 +155,12 @@ function delegate(sid: string) {
     (server.subagents[stored] ??= []).push({ ...payload, owner: sid, status: "running", accepting_steer: true, started_at: Date.now() / 1000 });
     server.event(sid, "subagent.start", payload);
   });
+  if (!queue) return;
+  const subagent_id = `sa-${++started}`;
+  const payload = { subagent_id, goal: "Write the summary", task_index: TEAM.length, task_count: TEAM.length + 1, depth: 0, delegation_id: `dlg-${sid}`, model: "stand-in-model" };
+  delegated.set(subagent_id, { sid, stored, payload });
+  (server.subagents[stored] ??= []).push({ ...payload, owner: sid, status: "queued", accepting_steer: false });
+  server.event(sid, "subagent.spawn_requested", payload);
 }
 
 function askApproval(sid: string) {
@@ -152,12 +174,20 @@ function failReply(sid: string) {
 }
 
 function endSubagent(id: string, status: string) {
-  const d = delegated.get(id);
+  const d = delegated.get(id) ?? backgroundSubagent(id);
   if (!d) return false;
   delegated.delete(id);
   server.subagents[d.stored] = (server.subagents[d.stored] ?? []).filter((r) => r.subagent_id !== id);
   server.event(d.sid, "subagent.complete", { ...d.payload, status, summary: `Stand-in subagent ${status}.` });
   return true;
+}
+
+function backgroundSubagent(id: string) {
+  for (const [stored, rows] of Object.entries(server.subagents)) {
+    const { owner, tail: _, ...payload } = rows.find((r) => r.subagent_id === id) ?? {};
+    if (typeof owner === "string") return { sid: owner, stored, payload };
+  }
+  return undefined;
 }
 
 let pipe: Pipe | undefined;
@@ -235,6 +265,12 @@ const http = createServer(async (req, res) => {
     save();
     return json(200, { ok: true, live: server.liveSessions.length });
   }
+  if (url.pathname === "/__kanban" && req.method === "POST") {
+    const id = url.searchParams.get("id") ?? "";
+    const moved = server.kanban.move(id, url.searchParams.get("status") ?? "done");
+    save();
+    return moved ? json(200, { ok: true, task: server.kanban.find(id) }) : json(404, { detail: `No stand-in task ${id}` });
+  }
   if (url.pathname === "/auth/password-login") {
     const b = JSON.parse(body ?? "{}");
     if (b.username !== USER || b.password !== PASSWORD) return json(401, { detail: "Invalid credentials" });
@@ -263,9 +299,10 @@ http.on("upgrade", async (req, sock: Socket) => {
         const prompt = String(text ?? "");
         setTimeout(() => {
           save();
-          if (/delegate/i.test(prompt)) delegate(session_id);
+          if (/delegate/i.test(prompt)) delegate(session_id, /queue/i.test(prompt));
           else if (/approval/i.test(prompt)) askApproval(session_id);
           else if (/^fail/i.test(prompt)) failReply(session_id);
+          else if (/dispatch|background/i.test(prompt)) setTimeout(save, 500);
           else replyTo(session_id, prompt);
         }, 0);
       }

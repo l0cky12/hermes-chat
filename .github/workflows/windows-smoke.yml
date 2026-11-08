@@ -1,0 +1,49 @@
+name: windows-smoke
+
+# A real sign-in and send on Windows (ADR 0069, #308): builds the app as windows.yml does (plus WebView2's DevTools port in
+# the window config), starts the stand-in Hermes dashboard, attaches msedgedriver to the app's WebView2 and drives the
+# verify skill's sign-in and send recipes through wd.mjs. Screenshots, the page's errors, the WebView2 console log, the
+# driver log and the stand-in's request log are uploaded as artifacts. Started by hand: about ten minutes on a warm cache.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Keep LF line endings (bash scripts and wd.mjs run here)
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: nsis
+      - run: npm ci
+      - name: Build the app (release, frontend embedded, no installer, WebView2 DevTools port on)
+        run: npx tauri build --no-bundle --config .github/windows-smoke/tauri.smoke.conf.json
+      - name: msedgedriver matching the WebView2 runtime
+        shell: pwsh
+        run: .github/windows-smoke/msedgedriver.ps1 "$env:RUNNER_TEMP\edgedriver"
+      - name: Drive a send in the real app
+        shell: bash
+        env:
+          HV_RUN: ${{ runner.temp }}\hv
+          EDGEDRIVER: ${{ runner.temp }}\edgedriver\msedgedriver.exe
+        run: .github/windows-smoke/send.sh
+      - name: Evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-smoke-evidence
+          path: ${{ runner.temp }}\hv\evidence
+          if-no-files-found: warn

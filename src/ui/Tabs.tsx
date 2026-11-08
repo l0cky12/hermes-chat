@@ -25,9 +25,17 @@ let rowDrag: string | null = null;
 export const dragChat = (e: DragEvent, id: string) => {
   rowDrag = id;
   e.dataTransfer.setData(CHAT_DRAG, id);
-  e.dataTransfer.effectAllowed = "copy";
+  // A drop on the Settled drawer or the Inbox is a move (Sidebar.tsx), and a browser refuses a drop whose dropEffect
+  // effectAllowed doesn't allow.
+  e.dataTransfer.effectAllowed = "copyMove";
 };
 export const dragChatEnd = () => void (rowDrag = null);
+
+/** The id of the chat list row being dragged, or undefined for any other drag, a tab's included. */
+export const rowDragged = (e: DragEvent): string | undefined => {
+  const types = e.dataTransfer.types;
+  return types.includes(CHAT_DRAG) && !types.includes(TAB_DRAG) ? e.dataTransfer.getData(CHAT_DRAG) || rowDrag || undefined : undefined;
+};
 
 /** The chat a drag carries, or undefined for a drag that isn't a chat's. A row's id unknown ("", which no tab has)
  * only when its drag started outside this window. */
@@ -97,9 +105,13 @@ export function TabStrip({
   // While a drop would land here: before which tab (undefined: at the end, unmeasured).
   const [over, setOver] = useState<{ index?: number } | null>(null);
   const [menuAt, setMenuAt] = useState<{ id: string | null; x: number; y: number } | null>(null);
-  // The tab shown is scrolled into sight when the strip is wider than the pane.
+  // The tab shown is scrolled into sight when the strip is wider than the pane. A block body: scrollIntoView returns a
+  // Promise on WebView2 (Chromium 156+), and an effect that returned it gave React a cleanup that isn't a function, so
+  // the next tab change threw and React dropped the whole tree (#308).
   const list = useRef<HTMLDivElement>(null);
-  useEffect(() => list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" }), [current, tabs.length]);
+  useEffect(() => {
+    list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [current, tabs.length]);
   const actions = menuAt ? menu(menuAt.id) : [];
   return (
     <div

@@ -112,7 +112,7 @@ const titles = (section: string) =>
   [...document.querySelectorAll(`.row[data-section="${section}"]:not([hidden]) .row-open .row-title`)].map((t) => t.textContent);
 
 describe("The chat list's sections", () => {
-  it("shows no Active label: what needs you is in the Inbox, then Working, Snoozed and Settled", async () => {
+  it("shows no Active label: what needs you is in the Inbox, then Snoozed, Working and Settled", async () => {
     const user = userEvent.setup();
     render(
       <List
@@ -198,8 +198,10 @@ describe("The chat list's sections", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(Math.abs((snoozed[0][1] as number) - before - 45 * 60_000)).toBeLessThan(1000);
 
-    // It is in Snoozed now, collapsed.
     await user.click(screen.getByRole("button", { name: /Snoozed/ }));
+    fireEvent.contextMenu(rowOf("a"));
+    await user.click(screen.getByRole("menuitem", { name: "Unsnooze" }));
+    expect(snoozed[1]).toEqual(["a", undefined]);
     fireEvent.contextMenu(rowOf("a"));
     await user.click(screen.getByRole("menuitem", { name: "Custom…" }));
     const again = screen.getByRole("dialog", { name: /Snooze/ });
@@ -209,7 +211,54 @@ describe("The chat list's sections", () => {
     const p = (n: number) => String(n).padStart(2, "0");
     fireEvent.change(at, { target: { value: `${when.getFullYear()}-${p(when.getMonth() + 1)}-${p(when.getDate())}T14:30` } });
     await user.click(within(again).getByRole("button", { name: "Snooze" }));
-    expect(snoozed[1]).toEqual(["a", when.getTime()]);
+    expect(snoozed[2]).toEqual(["a", when.getTime()]);
+  });
+
+  it("shows only Unsnooze on a snoozed chat, and the snooze times again once it is unsnoozed", async () => {
+    const user = userEvent.setup();
+    render(<List snoozed={[]} start={{ a: NOW + HOUR }} chats={[chat("a")]} />);
+    await user.click(screen.getByRole("button", { name: /Snoozed/ }));
+    fireEvent.contextMenu(rowOf("a"));
+    let group = within(screen.getByRole("menu")).getByRole("group", { name: "Snooze" });
+    expect(within(group).getAllByRole("menuitem").map((b) => b.textContent)).toEqual(["Unsnooze"]);
+    expect(group.textContent).toContain("Snoozed until");
+    await user.click(within(group).getByRole("menuitem", { name: "Unsnooze" }));
+
+    fireEvent.contextMenu(rowOf("a"));
+    group = within(screen.getByRole("menu")).getByRole("group", { name: "Snooze" });
+    expect(within(group).getAllByRole("menuitem").map((b) => b.textContent)).toEqual(["1 hour", "3 hours", "Tomorrow", "Next week", "Custom…"]);
+  });
+
+  it("offers the snooze times again when a snooze has run out on its own", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(NOW);
+    render(<List snoozed={[]} start={{ a: NOW + HOUR }} chats={[chat("a")]} />);
+    fireEvent.click(screen.getByRole("button", { name: /Snoozed/ }));
+    fireEvent.contextMenu(rowOf("a"));
+    const snoozeItems = () => within(within(screen.getByRole("menu")).getByRole("group", { name: "Snooze" })).getAllByRole("menuitem").map((b) => b.textContent);
+    expect(snoozeItems()).toEqual(["Unsnooze"]);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await act(async () => void vi.advanceTimersByTime(HOUR + 100));
+    fireEvent.contextMenu(rowOf("a"));
+    expect(snoozeItems()).toEqual(["1 hour", "3 hours", "Tomorrow", "Next week", "Custom…"]);
+  });
+
+  it("moves the arrow keys over every item a snoozed chat's menu shows, and only those", async () => {
+    const user = userEvent.setup();
+    render(<List snoozed={[]} start={{ a: NOW + HOUR }} chats={[chat("a")]} />);
+    await user.click(screen.getByRole("button", { name: /Snoozed/ }));
+    fireEvent.contextMenu(rowOf("a"));
+    const shown = within(screen.getByRole("menu")).getAllByRole("menuitem").map((b) => b.textContent);
+    const at = shown.indexOf("Unsnooze");
+    screen.getByRole("menuitem", { name: "Unsnooze" }).focus();
+    const reached = [];
+    for (const _ of shown) {
+      await user.keyboard("{ArrowDown}");
+      reached.push(document.activeElement!.textContent);
+    }
+    expect(reached).toEqual([...shown.slice(at + 1), ...shown.slice(0, at + 1)]);
+    await user.keyboard("{ArrowUp}");
+    expect(document.activeElement!.textContent).toBe(shown.at(at - 1));
   });
 
   it("keeps a row's rename box, and an open Custom snooze, when the chat moves between Working and the top", async () => {

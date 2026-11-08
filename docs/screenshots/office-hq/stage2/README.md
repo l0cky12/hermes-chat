@@ -10,6 +10,11 @@ Taken with the verify skill (`.claude/skills/verify-hermes-chat`) in the real ap
 6. `6-walking-out-after-dismiss.png`: its Inbox entry dismissed, the office opened again walks it off the Lounge couch toward the front door. The floor's note says why agents leave.
 7. `7-three-typing-default.png`: a delegating reply in `default`, three agents typing; `work`'s floor in the tower is lit with "!" while its reply waits for an approval.
 
+Shots 1 to 7 predate merging `main` at 71d9a6e7, which gave the agents new bodies (hair, faces, two-segment arms and legs). After that merge, from a fresh run:
+
+8. `8-merged-figures-walking.png`: `work`'s reply, now waiting for an approval, walks out of the Workroom with the new bodies, legs mid-stride.
+9. `9-merged-figures-waiting-room.png`: it arrives in the Waiting room, hand up under a "!". The frame count then stayed at 189 for 8 s: nothing is drawn once the walk ends.
+
 ## Requests while another profile's reply starts
 
 From `POST /__live` to the character on `work`'s floor, the stand-in got:

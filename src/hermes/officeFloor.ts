@@ -10,6 +10,7 @@ export type BuildingRoom = "workroom" | "waiting" | "trouble" | "lounge";
 export const ROOM_OF: Record<DeskState, BuildingRoom> = {
   running: "workroom",
   queued: "workroom",
+  handedOff: "workroom",
   approval: "waiting",
   uncertain: "waiting",
   failed: "trouble",
@@ -21,8 +22,8 @@ export const ROOM_OF: Record<DeskState, BuildingRoom> = {
   unknown: "lounge",
 };
 
-/** How an agent is posed: at a desk typing, standing at the Workroom door, hand up, slumped at a desk, on a couch. */
-export type Pose = "typing" | "door" | "hand-up" | "slumped" | "couch";
+/** How an agent is posed: at a desk typing, or seated there waiting, standing at the Workroom door, hand up, slumped at a desk, on a couch. */
+export type Pose = "typing" | "seated" | "door" | "hand-up" | "slumped" | "couch";
 
 const POSE_IN: Record<BuildingRoom, Pose> = { workroom: "typing", waiting: "hand-up", trouble: "slumped", lounge: "couch" };
 
@@ -150,16 +151,18 @@ export const HOME_AFTER_MS = 30 * 60_000;
 /** Which agents are drawn when not all fit: those that need the owner first, then those at work, then the rest. */
 const KEEP_ORDER: readonly BuildingRoom[] = ["waiting", "trouble", "workroom", "lounge"];
 
-const works = (s: DeskState) => s === "running" || s === "queued";
+const works = (s: DeskState) => s === "running" || s === "queued" || s === "handedOff";
+const holdsDesk = (s: DeskState) => s === "running" || s === "handedOff";
 
 /**
  * Every agent in `rooms` on the one floor, in the room its state gives, at a seat, in its team's color. Pure: the same
  * rooms and memory give the same floor, and feeding the returned memory back with the same rooms changes nothing.
  * Characters come in the order `rooms` lists them.
  *
- * - A team keeps the pods it holds while any of its agents is running or queued; it takes the lowest free pods when it
- *   needs more, and lets them all go once none of its agents works. An agent keeps its desk while it runs.
- * - A running agent with no free desk in its team's pods, and every queued agent, stands in line at the Workroom door.
+ * - A team keeps the pods it holds while any of its agents is running, waiting or queued; it takes the lowest free pods
+ *   when it needs more, and lets them all go once none of its agents works. An agent keeps its desk while it runs.
+ * - A running or waiting agent with no free desk in its team's pods, and every queued agent, stands in line at the
+ *   Workroom door.
  * - A team keeps its color while it is on the floor; a new team takes the color fewest teams wear.
  * - At most `cap` characters, and no more than a room has seats. Those not drawn are counted in `more`.
  * - An agent in the Lounge goes home, and isn't on the floor, once the owner dismissed its reply's inbox entry or
@@ -207,8 +210,8 @@ export function officeFloor(rooms: readonly Room[], memory: FloorMemory, now: nu
   }
 
   // Pods: a working team keeps what it holds, then teams in order take the lowest free pods they still need.
-  const running = new Map<string, Agent[]>();
-  for (const a of agents) if (drawn.has(a) && a.desk.state === "running") running.set(a.room.key, [...(running.get(a.room.key) ?? []), a]);
+  const atDesk = new Map<string, Agent[]>();
+  for (const a of agents) if (drawn.has(a) && holdsDesk(a.desk.state)) atDesk.set(a.room.key, [...(atDesk.get(a.room.key) ?? []), a]);
   const pods = new Map<string, number[]>();
   const held = new Set<number>();
   for (const r of rooms) {
@@ -218,7 +221,7 @@ export function officeFloor(rooms: readonly Room[], memory: FloorMemory, now: nu
     kept.forEach((p) => held.add(p));
   }
   for (const r of rooms) {
-    const need = Math.ceil((running.get(r.key)?.length ?? 0) / POD_SIZE);
+    const need = Math.ceil((atDesk.get(r.key)?.length ?? 0) / POD_SIZE);
     const mine = pods.get(r.key) ?? [];
     for (let p = 0; p < PODS && mine.length < need; p++) if (!held.has(p)) (mine.push(p), held.add(p));
     if (mine.length) pods.set(r.key, mine);
@@ -228,14 +231,14 @@ export function officeFloor(rooms: readonly Room[], memory: FloorMemory, now: nu
   const desks = new Map<string, number>();
   const taken = new Set<number>();
   const mineOf = (key: string) => (pods.get(key) ?? []).flatMap((p) => Array.from({ length: POD_SIZE }, (_, i) => p * POD_SIZE + i));
-  for (const [key, team] of running) {
+  for (const [key, team] of atDesk) {
     const mine = new Set(mineOf(key));
     for (const a of team) {
       const was = memory.desks.get(a.desk.key);
       if (was !== undefined && mine.has(was) && !taken.has(was)) (desks.set(a.desk.key, was), taken.add(was));
     }
   }
-  for (const [key, team] of running)
+  for (const [key, team] of atDesk)
     for (const a of team) {
       if (desks.has(a.desk.key)) continue;
       const free = mineOf(key).find((d) => !taken.has(d));
@@ -251,8 +254,10 @@ export function officeFloor(rooms: readonly Room[], memory: FloorMemory, now: nu
     const desk = desks.get(a.desk.key);
     let spot: Spot | undefined;
     let pose: Pose = POSE_IN[a.place];
-    if (desk !== undefined) spot = PLAN.seats.workroom[desk];
-    else if (a.place === "workroom") {
+    if (desk !== undefined) {
+      spot = PLAN.seats.workroom[desk];
+      if (a.desk.state === "handedOff") pose = "seated";
+    } else if (a.place === "workroom") {
       spot = PLAN.door[next.door++];
       pose = "door";
     } else spot = PLAN.seats[a.place][next[a.place]++];

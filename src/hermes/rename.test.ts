@@ -58,7 +58,7 @@ describe("Renaming a chat", () => {
   it("refuses an empty title without asking Hermes", async () => {
     const { server, hermes, title } = await listed(row("a", 1, { title: "Old name" }));
     await expect(hermes.rename("a", "   ", "Old name")).rejects.toThrow("A chat needs a title.");
-    expect(server.restRequests.filter((r) => r.method !== "GET" || r.path !== "/api/sessions")).toEqual([]);
+    expect(server.restRequests.filter((r) => r.method !== "GET" || (r.path !== "/api/sessions" && !r.path.startsWith("/api/plugins/kanban/")))).toEqual([]);
     expect(title("a")).toBe("Old name");
   });
 
