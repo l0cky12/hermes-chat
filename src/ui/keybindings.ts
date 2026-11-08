@@ -66,17 +66,6 @@ export type CommandId = keyof typeof COMMANDS;
 export const COMMAND_IDS = Object.keys(COMMANDS) as readonly CommandId[];
 export const isCommandId = (s: unknown): s is CommandId => typeof s === "string" && Object.hasOwn(COMMANDS, s);
 
-/** Keys that stay as they are, listed on the page so they can be found. `keys`: each as its label, `Ctrl+Shift+Z`. */
-export type FixedKey = { title: string; keys: readonly string[]; when: string; group: Group };
-export const FIXED: readonly FixedKey[] = [
-  { title: "Undo in a text field", keys: ["Ctrl+Z"], when: "textFieldFocus", group: "chat" },
-  { title: "Redo in a text field", keys: ["Ctrl+Shift+Z", "Ctrl+Y"], when: "textFieldFocus", group: "chat" },
-  { title: "Undo what the notice offers to undo", keys: ["Ctrl+Z"], when: "!textFieldFocus && noticeShown", group: "chat" },
-  { title: "Close the chat's menu", keys: ["Escape"], when: "chatMenuOpen", group: "threads" },
-  { title: "Pick a menu item by its letter; Tab stays inside the menu", keys: ["A", "Tab"], when: "chatMenuOpen", group: "threads" },
-  { title: "Cancel a delete question, or close a dialog", keys: ["Escape"], when: "dialogOpen", group: "navigation" },
-];
-
 const MODIFIERS = ["Ctrl", "Alt", "Shift"] as const;
 const NAMED_KEYS = ["Enter", "Escape", "Tab", "Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End", "Delete", "Backspace", "Insert", "ContextMenu"];
 const PUNCTUATION_BY_CODE: Record<string, string> = {
@@ -115,6 +104,24 @@ export function chordOf(e: KeyLike): Chord | undefined {
 /** A stored string as a chord, if it has a chord's shape. */
 export const parseChord = (s: unknown): Chord | undefined => (typeof s === "string" && CHORD.test(s) ? (s as Chord) : undefined);
 
+/** A chord written in this file; a typo fails at load, not in an owner's hands. */
+function chord(s: string): Chord {
+  const c = parseChord(s);
+  if (!c) throw new Error(`"${s}" is not a chord`);
+  return c;
+}
+
+/** Keys that stay as they are, listed on the page so they can be found. */
+export type FixedKey = { title: string; keys: readonly Chord[]; when: string; group: Group };
+export const FIXED: readonly FixedKey[] = [
+  { title: "Undo in a text field", keys: [chord("Ctrl+Z")], when: "textFieldFocus", group: "chat" },
+  { title: "Redo in a text field", keys: [chord("Ctrl+Shift+Z"), chord("Ctrl+Y")], when: "textFieldFocus", group: "chat" },
+  { title: "Undo what the notice offers to undo", keys: [chord("Ctrl+Z")], when: "!textFieldFocus && noticeShown", group: "chat" },
+  { title: "Close the chat's menu", keys: [chord("Escape")], when: "chatMenuOpen", group: "threads" },
+  { title: "Pick a menu item by its letter; Tab stays inside the menu", keys: [chord("A"), chord("Tab")], when: "chatMenuOpen", group: "threads" },
+  { title: "Cancel a delete question, or close a dialog", keys: [chord("Escape")], when: "dialogOpen", group: "navigation" },
+];
+
 const splitChord = (c: Chord): { mods: string[]; key: string } => {
   const mods: string[] = [];
   let rest: string = c;
@@ -144,13 +151,7 @@ export const ariaKeys = (chords: readonly Chord[]): string =>
 
 export type Bindings = Readonly<Record<CommandId, readonly Chord[]>>;
 
-const chordsOf = (id: CommandId): readonly Chord[] =>
-  COMMANDS[id].defaults.map((d) => {
-    const c = parseChord(d);
-    if (!c) throw new Error(`COMMANDS.${id}: "${d}" is not a chord`);
-    return c;
-  });
-export const DEFAULT_BINDINGS: Bindings = Object.fromEntries(COMMAND_IDS.map((id) => [id, chordsOf(id)])) as Bindings;
+export const DEFAULT_BINDINGS = Object.fromEntries(COMMAND_IDS.map((id) => [id, COMMANDS[id].defaults.map(chord)])) as unknown as Bindings;
 
 const sameChords = (a: readonly Chord[], b: readonly Chord[]) => a.length === b.length && a.every((c, i) => c === b[i]);
 /** Whether the owner's chords for `id` differ from the defaults. */

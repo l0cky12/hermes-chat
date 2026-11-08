@@ -30,6 +30,7 @@ import { desktopSummon, type SummonApi } from "./hermes/summon";
 import { onDesktopScreenshot, screenshotSupport, showWindow, syncScreenshotOutbox, tauriScreenshots, type ScreenshotSupport } from "./hermes/tauriScreenshot";
 import { ConnectionManager, RailConnections, RemoveConnection, SwitchConnection } from "./ui/Connections";
 import { checkShortcut, shortcutLabel, shortcutOf } from "./ui/shortcut";
+import { pickApp } from "./ui/keybindings";
 
 import { reachRoute, tauriPipe, tauriProbe, tauriReach, type SignInDetails } from "./hermes/tauriPipe";
 import { AttemptLog, tauriAttemptStore } from "./hermes/attempts";
@@ -2194,8 +2195,8 @@ export function Main({
   };
 
   useEffect(() => {
-    // Only Ctrl/Cmd chords and Alt+Up/Down, never mid-composition. No bare key does anything app-wide, so nothing
-    // typed with focus outside an input can answer an Approval or stop a reply.
+    // Only chords with Ctrl or Alt, never mid-composition: keybindings.ts refuses a bare key for an app-wide command,
+    // so nothing typed with focus outside an input can answer an Approval or stop a reply.
     const onKey = (e: KeyboardEvent) => {
       if (covered || composing(e)) return;
       // Ctrl+Z outside a text field runs the notice's Undo, as its button does; in one it is always text undo.
@@ -2213,49 +2214,65 @@ export function Main({
         if (!e.repeat) takeScreenshot();
         return;
       }
-      // Alt+Up/Down: the chat above or below the one showing, in Pinned, the Inbox or Working, as the list orders
-      // them. Only while the chat is on screen; a list that uses the same keys (the queue) takes them first, and a
-      // select keeps Alt+Down to open.
+      // A control that took the key (a list that uses the same keys, like the queue) keeps it from an app-wide command.
+      if (e.defaultPrevented) return;
       const onChat = !covering && !previewCovers && !projectScreenOpen && !searchOpen;
-      if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
-        if (!onChat || e.defaultPrevented || (e.target as Element | null)?.tagName === "SELECT") return;
-        const { pinned, inbox, working } = chatSections(listed, snoozes, Date.now(), attention.since, pins);
-        const order = [...pinned, ...inbox, ...working];
-        const at = order.findIndex((c) => c.id === active.chatId);
-        const next = order[at < 0 ? 0 : at + (e.key === "ArrowDown" ? 1 : -1)];
-        if (next) {
-          e.preventDefault();
-          openChat(next.id);
+      const command = pickApp(e);
+      switch (command) {
+        case "chatBelow":
+        case "chatAbove": {
+          // The chat above or below the one showing, in Pinned, the Inbox or Working, as the list orders them. Only
+          // while the chat is on screen, and a select keeps Alt+Down to open.
+          if (!onChat || (e.target as Element | null)?.tagName === "SELECT") return;
+          const { pinned, inbox, working } = chatSections(listed, snoozes, Date.now(), attention.since, pins);
+          const order = [...pinned, ...inbox, ...working];
+          const at = order.findIndex((c) => c.id === active.chatId);
+          const next = order[at < 0 ? 0 : at + (command === "chatBelow" ? 1 : -1)];
+          if (next) {
+            e.preventDefault();
+            openChat(next.id);
+          }
+          return;
         }
-        return;
-      }
-      if (!(e.ctrlKey || e.metaKey)) return;
-      const k = e.key.toLowerCase();
-      if (k === "k") {
-        e.preventDefault();
-        setSearchStart(undefined);
-        setSearchOpen((o) => !o);
-      } else if (k === "n") {
-        e.preventDefault();
-        newChat();
-      } else if (e.key === "Tab" && onChat) {
-        e.preventDefault();
-        cycleTab(e.shiftKey ? -1 : 1);
-      } else if ((e.key === "PageUp" || e.key === "PageDown") && e.shiftKey && !e.altKey && onChat) {
-        e.preventDefault();
-        shiftTab(e.key === "PageUp" ? -1 : 1);
-      } else if (k === "b") {
-        e.preventDefault();
-        setListOpen((o) => !o);
-      } else if (k === ",") {
-        e.preventDefault();
-        openSettings();
-      } else if (e.code === "Backslash" || k === "\\") {
-        e.preventDefault();
-        toggleSplit();
-      } else if ((k === "1" || k === "2") && !e.shiftKey && !e.altKey && split && !settingsOpen && !jobsOpen && !automationsOpen && !outputsOpen && !repoOpen) {
-        e.preventDefault();
-        focusPane(panes[Number(k) - 1].key);
+        case "search":
+          e.preventDefault();
+          setSearchStart(undefined);
+          setSearchOpen((o) => !o);
+          return;
+        case "newChat":
+          e.preventDefault();
+          newChat();
+          return;
+        case "nextTab":
+        case "prevTab":
+          if (!onChat) return;
+          e.preventDefault();
+          cycleTab(command === "nextTab" ? 1 : -1);
+          return;
+        case "moveTabLeft":
+        case "moveTabRight":
+          if (!onChat) return;
+          e.preventDefault();
+          shiftTab(command === "moveTabLeft" ? -1 : 1);
+          return;
+        case "toggleList":
+          e.preventDefault();
+          setListOpen((o) => !o);
+          return;
+        case "settings":
+          e.preventDefault();
+          openSettings();
+          return;
+        case "toggleSplit":
+          e.preventDefault();
+          toggleSplit();
+          return;
+        case "focusLeft":
+        case "focusRight":
+          if (!split || settingsOpen || jobsOpen || automationsOpen || outputsOpen || repoOpen) return;
+          e.preventDefault();
+          focusPane(panes[command === "focusLeft" ? 0 : 1].key);
+          return;
       }
     };
     window.addEventListener("keydown", onKey);
@@ -3077,10 +3094,8 @@ export function Main({
           onSave={(name, f) => tagsStore.saveFilter(name, f)}
           onBulk={(p) => tagsStore.applyBulk(p)}
           onManageTags={() => openTags()}
-          // Ctrl+K closes the palette, and the screenshot shortcut closes it to take one.
-          passKey={(e) =>
-            ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") || (!!screenshotShortcut && shortcutOf(e.nativeEvent) === screenshotShortcut)
-          }
+          // Search's own chord closes the palette, and the screenshot shortcut closes it to take one.
+          passKey={(e) => pickApp(e) === "search" || (!!screenshotShortcut && shortcutOf(e.nativeEvent) === screenshotShortcut)}
         />
       )}
       {tagsOpen && <TagManager key={scope} store={tagsStore} profile={profile} returnTo={tagsReturn} onClose={() => setTagsOpen(false)} />}

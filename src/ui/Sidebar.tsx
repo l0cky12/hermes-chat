@@ -19,6 +19,7 @@ import type { ProfileCloneApi } from "../hermes/profileClone";
 import { ArchiveButton, STATUS_LABEL, SettleButton, SourceIcon, Spinner, composing, relTime, routeLabel, useReturnFocus } from "./bits";
 import { viaLabel } from "../hermes/routes";
 import { dragChat, dragChatEnd } from "./Tabs";
+import { pick } from "./keybindings";
 
 
 
@@ -347,9 +348,9 @@ function RenameRow({
         onChange={(e) => setDraft(e.target.value)}
         onFocus={(e) => e.currentTarget.select()}
         onKeyDown={(e) => {
-          if (composing(e)) return;
-          if (e.key === "Enter") save();
-          else if (e.key === "Escape" && !saving) onDone();
+          const command = pick(e, "rename");
+          if (command === "renameSave") save();
+          else if (command === "renameCancel" && !saving) onDone();
         }}
         onBlur={() => !saving && draft.trim() === from && onDone()}
       />
@@ -469,7 +470,7 @@ function ChatRow({
       }}
       onKeyDown={(e) => {
         // WebKitGTK sends no contextmenu event for Shift+F10.
-        if ((e.key === "F10" && e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) || e.key === "ContextMenu") {
+        if (pick(e, "chatRow") === "rowMenu") {
           e.preventDefault();
           setRetitleError(undefined);
           const r = e.currentTarget.getBoundingClientRect();
@@ -492,7 +493,7 @@ function ChatRow({
           onOpen();
         }}
         onKeyDown={(e) => {
-          if ((e.key === "Delete" || e.key === "Backspace") && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && !chat.running) {
+          if (pick(e, "chatRow") === "rowDelete" && !chat.running) {
             e.preventDefault();
             onAskDelete(e.currentTarget);
           }
@@ -847,7 +848,7 @@ function ProfileMenu({
       role="listbox"
       aria-label="Profiles"
       // Escape closes it from the filter or from an option the owner tabbed to.
-      onKeyDown={(e) => e.key === "Escape" && !composing(e) && onClose()}
+      onKeyDown={(e) => pick(e, "profileMenu") === "profileClose" && onClose()}
     >
       <input
         className="profile-filter"
@@ -855,7 +856,7 @@ function ProfileMenu({
         placeholder="Filter profiles"
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && !composing(e) && shown[0] && onPick(shown[0])}
+        onKeyDown={(e) => pick(e, "profileMenu") === "profilePick" && shown[0] && onPick(shown[0])}
       />
       <div className="profile-options">
         {shown.map((p) => (
@@ -907,11 +908,11 @@ function menuForFocusedRow(e: ReactMouseEvent<HTMLElement>) {
 
 /** Up and Down move focus between the chats in the list, top to bottom through its sections, without opening them. */
 function moveBetweenChats(e: KeyboardEvent<HTMLElement>) {
-  // Alt+arrows open the chat above or below instead (App.tsx), so they pass.
-  if ((e.key !== "ArrowDown" && e.key !== "ArrowUp") || e.altKey || !(e.target as Element).classList.contains("row-open")) return;
+  const command = pick(e, "chatRow");
+  if ((command !== "rowDown" && command !== "rowUp") || !(e.target as Element).classList.contains("row-open")) return;
   e.preventDefault();
   const rows = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>(".row-open")).filter((r) => !r.closest("[hidden]"));
-  rows[rows.indexOf(e.target as HTMLButtonElement) + (e.key === "ArrowDown" ? 1 : -1)]?.focus();
+  rows[rows.indexOf(e.target as HTMLButtonElement) + (command === "rowDown" ? 1 : -1)]?.focus();
 }
 
 /**

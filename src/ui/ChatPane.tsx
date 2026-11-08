@@ -21,6 +21,7 @@ import { SideQuestionPair } from "./SideQuestions";
 import { Markdown } from "./Markdown";
 import { SourceIcon, Spinner, StoredTime, composing, highlight } from "./bits";
 import { caretAfter, editStep, inputKind, type EditStep } from "./editKeys";
+import { chordOf, pick as pickCommand, pickApp } from "./keybindings";
 import type { EditKind } from "../hermes/editHistory";
 import { wakeFull } from "../hermes/snooze";
 import { stagedFiles } from "../hermes/unsaved";
@@ -45,6 +46,9 @@ import { CopyButton, replyMarkdown } from "./CopyMessage";
 import { turnsOf, type ReplayKind, type Variant } from "../hermes/replay";
 import type { FollowUp } from "../hermes/uiPrefs";
 import { sttRoute } from "../hermes/sttRoute";
+
+/** The chords a textarea answers with a new line itself. */
+const NATIVE_NEW_LINE: readonly string[] = ["Enter", "Shift+Enter"];
 
 /**
  * What a message sent while the chat's reply runs does (ADR 0057). `mode`: what Enter does, the Follow-up behavior
@@ -495,10 +499,9 @@ export function ChatPane({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && !composing(e) && activeRef.current) {
-        e.preventDefault();
-        openFind();
-      }
+      if (pickApp(e) !== "find" || e.defaultPrevented || !activeRef.current) return;
+      e.preventDefault();
+      openFind();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -673,11 +676,11 @@ export function ChatPane({
                 stickToBottom.current = false;
               }}
               onKeyDown={(e) => {
-                if (composing(e)) return;
-                if (e.key === "Enter" || e.key === "ArrowDown" || e.key === "ArrowUp") {
-                  e.preventDefault();
-                  step(e.key === "ArrowUp" || (e.key === "Enter" && e.shiftKey) ? -1 : 1);
-                } else if (e.key === "Escape") closeFind();
+                const command = pickCommand(e, "find");
+                if (!command) return;
+                e.preventDefault();
+                if (command === "findClose") closeFind();
+                else step(command === "findPrev" ? -1 : 1);
               }}
             />
             <span className="find-count" aria-live="polite">
@@ -1556,10 +1559,16 @@ function Composer({
               step(edit);
               return;
             }
-            if (e.key === "Enter" && !e.shiftKey && !composing(e)) {
+            const command = pickCommand(e, "composer");
+            if (command === "send" || command === "sendOther") {
               e.preventDefault();
               // Enter queues or steers only while the hint below says so; Dictation hides it.
-              if (!(queueing && dictation.active)) send(e.ctrlKey || e.metaKey);
+              if (!(queueing && dictation.active)) send(command === "sendOther");
+            } else if (command === "newLine" && !NATIVE_NEW_LINE.includes(chordOf(e)!)) {
+              // The textarea puts in a new line on Enter and Shift+Enter itself. Any other chord is written as typing
+              // is, so the composer's own history (ADR 0095) sees it.
+              e.preventDefault();
+              document.execCommand("insertText", false, "\n");
             }
           }}
         />

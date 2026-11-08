@@ -15,6 +15,7 @@ import { ArrowLeft, AudioLines, Brain, Camera, Cpu, Database, Download, HardDriv
 import type { MemorySource } from "../hermes/memory";
 import { SubNav, type SubNavItem } from "./SubNav";
 import { SettingRow, SettingsSearching, SettingsSection } from "./SettingRows";
+import { pickApp } from "./keybindings";
 import type { Chat, ConnectionStatus } from "../hermes/model";
 import type { Route } from "../hermes/pipe";
 import { viaLabel } from "../hermes/routes";
@@ -453,7 +454,7 @@ export function SettingsScreen({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || document.querySelector('[aria-modal="true"]')) return;
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "f") {
+      if (pickApp(e) === "find") {
         e.preventDefault();
         searchBox.current?.focus();
         searchBox.current?.select();
