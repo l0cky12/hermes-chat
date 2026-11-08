@@ -13,6 +13,7 @@ import { connect, type Hermes } from "../hermes/transport";
 import { projectScope } from "../hermes/projectLinks";
 import { Main } from "../App";
 import { ChatList } from "./Sidebar";
+import { TAB_DRAG } from "./Tabs";
 import { ChatSectionSettings } from "./ChatSectionSettings";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
@@ -228,6 +229,141 @@ describe("The Settled drawer, in the list", () => {
     render(<List chats={mix} />);
     fireEvent.contextMenu(rowOf("gone"));
     expect(screen.queryByRole("menuitem", { name: /^(Settle|Unsettle)$/ })).toBeNull();
+  });
+});
+
+describe("Dragging a row to settle or unsettle it, in the list", () => {
+  const drawer = () => document.querySelector<HTMLElement>(".settled-drawer")!;
+  const scroll = () => document.querySelector<HTMLElement>(".sb-scroll")!;
+  const inboxTinted = () => scroll().getAttribute("data-drop") === "inbox";
+  const tinted = () => drawer().classList.contains("drop") || inboxTinted();
+
+  function dragRow(id: string, target: Element, { drop = true, tab = false }: { drop?: boolean; tab?: boolean } = {}) {
+    const data = new Map<string, string>();
+    // Browsers hide drag data until drop; dragover sees only the types.
+    let readable = false;
+    const dataTransfer = {
+      types: [] as string[],
+      setData: (k: string, v: string) => (data.set(k, v), dataTransfer.types.push(k)),
+      getData: (k: string) => (readable ? (data.get(k) ?? "") : ""),
+      effectAllowed: "",
+      dropEffect: "",
+    };
+    const source = rowOf(id);
+    fireEvent.dragStart(source, { dataTransfer });
+    if (tab) dataTransfer.types.push(TAB_DRAG);
+    fireEvent.dragOver(target, { dataTransfer });
+    if (!drop) return;
+    readable = true;
+    fireEvent.drop(target, { dataTransfer });
+    fireEvent.dragEnd(source, { dataTransfer });
+  }
+
+  const drag = [chat("fresh"), chat("shelved", { settled: true }), chat("gone", { archived: true })];
+
+  it("settles an Inbox row dropped on the closed drawer, tinting it meanwhile, and leaves the drawer closed", () => {
+    setUIPrefs({ chatSectionsCollapsed: ["settled"] });
+    const onSettle = vi.fn();
+    render(<List chats={drag} onSettle={onSettle} />);
+    dragRow("fresh", head("Settled"), { drop: false });
+    expect(drawer().classList.contains("drop")).toBe(true);
+    dragRow("fresh", head("Settled"));
+    expect(onSettle.mock.calls).toEqual([["fresh", true]]);
+    expect(drawer().classList.contains("drop")).toBe(false);
+    expect(head("Settled").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("settles on the open drawer's rows too", () => {
+    setUIPrefs({ chatSectionsCollapsed: [] });
+    const onSettle = vi.fn();
+    render(<List chats={drag} onSettle={onSettle} />);
+    dragRow("fresh", rowOf("shelved"));
+    expect(onSettle.mock.calls).toEqual([["fresh", true]]);
+  });
+
+  it("unsettles a Settled row dropped on an Inbox row or the Inbox's header, tinting the Inbox meanwhile", () => {
+    setUIPrefs({ chatSectionsCollapsed: [] });
+    const onSettle = vi.fn();
+    render(<List chats={drag} onSettle={onSettle} />);
+    dragRow("shelved", rowOf("fresh"), { drop: false });
+    expect(inboxTinted()).toBe(true);
+    expect(drawer().classList.contains("drop")).toBe(false);
+    dragRow("shelved", rowOf("fresh"));
+    dragRow("shelved", head("Inbox"));
+    expect(onSettle.mock.calls).toEqual([
+      ["shelved", false],
+      ["shelved", false],
+    ]);
+    expect(inboxTinted()).toBe(false);
+  });
+
+  it("unsettles a pinned Settled chat dropped on the Inbox, and settles a snoozed one dropped on the drawer", () => {
+    setUIPrefs({ chatSectionsCollapsed: [] });
+    const onSettle = vi.fn();
+    render(
+      <List
+        chats={[chat("fresh"), chat("pinned", { settled: true }), chat("napping")]}
+        pins={{ pinned: NOW }}
+        snoozes={{ napping: NOW + 3_600_000 }}
+        onSettle={onSettle}
+      />,
+    );
+    dragRow("pinned", head("Inbox"));
+    dragRow("napping", head("Settled"));
+    expect(onSettle.mock.calls).toEqual([
+      ["pinned", false],
+      ["napping", true],
+    ]);
+  });
+
+  it("does nothing, with no tint, for a drop that would change nothing", () => {
+    setUIPrefs({ chatSectionsCollapsed: [] });
+    const onSettle = vi.fn();
+    render(<List chats={drag} onSettle={onSettle} />);
+    for (const [id, target] of [
+      ["shelved", head("Settled")],
+      ["shelved", rowOf("shelved")],
+      ["fresh", head("Inbox")],
+      ["fresh", rowOf("fresh")],
+    ] as const) {
+      dragRow(id, target, { drop: false });
+      expect(tinted()).toBe(false);
+      dragRow(id, target);
+    }
+    expect(onSettle).not.toHaveBeenCalled();
+  });
+
+  it("refuses an archived chat on both", () => {
+    setUIPrefs({ chatSectionsShown: ["inbox", "archived", "settled"], chatSectionsCollapsed: [] });
+    const onSettle = vi.fn();
+    render(<List chats={drag} onSettle={onSettle} />);
+    for (const target of [head("Settled"), head("Inbox")]) {
+      dragRow("gone", target, { drop: false });
+      expect(tinted()).toBe(false);
+      dragRow("gone", target);
+    }
+    expect(onSettle).not.toHaveBeenCalled();
+  });
+
+  it("refuses a tab dragged onto the drawer or the Inbox", () => {
+    setUIPrefs({ chatSectionsCollapsed: [] });
+    const onSettle = vi.fn();
+    render(<List chats={drag} onSettle={onSettle} />);
+    dragRow("fresh", head("Settled"), { drop: false, tab: true });
+    expect(tinted()).toBe(false);
+    dragRow("fresh", head("Settled"), { tab: true });
+    dragRow("shelved", head("Inbox"), { tab: true });
+    expect(onSettle).not.toHaveBeenCalled();
+  });
+
+  it("takes the Inbox's header when it is empty and collapsed, and not the sections below it", () => {
+    setUIPrefs({ chatSectionsCollapsed: ["inbox"] });
+    const onSettle = vi.fn();
+    render(<List chats={[chat("shelved", { settled: true }), chat("busy", { running: true })]} onSettle={onSettle} />);
+    dragRow("shelved", head("Working"), { drop: false });
+    expect(tinted()).toBe(false);
+    dragRow("shelved", head("Inbox"));
+    expect(onSettle.mock.calls).toEqual([["shelved", false]]);
   });
 });
 

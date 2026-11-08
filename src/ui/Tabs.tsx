@@ -25,9 +25,17 @@ let rowDrag: string | null = null;
 export const dragChat = (e: DragEvent, id: string) => {
   rowDrag = id;
   e.dataTransfer.setData(CHAT_DRAG, id);
-  e.dataTransfer.effectAllowed = "copy";
+  // A drop on the Settled drawer or the Inbox is a move (Sidebar.tsx), and a browser refuses a drop whose dropEffect
+  // effectAllowed doesn't allow.
+  e.dataTransfer.effectAllowed = "copyMove";
 };
 export const dragChatEnd = () => void (rowDrag = null);
+
+/** The id of the chat list row being dragged, or undefined for any other drag, a tab's included. */
+export const rowDragged = (e: DragEvent): string | undefined => {
+  const types = e.dataTransfer.types;
+  return types.includes(CHAT_DRAG) && !types.includes(TAB_DRAG) ? e.dataTransfer.getData(CHAT_DRAG) || rowDrag || undefined : undefined;
+};
 
 /** The chat a drag carries, or undefined for a drag that isn't a chat's. A row's id unknown ("", which no tab has)
  * only when its drag started outside this window. */
