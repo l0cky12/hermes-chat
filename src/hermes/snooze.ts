@@ -368,6 +368,10 @@ export function chatSections(
   return s;
 }
 
+/** Where a chat list row dropped on the Settled drawer or the Inbox puts its chat: settled or not, or undefined when the drop would change nothing or the chat is archived (ADR 0090). */
+export const settleByDrop = (chat: Chat | undefined, on: "settled" | "inbox"): boolean | undefined =>
+  !chat || chat.archived || chat.settled === (on === "settled") ? undefined : on === "settled";
+
 export type InboxSettle = { ids: string[]; approvals: number; failures: number };
 
 export function inboxSettle(inbox: Chat[]): InboxSettle {

@@ -1,7 +1,7 @@
 // Icon rail beside a chat list (ADR 0001), ported from the prototype's variants C and A, with the profile's tools in one
 // Server group and tips that show at once (ADR 0050, 0055). Server files and the Terminal live in the side panel only. The list's header is the profile switcher. Settings opens from the
 // rail's foot. Right-clicking a chat opens its menu (ChatMenu.tsx).
-import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Inbox as InboxIcon, LockOpen, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
 import type { Chat, ConnectionStatus, OtherProfile, OtherProfiles } from "../hermes/model";
@@ -9,7 +9,7 @@ import { SOURCE_LABEL, isWaiting } from "../hermes/model";
 import { CHECK_EVERY_MS, totalUnread } from "../hermes/otherProfiles";
 import type { Route } from "../hermes/pipe";
 import { RenameConflict, TitleModelUnavailable, type Snapshot } from "../hermes/transport";
-import { SECTION_LABEL, chatSections, inboxSettle, wakeFull, wakeLabel, type InboxSettle, type Pins, type SectionKey, type Snoozes } from "../hermes/snooze";
+import { SECTION_LABEL, chatSections, inboxSettle, settleByDrop, wakeFull, wakeLabel, type InboxSettle, type Pins, type SectionKey, type Snoozes } from "../hermes/snooze";
 import { getUIPrefs, setUIPrefs, subscribe as subscribeUIPrefs } from "../hermes/uiPrefs";
 import { ChatMenu, type ChatPin, type ChatProjects, type ChatSnooze, type ChatTags } from "./ChatMenu";
 import { SnoozeDialog, useSnoozeClock } from "./Snooze";
@@ -19,7 +19,7 @@ import { CloneProfileDialog } from "./CloneProfile";
 import type { ProfileCloneApi } from "../hermes/profileClone";
 import { ArchiveButton, STATUS_LABEL, SettleButton, SourceIcon, Spinner, composing, relTime, routeLabel, useReturnFocus } from "./bits";
 import { viaLabel } from "../hermes/routes";
-import { dragChat, dragChatEnd } from "./Tabs";
+import { dragChat, dragChatEnd, rowDragged } from "./Tabs";
 
 
 
@@ -921,9 +921,11 @@ function moveBetweenChats(e: KeyboardEvent<HTMLElement>) {
  * the list's scroll. Settled is a drawer at the list's foot, outside the scroll (ADR 0090): its header stays at the
  * bottom, and opens the drawer upward with its own scroll. Settling a chat is how it is cleared from the Inbox.
  * Settings → General picks the sections shown (uiPrefs.ts `chatSectionsShown`), and each one's header collapses it,
- * remembered across restarts. The scroll's sections are one list of rows and headers, so a row that moves between
- * them, as a reply starts or ends, keeps its menu, rename box and focus; a collapsed section keeps its Active rows,
- * hidden, for the same reason. The Custom snooze dialog belongs to the list, not a row, for the same reason too.
+ * remembered across restarts. A row dragged onto the drawer, open or closed, settles its chat, and a Settled one dragged
+ * onto the Inbox unsettles it; each is tinted while the drop would change something (ADR 0090). The scroll's sections
+ * are one list of rows and headers, so a row that moves between them, as a reply starts or ends, keeps its menu, rename
+ * box and focus; a collapsed section keeps its Active rows, hidden, for the same reason. The Custom snooze dialog
+ * belongs to the list, not a row, for the same reason too.
  * Archived chats are in `chats` only while the Archived section is shown (App.tsx lists them then).
  * `projectSwitcher` sits under the profile's name; `chats` are only the shown project's when one is picked there.
  * `projectsOf`: the projects a chat's menu offers to put it in or take it out of.
@@ -1033,6 +1035,28 @@ export function ChatList({
   const now = useSnoozeClock(snoozes);
   const sections = chatSections(chats, snoozes, now, attentionSince, pins);
   const [askedInbox, setAskedInbox] = useState<InboxSettle>();
+  const [dropOn, setDropOn] = useState<"settled" | "inbox" | null>(null);
+  const dropHandlers = (on: "settled" | "inbox", isTarget: (e: DragEvent<HTMLElement>) => boolean = () => true) => ({
+    onDragOver: (e: DragEvent<HTMLElement>) => {
+      if (isTarget(e) && settleByDrop(chats.find((c) => c.id === rowDragged(e)), on) !== undefined) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        setDropOn(on);
+      } else setDropOn((was) => (was === on ? null : was));
+    },
+    onDragLeave: (e: DragEvent<HTMLElement>) => e.currentTarget.contains(e.relatedTarget as Node) || setDropOn((was) => (was === on ? null : was)),
+    onDrop: (e: DragEvent<HTMLElement>) => {
+      setDropOn((was) => (was === on ? null : was));
+      const id = rowDragged(e);
+      // Settling remounts the row outside this scroll, and React never delivers dragend to a detached node.
+      dragChatEnd();
+      const to = isTarget(e) ? settleByDrop(chats.find((c) => c.id === id), on) : undefined;
+      if (id === undefined || to === undefined) return;
+      e.preventDefault();
+      onSettle(id, to);
+    },
+  });
+  const overInbox = (e: DragEvent<HTMLElement>) => !!(e.target as Element).closest('[data-section="inbox"], [data-section-head="inbox"]');
   const stillInbox = askedInbox ? sections.inbox.filter((c) => askedInbox.ids.includes(c.id)).map((c) => c.id) : [];
   const askedInboxGone = !!askedInbox && !stillInbox.length;
   // The dialog closes if its chat leaves the list, or is settled or archived meanwhile (in another window or client).
@@ -1098,7 +1122,7 @@ export function ChatList({
     );
     if (k !== "inbox" || !onSettleAll || !list.length) return toggle;
     return (
-      <div key={`section-${k}`} className="section-head">
+      <div key={`section-${k}`} className="section-head" data-section="inbox">
         {toggle}
         <button className="section-action" data-settle-all onClick={() => setAskedInbox(inboxSettle(list))}>
           Settle all
@@ -1139,7 +1163,7 @@ export function ChatList({
         </div>
       )}
       {projectSwitcher && <div className="sb-project">{projectSwitcher}</div>}
-      <div className="sb-scroll">
+      <div className="sb-scroll" data-drop={dropOn === "inbox" ? "inbox" : undefined} {...dropHandlers("inbox", overInbox)}>
         {switching && (
           <SwitchStatus profile={profile} switching={switching} status={status} onRetry={onRetrySwitch} onBack={() => onSwitchProfile(switching.from)} />
         )}
@@ -1160,7 +1184,7 @@ export function ChatList({
               header(k, list, open),
               ...(open || keepsHidden(k) ? list.map((c) => row(c, k, !open)) : []),
               open && !list.length && (
-                <div key={`empty-${k}`} className="empty-hint">
+                <div key={`empty-${k}`} className="empty-hint" data-section={k === "inbox" ? "inbox" : undefined}>
                   {k === "inbox" ? (busy ? "Nothing needs you right now." : "Nothing needs you. Start a new chat.") : `No ${SECTION_LABEL[k].toLowerCase()} chats.`}
                 </div>
               ),
@@ -1170,7 +1194,7 @@ export function ChatList({
       </div>
       {shown.includes("settled") && (
         // The drawer at the list's foot (ADR 0090): its header stays at the bottom however long the scroll above is.
-        <div className={`settled-drawer ${settledOpen ? "open" : ""}`}>
+        <div className={`settled-drawer ${settledOpen ? "open" : ""} ${dropOn === "settled" ? "drop" : ""}`} {...dropHandlers("settled")}>
           {header("settled", sections.settled, settledOpen)}
           {settledOpen && (
             <div className="settled-list">
