@@ -46,10 +46,26 @@ describe("The office's characters", () => {
     const stale = officeFloor([{ ...team("s", "running"), desks: [{ ...team("s", "running").desks[0], stale: "As last seen." }] }], EMPTY_FLOOR_MEMORY, NOW);
     const figures = buildFigures();
     figures.set(floor.characters);
-    expect(figures.animate(0, false)).toBe(false);
-    expect(figures.animate(0, true)).toBe(true);
+    expect(figures.animate(0, false, 160)).toBe(false);
+    expect(figures.animate(0, true, 160)).toBe(true);
     figures.set(stale.characters);
-    expect(figures.animate(0, true)).toBe(false);
+    expect(figures.animate(0, true, 160)).toBe(false);
+  });
+
+  it("swaps a typing agent's hands on every frame drawn one beat apart, at any pace", () => {
+    const floor = officeFloor([team("a", "running")], EMPTY_FLOOR_MEMORY, NOW);
+    const figures = buildFigures();
+    figures.set(floor.characters);
+    const arms = figures.group.children.filter((o): o is InstancedMesh => o instanceof InstancedMesh)[2];
+    const pose = () => Array.from(arms.instanceMatrix.array.slice(0, 16)).join(",");
+    for (const beat of [1000 / 6, 1000 / 3]) {
+      const seen: string[] = [];
+      for (let frame = 0; frame < 6; frame++) {
+        figures.animate(5_000 + frame * beat + 1, true, beat);
+        seen.push(pose());
+      }
+      seen.slice(1).forEach((p, i) => expect(p).not.toBe(seen[i]));
+    }
   });
 
   it("keeps the selection ring under the selected agent when the floor moves it, and drops it when the agent goes", () => {

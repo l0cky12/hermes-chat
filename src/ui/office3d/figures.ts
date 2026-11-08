@@ -77,8 +77,8 @@ export type Figures = {
   group: Group;
   /** Places the characters; drawn on the next frame. The first `onFloor` are the floor's; the rest walk out. */
   set(characters: readonly Placed[], onFloor?: number): void;
-  /** Moves typing arms for time `t` (ms). Whether any character types, so the scene knows to keep drawing. */
-  animate(t: number, moves: boolean): boolean;
+  /** Moves typing arms for time `t` (ms), a hand up or down each `beat` (ms). Whether any character types, so the scene keeps drawing. */
+  animate(t: number, moves: boolean, beat: number): boolean;
   select(key: string | undefined): void;
   /** The meshes a click can hit, and which character an instance of them is. */
   pickable: InstancedMesh[];
@@ -170,14 +170,14 @@ export function buildFigures(): Figures {
       }
       ringOn();
     },
-    animate(t, moves) {
+    animate(t, moves, beatMs) {
       if (!moves || typing.length === 0) return typing.length > 0 && moves;
       // Every pose has two arms, so character i's are arms 2i and 2i + 1.
       for (const i of typing) {
         const f = FIGURE.typing;
         f.arms.forEach((a, side) => {
           // Two poses, a hand up and a hand down, swapped each beat: at a few frames a second that reads as typing.
-          const beat = Math.floor(t / 160) + i;
+          const beat = Math.floor(t / beatMs) + i;
           const swing = (beat + side) % 2 ? 0.16 : -0.06;
           arm.setMatrixAt(i * 2 + side, partMatrix(bases[i], a, swing, m));
         });

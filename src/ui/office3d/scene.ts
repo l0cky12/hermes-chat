@@ -1,9 +1,11 @@
 // The office's building as a three.js scene (ADR 0089). The only way in from the app: OfficeBuilding.tsx loads this
 // file with import(), so three.js is its own chunk, fetched when the office first opens. It draws what officeFloor
 // decided and decides nothing itself, beyond walking each agent from where it was to where the floor now puts it.
-// Every frame goes through the pacer: none unless something changed or moves, at most 30 a second, none while asleep.
+// Every frame goes through the pacer: none unless something changed or moves, at most QUALITY's rate a second, none
+// while asleep.
 import { DirectionalLight, HemisphereLight, PerspectiveCamera, Plane, Raycaster, Scene, Vector2, Vector3, WebGLRenderer, Color } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import type { OfficeQuality } from "../../hermes/uiPrefs";
 import { PLAN, type BuildingRoom, type Floor } from "../../hermes/officeFloor";
 import { buildBuilding, buildTower, PALETTE, type Mode } from "./building";
 import { buildFigures } from "./figures";
@@ -16,6 +18,8 @@ export type ScreenPoint = { x: number; y: number; off: boolean };
 export type SceneEvents = {
   /** A click on a character, or on nothing (undefined). */
   onPick(key: string | undefined): void;
+  /** The pointer is over a character, or no longer (undefined). Told only when that changes. It draws nothing. */
+  onHover(key: string | undefined): void;
   /** A click on one of the tower's floors, by its index in `setTower`'s list. */
   onFloor(index: number): void;
   /**
@@ -39,6 +43,8 @@ export type OfficeScene = {
   setMode(mode: Mode): void;
   /** Whether things may move: typing arms, walks and camera moves. Off for reduced motion. */
   setMotion(moves: boolean): void;
+  /** How much the building may cost. Applies at once; Low puts anyone walking in place. */
+  setQuality(quality: OfficeQuality): void;
   setSelected(key: string | undefined): void;
   resetCamera(): void;
   /** Whether it may draw at all: on screen and its window focused. */
@@ -46,26 +52,28 @@ export type OfficeScene = {
   dispose(): void;
 };
 
-/** The device pixel ratio is held at 1.5 at most: past it the cost grows faster than anyone can see. */
-const MAX_DPR = 1.5;
+const QUALITY: Record<OfficeQuality, { maxFps: number; maxDpr: number; walks: boolean; typingFps: number }> = {
+  normal: { maxFps: 30, maxDpr: 1.5, walks: true, typingFps: 6 },
+  low: { maxFps: 15, maxDpr: 1, walks: false, typingFps: 3 },
+};
 const MIN_DISTANCE = 7;
 const MAX_DISTANCE = 44;
 const HOME = { target: new Vector3(0, 0, 0.5), position: new Vector3(15, 27, 23) };
 const TWEEN_MS = 450;
-/** Typing needs a few distinct poses a second, not smooth motion: each frame of it redraws the whole building. */
-const TYPING_FPS = 6;
 
-export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents, start: { mode: Mode; moves: boolean }): OfficeScene {
+export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents, start: { mode: Mode; moves: boolean; quality: OfficeQuality }): OfficeScene {
   // The last frame drawn has to stay on screen until the next one, which may be minutes away: WebKitGTK otherwise
   // shows a cleared canvas the next time the page repaints.
   const renderer = new WebGLRenderer({ canvas, antialias: false, preserveDrawingBuffer: true, powerPreference: "low-power" });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_DPR));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, QUALITY[start.quality].maxDpr));
   const scene = new Scene();
   const camera = new PerspectiveCamera(40, 1, 0.5, 200);
   camera.position.copy(HOME.position);
 
   let mode = start.mode;
   let moves = start.moves;
+  let quality = start.quality;
+  const mayWalk = () => moves && QUALITY[quality].walks;
   const building = buildBuilding(mode);
   const tower = buildTower(mode);
   const figures = buildFigures();
@@ -94,7 +102,7 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
   controls.update();
 
   let tween: { from: { p: Vector3; t: Vector3 }; to: { p: Vector3; t: Vector3 }; start: number } | undefined;
-  const pacer = createPacer({ draw, onFrame: events.onFrame });
+  const pacer = createPacer({ draw, onFrame: events.onFrame, maxFps: QUALITY[quality].maxFps });
   // Zooming toward the cursor moves the point the camera turns about; it stays over the building.
   controls.addEventListener("change", () => {
     controls.target.x = Math.max(-12, Math.min(12, controls.target.x));
@@ -140,7 +148,8 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
       }
     }
     if (walks) walks = place(now);
-    pacer.animating("typing", figures.animate(now, moves), TYPING_FPS);
+    const { typingFps } = QUALITY[quality];
+    pacer.animating("typing", figures.animate(now, moves, 1000 / typingFps), typingFps);
     renderer.render(scene, camera);
     renderer.getSize(size);
     const tags = new Map<string, ReturnType<typeof toScreen>>();
@@ -168,18 +177,34 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     const r = canvas.getBoundingClientRect();
     return new Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   };
+  type Under = { kind: "figure"; key: string } | { kind: "floor"; index: number } | { kind: "leaving" } | { kind: "nothing" };
+  const under = (e: MouseEvent): Under => {
+    raycaster.setFromCamera(ndc(e), camera);
+    const hit = raycaster.intersectObjects([...figures.pickable, ...tower.pickable()], false)[0];
+    if (!hit) return { kind: "nothing" };
+    if (hit.object.userData.floor !== undefined) return { kind: "floor", index: hit.object.userData.floor as number };
+    const key = hit.instanceId === undefined ? undefined : figures.keyAt(hit.instanceId);
+    return key === undefined ? { kind: "leaving" } : { kind: "figure", key };
+  };
   let down: { x: number; y: number } | undefined;
   const onDown = (e: PointerEvent) => void (down = { x: e.clientX, y: e.clientY });
   const onClick = (e: MouseEvent) => {
     if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
-    raycaster.setFromCamera(ndc(e), camera);
-    // The nearest thing under the pointer: a character, a tower floor, or one walking out, which can't be picked.
-    const hit = raycaster.intersectObjects([...figures.pickable, ...tower.pickable()], false)[0];
-    if (hit?.object.userData.floor !== undefined) return events.onFloor(hit.object.userData.floor as number);
-    const key = hit?.instanceId === undefined ? undefined : figures.keyAt(hit.instanceId);
-    if (hit && key === undefined) return;
-    events.onPick(key);
+    const hit = under(e);
+    if (hit.kind === "floor") return events.onFloor(hit.index);
+    if (hit.kind !== "leaving") events.onPick(hit.kind === "figure" ? hit.key : undefined);
   };
+  let hovered: string | undefined;
+  const hover = (key: string | undefined, pointer: boolean) => {
+    canvas.style.cursor = pointer ? "pointer" : "";
+    if (key !== hovered) events.onHover((hovered = key));
+  };
+  const onMove = (e: PointerEvent) => {
+    if (e.buttons !== 0) return hover(undefined, false);
+    const hit = under(e);
+    hover(hit.kind === "figure" ? hit.key : undefined, hit.kind === "figure" || hit.kind === "floor");
+  };
+  const onLeave = () => hover(undefined, false);
   // A double click on a room zooms to it, keeping the direction the camera looks from.
   const onDouble = (e: MouseEvent) => {
     raycaster.setFromCamera(ndc(e), camera);
@@ -200,6 +225,8 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     events.onLost("The graphics card stopped drawing the office (its WebGL context was lost).");
   };
   canvas.addEventListener("pointerdown", onDown);
+  canvas.addEventListener("pointermove", onMove);
+  canvas.addEventListener("pointerleave", onLeave);
   canvas.addEventListener("click", onClick);
   canvas.addEventListener("dblclick", onDouble);
   canvas.addEventListener("webglcontextlost", onLost);
@@ -221,9 +248,9 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     setFloor(next, profile) {
       const t = performance.now();
       floor = next;
-      crowd.set(next.characters, profile, t, moves);
+      crowd.set(next.characters, profile, t, mayWalk());
       walks = place(t);
-      pacer.animating("typing", moves && next.characters.some((c) => c.pose === "typing" && !c.stale), TYPING_FPS);
+      pacer.animating("typing", moves && next.characters.some((c) => c.pose === "typing" && !c.stale), QUALITY[quality].typingFps);
       pacer.invalidate();
     },
     setTower(floors) {
@@ -241,12 +268,22 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     },
     setMotion(next) {
       moves = next;
-      if (!moves) {
-        pacer.animating("typing", false);
+      if (!moves) pacer.animating("typing", false);
+      if (!mayWalk()) {
         crowd.stop();
         walks = place(performance.now());
       }
       pacer.invalidate();
+    },
+    setQuality(next) {
+      quality = next;
+      pacer.setMaxFps(QUALITY[quality].maxFps);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, QUALITY[quality].maxDpr));
+      if (!mayWalk()) {
+        crowd.stop();
+        walks = place(performance.now());
+      }
+      resize();
     },
     setSelected(key) {
       figures.select(key);
@@ -259,7 +296,10 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
       watch.disconnect();
       controls.dispose();
       canvas.removeEventListener("pointerdown", onDown);
+      canvas.removeEventListener("pointermove", onMove);
+      canvas.removeEventListener("pointerleave", onLeave);
       canvas.removeEventListener("click", onClick);
+      canvas.style.cursor = "";
       canvas.removeEventListener("dblclick", onDouble);
       canvas.removeEventListener("webglcontextlost", onLost);
       building.dispose();

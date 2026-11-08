@@ -108,6 +108,31 @@ describe("The office's frame pacer", () => {
     expect(drawn() - slow).toBeLessThanOrEqual(7);
   });
 
+  it("changes its most frames a second while running, and mixed movers follow it", () => {
+    const { pacer, run, drawn } = setup();
+    pacer.setAwake(true);
+    run(100);
+    pacer.animating("camera", true);
+    const rate = (ms: number) => {
+      const from = drawn();
+      run(ms);
+      return ((drawn() - from) * 1000) / ms;
+    };
+    expect(rate(2_000)).toBeGreaterThanOrEqual(28);
+    pacer.setMaxFps(15);
+    run(200);
+    const low = rate(2_000);
+    expect(low).toBeGreaterThanOrEqual(14);
+    expect(low).toBeLessThanOrEqual(16);
+    pacer.animating("typing", true, 6);
+    expect(rate(2_000)).toBeLessThanOrEqual(16);
+    pacer.setMaxFps(30);
+    run(200);
+    const high = rate(2_000);
+    expect(high).toBeGreaterThanOrEqual(28);
+    expect(high).toBeLessThanOrEqual(31);
+  });
+
   it("draws nothing while asleep, even while something moves or changes, and catches up once on waking", () => {
     const { pacer, run, drawn, asked } = setup();
     pacer.setAwake(true);
