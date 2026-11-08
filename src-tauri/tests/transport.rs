@@ -97,13 +97,24 @@ async fn status() -> Response {
 /// Keys `PUT /api/env` saved, as (query, body), for every test; each test uses its own profile.
 static SAVED_KEYS: Mutex<Vec<(String, Value)>> = Mutex::new(Vec::new());
 
-/// `GET /api/env`, trimmed: one provider key, a messaging token the Channels page owns, and a base URL.
-async fn env_rows(headers: HeaderMap) -> Response {
+/// Keys `DELETE /api/env` removed, as (query, body), for every test; each test uses its own profile.
+static REMOVED_KEYS: Mutex<Vec<(String, Value)>> = Mutex::new(Vec::new());
+
+fn removed_for(profile: &str) -> Vec<Value> {
+    REMOVED_KEYS.lock().unwrap().iter().filter(|(q, _)| q == &format!("profile={profile}")).map(|(_, b)| b.clone()).collect()
+}
+
+/// `GET /api/env`, trimmed: a provider key that is not set, one that is set until a `DELETE` removes it (and is never
+/// set for `keys-gone`), a messaging token the Channels page owns, and a base URL.
+async fn env_rows(headers: HeaderMap, RawQuery(query): RawQuery) -> Response {
     if !cookie(&headers).contains("hermes_session_at=AT") {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    let query = query.unwrap_or_default();
+    let anthropic_set = query != "profile=keys-gone" && !REMOVED_KEYS.lock().unwrap().iter().any(|(q, _)| q == &query);
     Json(json!({
         "OPENROUTER_API_KEY": {"is_set": false, "provider": "openrouter", "is_password": true, "channel_managed": false},
+        "ANTHROPIC_API_KEY": {"is_set": anthropic_set, "provider": "anthropic", "is_password": true, "channel_managed": false},
         "TELEGRAM_BOT_TOKEN": {"is_set": true, "provider": "", "is_password": true, "channel_managed": true},
         "OPENAI_BASE_URL": {"is_set": false, "provider": "openai-api", "is_password": false, "channel_managed": false},
     }))
@@ -117,6 +128,21 @@ async fn save_env(RawQuery(query): RawQuery, Json(body): Json<Value>) -> Respons
     }
     SAVED_KEYS.lock().unwrap().push((query.unwrap_or_default(), body));
     Json(json!({"ok": true})).into_response()
+}
+
+/// `DELETE /api/env`. `keys-gone` has no such key, so Hermes answers 404; `keys-stuck` answers 200 and keeps it.
+async fn delete_env(RawQuery(query): RawQuery, Json(body): Json<Value>) -> Response {
+    let query = query.unwrap_or_default();
+    match query.as_str() {
+        "profile=keys-gone" => {
+            (StatusCode::NOT_FOUND, Json(json!({"detail": format!("{} not found in .env", body["key"].as_str().unwrap_or_default())}))).into_response()
+        }
+        "profile=keys-stuck" => Json(json!({"ok": true})).into_response(),
+        _ => {
+            REMOVED_KEYS.lock().unwrap().push((query, body));
+            Json(json!({"ok": true})).into_response()
+        }
+    }
 }
 
 /// `POST /api/providers/validate`: `sk-good` passes, `sk-bad` is turned down, `sk-offline` can't be checked, and
@@ -460,7 +486,7 @@ fn stub_routes() -> Router {
         .route("/api/expire", get(expire))
         .route("/api/busy", get(busy))
         .route("/api/status", get(status))
-        .route("/api/env", get(env_rows).put(save_env))
+        .route("/api/env", get(env_rows).put(save_env).delete(delete_env))
         .route("/api/providers/validate", post(validate))
         .route("/api/audio/transcribe", post(transcribe))
         .route("/api/audio/speak", post(speak))
@@ -1442,6 +1468,83 @@ async fn a_failed_key_save_never_shows_the_key_or_part_of_it() {
     let key = format!("sk-echo-{}", "x".repeat(400));
     let err = dashboard.save_provider_key("keys-echo", "OPENROUTER_API_KEY", &key).await.unwrap_err().to_string();
     assert!(err.contains("422") && !err.contains("sk-echo") && !err.contains("xxxx"), "{err}");
+}
+
+#[tokio::test]
+async fn removes_a_provider_key_and_reads_the_list_back() {
+    let dashboard = signed_in().await;
+    dashboard.remove_provider_key("keys-remove", "ANTHROPIC_API_KEY").await.unwrap();
+    assert_eq!(removed_for("keys-remove"), vec![json!({"key": "ANTHROPIC_API_KEY"})]);
+}
+
+#[tokio::test]
+async fn a_key_hermes_says_is_not_set_counts_as_removed() {
+    let dashboard = signed_in().await;
+    dashboard.remove_provider_key("keys-gone", "ANTHROPIC_API_KEY").await.unwrap();
+}
+
+#[tokio::test]
+async fn says_so_when_hermes_still_lists_the_key_after_removing_it() {
+    let dashboard = signed_in().await;
+    let err = dashboard.remove_provider_key("keys-stuck", "ANTHROPIC_API_KEY").await.unwrap_err();
+    assert!(matches!(&err, TransportError::KeyStillSet(key) if key == "ANTHROPIC_API_KEY"), "{err:?}");
+}
+
+#[tokio::test]
+async fn removes_only_what_hermes_lists_as_a_provider_key() {
+    let dashboard = signed_in().await;
+    for key in ["TELEGRAM_BOT_TOKEN", "OPENAI_BASE_URL", "NOT_LISTED_API_KEY", "HERMES_DASHBOARD_SESSION_TOKEN", "PATH"] {
+        let err = dashboard.remove_provider_key("keys-refused-remove", key).await.unwrap_err();
+        assert!(matches!(err, TransportError::NotRelayed(_)), "{key}: {err:?}");
+    }
+    assert!(removed_for("keys-refused-remove").is_empty());
+}
+
+#[tokio::test]
+async fn a_provider_key_removal_never_follows_a_redirect_to_another_site() {
+    let (elsewhere, other) = other_site().await;
+    let away = elsewhere.join("api/env").unwrap().to_string();
+    let app =
+        Router::new().route("/auth/password-login", post(login)).route("/api/env", get(env_rows).delete(move || async move { Redirect::temporary(&away) }));
+    let dashboard = sign_in_at(&serve(app).await, &sign_in("hunter2")).await.unwrap();
+    let err = dashboard.remove_provider_key("default", "ANTHROPIC_API_KEY").await.unwrap_err();
+    assert!(matches!(err, TransportError::Redirected(_)), "{err:?}");
+    assert!(other.lock().unwrap().is_empty(), "the request went to another site");
+}
+
+#[tokio::test]
+async fn a_provider_key_removal_that_never_answers_gives_up() {
+    let app = Router::new().route("/auth/password-login", post(login)).route("/api/env", get(env_rows).delete(std::future::pending::<Response>));
+    let dashboard = sign_in_at(&serve(app).await, &sign_in("hunter2")).await.unwrap();
+    let started = std::time::Instant::now();
+    let err = dashboard.remove_provider_key_within("default", "ANTHROPIC_API_KEY", Duration::from_millis(300)).await.unwrap_err();
+    assert!(matches!(err, TransportError::KeyRemovalTimedOut(_)), "{err:?}");
+    assert!(started.elapsed() < Duration::from_secs(3));
+}
+
+#[tokio::test]
+async fn never_relays_a_delete_of_the_servers_env() {
+    let dashboard = signed_in().await;
+    for path in [
+        "api/env",
+        "api/env?profile=default",
+        "api/env/",
+        "api/env/reveal",
+        // Spelled so the server still routes them to `/api/env`.
+        "api/./env",
+        "api/%2e/env",
+        "api/%65nv",
+        "api%2Fenv",
+        "api//env",
+        "api/sessions/%2E%2E/env",
+    ] {
+        let err = dashboard.request("DELETE", path, Some(json!({"key": "ANTHROPIC_API_KEY"}).to_string())).await.err().unwrap();
+        assert!(matches!(err, TransportError::NotRelayed(_)), "DELETE {path}: {err:?}");
+    }
+    assert!(removed_for("default").is_empty());
+    // Reading it, and any other delete, still go through.
+    dashboard.request("GET", "api/env?profile=default", None).await.unwrap();
+    dashboard.request("DELETE", "api/sessions/a%20b", None).await.unwrap();
 }
 
 #[tokio::test]

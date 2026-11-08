@@ -2,7 +2,7 @@
 // menu uses too. Escape or a click elsewhere closes one, and focus goes back to what had it. The arrow keys move
 // between a menu's items, and an item's letter (`aria-keyshortcuts`) picks it.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { AlarmClock, AlarmClockOff, AppWindow, Archive, ArchiveRestore, CalendarClock, Check, Columns2, Link2, PanelLeft, PanelRight, Pencil, Pin, PinOff, Sparkles, Tag as TagIcon, Trash2 } from "lucide-react";
+import { AlarmClock, AlarmClockOff, AppWindow, Archive, ArchiveRestore, CalendarClock, Check, Columns2, Hourglass, Link2, PanelLeft, PanelRight, Pencil, Pin, PinOff, Sparkles, Tag as TagIcon, Trash2 } from "lucide-react";
 import type { Chat } from "../hermes/model";
 import type { Project } from "../hermes/projects";
 import { snoozePresets, wakeFull } from "../hermes/snooze";
@@ -35,6 +35,9 @@ export type ChatSettle = { settled: boolean; onSettle: (settled: boolean) => voi
 
 /** Pinning the chat to the top of the list, or unpinning it (snooze.ts `PinStore`, ADR 0085). */
 export type ChatPin = { pinned: boolean; onPin: (pinned: boolean) => void };
+
+/** Stop waiting on the work the chat handed off (dispatched.ts), on this computer only; `label` says what it waits on. */
+export type ChatStopWaiting = { label: string; onStop: () => void };
 
 /** The Pin or Unpin item of a chat's menus, which P picks while the menu is open. */
 export function PinItem({ pin, onClose }: { pin: ChatPin; onClose: () => void }) {
@@ -77,6 +80,7 @@ export function ChatMenu({
   snooze,
   settle,
   pin,
+  stopWaiting,
   onDelete,
   onClose,
 }: {
@@ -95,10 +99,12 @@ export function ChatMenu({
   snooze?: ChatSnooze;
   settle?: ChatSettle;
   pin?: ChatPin;
+  stopWaiting?: ChatStopWaiting;
   onDelete?: () => void;
   onClose: () => void;
 }) {
   const now = Date.now();
+  const snoozedUntil = snooze?.until !== undefined && snooze.until > now ? snooze.until : undefined;
   return (
     <Menu label={`Actions for ${chat.title}`} x={x} y={y} onClose={onClose}>
       <button
@@ -181,6 +187,22 @@ export function ChatMenu({
           </button>
         ))}
       {pin && <PinItem pin={pin} onClose={onClose} />}
+      {stopWaiting && (
+        <button
+          role="menuitem"
+          className="menu-item"
+          title={`${stopWaiting.label}. Put this chat in the Inbox without waiting; nothing on Hermes is cancelled`}
+          onClick={() => {
+            onClose();
+            stopWaiting.onStop();
+          }}
+        >
+          <span className="menu-icon">
+            <Hourglass size={15} />
+          </span>
+          <span className="menu-label">Stop waiting</span>
+        </button>
+      )}
       {settle && (
         <button
           role="menuitem"
@@ -198,9 +220,9 @@ export function ChatMenu({
       {snooze && (
         <div role="group" aria-label="Snooze" className="menu-group">
           <div className="menu-heading" aria-hidden>
-            {snooze.until && snooze.until > now ? `Snoozed until ${wakeFull(snooze.until)}` : "Snooze"}
+            {snoozedUntil !== undefined ? `Snoozed until ${wakeFull(snoozedUntil)}` : "Snooze"}
           </div>
-          {snooze.until && snooze.until > now && (
+          {snoozedUntil !== undefined ? (
             <button
               role="menuitem"
               className="menu-item"
@@ -214,37 +236,40 @@ export function ChatMenu({
               </span>
               <span className="menu-label">Unsnooze</span>
             </button>
+          ) : (
+            <>
+              {snoozePresets(now).map((p) => (
+                <button
+                  key={p.key}
+                  role="menuitem"
+                  className="menu-item"
+                  title={`Until ${wakeFull(p.until)}`}
+                  onClick={() => {
+                    onClose();
+                    snooze.onSnooze(p.until);
+                  }}
+                >
+                  <span className="menu-icon">
+                    <AlarmClock size={15} />
+                  </span>
+                  <span className="menu-label">{p.label}</span>
+                </button>
+              ))}
+              <button
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  onClose();
+                  snooze.onCustom();
+                }}
+              >
+                <span className="menu-icon">
+                  <CalendarClock size={15} />
+                </span>
+                <span className="menu-label">Custom…</span>
+              </button>
+            </>
           )}
-          {snoozePresets(now).map((p) => (
-            <button
-              key={p.key}
-              role="menuitem"
-              className="menu-item"
-              title={`Until ${wakeFull(p.until)}`}
-              onClick={() => {
-                onClose();
-                snooze.onSnooze(p.until);
-              }}
-            >
-              <span className="menu-icon">
-                <AlarmClock size={15} />
-              </span>
-              <span className="menu-label">{p.label}</span>
-            </button>
-          ))}
-          <button
-            role="menuitem"
-            className="menu-item"
-            onClick={() => {
-              onClose();
-              snooze.onCustom();
-            }}
-          >
-            <span className="menu-icon">
-              <CalendarClock size={15} />
-            </span>
-            <span className="menu-label">Custom…</span>
-          </button>
         </div>
       )}
       {!!projects?.list.length && (

@@ -48,7 +48,8 @@ import { Office } from "./ui/Office";
 import { officeRooms, type Desk, type Room } from "./hermes/office";
 import type { SubagentId } from "./hermes/subagents";
 import { botActivity, isBotChat, isBotChatTitle, newInBotChatNote, type Bot } from "./hermes/bots";
-import { inboxAcks, inboxEntries, inboxScope, needsOwner, type InboxEntry } from "./hermes/inbox";
+import { blocksRestore, inboxAcks, inboxEntries, inboxScope, needsOwner, type InboxEntry } from "./hermes/inbox";
+import { handoffs as handoffsOf, nextHandoffChange, outstandingIds, type Handoff, type StopWaiting } from "./hermes/dispatched";
 import { ChatPane, type FollowUpHost, type JumpTarget } from "./ui/ChatPane";
 import type { ChatPin } from "./ui/ChatMenu";
 import { BranchDialog, BranchedFrom } from "./ui/Branch";
@@ -67,7 +68,7 @@ import { SearchPalette } from "./ui/Search";
 import { SavedFilters, TagManager } from "./ui/Tags";
 import { useSnoozeClock } from "./ui/Snooze";
 import { TagsStore, savedTagsFile, type SavedFilter } from "./hermes/tags";
-import { AttentionClock, ClearedStore, PINS_KEY, PinStore, SNOOZE_KEY, SnoozeStore, chatSections, heldClears, wakeFull } from "./hermes/snooze";
+import { AttentionClock, ClearedStore, PINS_KEY, PinStore, SNOOZE_KEY, STOP_WAITING_KEY, SnoozeStore, StopWaitingStore, chatSections, heldClears, wakeFull } from "./hermes/snooze";
 import { IDLE_COMPACT_CHECK_MS, IdleCompactor, idleCompactionNote } from "./hermes/idleCompact";
 import { runFilter } from "./hermes/chatFilter";
 import { SettingsScreen, type PersonaWiring } from "./ui/Settings";
@@ -82,6 +83,7 @@ import { UsageAnalytics } from "./ui/UsageAnalytics";
 import { note, type RemoteLog } from "./hermes/logs";
 import { OutputsIndex, outputsIn, sessionOf, splitPath, type Output } from "./hermes/outputs";
 import { STATUS_LABEL, composing, routeLabel } from "./ui/bits";
+import { editStep, isTextField } from "./ui/editKeys";
 import { ProjectScreen, ProjectSwitcher, type ProjectUnread } from "./ui/Projects";
 import { ScheduledJobs } from "./ui/ScheduledJobs";
 import { TroubleshootStore, startTroubleshoot } from "./hermes/troubleshoot";
@@ -1198,6 +1200,18 @@ export function Main({
     window.addEventListener("storage", changed);
     return () => window.removeEventListener("storage", changed);
   }, [pinStore]);
+  const stopStore = useMemo(() => new StopWaitingStore(localStorage, scope), [scope]);
+  const stops = useSyncExternalStore(stopStore.subscribe, stopStore.getSnapshot);
+  useEffect(() => {
+    const changed = (e: StorageEvent) => e.key === STOP_WAITING_KEY && stopStore.reread();
+    window.addEventListener("storage", changed);
+    return () => window.removeEventListener("storage", changed);
+  }, [stopStore]);
+  const handoffMap = useHandoffs(chats, stops);
+  const stopWaiting = (id: string) => {
+    const chat = chats.find((c) => c.id === id);
+    if (chat) stopStore.stop(id, outstandingIds(chat));
+  };
   // A pinned chat the list doesn't reach (quiet for over a month) is looked up once and kept in the list; one Hermes no
   // longer has is unpinned.
   const pinsLookedUp = useMemo(() => new Set<string>(), [scope]);
@@ -1212,7 +1226,7 @@ export function Main({
       );
     }
   }, [pins, chats, status, switching, pinStore]);
-  attention.observe(chats, Date.now(), status === "connected");
+  attention.observe(chats, Date.now(), status === "connected", handoffMap);
   const tagChange = (fn: () => Promise<unknown>) =>
     fn().catch((e) => setToast({ text: (e as Error).message, at: Date.now() }));
   const openSearch = (start?: SavedFilter) => {
@@ -1308,7 +1322,7 @@ export function Main({
     void refreshOutputs();
   }, [outputsOpen, status, outputsIndex, shownOutputsScope, outputsChatKey]);
   const where = routeLabel(route) ?? addressLabel(connection);
-  const inbox = inboxEntries({ profile, chats, connected: status === "connected", others, live, seen });
+  const inbox = inboxEntries({ profile, chats, connected: status === "connected", others, live, seen, handoffs: handoffMap });
   const inboxShown = inbox.entries.filter((e) => !acks.isDismissed(e, dismissed));
   // Writes only when a resumed chat shows cards a dismissed waiting session covered.
   useEffect(() => acks.keepCovered(inbox.entries));
@@ -1319,7 +1333,8 @@ export function Main({
   // A restore reloads the app on what it wrote, so it waits for replies and Approvals, here or in another profile, and
   // for any draft or queue this computer couldn't keep (ADR 0038).
   const workingRef = useRef(false);
-  const working = chats.some((c) => c.running || c.items.some(isWaiting)) || inbox.entries.some((e) => e.kind === "running" || (e.kind === "approval" && !e.ended));
+  const working =
+    chats.some((c) => c.running || c.items.some(isWaiting)) || inbox.entries.some(blocksRestore);
   workingRef.current = working;
   // Read when the restore dialog renders and again just before it writes: sends and refused writes aren't React state.
   const restoreBusy = () => restoreBlocked({ working: workingRef.current, unsaved: unsaved.size, sending: sending.size });
@@ -1831,6 +1846,21 @@ export function Main({
     });
   };
 
+  // Unlike setSettled's, this Undo has no snooze to put back: Inbox chats aren't snoozed or pinned.
+  const settleAll = (ids: string[]) => {
+    const profile = hermes.profile;
+    const many = (n: number) => `${n} chat${n === 1 ? "" : "s"}`;
+    void hermes.settleAll(ids).then((failed) => {
+      if (!stillIn(profile)) return;
+      const went = ids.filter((id) => !failed.includes(id));
+      if (!went.length) return setToast({ text: `Couldn't settle ${many(ids.length)}. ${ids.length === 1 ? "It's" : "They're"} still in the Inbox.`, at: Date.now() });
+      const text = failed.length
+        ? `Settled ${many(went.length)}. ${many(failed.length)} couldn't be settled and ${failed.length === 1 ? "is" : "are"} still in the Inbox.`
+        : `Settled ${many(went.length)}`;
+      setToast({ text, undo: () => went.forEach((id) => void hermes.unsettle(id)), at: Date.now() });
+    });
+  };
+
   // Snoozing is kept on this computer only; Undo puts back what the chat had.
   const snoozeChat = (id: string, until: number | undefined) => {
     const title = chats.find((c) => c.id === id)?.title ?? "";
@@ -2197,6 +2227,16 @@ export function Main({
     // typed with focus outside an input can answer an Approval or stop a reply.
     const onKey = (e: KeyboardEvent) => {
       if (covered || composing(e)) return;
+      // Ctrl+Z outside a text field runs the notice's Undo, as its button does; in one it is always text undo.
+      const step = editStep(e);
+      if (step) {
+        if (step === "undo" && toast?.undo && !e.defaultPrevented && !isTextField(e.target) && !document.querySelector('[aria-modal="true"]')) {
+          e.preventDefault();
+          toast.undo();
+          setToast(null);
+        }
+        return;
+      }
       if (screenshotShortcut && shortcutOf(e) === screenshotShortcut && !checkShortcut(screenshotShortcut).error) {
         e.preventDefault();
         if (!e.repeat) takeScreenshot();
@@ -2208,7 +2248,7 @@ export function Main({
       const onChat = !covering && !previewCovers && !projectScreenOpen && !searchOpen;
       if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
         if (!onChat || e.defaultPrevented || (e.target as Element | null)?.tagName === "SELECT") return;
-        const { pinned, inbox, working } = chatSections(listed, snoozes, Date.now(), attention.since, pins);
+        const { pinned, inbox, working } = chatSections(listed, snoozes, Date.now(), attention.since, pins, handoffMap);
         const order = [...pinned, ...inbox, ...working];
         const at = order.findIndex((c) => c.id === active.chatId);
         const next = order[at < 0 ? 0 : at + (e.key === "ArrowDown" ? 1 : -1)];
@@ -2610,10 +2650,13 @@ export function Main({
           onOpenIn={openIn}
           onOpenTab={(id) => openChat(id, { newTab: true })}
           onSettle={setSettled}
+          onSettleAll={settleAll}
           snoozes={snoozes}
           attentionSince={attention.since}
           pins={pins}
           onPin={pinChat}
+          handoffs={handoffMap}
+          onStopWaiting={stopWaiting}
           onSnooze={(id, until) => snoozeChat(id, until)}
           onWake={(id) => snoozeChat(id, undefined)}
           onArchive={setArchived}
@@ -2803,6 +2846,7 @@ export function Main({
             toolsets={hermes.toolsets}
             mcp={hermes.mcp}
             gateways={hermes.gateways}
+            providers={hermes}
             openUrl={(url) => webPages.openInBrowser(url).then(() => undefined)}
             runningReplies={chats.filter((c) => c.running).length}
             openChat={(() => {
@@ -3438,7 +3482,7 @@ function ChatView({
           if (why) return why;
           // The queue keeps its screenshots now, until they go or the owner removes the message (chatCache.ts).
           screenshots?.hold(attachments.map((a) => a.path));
-          savedDrafts.set(shownDraft, "");
+          savedDrafts.take(shownDraft);
           return undefined;
         },
         edit: (id, text) => hermes.editQueued(chat.id, id, text),
@@ -3522,7 +3566,7 @@ function ChatView({
       if (commandsRunning.has(key)) throw new Error("A command typed in this chat is still running.");
       commandsRunning.add(key);
       const typed = savedDrafts.get(key);
-      const done = () => savedDrafts.get(key) === typed && savedDrafts.set(key, "");
+      const done = () => savedDrafts.get(key) === typed && savedDrafts.take(key);
       const here = () => still() && stillIn();
       try {
         if (def.name === "new") {
@@ -3580,7 +3624,7 @@ function ChatView({
     steer: async (text) => {
       const key = shownDraft;
       const typed = savedDrafts.get(key);
-      const done = () => savedDrafts.get(key) === typed && savedDrafts.set(key, "");
+      const done = () => savedDrafts.get(key) === typed && savedDrafts.take(key);
       if (await hermes.steer(chat.id, text) === "steered") {
         done();
         return undefined;
@@ -3650,7 +3694,8 @@ function ChatView({
       status={status}
       alsoPostsIn={hermes.alsoPostsIn(chat.id)}
       draft={composerText}
-      onDraft={(text) => savedDrafts.set(shownDraft, text)}
+      onDraft={(text, how) => savedDrafts.set(shownDraft, text, how)}
+      onDraftStep={(step) => savedDrafts[step](shownDraft)}
       onRetry={retry}
       onEdit={edit}
       onDismiss={(itemId) => hermes.dismiss(chat.id, itemId)}
@@ -3815,6 +3860,22 @@ type ServerCommands = { state: "loading" } | { state: "ready"; list: ServerComma
  * The skills the composer offers for `profile` (`Hermes.skillCommands`), read once connected and again on `refresh` if
  * they may have changed. Undefined while unknown, or when this Hermes can't run skills from the composer.
  */
+/**
+ * Each chat's handoff (dispatched.ts), worked out again whenever one changes with nothing else happening: a wake grace
+ * ending, a task stalling, or one going stale. `clock` is the last of those times this render has passed.
+ */
+function useHandoffs(chats: Chat[], stops: StopWaiting): ReadonlyMap<string, Handoff> {
+  const [clock, setClock] = useState(Date.now);
+  const map = useMemo(() => handoffsOf(chats, stops, Math.max(clock, Date.now())), [chats, stops, clock]);
+  useEffect(() => {
+    const at = nextHandoffChange(chats, stops, Date.now());
+    if (at === undefined) return;
+    const timer = setTimeout(() => setClock(Date.now()), Math.max(0, at - Date.now()) + 1);
+    return () => clearTimeout(timer);
+  }, [chats, stops, clock]);
+  return map;
+}
+
 function useSkillCommands(hermes: Hermes, connected: boolean, profile: string): { skills?: SkillCommands; refresh: () => void } {
   const [read, setRead] = useState<{ profile: string; skills?: SkillCommands }>();
   const [asked, setAsked] = useState(0);

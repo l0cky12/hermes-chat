@@ -211,7 +211,7 @@ function emptyNote(filter: InboxFilter): string {
 function Row({ entry: e, server, onOpen, onDismiss }: { entry: InboxEntry; server: string; onOpen: () => void; onDismiss: () => void }) {
   const Icon = KIND_ICON[e.kind];
   const when = e.at || e.noticedAt;
-  const state = e.ended ? "Expired" : KIND_LABEL[e.kind];
+  const state = e.ended ? "Expired" : e.waiting ? "Waiting" : KIND_LABEL[e.kind];
   const whenText = when ? `${e.at ? "" : "noticed "}${relTime(when) === "now" ? "now" : `${relTime(when)} ago`}` : "time not known";
   return (
     <li className={`inbox-row kind-${e.kind}${e.ended ? " is-ended" : ""}${e.stale ? " is-stale" : ""}`}>

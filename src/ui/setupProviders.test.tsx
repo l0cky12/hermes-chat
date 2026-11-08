@@ -8,7 +8,8 @@ import { FakeHermes, fakeEnv } from "../hermes/fakeHermes";
 import type { OpenPipe } from "../hermes/pipe";
 import type { Probe } from "../hermes/setup";
 import { connect } from "../hermes/transport";
-import { Onboarding, withoutKey } from "./Onboarding";
+import { withoutKey } from "../hermes/setup";
+import { Onboarding } from "./Onboarding";
 
 afterEach(cleanup);
 

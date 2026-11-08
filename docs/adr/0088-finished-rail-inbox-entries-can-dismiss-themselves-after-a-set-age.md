@@ -4,7 +4,7 @@ Issue #275. Dismissing a Rail inbox entry was a click per entry (ADR 0019). An o
 
 ## Decisions
 
-- **Settings → Chats, Rail inbox, "Auto-dismiss finished chats after".** Its choices are Off, 1 day, 2 days, 1 week or 2 weeks. Off until the owner picks a time. It is a display preference (uiPrefs.ts `inboxAutoDismissDays`), kept on this computer like the rest.
+- **Settings → Chats, Rail inbox, "Days of inactivity before auto-dismiss".** A number field (issue #298) of whole days from 1 to 365, saved when the field is left or Enter is pressed. Empty or 0 is Off, and a value outside that range isn't saved. Off until the owner sets a number. It is a display preference (uiPrefs.ts `inboxAutoDismissDays`), kept on this computer like the rest.
 - **Only Completed entries qualify.** A reply running, an Approval waiting or ended, a failure, a Failed message and one Hermes may not have all ask something of the owner or leave on their own, and are never dismissed for their age. A Completed entry with no known time isn't either.
 - **Older than the set time means its own time.** An entry qualifies once the time Hermes gives its chat's last activity is more than the set time ago. One exactly that old stays.
 - **It is a dismissal, through the same store.** Each entry is recorded as a dismissal by hand records it: its key and time, and now as when, in the connection's own record (`INBOX_PREFIX`), kept 30 days and 1000 at most. So it shows again exactly when a dismissed entry does: once the chat has something newer. Unread, Settled and Archived on the server are untouched, and nothing goes to Hermes.

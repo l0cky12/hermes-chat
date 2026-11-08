@@ -1,71 +1,19 @@
-// The artifact editor's model without I/O: undo and redo, when Hermes's proposal applies, Unicode-safe selections,
+// The artifact editor's model without I/O: when Hermes's proposal applies, Unicode-safe selections,
 // what Hermes is sent, and the versions kept.
 import { describe, expect, it } from "vitest";
 import {
   ASK_CONTEXT_CHARS,
-  HISTORY_MAX_STEPS,
-  TYPING_PAUSE_MS,
   VERSIONS_PER_FILE,
   askInput,
   askMaxTokens,
-  emptyHistory,
   keep,
   proposed,
-  record,
-  redo,
   replacementFrom,
   staleBecause,
-  undo,
   wholeChars,
   type KeptVersion,
   type Proposal,
 } from "./artifactEdit";
-
-const at = (text: string) => ({ text, start: text.length, end: text.length });
-
-describe("undo and redo", () => {
-  it("makes a burst of typing one step, and a pause or another kind of change a new one", () => {
-    let h = emptyHistory();
-    h = record(h, at(""), "typing", 0);
-    h = record(h, at("a"), "typing", 100);
-    h = record(h, at("ab"), "typing", 200);
-    expect(h.past.map((s) => s.text)).toEqual([""]);
-    h = record(h, at("abc"), "typing", 200 + TYPING_PAUSE_MS + 1);
-    expect(h.past.map((s) => s.text)).toEqual(["", "abc"]);
-    h = record(h, at("abcd"), "change", 2000);
-    h = record(h, at("HERMES"), "typing", 2001);
-    expect(h.past.map((s) => s.text)).toEqual(["", "abc", "abcd", "HERMES"]);
-  });
-
-  it("undoes and redoes in order, and a new change drops what was undone", () => {
-    let h = emptyHistory();
-    h = record(h, at("one"), "change", 0);
-    h = record(h, at("two"), "change", 1);
-    let step = undo(h, at("three"))!;
-    expect(step.state.text).toBe("two");
-    step = undo(step.history, step.state)!;
-    expect(step.state.text).toBe("one");
-    expect(undo(step.history, step.state)).toBeUndefined();
-    const back = redo(step.history, step.state)!;
-    expect(back.state.text).toBe("two");
-    expect(redo(back.history, back.state)!.state.text).toBe("three");
-    const branched = record(back.history, back.state, "change", 5);
-    expect(branched.future).toEqual([]);
-    expect(redo(branched, at("other"))).toBeUndefined();
-  });
-
-  it("keeps the selection with each step", () => {
-    const h = record(emptyHistory(), { text: "hello world", start: 6, end: 11 }, "change", 0);
-    expect(undo(h, at("hello there"))!.state).toEqual({ text: "hello world", start: 6, end: 11 });
-  });
-
-  it("keeps at most the newest steps", () => {
-    let h = emptyHistory();
-    for (let i = 0; i < HISTORY_MAX_STEPS + 50; i++) h = record(h, at(String(i)), "change", i);
-    expect(h.past).toHaveLength(HISTORY_MAX_STEPS);
-    expect(h.past[0].text).toBe("50");
-  });
-});
 
 const proposal = (o: Partial<Proposal> = {}): Proposal => ({
   id: 1,

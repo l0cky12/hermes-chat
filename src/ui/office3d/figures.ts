@@ -121,6 +121,15 @@ const FIGURE: Record<Pose, Figure> = {
     ],
     legs: seatedLegs(-0.04),
   },
+  seated: {
+    ...TYPING,
+    // Waiting on work it handed off: back from the keyboard, hands resting in its lap.
+    arms: [
+      { at: TYPING.shoulders[0], turn: [-0.15, 0, -0.08], bend: -1.1 },
+      { at: TYPING.shoulders[1], turn: [-0.15, 0, 0.08], bend: -1.1 },
+    ],
+    legs: seatedLegs(-0.04),
+  },
   door: {
     ...STAND,
     arms: [

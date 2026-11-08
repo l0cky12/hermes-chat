@@ -1,56 +1,10 @@
-// The editing model behind an artifact editor (GLOSSARY.md "Artifact", ADR 0029), with no I/O: undo and redo, the
-// edit Hermes proposes for a selection and when it may be applied, and the prior versions kept after each save.
+// The editing model behind an artifact editor (GLOSSARY.md "Artifact", ADR 0029), with no I/O: the edit Hermes
+// proposes for a selection and when it may be applied, and the prior versions kept after each save.
 // Positions are UTF-16 offsets into the text as the editor holds it (LF line ends, no byte order mark), which is
 // what a textarea's selection gives.
 
-/** The text and selection at one point in the editing history. */
+/** The text and selection at one point in the editing history (editHistory.ts). */
 export type Snapshot = { text: string; start: number; end: number };
-
-/** How long a pause in typing starts a new undo step, as editors do; anything but typing is always its own step. */
-export const TYPING_PAUSE_MS = 1000;
-/** Most undo steps kept, and most characters they hold in all; the oldest go first. */
-export const HISTORY_MAX_STEPS = 200;
-export const HISTORY_MAX_CHARS = 32 * 1024 * 1024;
-
-/**
- * Undo and redo. `past` holds the states before each step, oldest first; `future` the states undone, the next redo
- * last. `typingAt` is when the step under way began taking typing, so a burst of typing is one step.
- */
-export type History = { past: Snapshot[]; future: Snapshot[]; typingAt?: number };
-
-export const emptyHistory = (): History => ({ past: [], future: [] });
-
-function trimmed(past: Snapshot[]): Snapshot[] {
-  let out = past.length > HISTORY_MAX_STEPS ? past.slice(past.length - HISTORY_MAX_STEPS) : past;
-  let chars = out.reduce((n, s) => n + s.text.length, 0);
-  let drop = 0;
-  // Always keeps the latest step, whatever its size.
-  while (chars > HISTORY_MAX_CHARS && drop < out.length - 1) chars -= out[drop++].text.length;
-  if (drop) out = out.slice(drop);
-  return out;
-}
-
-/**
- * The history after a change away from `before`. `typing`: the owner typed it, so it joins the step under way unless
- * they paused; anything else (a Hermes edit applied, a version restored, a merge) is a step of its own.
- */
-export function record(h: History, before: Snapshot, kind: "typing" | "change", now: number): History {
-  if (kind === "typing" && h.typingAt !== undefined && now - h.typingAt < TYPING_PAUSE_MS && h.past.length) return { ...h, future: [], typingAt: now };
-  return { past: trimmed([...h.past, before]), future: [], typingAt: kind === "typing" ? now : undefined };
-}
-
-/** Steps back from `now`: the state to show, and the history after. Undefined when there's nothing to undo. */
-export function undo(h: History, now: Snapshot): { state: Snapshot; history: History } | undefined {
-  const state = h.past.at(-1);
-  if (!state) return undefined;
-  return { state, history: { past: h.past.slice(0, -1), future: [...h.future, now] } };
-}
-
-export function redo(h: History, now: Snapshot): { state: Snapshot; history: History } | undefined {
-  const state = h.future.at(-1);
-  if (!state) return undefined;
-  return { state, history: { past: [...h.past, now], future: h.future.slice(0, -1) } };
-}
 
 /**
  * An edit Hermes proposed: `replacement` for `[start, end)` of `before`, the editor's whole text when the owner asked.

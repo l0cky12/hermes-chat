@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Chat, Item } from "./model";
-import { AttentionClock, CLEARED_KEY, ClearedStore, PINS_KEY, PinStore, SNOOZE_KEY, SnoozeStore, WOKEN_KEPT_MS, chatSections, customUntil, heldClears, lastActive, nextWake, snoozePresets, wakeLabel } from "./snooze";
+import { handoffs, type DispatchedTask } from "./dispatched";
+import { AttentionClock, CLEARED_KEY, ClearedStore, PINS_KEY, PinStore, SNOOZE_KEY, STOP_WAITING_KEY, SnoozeStore, StopWaitingStore, WOKEN_KEPT_MS, chatSections, customUntil, heldClears, isWorking, lastActive, nextWake, snoozePresets, wakeLabel } from "./snooze";
 
 /** A Storage stand-in, its document under `key` readable as `raw`. */
 function memory(start?: string, key = SNOOZE_KEY) {
@@ -146,7 +147,7 @@ describe("chatSections", () => {
     expect(s.snoozed.map((c) => c.id)).toEqual(["snoozed", "later"]);
     expect(s.settled.map((c) => c.id)).toEqual(["settled", "settledSnoozed"]);
     expect(s.archived.map((c) => c.id)).toEqual(["archived"]);
-    expect(Object.keys(s)).toEqual(["pinned", "inbox", "working", "snoozed", "archived", "settled"]);
+    expect(Object.keys(s)).toEqual(["pinned", "inbox", "snoozed", "archived", "working", "settled"]);
   });
 
   it("puts a pinned chat in Pinned, in the order pinned, whatever happens in it, unless it is Archived", () => {
@@ -180,6 +181,29 @@ describe("chatSections", () => {
     // Noting the same chats again changes nothing.
     clock.observe(after, WED + HOUR);
     expect(clock.since).toEqual({ asks: WED });
+  });
+
+  it("keeps a chat in Working while it waits on work it handed off, and counts it as stopped once that ends", () => {
+    const task: DispatchedTask = { id: "t_1", board: "default", status: "ready", createdAt: WED - 60_000, picked: false };
+    const dispatched = [chat("sent", WED - HOUR, { tasks: [task] }), chat("asked", WED - HOUR, { tasks: [task], items: [waiting] }), chat("done", WED - 60_000)];
+    const h = handoffs(dispatched, {}, WED);
+    expect(isWorking(dispatched[0], h.get("sent"))).toBe(true);
+    expect(isWorking(dispatched[0])).toBe(false);
+    expect(chatSections(dispatched, {}, WED, {}, {}, h).working.map((c) => c.id)).toEqual(["sent"]);
+    expect(chatSections(dispatched, {}, WED, {}, {}, h).inbox.map((c) => c.id)).toEqual(["done", "asked"]);
+    const clock = new AttentionClock();
+    clock.observe(dispatched, WED - 30_000, true, h);
+    expect(clock.since).toEqual({});
+    const over = dispatched.map((c) => (c.id === "sent" ? { ...c, tasks: [{ ...task, status: "done" as const, overAt: WED - 60_000 }] } : c));
+    clock.observe(over, WED, true, handoffs(over, {}, WED));
+    expect(clock.since).toEqual({ sent: WED });
+    expect(chatSections(over, {}, WED, clock.since, {}, handoffs(over, {}, WED)).inbox.map((c) => c.id)).toEqual(["sent", "done", "asked"]);
+  });
+
+  it("puts a chat whose task needs the owner in the Inbox", () => {
+    const blocked: DispatchedTask = { id: "t_1", board: "default", status: "blocked", createdAt: WED - 60_000, picked: false };
+    const list = [chat("stuck", WED - HOUR, { tasks: [blocked] })];
+    expect(chatSections(list, {}, WED, {}, {}, handoffs(list, {}, WED)).inbox.map((c) => c.id)).toEqual(["stuck"]);
   });
 
   it("doesn't count a reply cut off by a dropped connection as stopped", () => {
@@ -302,6 +326,44 @@ describe("PinStore", () => {
     pins.unpin("x");
     pins.pin("x", WED);
     expect(pins.getSnapshot()).toEqual({ x: WED });
+  });
+});
+
+describe("StopWaitingStore", () => {
+  it("keeps each connection and profile's stops apart, under its own key, adds to a chat's, and survives a restart", () => {
+    const storage = memory(undefined, STOP_WAITING_KEY);
+    const a = new StopWaitingStore(storage, "A");
+    const b = new StopWaitingStore(storage, "B");
+    a.stop("x", ["t_1", "sa-1"]);
+    b.stop("x", ["t_9"]);
+    a.stop("x", ["sa-1", "t_2"]);
+    expect(storage.raw).toEqual({ v: 1, scopes: { A: { x: ["t_1", "sa-1", "t_2"] }, B: { x: ["t_9"] } } });
+    expect(storage.keys).toEqual([STOP_WAITING_KEY]);
+    expect(new StopWaitingStore(storage, "A").getSnapshot()).toEqual({ x: ["t_1", "sa-1", "t_2"] });
+  });
+
+  it("tells subscribers, leaves out what isn't a list of ids, and holds a change in memory when storage is full", () => {
+    const storage = memory(JSON.stringify({ v: 1, scopes: { A: { x: ["t_1", 5, ""], y: "t_2", z: [] } } }), STOP_WAITING_KEY);
+    const store = new StopWaitingStore(storage, "A");
+    expect(store.getSnapshot()).toEqual({ x: ["t_1"] });
+    let heard = 0;
+    store.subscribe(() => heard++);
+    store.stop("x", ["t_3"]);
+    expect(heard).toBe(1);
+    store.stop("x", ["t_1"]);
+    expect(heard).toBe(1);
+    expect(store.getSnapshot()).toEqual({ x: ["t_1", "t_3"] });
+    const full = new StopWaitingStore(
+      {
+        getItem: () => null,
+        setItem: () => {
+          throw new Error("full");
+        },
+      },
+      "A",
+    );
+    full.stop("x", ["t_1"]);
+    expect(full.getSnapshot()).toEqual({ x: ["t_1"] });
   });
 });
 

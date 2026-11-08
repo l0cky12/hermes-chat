@@ -17,7 +17,7 @@ const positionOf = (m: Matrix4) => new Vector3().setFromMatrixPosition(m);
 const SEAT_TOP = 0.42 * FIGURE_SCALE;
 const DESK_TOP = 0.74 * FIGURE_SCALE;
 
-const EVERY_POSE = officeFloor([team("a", "running", "queued"), team("b", "approval", "failed", "completed")], EMPTY_FLOOR_MEMORY);
+const EVERY_POSE = officeFloor([team("a", "running", "queued", "handedOff"), team("b", "approval", "failed", "completed")], EMPTY_FLOOR_MEMORY);
 
 function drawn(characters: readonly Character[]) {
   const figures = buildFigures();
@@ -111,7 +111,7 @@ describe("The office's characters", () => {
       expect(hip(i).y).toBeGreaterThan(0.8 * FIGURE_SCALE);
     });
 
-    it.each(["typing", "slumped", "couch"] as const)("seats a %s agent with its hips on the seat and its feet on the floor", (pose) => {
+    it.each(["typing", "seated", "slumped", "couch"] as const)("seats a %s agent with its hips on the seat and its feet on the floor", (pose) => {
       const i = indexOfPose(chars, pose);
       expect(i).toBeGreaterThanOrEqual(0);
       expect(hip(i).y).toBeGreaterThanOrEqual(SEAT_TOP);
@@ -139,6 +139,17 @@ describe("The office's characters", () => {
         const tip = handTip(2 * i + side);
         expect(Math.abs(tip.y - DESK_TOP)).toBeLessThan(0.12);
         expect(aheadOfSeat(chars[i], tip) - aheadOfSeat(chars[i], positionOf(matrix("torso", i)))).toBeGreaterThan(0.25);
+      }
+    });
+
+    it("rests the hands of an agent waiting on handed-off work in its lap, below the desk top and ahead of its body", () => {
+      const i = indexOfPose(chars, "seated");
+      expect(i).toBeGreaterThanOrEqual(0);
+      for (const side of [0, 1]) {
+        const tip = handTip(2 * i + side);
+        expect(tip.y).toBeLessThan(DESK_TOP - 0.1);
+        expect(tip.y).toBeGreaterThan(SEAT_TOP);
+        expect(aheadOfSeat(chars[i], tip) - aheadOfSeat(chars[i], positionOf(matrix("torso", i)))).toBeGreaterThan(0.15);
       }
     });
 
