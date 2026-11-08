@@ -25,7 +25,7 @@ A URL sign-in (ADR 0004) has no SSH target. The page then says so, offers **Open
 
 ## Considered options
 
-- **`ssh -L 127.0.0.1:<port>:…` straight to TCP**, as the sign-in tunnel does. Rejected for pages: it needs the free-port-then-release race above, and a page's port would be ssh's to keep after Rust thought it closed.
+- **`ssh -L 127.0.0.1:<port>:…` straight to TCP**, as the sign-in tunnel did until ADR 0098. Rejected for pages: it needs the free-port-then-release race above, and a page's port would be ssh's to keep after Rust thought it closed.
 - **One more forward on the sign-in tunnel's ssh.** Rejected: adding a forward to a running ssh needs a ControlMaster socket, which ADR 0022 also declined, and a page's forward would then live as long as the sign-in.
 - **`ssh -W host:port` for each connection.** It clears config forwards on its own, but each of the frame's connections would be a new SSH sign-in.
 - **Rust fetching the page and serving it from a custom scheme.** Rejected: the page would lose its origin, and a scheme the app serves is nearer the app than a cross-origin frame.

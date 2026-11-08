@@ -1,10 +1,15 @@
 //! SSH local forward to the dashboard on the server's loopback, using the system `ssh` so the
 //! owner's ~/.ssh/config, agent and keys apply (ADR 0003; research doc §9 "SSH mode").
+//!
+//! The local end is made as a server page's is (ADR 0052, ADR 0098): ssh forwards a Unix socket in a private folder,
+//! and Rust binds `127.0.0.1:0`, keeps the listener and relays each connection to the socket. The port the sign-in
+//! sends the password to is never free for another program to take while ssh signs in.
 
+use crate::server_page::{self, LocalEnd};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
 
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
@@ -21,10 +26,18 @@ pub enum TunnelError {
     Timeout(u64),
 }
 
-/// A running `ssh -N -L`. Dropping it kills ssh.
+/// A running `ssh -N -L` and the relay to it on `local_port`. Dropping it kills ssh and closes the relay.
 pub struct Tunnel {
     _child: Child,
+    _end: LocalEnd,
+    relay: tokio::task::AbortHandle,
     pub local_port: u16,
+}
+
+impl Drop for Tunnel {
+    fn drop(&mut self) {
+        self.relay.abort();
+    }
 }
 
 pub async fn open(target: &str, remote_port: u16) -> Result<Tunnel, TunnelError> {
@@ -44,7 +57,7 @@ async fn open_through(program: &str, target: &str, remote_port: u16, quick: Opti
     if target.is_empty() || target.starts_with('-') || target.contains(char::is_whitespace) {
         return Err(TunnelError::BadTarget);
     }
-    let local_port = free_port().await.map_err(|e| TunnelError::Spawn(e.to_string()))?;
+    let end = LocalEnd::new().map_err(|e| TunnelError::Spawn(format!("{}: {e}", LocalEnd::COULDNT)))?;
     let ready_within = quick.map_or(READY_TIMEOUT, |q| q * 2);
     let connect_timeout = quick.map(|q| format!("ConnectTimeout={}", q.as_secs().max(1)));
     let mut child = background(program);
@@ -62,8 +75,12 @@ async fn open_through(program: &str, target: &str, remote_port: u16, quick: Opti
             "ServerAliveInterval=15",
             "-o",
             "StrictHostKeyChecking=accept-new",
+            "-o",
+            "StreamLocalBindMask=0177",
+            "-o",
+            "StreamLocalBindUnlink=yes",
             "-L",
-            &format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"),
+            &format!("{}:127.0.0.1:{remote_port}", end.listen()),
             "--",
             target,
         ])
@@ -83,14 +100,18 @@ async fn open_through(program: &str, target: &str, remote_port: u16, quick: Opti
             }
             return Err(TunnelError::Ssh(err.trim().to_owned()));
         }
-        if TcpStream::connect(("127.0.0.1", local_port)).await.is_ok() {
-            return Ok(Tunnel { _child: child, local_port });
+        if server_page::connect(&end.address()).await.is_ok() {
+            break;
         }
         if tokio::time::Instant::now() >= deadline {
             return Err(TunnelError::Timeout(ready_within.as_secs()));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| TunnelError::Spawn(e.to_string()))?;
+    let local_port = listener.local_addr().map_err(|e| TunnelError::Spawn(e.to_string()))?.port();
+    let relay = tokio::spawn(server_page::serve(listener, end.address())).abort_handle();
+    Ok(Tunnel { _child: child, _end: end, relay, local_port })
 }
 
 /// Options every `ssh` this app starts gets on this platform. Windows's OpenSSH can't share connections
@@ -118,16 +139,13 @@ fn background(program: &str) -> Command {
     command
 }
 
-async fn free_port() -> std::io::Result<u16> {
-    Ok(TcpListener::bind(("127.0.0.1", 0)).await?.local_addr()?.port())
-}
-
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpStream;
 
     /// A stand-in for ssh: it writes the local end it was told to listen on (`-L <listen>:<host>:<port>`) to
     /// `<dir>/listen`, takes a second to "sign in", then listens there and forwards each connection to `<host>:<port>`
