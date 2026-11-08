@@ -66,7 +66,7 @@ import type { UsageIo } from "./usageAnalytics";
 import { compactResultOf, compactionsOf, readingOf, type CompactResult, type CompactionHistory, type CompactionRow, type ContextReading } from "./contextInspect";
 import { chatUsageOf, countersOf, newerChatUsage, replyUsage, ZERO_COUNTERS, type ReplyUsage, type UsageCounters } from "./usage";
 import { toolResultText } from "./toolResult";
-import { onLost, onRoster, onSubagentEvent, onUnchecked, parseOutput, type SubagentId, type SubagentOutput } from "./subagents";
+import { onLost, onRoster, onSubagentEvent, onUnchecked, parseOutput, tally, type SubagentId, type SubagentOutput } from "./subagents";
 import {
   BRANCH_KEY_TTL_MS,
   NO_BRANCHES,
@@ -3600,7 +3600,8 @@ export class Hermes {
     this.sideAwaiting.clear();
     for (const c of this.snapshot.chats) {
       if (c.runtimeId) this.staleItems.set(c.id, c.items.length);
-      if (c.running || c.items.some(isWaiting)) this.resumeOnReconnect.add(c.id);
+      // A chat waiting on its subagents is resumed too, so the reconnect reads what they did meanwhile (dispatched.ts).
+      if (c.running || c.items.some(isWaiting) || (c.subagents && tally(c.subagents).running)) this.resumeOnReconnect.add(c.id);
     }
     // What the dropped connection last heard about the shown profile's sessions is older than its chats' own state,
     // which the reconnect resumes; the next check, once connected, reads it again.

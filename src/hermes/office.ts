@@ -44,8 +44,19 @@ const SUBAGENT_STATE: Record<SubagentState, DeskState> = {
   unknown: "unknown",
 };
 
-/** Which inbox entry a chat's reply desk shows when there are several: what needs the owner first. */
-const REPLY_ORDER: readonly InboxKind[] = ["approval", "running", "failed", "uncertain", "completed"];
+/**
+ * Which inbox entry a chat's reply desk shows when there are several: what needs the owner first, except that a reply
+ * running (the wake turn) shows ahead of a dispatched task that needs the owner, as the chat's row does.
+ */
+const REPLY_ORDER: readonly ((e: InboxEntry) => boolean)[] = [
+  (e) => e.kind === "approval" && !e.taskId,
+  (e) => e.kind === "running" && !e.waiting,
+  (e) => e.kind === "approval",
+  (e) => e.kind === "running",
+  (e) => e.kind === "failed",
+  (e) => e.kind === "uncertain",
+  (e) => e.kind === "completed",
+];
 // The inbox's "completed" is a chat with something unread: no event confirms that a reply finished.
 const REPLY_STATE: Record<InboxKind, DeskState> = { approval: "approval", running: "running", failed: "failed", uncertain: "uncertain", completed: "unread" };
 
@@ -113,7 +124,7 @@ export function officeRooms({
   for (const c of chats) if (c.subagents?.subagents.length) room(profile, c.id, c.title);
 
   return [...rooms.entries()].map(([key, r]) => {
-    const entry = REPLY_ORDER.map((k) => r.entries.find((e) => e.kind === k)).find((e) => !!e);
+    const entry = REPLY_ORDER.map((is) => r.entries.find(is)).find((e) => !!e);
     const stale = !connected ? NOT_CONNECTED : entry?.stale ? "As last seen: Hermes couldn't be checked." : undefined;
     const chat = r.profile === profile ? chats.find((c) => c.id === r.chatId) : undefined;
     const reply: Desk = {

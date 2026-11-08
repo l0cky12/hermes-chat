@@ -21,7 +21,7 @@ describe("The office's rooms", () => {
     const tree = started(started(undefined, "a"), "b", { parent_id: "a", depth: 1 });
     const ended = onSubagentEvent(onSubagentEvent(tree, "subagent.complete", { subagent_id: "b", status: "completed" }, 2_500), "subagent.complete", { subagent_id: "a", status: "completed" }, 2_500);
     const others: OtherProfiles = { byName: { work: { chats: [{ id: "w1", title: "Deploy", at: 5_000, unread: true, source: "app" }] } } };
-    expect(brief(rooms([chat("quiet", { subagents: ended }), chat("busy", { running: true })], { others }))).toEqual([
+    expect(brief(rooms([chat("quiet", { subagents: ended, updatedAt: 2_600 }), chat("busy", { running: true })], { others }))).toEqual([
       "work/w1: unread",
       "default/busy: running",
       "default/quiet: idle completed completed",
@@ -92,6 +92,12 @@ describe("The office's rooms", () => {
     expect(brief(rs)).toEqual(["default/stuck: approval", "default/sent: handedOff running"]);
     expect(rs[1].desks[0].doing).toEqual({ text: "Hermes is waiting on work it handed off.", at: 1_000 });
     expect(officeTally(rs)).toEqual({ working: 2, waiting: 1, failed: 0, desks: 3 });
+  });
+
+  it("shows the wake turn of a chat whose dispatched task needs the owner as running, as its row does", () => {
+    const blocked: DispatchedTask = { id: "t_1", board: "default", status: "blocked", createdAt: 2_000, picked: true };
+    expect(brief(rooms([chat("stuck", { tasks: [blocked], running: true })]))).toEqual(["default/stuck: running"]);
+    expect(brief(rooms([chat("stuck", { tasks: [blocked] })]))).toEqual(["default/stuck: approval"]);
   });
 
   it("gives the card a subagent's goal, model and start, and the reply's model when the chat is on this connection", () => {

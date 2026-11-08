@@ -5,7 +5,7 @@
 // goes to the Inbox once a task needs the owner. Everything here is pure: the transport keeps `Chat.tasks` from
 // Hermes's board (kanban.ts), and the subagents are the chat's own tree (subagents.ts).
 import type { Chat } from "./model";
-import { tally } from "./subagents";
+import { hasEnded, tally, type Subagent } from "./subagents";
 
 export const KANBAN_STATUSES = ["triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done", "archived"] as const;
 export type KanbanStatus = (typeof KANBAN_STATUSES)[number];
@@ -68,11 +68,26 @@ function holds(t: DispatchedTask, now: number): boolean {
   return means === "outstanding" && !isStale(t, now);
 }
 
-/** Subagents still queued or running, less those in `ignored`. */
-function subagentsLeft(c: Chat, ignored?: ReadonlySet<string>): number {
+/**
+ * A subagent that ended after the chat last moved (no turn started or ended since), inside the wake grace: Hermes is
+ * about to start the turn that reports on it, as with an over task.
+ */
+function justEnded(s: Subagent, c: Chat, now: number): boolean {
+  const at = endedAt(s);
+  return at !== undefined && at >= c.updatedAt && now - at < WAKE_GRACE_MS;
+}
+
+/** When Hermes said the subagent ended; none while it runs, or when it ended unheard (`ended`, as a roster finds it). */
+function endedAt(s: Subagent): number | undefined {
+  if (!hasEnded(s.state) || s.state === "ended") return undefined;
+  return [...s.activity].reverse().find((a) => a.kind === "ended")?.at;
+}
+
+/** Subagents still queued or running, else those just ended with the wake turn to come, less those in `ignored`. */
+function subagentsLeft(c: Chat, ignored: ReadonlySet<string> | undefined, now: number): number {
   if (!c.subagents) return 0;
-  if (!ignored) return tally(c.subagents).running;
-  return tally({ ...c.subagents, subagents: c.subagents.subagents.filter((s) => !ignored.has(s.id)) }).running;
+  const counted = c.subagents.subagents.filter((s) => !ignored?.has(s.id));
+  return tally({ ...c.subagents, subagents: counted }).running || counted.filter((s) => justEnded(s, c, now)).length;
 }
 
 /**
@@ -84,7 +99,7 @@ export function handoffOf(c: Chat, ignored: ReadonlySet<string> | undefined, now
   const needs = tasks.find((t) => TASK_MEANS[t.status] === "needsOwner");
   if (needs) return { kind: "needsOwner", task: needs, reason: needs.status === "blocked" ? "A dispatched task is blocked." : "A dispatched task is waiting for review." };
   const held = tasks.filter((t) => holds(t, now));
-  const subagents = c.running ? 0 : subagentsLeft(c, ignored);
+  const subagents = c.running ? 0 : subagentsLeft(c, ignored, now);
   if (!held.length && !subagents) return undefined;
   const stalled = held.some((t) => t.status === "ready" && !t.picked && now - t.createdAt > STALLED_MS);
   return { kind: "waiting", tasks: held, subagents, stalled };
@@ -120,7 +135,7 @@ export function outstandingIds(c: Chat): string[] {
 }
 
 /**
- * The next time a chat's handoff changes with nothing else happening: an over task's grace ending, a `ready` task
+ * The next time a chat's handoff changes with nothing else happening: an over task's or ended subagent's grace ending, a `ready` task
  * becoming stalled, or an unpicked task going stale. None when no chat has one.
  */
 export function nextHandoffChange(chats: readonly Chat[], stops: StopWaiting, now: number): number | undefined {
@@ -130,6 +145,7 @@ export function nextHandoffChange(chats: readonly Chat[], stops: StopWaiting, no
   };
   for (const c of chats) {
     const ignored = new Set(stops[c.id] ?? []);
+    for (const s of c.subagents?.subagents ?? []) if (!ignored.has(s.id) && justEnded(s, c, now)) consider(endedAt(s)! + WAKE_GRACE_MS);
     for (const t of c.tasks ?? []) {
       if (ignored.has(t.id)) continue;
       if (TASK_MEANS[t.status] === "over" && t.overAt !== undefined) consider(t.overAt + WAKE_GRACE_MS);

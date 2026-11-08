@@ -156,19 +156,27 @@ export class KanbanWatch {
   }
 
   private schedule() {
-    clearTimeout(this.scanTimer);
     clearTimeout(this.pollTimer);
-    this.scanTimer = setTimeout(() => void this.scan(), SCAN_EVERY_MS);
+    this.armScan();
     this.pollTimer = setTimeout(() => void this.poll(), POLL_EVERY_MS);
   }
 
-  private scan(): Promise<void> {
-    return (this.scanning ??= this.scanOnce().finally(() => (this.scanning = undefined)));
+  /** The next board scan, `SCAN_EVERY_MS` from now, in place of any already due. */
+  private armScan() {
+    clearTimeout(this.scanTimer);
+    this.scanTimer = setTimeout(() => void this.scan(), SCAN_EVERY_MS);
   }
 
-  private async scanOnce() {
-    if (!this.running) return;
+  private scan(): Promise<void> {
+    if (!this.running) return Promise.resolve();
     const epoch = this.epoch;
+    return (this.scanning ??= this.scanOnce(epoch).finally(() => {
+      this.scanning = undefined;
+      if (epoch === this.epoch && this.running) this.armScan();
+    }));
+  }
+
+  private async scanOnce(epoch: number) {
     this.scanned = true;
     const trackedBeforeScan = new Set(this.tracked.keys());
     let boards: KanbanBoard[];
@@ -212,7 +220,6 @@ export class KanbanWatch {
         changed = true;
       }
     if (changed) this.publish();
-    if (epoch === this.epoch && this.running) this.scanTimer = setTimeout(() => void this.scan(), SCAN_EVERY_MS);
   }
 
   private async poll() {

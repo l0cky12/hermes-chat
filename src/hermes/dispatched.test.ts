@@ -47,7 +47,18 @@ describe("a chat's handoff", () => {
   it("is nothing when the chat dispatched nothing, or everything it dispatched has ended", () => {
     expect(handoffOf(chat("c"), undefined, NOW)).toBeUndefined();
     expect(handoffOf(chat("c", { tasks: [] }), undefined, NOW)).toBeUndefined();
-    expect(handoffOf(chat("c", { subagents: ended(started(undefined, "s1"), "s1") }), undefined, NOW)).toBeUndefined();
+    const done = ended(started(undefined, "s1"), "s1");
+    expect(handoffOf(chat("c", { subagents: done }), undefined, NOW + WAKE_GRACE_MS)).toBeUndefined();
+    expect(handoffOf(chat("c", { subagents: done, updatedAt: NOW + 1 }), undefined, NOW + 1)).toBeUndefined();
+  });
+
+  it("waits out the wake grace after the last background subagent ends, unless the chat has moved on since", () => {
+    const done = ended(ended(started(started(undefined, "s1"), "s2"), "s1"), "s2");
+    expect(handoffOf(chat("c", { subagents: done }), undefined, NOW + WAKE_GRACE_MS - 1)).toEqual({ kind: "waiting", tasks: [], subagents: 2, stalled: false });
+    expect(handoffOf(chat("c", { subagents: done }), new Set(["s1", "s2"]), NOW)).toBeUndefined();
+    expect(nextHandoffChange([chat("c", { subagents: done })], {}, NOW)).toBe(NOW + WAKE_GRACE_MS);
+    const oneLeft = ended(started(started(undefined, "s1"), "s2"), "s1");
+    expect(handoffOf(chat("c", { subagents: oneLeft }), undefined, NOW)).toMatchObject({ subagents: 1 });
   });
 
   it("counts outstanding tasks and the subagents still at work", () => {

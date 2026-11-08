@@ -222,7 +222,7 @@ describe("after a restart", () => {
 });
 
 describe("a reply that starts background subagents", () => {
-  it("keeps the chat in Working until every subagent has ended", async () => {
+  it("keeps the chat in Working until every subagent has ended and the wake turn is due or done", async () => {
     const { server, hermes, chat, handoff, section } = await signedIn();
     const id = await hermes.newChat();
     await hermes.send(id, "do this in the background");
@@ -234,6 +234,42 @@ describe("a reply that starts background subagents", () => {
     server.event(runtime, "subagent.complete", { subagent_id: "sa-1", status: "completed" });
     expect(handoff(id)).toMatchObject({ subagents: 1 });
     server.event(runtime, "subagent.complete", { subagent_id: "sa-2", status: "failed" });
+    expect(handoff(id)).toMatchObject({ kind: "waiting", subagents: 2 });
+    expect(section(id)).toBe("working");
+    expect(handoff(id, Date.now() + WAKE_GRACE_MS)).toBeUndefined();
+    expect(section(id, Date.now() + WAKE_GRACE_MS)).toBe("inbox");
+  });
+
+  it("goes to the Inbox once the wake turn that reports on the subagents ends", async () => {
+    const { server, hermes, chat, handoff, section } = await signedIn();
+    const id = await hermes.newChat();
+    await hermes.send(id, "do this in the background");
+    await vi.advanceTimersByTimeAsync(0);
+    const runtime = server.runtimeIdOf(id)!;
+    for (const sa of ["sa-1", "sa-2"]) server.event(runtime, "subagent.complete", { subagent_id: sa, status: "completed" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    server.event(runtime, "message.start");
+    expect(chat(id).running).toBe(true);
+    expect(section(id)).toBe("working");
+    server.event(runtime, "message.delta", { text: "Both subagents are back." });
+    server.event(runtime, "message.complete", { text: "Both subagents are back.", status: "complete" });
+    expect(handoff(id)).toBeUndefined();
+    expect(section(id)).toBe("inbox");
+  });
+});
+
+describe("a chat waiting on background subagents across a dropped connection", () => {
+  it("is resumed on reconnect, so subagents that ended meanwhile stop holding it in Working", async () => {
+    const { server, hermes, handoff, section } = await signedIn();
+    const id = await hermes.newChat();
+    await hermes.send(id, "do this in the background");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handoff(id)).toMatchObject({ kind: "waiting", subagents: 2 });
+    server.drop();
+    server.subagents[id] = [];
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hermes.idle();
+    expect(server.last("subagent.list")?.params).toEqual({ session_id: server.runtimeIdOf(id) });
     expect(handoff(id)).toBeUndefined();
     expect(section(id)).toBe("inbox");
   });
@@ -259,6 +295,41 @@ describe("a board read that was under way when a task was dispatched", () => {
     answer([]);
     await new Promise((r) => setTimeout(r, 0));
     expect(published.at(-1)).toEqual(["t_new"]);
+    watch.stop();
+  });
+});
+
+describe("the board scan's schedule", () => {
+  afterEach(() => void vi.useRealTimers());
+  const watchWith = (boards: () => Promise<{ boards: { slug: string; current: boolean; archived: boolean }[]; current?: string }>) =>
+    new KanbanWatch({ api: { boards, board: async () => [], task: async () => undefined }, sessions: () => new Set(), publish: () => {} });
+
+  it("tries again a scan later when the board list couldn't be read", async () => {
+    vi.useFakeTimers();
+    let asked = 0;
+    const watch = watchWith(async () => {
+      asked++;
+      if (asked === 2) throw new Error("The dashboard answered 502: Bad Gateway");
+      return { boards: [{ slug: "default", current: true, archived: false }], current: "default" };
+    });
+    watch.start();
+    watch.chatsListed();
+    await vi.advanceTimersByTimeAsync(SCAN_EVERY_MS);
+    expect(asked).toBe(2);
+    await vi.advanceTimersByTimeAsync(SCAN_EVERY_MS);
+    expect(asked).toBe(3);
+    watch.stop();
+  });
+
+  it("scans once a period, not once for each timer that ever started one", async () => {
+    vi.useFakeTimers();
+    let asked = 0;
+    const watch = watchWith(async () => (asked++, { boards: [], current: "default" }));
+    watch.start();
+    await vi.advanceTimersByTimeAsync(SCAN_EVERY_MS / 2);
+    watch.chatsListed();
+    await vi.advanceTimersByTimeAsync(SCAN_EVERY_MS * 4);
+    expect(asked).toBe(5);
     watch.stop();
   });
 });
