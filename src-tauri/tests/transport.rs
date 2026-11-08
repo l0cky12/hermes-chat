@@ -2589,23 +2589,22 @@ async fn something_that_isnt_hermes_never_gets_the_password() {
 
 #[test]
 fn plain_http_goes_only_to_this_computer_a_lan_or_tailscale() {
-    for ip in [
-        "127.0.0.1",
-        "10.1.2.3",
-        "172.16.0.9",
-        "192.168.1.10",
-        "169.254.3.4",
-        "100.64.0.1",
-        "100.127.255.254",
-        "::1",
-        "fd7a:115c:a1e0::1",
-        "fc00::5",
-        "fe80::1",
-        "::ffff:192.168.1.10",
-    ] {
+    for ip in ["127.0.0.1", "10.1.2.3", "172.16.0.9", "192.168.1.10", "169.254.3.4", "::1", "fd7a:115c:a1e0::1", "fc00::5", "fe80::1", "::ffff:192.168.1.10"] {
         assert!(transport::is_local_or_private(ip.parse().unwrap()), "{ip}");
     }
-    for ip in ["8.8.8.8", "100.63.255.255", "100.128.0.1", "172.32.0.1", "2001:4860:4860::8888", "::ffff:8.8.8.8", "0.0.0.0"] {
+    // 100.64.0.0/10 is carrier-grade NAT as well as Tailscale, so it counts only when Tailscale carries it.
+    for ip in [
+        "8.8.8.8",
+        "100.64.0.1",
+        "100.127.255.254",
+        "::ffff:100.64.0.1",
+        "100.63.255.255",
+        "100.128.0.1",
+        "172.32.0.1",
+        "2001:4860:4860::8888",
+        "::ffff:8.8.8.8",
+        "0.0.0.0",
+    ] {
         assert!(!transport::is_local_or_private(ip.parse().unwrap()), "{ip}");
     }
 }
