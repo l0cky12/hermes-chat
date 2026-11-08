@@ -71,9 +71,6 @@ export const OFFICE_VIEWS: readonly OfficeView[] = ["building", "list", "off"];
 
 export type FollowUp = "queue" | "steer";
 
-/** The auto-dismiss choices Settings → Inbox offers, in days. */
-export const INBOX_AUTO_DISMISS_DAYS = [1, 2, 7, 14] as const;
-
 /**
  * Idle compaction (idleCompact.ts, ADR 0059). `enabled`: off until the owner turns it on, since a compaction is a model
  * call. `percent`: how full the context window must be, as Hermes measured it. `idleMinutes`: how long the chat must
