@@ -125,10 +125,13 @@ describe("the waiting label", () => {
 });
 
 describe("Stop waiting's ids", () => {
-  it("are every task the chat has and each subagent still at work", () => {
+  it("are every task and subagent the chat has, so a subagent inside its wake grace stops holding it too", () => {
     const tree = ended(started(started(undefined, "s1"), "s2"), "s1");
-    expect(outstandingIds(chat("c", { tasks: [task("t1", "ready"), task("t2", "done")], subagents: tree }))).toEqual(["t1", "t2", "s2"]);
+    expect(outstandingIds(chat("c", { tasks: [task("t1", "ready"), task("t2", "done")], subagents: tree }))).toEqual(["t1", "t2", "s1", "s2"]);
     expect(outstandingIds(chat("c"))).toEqual([]);
+    const allEnded = chat("c", { subagents: ended(tree, "s2") });
+    expect(handoffOf(allEnded, undefined, NOW)).toMatchObject({ kind: "waiting" });
+    expect(handoffOf(allEnded, new Set(outstandingIds(allEnded)), NOW)).toBeUndefined();
   });
 });
 

@@ -275,6 +275,25 @@ describe("a chat waiting on background subagents across a dropped connection", (
   });
 });
 
+describe("a chat whose wake turn is due when the connection drops", () => {
+  it("is resumed on reconnect, so the wake turn is heard and keeps it in Working", async () => {
+    const { server, hermes, chat, section } = await signedIn();
+    const id = await hermes.newChat();
+    await hermes.send(id, "do this in the background");
+    await vi.advanceTimersByTimeAsync(0);
+    const runtime = server.runtimeIdOf(id)!;
+    for (const sa of ["sa-1", "sa-2"]) server.event(runtime, "subagent.complete", { subagent_id: sa, status: "completed" });
+    server.drop();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hermes.idle();
+    expect(chat(id).runtimeId).toBe(server.runtimeIdOf(id));
+    server.event(server.runtimeIdOf(id)!, "message.start");
+    await vi.advanceTimersByTimeAsync(WAKE_GRACE_MS);
+    expect(chat(id).running).toBe(true);
+    expect(section(id)).toBe("working");
+  });
+});
+
 describe("a board read that was under way when a task was dispatched", () => {
   it("keeps the new task, though the board it read didn't have it yet", async () => {
     let answer!: (tasks: SeenTask[]) => void;

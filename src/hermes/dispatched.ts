@@ -127,11 +127,20 @@ export function waitingLabel(h: Extract<Handoff, { kind: "waiting" }>): string {
   return `Waiting on ${count(h.subagents, "subagent")}`;
 }
 
-/** The ids of the chat's work as it stands, for Stop waiting: every task it has, and each subagent still at work. */
+/**
+ * The ids of the chat's work as it stands, for Stop waiting: every task and subagent it has, since one that just ended
+ * still holds the chat for its wake grace.
+ */
 export function outstandingIds(c: Chat): string[] {
-  const tasks = (c.tasks ?? []).map((t) => t.id);
-  const subagents = (c.subagents?.subagents ?? []).filter((s) => s.state === "queued" || s.state === "running").map((s) => s.id);
-  return [...tasks, ...subagents];
+  return [...(c.tasks ?? []), ...(c.subagents?.subagents ?? [])].map((w) => w.id);
+}
+
+/**
+ * Whether a reconnect should resume the chat to hear its session: subagents at work, or a wake turn due for work that
+ * just ended, which would otherwise run unheard while the hold runs out.
+ */
+export function followsSession(c: Chat, now: number): boolean {
+  return subagentsLeft(c, undefined, now) > 0 || (c.tasks ?? []).some((t) => TASK_MEANS[t.status] === "over" && holds(t, now));
 }
 
 /**

@@ -39,7 +39,7 @@ import { projectsApi, type ProjectsApi } from "./projects";
 import { STEER, askSideQuestion, listServerCommands, runServerCommand, sideAnswer, type CommandDef, type CommandResult, type ServerCommandList } from "./commands";
 import { callText, offeredSkills, runSkill, skillInvocationText, type SkillCall, type SkillCommands } from "./skillCommands";
 import { CronApi } from "./cronJobs";
-import { parseKanbanCreate, sameTask, type DispatchedTask } from "./dispatched";
+import { followsSession, parseKanbanCreate, sameTask, type DispatchedTask } from "./dispatched";
 import { KanbanApi, KanbanWatch } from "./kanban";
 import { AutomationsApi } from "./automations";
 import { ModelSettingsApi } from "./modelSettings";
@@ -66,7 +66,7 @@ import type { UsageIo } from "./usageAnalytics";
 import { compactResultOf, compactionsOf, readingOf, type CompactResult, type CompactionHistory, type CompactionRow, type ContextReading } from "./contextInspect";
 import { chatUsageOf, countersOf, newerChatUsage, replyUsage, ZERO_COUNTERS, type ReplyUsage, type UsageCounters } from "./usage";
 import { toolResultText } from "./toolResult";
-import { onLost, onRoster, onSubagentEvent, onUnchecked, parseOutput, tally, type SubagentId, type SubagentOutput } from "./subagents";
+import { onLost, onRoster, onSubagentEvent, onUnchecked, parseOutput, type SubagentId, type SubagentOutput } from "./subagents";
 import {
   BRANCH_KEY_TTL_MS,
   NO_BRANCHES,
@@ -3600,8 +3600,8 @@ export class Hermes {
     this.sideAwaiting.clear();
     for (const c of this.snapshot.chats) {
       if (c.runtimeId) this.staleItems.set(c.id, c.items.length);
-      // A chat waiting on its subagents is resumed too, so the reconnect reads what they did meanwhile (dispatched.ts).
-      if (c.running || c.items.some(isWaiting) || (c.subagents && tally(c.subagents).running)) this.resumeOnReconnect.add(c.id);
+      // So is a chat whose subagents work or whose wake turn is due, so the reconnect hears them (dispatched.ts).
+      if (c.running || c.items.some(isWaiting) || followsSession(c, Date.now())) this.resumeOnReconnect.add(c.id);
     }
     // What the dropped connection last heard about the shown profile's sessions is older than its chats' own state,
     // which the reconnect resumes; the next check, once connected, reads it again.
