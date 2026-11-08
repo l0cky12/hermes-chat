@@ -48,8 +48,8 @@ import { Office } from "./ui/Office";
 import { officeRooms, type Desk, type Room } from "./hermes/office";
 import type { SubagentId } from "./hermes/subagents";
 import { botActivity, isBotChat, isBotChatTitle, newInBotChatNote, type Bot } from "./hermes/bots";
-import { inboxAcks, inboxEntries, inboxScope, needsOwner, type InboxEntry } from "./hermes/inbox";
-import { handoffs as handoffsOf, nextHandoffChange, outstandingIds } from "./hermes/dispatched";
+import { blocksRestore, inboxAcks, inboxEntries, inboxScope, needsOwner, type InboxEntry } from "./hermes/inbox";
+import { handoffs as handoffsOf, nextHandoffChange, outstandingIds, type Handoff, type StopWaiting } from "./hermes/dispatched";
 import { ChatPane, type FollowUpHost, type JumpTarget } from "./ui/ChatPane";
 import type { ChatPin } from "./ui/ChatMenu";
 import { BranchDialog, BranchedFrom } from "./ui/Branch";
@@ -1199,7 +1199,6 @@ export function Main({
     window.addEventListener("storage", changed);
     return () => window.removeEventListener("storage", changed);
   }, [pinStore]);
-  // The work the owner stopped waiting on, kept the same way (dispatched.ts).
   const stopStore = useMemo(() => new StopWaitingStore(localStorage, scope), [scope]);
   const stops = useSyncExternalStore(stopStore.subscribe, stopStore.getSnapshot);
   useEffect(() => {
@@ -1207,16 +1206,7 @@ export function Main({
     window.addEventListener("storage", changed);
     return () => window.removeEventListener("storage", changed);
   }, [stopStore]);
-  // Each chat's dispatched work, worked out once a render. A handoff can change with nothing else happening (a wake
-  // grace ending, a task going stale), so the next such time is waited for.
-  const [handoffTick, setHandoffTick] = useState(0);
-  const handoffMap = useMemo(() => handoffsOf(chats, stops, Date.now()), [chats, stops, handoffTick]);
-  useEffect(() => {
-    const at = nextHandoffChange(chats, stops, Date.now());
-    if (at === undefined) return;
-    const timer = setTimeout(() => setHandoffTick((n) => n + 1), Math.max(0, at - Date.now()) + 1);
-    return () => clearTimeout(timer);
-  }, [handoffMap]);
+  const handoffMap = useHandoffs(chats, stops);
   const stopWaiting = (id: string) => {
     const chat = chats.find((c) => c.id === id);
     if (chat) stopStore.stop(id, outstandingIds(chat));
@@ -1342,9 +1332,8 @@ export function Main({
   // A restore reloads the app on what it wrote, so it waits for replies and Approvals, here or in another profile, and
   // for any draft or queue this computer couldn't keep (ADR 0038).
   const workingRef = useRef(false);
-  // Work a chat handed off can run or sit blocked for days on Hermes, and a restore doesn't touch it, so it doesn't hold one up.
   const working =
-    chats.some((c) => c.running || c.items.some(isWaiting)) || inbox.entries.some((e) => (e.kind === "running" && !e.waiting) || (e.kind === "approval" && !e.ended && !e.taskId));
+    chats.some((c) => c.running || c.items.some(isWaiting)) || inbox.entries.some(blocksRestore);
   workingRef.current = working;
   // Read when the restore dialog renders and again just before it writes: sends and refused writes aren't React state.
   const restoreBusy = () => restoreBlocked({ working: workingRef.current, unsaved: unsaved.size, sending: sending.size });
@@ -3858,6 +3847,22 @@ type ServerCommands = { state: "loading" } | { state: "ready"; list: ServerComma
  * The skills the composer offers for `profile` (`Hermes.skillCommands`), read once connected and again on `refresh` if
  * they may have changed. Undefined while unknown, or when this Hermes can't run skills from the composer.
  */
+/**
+ * Each chat's handoff (dispatched.ts), worked out again whenever one changes with nothing else happening: a wake grace
+ * ending, a task stalling, or one going stale. `clock` is the last of those times this render has passed.
+ */
+function useHandoffs(chats: Chat[], stops: StopWaiting): ReadonlyMap<string, Handoff> {
+  const [clock, setClock] = useState(Date.now);
+  const map = useMemo(() => handoffsOf(chats, stops, Math.max(clock, Date.now())), [chats, stops, clock]);
+  useEffect(() => {
+    const at = nextHandoffChange(chats, stops, Date.now());
+    if (at === undefined) return;
+    const timer = setTimeout(() => setClock(Date.now()), Math.max(0, at - Date.now()) + 1);
+    return () => clearTimeout(timer);
+  }, [chats, stops, clock]);
+  return map;
+}
+
 function useSkillCommands(hermes: Hermes, connected: boolean, profile: string): { skills?: SkillCommands; refresh: () => void } {
   const [read, setRead] = useState<{ profile: string; skills?: SkillCommands }>();
   const [asked, setAsked] = useState(0);

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { handoffs } from "./dispatched";
 import { FakeHermes, row } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
-import { INBOX_PREFIX, inboxAcks, inboxEntries, needsOwner, type InboxEntry, type InboxKind } from "./inbox";
+import { INBOX_PREFIX, blocksRestore, inboxAcks, inboxEntries, needsOwner, type InboxEntry, type InboxKind } from "./inbox";
 import type { OutgoingItem } from "./model";
 import { connect, type Hermes } from "./transport";
 
@@ -622,5 +622,17 @@ describe("Auto-dismissing finished entries", () => {
     acks.dismissAll(es, es);
     for (const e of es) expect(acks.isDismissed(e)).toBe(true);
     expect(store.writes()).toBe(1);
+  });
+});
+
+describe("what a restore waits for", () => {
+  const entry = (kind: InboxKind, extra: Partial<InboxEntry> = {}): InboxEntry => ({ key: `${kind} ${JSON.stringify(extra)}`, kind, profile: "default", chatId: "c", title: "c", at: 0, summary: "", ...extra });
+  it("waits for a reply and an Approval, not for handed-off work or a dispatched task that needs the owner", () => {
+    expect(blocksRestore(entry("running"))).toBe(true);
+    expect(blocksRestore(entry("approval"))).toBe(true);
+    expect(blocksRestore(entry("running", { waiting: true }))).toBe(false);
+    expect(blocksRestore(entry("approval", { taskId: "t_1" }))).toBe(false);
+    expect(blocksRestore(entry("approval", { ended: true }))).toBe(false);
+    expect(blocksRestore(entry("completed"))).toBe(false);
   });
 });

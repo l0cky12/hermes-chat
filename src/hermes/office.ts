@@ -14,7 +14,7 @@ import { childrenOf, type Subagent, type SubagentId, type SubagentState, type Su
  * and nothing about it needs the owner, but its subagents are known. `unknown`: a subagent known only as the parent of
  * another, or a reply while the app isn't connected and nothing else says how it is.
  */
-export type DeskState = "queued" | "running" | "waiting" | "approval" | "failed" | "uncertain" | "completed" | "unread" | "stopped" | "ended" | "unknown" | "idle";
+export type DeskState = "queued" | "running" | "handedOff" | "approval" | "failed" | "uncertain" | "completed" | "unread" | "stopped" | "ended" | "unknown" | "idle";
 
 export type Desk = {
   key: string;
@@ -121,7 +121,7 @@ export function officeRooms({
       agent: { kind: "reply", ...(entry && { entry }) },
       name: "The chat's reply",
       // A drop ends the app's word on whether the reply runs; it's resumed and known again once connected.
-      state: entry ? (entry.waiting ? "waiting" : REPLY_STATE[entry.kind]) : connected ? "idle" : "unknown",
+      state: entry ? (entry.waiting ? "handedOff" : REPLY_STATE[entry.kind]) : connected ? "idle" : "unknown",
       ...(entry && { doing: { text: entry.summary, at: entry.at || entry.noticedAt || 0 } }),
       ...(stale && { stale }),
       ...(chat?.model && { detail: { model: chat.model.model } }),
@@ -146,7 +146,7 @@ export function officeTally(rooms: readonly Room[]): { working: number; waiting:
   for (const r of rooms)
     for (const d of r.desks) {
       desks++;
-      if (d.state === "running" || d.state === "queued" || d.state === "waiting") working++;
+      if (d.state === "running" || d.state === "queued" || d.state === "handedOff") working++;
       else if (d.state === "approval") waiting++;
       else if (d.state === "failed") failed++;
     }

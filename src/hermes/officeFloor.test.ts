@@ -21,11 +21,11 @@ const podsOf = (f: Floor, teamKey: string) =>
 
 describe("The office floor", () => {
   it("puts each agent in the room its state gives, posed for it", () => {
-    const f = officeFloor([team("a", "running", "queued", "waiting", "approval", "uncertain", "failed", "completed", "unread", "stopped", "ended", "idle", "unknown")], EMPTY_FLOOR_MEMORY);
+    const f = officeFloor([team("a", "running", "queued", "handedOff", "approval", "uncertain", "failed", "completed", "unread", "stopped", "ended", "idle", "unknown")], EMPTY_FLOOR_MEMORY);
     expect(f.characters.map((c) => `${c.desk.state}: ${c.place}/${c.pose}`)).toEqual([
       "running: workroom/typing",
       "queued: workroom/door",
-      "waiting: workroom/seated",
+      "handedOff: workroom/seated",
       "approval: waiting/hand-up",
       "uncertain: waiting/hand-up",
       "failed: trouble/slumped",
@@ -47,7 +47,7 @@ describe("The office floor", () => {
   });
 
   it("seats a reply waiting on handed-off work at its team's desks, with the subagents it waits on", () => {
-    const f = officeFloor([team("a", "waiting", "running", "running")], EMPTY_FLOOR_MEMORY);
+    const f = officeFloor([team("a", "handedOff", "running", "running")], EMPTY_FLOOR_MEMORY);
     expect(f.characters.map((c) => c.pose)).toEqual(["seated", "typing", "typing"]);
     expect(new Set(f.characters.map((c) => Math.floor(PLAN.seats.workroom.indexOf(c.spot) / POD_SIZE)))).toEqual(new Set([0]));
     expect(new Set(f.characters.map((c) => c.color)).size).toBe(1);

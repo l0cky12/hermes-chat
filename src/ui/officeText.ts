@@ -5,7 +5,7 @@ import type { Desk, DeskState, Room } from "../hermes/office";
 export const STATE_LABEL: Record<DeskState, string> = {
   queued: "Queued",
   running: "Running",
-  waiting: "Waiting on handed-off work",
+  handedOff: "Waiting on handed-off work",
   approval: "Waiting for your approval",
   failed: "Failed",
   uncertain: "May not have sent",

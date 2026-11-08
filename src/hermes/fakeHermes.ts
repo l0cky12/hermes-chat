@@ -809,7 +809,6 @@ export class FakeHermes {
       this.turns.add(runtimeId);
       this.stopped.delete(runtimeId);
       this.respond(r.id, { status: "streaming", ...(this.userRowId !== undefined && { user_row_id: this.userRowId }) });
-      // Work handed off and the turn ended (issue #287): a kanban task, or background subagents.
       const prompt = String(r.params.text ?? "");
       if (stored && /dispatch/i.test(prompt)) queueMicrotask(() => this.kanban.dispatchReply(runtimeId, stored, prompt));
       else if (stored && /background/i.test(prompt)) queueMicrotask(() => this.backgroundReply(runtimeId, stored));
@@ -3006,8 +3005,15 @@ export type KanbanRow = {
 };
 
 const KANBAN_COLUMNS = ["triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done", "archived"];
-/** The statuses whose task events wake the subscribed chat (`session_notifications.py` `_KANBAN_WAKE_EVENTS`). */
-const KANBAN_WAKES: Record<string, string> = { done: "✔", blocked: "⛔", archived: "📦", review: "👀" };
+/**
+ * The notice Hermes's poller sends for a task's move, after `[board] @assignee Kanban <id>`, by the status it moved to
+ * (`_KANBAN_EVENT_FORMATTERS` in `tui_gateway/session_notifications.py` at v0.22.7). Archiving sends none, so no wake.
+ */
+const KANBAN_NOTICES: Record<string, (t: KanbanRow) => [glyph: string, said: string]> = {
+  done: (t) => ["✔", `done — ${t.title}`],
+  blocked: () => ["⏸", "blocked"],
+  review: () => ["🔄", "→ review"],
+};
 
 /**
  * The kanban plugin's REST (`GET /api/plugins/kanban/boards`, `board?board=`, `tasks/{id}?board=`) over in-memory
@@ -3056,10 +3062,11 @@ export class FakeKanban {
       t.runs.push({ id: t.current_run_id, status: "running" });
     }
     if (status === "done" || status === "blocked" || status === "review" || status === "archived") t.current_run_id = null;
-    const mark = KANBAN_WAKES[status];
+    const notice = KANBAN_NOTICES[status]?.(t);
     const runtime = t.session_id ? this.server.runtimeIdOf(t.session_id) : undefined;
-    if (!mark || !runtime) return true;
-    this.server.event(runtime, "status.update", { kind: "process", text: `${mark} [${t.board}] @${t.assignee ?? "unassigned"} Kanban ${t.id} ${status} — ${t.title}` });
+    if (!notice || !runtime) return true;
+    const [glyph, said] = notice;
+    this.server.event(runtime, "status.update", { kind: "process", text: `${glyph} [${t.board}] ${t.assignee ? `@${t.assignee} ` : ""}Kanban ${t.id} ${said}` });
     const wake = () => {
       if (!t.subscribed || this.server.turns.has(runtime) || this.server.stopped.has(runtime) || !t.session_id) return;
       const text = `Results are in for ${t.id} (${status}): ${t.title}. Here is the synthesis.`;

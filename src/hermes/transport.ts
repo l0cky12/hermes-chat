@@ -3339,7 +3339,6 @@ export class Hermes {
       void this.sync();
       return;
     }
-    // Hermes's notices about work the chat dispatched name the task; only its status on the board decides anything.
     if (type === "status.update") {
       if (payload.kind === "process" && typeof payload.text === "string") this.kanbanWatch.nudge(payload.text);
       return;
@@ -3369,7 +3368,6 @@ export class Hermes {
     }
     if (type === "message.start") {
       this.turnStart.set(chat.id, chat.items.at(-1)?.id ?? null);
-      // The wake turn took over from the over tasks (dispatched.ts).
       this.kanbanWatch.turnStarted([chat.id, ...(chat.lineage ?? [])]);
     }
     if (type === "tool.complete") {

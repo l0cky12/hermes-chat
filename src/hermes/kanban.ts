@@ -1,8 +1,8 @@
 // Hermes's kanban board, as far as the chat list needs it (issue #287): the tasks a chat's replies created, read over
 // the dashboard's kanban plugin REST (`plugins/kanban/dashboard/plugin_api.py` at Hermes 0.22.6), under
-// `api/plugins/kanban/`, with the dashboard's own sign-in and nothing more. No `kanban.*` method or event exists on the
-// WebSocket. `KanbanApi` makes the reads; `KanbanWatch` decides when, keeps what was read, and hands the transport each
-// session's tasks. The task's status on the board decides everything; a `status.update` only says which task to read.
+// `api/plugins/kanban/`, with the dashboard's own sign-in and nothing more. `KanbanApi` makes the reads; `KanbanWatch`
+// decides when, keeps what was read, and hands the transport each session's tasks. The task's status on the board
+// decides everything; a `status.update` only says which task to read.
 import { TASK_MEANS, isStale, parseTask, sameTask, type DispatchedTask } from "./dispatched";
 import type { RestMethod } from "./pipe";
 
@@ -170,8 +170,7 @@ export class KanbanWatch {
     if (!this.running) return;
     const epoch = this.epoch;
     this.scanned = true;
-    // A task added while the boards were being read may be missing from them: only earlier ones can be gone.
-    const before = new Set(this.tracked.keys());
+    const trackedBeforeScan = new Set(this.tracked.keys());
     let boards: KanbanBoard[];
     try {
       const read = await this.deps.api.boards();
@@ -201,7 +200,7 @@ export class KanbanWatch {
     for (const [id, was] of this.tracked) {
       const is = seen.get(id);
       if (is) changed = this.merge(was, is, now) || changed;
-      else if (!before.has(id)) continue;
+      else if (!trackedBeforeScan.has(id)) continue;
       else if (readBoards.has(was.task.board) || !boards.some((b) => b.slug === was.task.board)) {
         this.tracked.delete(id);
         changed = true;

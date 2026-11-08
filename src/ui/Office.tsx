@@ -15,7 +15,7 @@ import { STATE_LABEL, deskLabel } from "./officeText";
 const STATE_ICON: Record<DeskState, typeof X> = {
   queued: Clock,
   running: Loader,
-  waiting: Hourglass,
+  handedOff: Hourglass,
   approval: ShieldAlert,
   failed: CircleAlert,
   uncertain: CircleHelp,

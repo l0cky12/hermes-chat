@@ -2334,7 +2334,7 @@ label.memory-pick { cursor: pointer; }
 .office-list-room .office-room-name { padding: 10px 8px 2px; }
 .office-room-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .office-room-profile { flex: none; font-weight: 400; color: var(--faint); font-size: calc(11.5rem / 14); }
-.office-row.state-running .inbox-kind, .office-row.state-waiting .inbox-kind { color: var(--accent); }
+.office-row.state-running .inbox-kind, .office-row.state-handedOff .inbox-kind { color: var(--accent); }
 .office-row.state-approval .inbox-kind, .office-row.state-uncertain .inbox-kind { color: var(--warn); }
 .office-row.state-failed .inbox-kind { color: var(--bad); }
 .office-row.state-completed .inbox-kind { color: var(--ok); }

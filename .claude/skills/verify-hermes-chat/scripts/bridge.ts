@@ -16,7 +16,7 @@
 //   Hermes does, so a reply that runs on (a "delegate" prompt's) can be stopped.
 //   `POST /__subagent?id=<subagent id>&status=completed|failed` ends one as Hermes reports it (a test's control).
 //   `POST /__kanban?id=<task id>&status=<running|done|blocked|review|archived>` moves a task as a worker would (a test's
-//   control). `done`, `blocked`, `review` and `archived` send the chat a `status.update` naming the task and, 2 s later,
+//   control). `done`, `blocked` and `review` send the chat a `status.update` naming the task and, 2 s later,
 //   a streamed wake turn when the chat is live, subscribed, not stopped, and no turn runs, as Hermes's poller does.
 // HV_INBOX=1 gives the `work` profile two Unread chats for the Rail inbox: one last active 3 days ago, one an hour ago.
 // HV_LIST=<n> adds n Active, read chats to `default`, one an hour apart, so its Inbox is longer than the list panel.
@@ -130,7 +130,6 @@ function replyTo(sessionId: string, prompt: string, said?: string) {
   setTimeout(step, 400);
 }
 
-// A task moving wakes its chat with a streamed reply, so the row shows the spinner for a moment.
 server.kanban.wakeDelayMs = 2_000;
 server.kanban.wakeWith = (sid, _stored, text) => replyTo(sid, "", text);
 
@@ -165,8 +164,7 @@ function failReply(sid: string) {
 }
 
 function endSubagent(id: string, status: string) {
-  // One a "delegate" prompt started here, or one FakeHermes started for a "background" prompt.
-  const d = delegated.get(id) ?? fakeStarted(id);
+  const d = delegated.get(id) ?? backgroundSubagent(id);
   if (!d) return false;
   delegated.delete(id);
   server.subagents[d.stored] = (server.subagents[d.stored] ?? []).filter((r) => r.subagent_id !== id);
@@ -174,7 +172,7 @@ function endSubagent(id: string, status: string) {
   return true;
 }
 
-function fakeStarted(id: string) {
+function backgroundSubagent(id: string) {
   for (const [stored, rows] of Object.entries(server.subagents)) {
     const { owner, tail: _, ...payload } = rows.find((r) => r.subagent_id === id) ?? {};
     if (typeof owner === "string") return { sid: owner, stored, payload };
@@ -282,7 +280,6 @@ http.on("upgrade", async (req, sock: Socket) => {
           if (/delegate/i.test(prompt)) delegate(session_id);
           else if (/approval/i.test(prompt)) askApproval(session_id);
           else if (/^fail/i.test(prompt)) failReply(session_id);
-          // FakeHermes itself replies to these (its `prompt.submit`); the state file catches up after.
           else if (/dispatch|background/i.test(prompt)) setTimeout(save, 500);
           else replyTo(session_id, prompt);
         }, 0);

@@ -204,6 +204,12 @@ function sendEntry(s: { profile: string; chatId: string; title: string; itemId: 
 /** Whether an entry asks something of the owner, and counts on the inbox's badge: not running work, nor an ended Approval. */
 export const needsOwner = (e: InboxEntry) => e.kind !== "running" && !e.ended;
 
+/**
+ * Whether the entry is a reply or an Approval a restore must wait for. Work a chat handed off, and a dispatched task
+ * that needs the owner, can last days on Hermes, and a restore doesn't touch either.
+ */
+export const blocksRestore = (e: InboxEntry) => (e.kind === "running" && !e.waiting) || (e.kind === "approval" && !e.ended && !e.taskId);
+
 /** Whether the owner can dismiss the entry. Running work leaves the inbox on its own once it ends. */
 export const dismissable = (e: InboxEntry) => e.kind !== "running";
 

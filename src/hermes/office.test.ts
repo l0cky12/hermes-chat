@@ -26,10 +26,9 @@ describe("The office's rooms", () => {
       "default/busy: running",
       "default/quiet: idle completed completed",
     ]);
-    // A reply that ended while its subagents still run waits on them: at work, so the inbox lists it before.
     expect(brief(rooms([chat("quiet", { subagents: tree }), chat("busy", { running: true })], { others }))).toEqual([
       "work/w1: unread",
-      "default/quiet: waiting running running",
+      "default/quiet: handedOff running running",
       "default/busy: running",
     ]);
   });
@@ -51,7 +50,7 @@ describe("The office's rooms", () => {
   it("never shows a reply as finished on an unread chat alone, nor counts it as work", () => {
     const stopped = { kind: "assistant", id: "m-1", text: "Half a repl", stopped: true } as unknown as Chat["items"][number];
     const rs = rooms([chat("read-later", { unread: true }), chat("cut-short", { unread: true, items: [stopped], subagents: started(undefined, "a") })]);
-    expect(rs.flatMap((r) => r.desks.filter((d) => d.agent.kind === "reply").map((d) => d.state))).toEqual(["unread", "waiting"]);
+    expect(rs.flatMap((r) => r.desks.filter((d) => d.agent.kind === "reply").map((d) => d.state))).toEqual(["unread", "handedOff"]);
     expect(rs.flatMap((r) => r.desks).some((d) => d.state === "completed")).toBe(false);
     expect(officeTally(rs)).toEqual({ working: 2, waiting: 0, failed: 0, desks: 3 });
   });
@@ -69,7 +68,7 @@ describe("The office's rooms", () => {
   it("says why every desk is as last seen while disconnected, and never calls a reply it can't see idle", () => {
     const rs = rooms([chat("c", { subagents: started(undefined, "a") })], { connected: false });
     expect(rs[0].desks.map((d) => [d.state, d.stale])).toEqual([
-      ["waiting", "Not connected to Hermes: as last seen."],
+      ["handedOff", "Not connected to Hermes: as last seen."],
       ["running", "Not connected to Hermes: as last seen."],
     ]);
   });
@@ -90,7 +89,7 @@ describe("The office's rooms", () => {
   it("shows a reply that handed work off as waiting, at work for the tally, with the subagents it waits on", () => {
     const task: DispatchedTask = { id: "t_1", board: "default", status: "ready", createdAt: 2_000, picked: false };
     const rs = rooms([chat("sent", { tasks: [task], subagents: started(undefined, "a") }), chat("stuck", { tasks: [{ ...task, status: "blocked" }] })]);
-    expect(brief(rs)).toEqual(["default/stuck: approval", "default/sent: waiting running"]);
+    expect(brief(rs)).toEqual(["default/stuck: approval", "default/sent: handedOff running"]);
     expect(rs[1].desks[0].doing).toEqual({ text: "Hermes is waiting on work it handed off.", at: 1_000 });
     expect(officeTally(rs)).toEqual({ working: 2, waiting: 1, failed: 0, desks: 3 });
   });
