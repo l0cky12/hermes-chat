@@ -269,34 +269,39 @@ fn socket_path_ok(s: &str) -> bool {
     s.starts_with('/') && s.len() < 100 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"/_.-".contains(&b))
 }
 
-/// This computer's end of ssh's forward. On Linux, a Unix socket in a private folder (`SocketDir`) that only the owner
-/// can connect to. On Windows, a loopback port picked just before ssh binds it, as the sign-in tunnel (tunnel.rs) does:
-/// any program on this computer could connect to it, as to the relay's own port, and ssh saying it couldn't bind it
-/// (`cannot_listen_on`) ends the tunnel rather than relaying to whatever holds it.
+/// This computer's end of ssh's forward, for a server page and for the sign-in tunnel (tunnel.rs, ADR 0098). On Linux,
+/// a Unix socket in a private folder (`SocketDir`) that only the owner can connect to. On Windows, a loopback port
+/// picked just before ssh binds it: any program on this computer could connect to it, as to the relay's own port, and
+/// could take it before ssh binds it.
 #[cfg(unix)]
-struct LocalEnd(SocketDir);
+pub(crate) struct LocalEnd(SocketDir);
 #[cfg(windows)]
-struct LocalEnd(u16);
+pub(crate) struct LocalEnd(u16);
 
 /// What the relay connects each frame connection to.
 #[cfg(unix)]
-type Address = PathBuf;
+pub(crate) type Address = PathBuf;
 #[cfg(windows)]
-type Address = u16;
+pub(crate) type Address = u16;
 
 #[cfg(unix)]
 impl LocalEnd {
-    const COULDNT: &str = "Couldn't make a folder for the tunnel";
+    pub(crate) const COULDNT: &str = "Couldn't make a folder for the tunnel";
 
-    fn new() -> std::io::Result<Self> {
+    pub(crate) fn new() -> std::io::Result<Self> {
         SocketDir::new().map(LocalEnd)
+    }
+
+    /// Where ssh's `-L` listens: the socket's path, which `SocketDir` made one that ssh reads as one path.
+    pub(crate) fn listen(&self) -> String {
+        self.0.socket().to_string_lossy().into_owned()
     }
 
     fn ssh_args(&self, target: &str, page: &ServerPage) -> Result<Vec<OsString>, ServerPageError> {
         ssh_args(target, &self.0.socket(), page)
     }
 
-    fn address(&self) -> Address {
+    pub(crate) fn address(&self) -> Address {
         self.0.socket()
     }
 
@@ -307,23 +312,27 @@ impl LocalEnd {
 }
 
 #[cfg(unix)]
-async fn connect(address: &Address) -> std::io::Result<UnixStream> {
+pub(crate) async fn connect(address: &Address) -> std::io::Result<UnixStream> {
     UnixStream::connect(address).await
 }
 
 #[cfg(windows)]
 impl LocalEnd {
-    const COULDNT: &str = "Couldn't find a free port for the tunnel";
+    pub(crate) const COULDNT: &str = "Couldn't find a free port for the tunnel";
 
-    fn new() -> std::io::Result<Self> {
+    pub(crate) fn new() -> std::io::Result<Self> {
         Ok(LocalEnd(std::net::TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port()))
+    }
+
+    pub(crate) fn listen(&self) -> String {
+        format!("127.0.0.1:{}", self.0)
     }
 
     fn ssh_args(&self, target: &str, page: &ServerPage) -> Result<Vec<OsString>, ServerPageError> {
         tcp_ssh_args(target, self.0, page)
     }
 
-    fn address(&self) -> Address {
+    pub(crate) fn address(&self) -> Address {
         self.0
     }
 
@@ -333,7 +342,7 @@ impl LocalEnd {
 }
 
 #[cfg(windows)]
-async fn connect(address: &Address) -> std::io::Result<tokio::net::TcpStream> {
+pub(crate) async fn connect(address: &Address) -> std::io::Result<tokio::net::TcpStream> {
     tokio::net::TcpStream::connect(("127.0.0.1", *address)).await
 }
 
@@ -835,7 +844,7 @@ async fn answers(mut s: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpi
 
 /// Accepts the frame's connections on `listener` and copies each one to and from ssh's `socket`. Runs until dropped;
 /// returns only if accepting fails.
-async fn serve(listener: TcpListener, socket: Address) {
+pub(crate) async fn serve(listener: TcpListener, socket: Address) {
     let mut conns = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
