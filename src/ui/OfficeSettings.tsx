@@ -1,7 +1,7 @@
 // How the agent office shows (ADR 0077, ADR 0089): as a 3D building, as a list, or not at all. Kept in the display preferences
 // (uiPrefs.ts), on this computer only. Drawn as a card of rows (ADR 0059).
 import { useSyncExternalStore } from "react";
-import { getUIPrefs, setUIPrefs, subscribe, type OfficeView } from "../hermes/uiPrefs";
+import { getUIPrefs, setUIPrefs, subscribe, type OfficeQuality, type OfficeView } from "../hermes/uiPrefs";
 import { SettingRow, SettingsSection } from "./SettingRows";
 
 const CHOICES: { value: OfficeView; label: string }[] = [
@@ -9,6 +9,25 @@ const CHOICES: { value: OfficeView; label: string }[] = [
   { value: "list", label: "List" },
   { value: "off", label: "Off" },
 ];
+
+const QUALITIES: { value: OfficeQuality; label: string }[] = [
+  { value: "normal", label: "Normal" },
+  { value: "low", label: "Low" },
+];
+
+/** Normal or Low, in Settings and in the office's tools: Settings takes the office's place, so only the office's applies while it is seen. */
+export function OfficeQualitySwitch(name: { "aria-labelledby": string } | { "aria-label": string }) {
+  const { officeQuality } = useSyncExternalStore(subscribe, getUIPrefs);
+  return (
+    <div className="segmented office-quality" role="group" {...name}>
+      {QUALITIES.map((q) => (
+        <button key={q.value} type="button" aria-pressed={officeQuality === q.value} onClick={() => setUIPrefs({ officeQuality: q.value })}>
+          {q.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 export function OfficeSettings() {
   const { agentOffice } = useSyncExternalStore(subscribe, getUIPrefs);
@@ -37,6 +56,12 @@ export function OfficeSettings() {
             ))}
           </div>
         }
+      />
+      <SettingRow
+        name="Office quality"
+        nameId="office-quality-label"
+        hint="Low draws at most 15 frames a second at a lower resolution, agents type at half the pace, and they appear in their new room instead of walking. It applies to Building, and the office has the same switch."
+        control={<OfficeQualitySwitch aria-labelledby="office-quality-label" />}
       />
     </SettingsSection>
   );

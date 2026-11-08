@@ -132,6 +132,28 @@ describe("The office floor", () => {
     expect(f.characters.filter((c) => c.pose === "door").map((c) => c.key)).toEqual(["t10 reply", "t11 reply"]);
   });
 
+  it("gives the cap slot of a running agent that has no seat to the next agent that has one", () => {
+    const running = Array.from({ length: 40 }, (_, i) => team(`t${i}`, "running"));
+    const done = Array.from({ length: 10 }, (_, i) => team(`done${i}`, "completed"));
+    const f = officeFloor([...running, ...done], EMPTY_FLOOR_MEMORY, NOW);
+    const poses = (pose: string) => f.characters.filter((c) => c.pose === pose).length;
+    expect([f.characters.length, poses("typing"), poses("door"), poses("couch"), f.more]).toEqual([28, 10, 8, 10, 22]);
+    expect(officeFloor([...running, ...done], f.memory, NOW).characters.map((c) => c.key)).toEqual(f.characters.map((c) => c.key));
+    const order = [...running, ...done].map((r) => `${r.key} reply`);
+    expect(f.characters.map((c) => order.indexOf(c.key))).toEqual(f.characters.map((c) => order.indexOf(c.key)).sort((p, q) => p - q));
+  });
+
+  it("refills only up to the seats a room has", () => {
+    const running = Array.from({ length: 40 }, (_, i) => team(`t${i}`, "running"));
+    const done = Array.from({ length: 25 }, (_, i) => team(`done${i}`, "completed"));
+    const f = officeFloor([...running, ...done], EMPTY_FLOOR_MEMORY, NOW);
+    expect(f.characters.filter((c) => c.pose === "couch").length).toBe(PLAN.seats.lounge.length);
+    expect(f.characters.length).toBe(10 + 8 + PLAN.seats.lounge.length);
+    expect(f.more).toBe(65 - f.characters.length);
+    const spots = f.characters.map((c) => `${c.spot.x},${c.spot.z}`);
+    expect(new Set(spots).size).toBe(spots.length);
+  });
+
   it("marks stale agents, so they are greyed and frozen", () => {
     const r = team("a", "running");
     r.desks[0].stale = "Not connected to Hermes: as last seen.";

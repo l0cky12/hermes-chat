@@ -13,12 +13,15 @@ The rail's Office button opens the agent office in place of the chat panes. By d
 - `floors`: each profile is a floor. The shown profile's is open; the others are `.office-floor-tag` buttons on the tower beside the building, each with its agent count and a "!" when one there waits or failed. One opens that floor without switching the app's profile; `.office-floor-open` says which floor is open.
 - `live`: while the office is on screen, the app sends `session.active_list` every 15 s, so a reply started in another profile shows on that floor within about 15 s.
 - `walk`: an agent whose state moves it to another room walks there along the hallway in one to two seconds; one that leaves the floor walks out of the front door. Frames are drawn only while someone walks.
+- `quality`: Normal or Low, from the office's own `.office-quality` switch (applies to the open building at once) or Settings → Chats → Office quality (Settings takes the office's place, so it shows on the next open). Low draws at most 15 frames a second at pixel ratio 1, types at 3 frames a second instead of 6, and agents appear in their new room instead of walking. `canvas.office-canvas`'s `width` shows the pixel ratio; start `hv up` with `GDK_SCALE=2` for a ratio-2 screen.
+- `tags`: a tag is invisible (opacity 0) until the pointer is over its character, it has keyboard focus, or it is picked. A click on a hidden tag lands on the canvas, so hover the character first or Tab to the tag; `.office-tag[data-hover]` marks the one the pointer holds.
 - `home`: a Lounge agent goes home 30 minutes after it last changed state, or once its inbox entry is dismissed.
 
 ## How to get to it (user POV)
 
 - The Office button on the rail.
-- Settings (Ctrl+,) → Chats → Office, for Building, List or Off.
+- Settings (Ctrl+,) → Chats → Office, for Building, List or Off, and Office quality for Normal or Low.
+- The office's Normal / Low switch beside Reset view.
 
 ## Driving it with wd.mjs
 
@@ -27,9 +30,10 @@ Preconditions:
 - Signed in per [sign-in.md](sign-in.md).
 
 - **Agents at work.** Run `$S/wd.mjs click button "New chat (Ctrl+N)"`, `$S/wd.mjs click 'textarea[data-composer]'`, `$S/wd.mjs keys 'delegate the audit\n'` and `$S/wd.mjs wait .msg Delegating`. The stand-in's reply runs on, with two subagents, `sa-1` and `sa-2`.
-- **Open.** Run `$S/wd.mjs click button Office`, then `$S/wd.mjs wait .office-tag`. List the tags with `$S/wd.mjs eval 'return [...document.querySelectorAll(".office-tag")].map(t=>t.textContent+" | "+t.getAttribute("aria-label")).join("\n")'`. There are three: the chat's title (its reply), "Read the auth code" and "Read the tests", each `Running`. Take `$S/wd.mjs shot`.
-- **Card.** Run `$S/wd.mjs click .office-tag "Read the tests"`, then `$S/wd.mjs wait '[role=dialog]' "Open chat"`. The card lists Chat, Profile, State, Goal, Doing now, Model and Time. `$S/wd.mjs click button "Open chat"` closes the office and opens the chat at its Subagents panel.
+- **Open.** Run `$S/wd.mjs click button Office`, then `$S/wd.mjs wait .office-building`. Tags are hidden until hovered, so `wait`, `count` and `click` (which want a displayed element) don't see them; read them with `eval`. List the tags with `$S/wd.mjs eval 'return [...document.querySelectorAll(".office-tag")].map(t=>t.textContent+" | "+t.getAttribute("aria-label")).join("\n")'`. There are three: the chat's title (its reply), "Read the auth code" and "Read the tests", each `Running`. Take `$S/wd.mjs shot`.
+- **Card.** Press `$S/wd.mjs press Tab` until `document.activeElement` is the `.office-tag` you want (its tag then shows), then `$S/wd.mjs press Enter` and `$S/wd.mjs wait '[role=dialog]' "Open chat"`. With the pointer: move the real X pointer onto the character (`hv x mousemove`, after reading the window's screen offset from a `mousemove` event as `wd.mjs rightclick` does), check `.office-tag[data-hover]`, then `hv x mousedown 1` and `mouseup 1`. The card lists Chat, Profile, State, Goal, Doing now, Model and Time. `$S/wd.mjs click button "Open chat"` closes the office and opens the chat at its Subagents panel.
 - **Frames.** Read `$S/wd.mjs eval 'return document.querySelector(".office-building").dataset.frames'` twice, 20 s apart. With agents typing it rises by about 6 a second; with nothing running it doesn't move.
+- **Quality.** `$S/wd.mjs click '.office-quality button' Low` in the open office: the frame rate while typing halves (about 3 a second), and with `GDK_SCALE=2` `canvas.office-canvas`'s `width` drops from ratio 1.5 to 1 at once. A room change on Low draws one frame and no walk.
 - **Unfocused.** With agents typing, run `DISPLAY=$DISPLAY_NUM python3 -I $S/steal-focus.py 60 &` (after `. $HV_RUN/state.env`). `document.hasFocus()` turns false, and the frame count stays still until the window goes.
 - **Queued at the door.** A prompt with both `delegate` and `queue` in it, such as `delegate the audit and queue the summary`, also requests a third subagent, "Write the summary", that stays Queued. It stands in the line outside the Workroom door.
 - **Close up.** Turn the wheel toward a character: `$S/wd.mjs wheel .office-tag "<its tag text>" -- -120 40`, about 28 times from **Reset view**. The `40` aims 40 px under the tag, at the character, because a wheel turned over a tag doesn't reach the canvas. Where tags overlap (a busy Workroom pod), aim at a tag that stands apart, such as the door line's. A double click on a room also zooms, but its first click opens the card of any character under it.

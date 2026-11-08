@@ -3,14 +3,18 @@
 // first time this mounts, as its own chunk. Where everyone stands is officeFloors's to say; the scene only draws it.
 // The tags are real buttons named as List names its rows, so the building and List read the same to a screen reader
 // and the arrow keys move between them.
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type RefObject } from "react";
 import { RotateCcw } from "lucide-react";
 import type { Desk, Room } from "../hermes/office";
+import { getUIPrefs, subscribe } from "../hermes/uiPrefs";
 import { EMPTY_BUILDING_MEMORY, EMPTY_FLOOR_MEMORY, ROOM_OF, TEAM_COLORS, officeFloors, type BuildingMemory, type BuildingRoom, type Floor } from "../hermes/officeFloor";
 import type { OfficeScene, ScreenPoint } from "./office3d/scene";
 import { OfficeCard } from "./OfficeCard";
+import { OfficeQualitySwitch } from "./OfficeSettings";
 import { deskLabel } from "./officeText";
 import { usePageHidden, useWindowFocused } from "./windowState";
+
+const HEAD_TO_TAG_GRACE_MS = 250;
 
 const ROOM_NAME: Record<BuildingRoom, string> = { workroom: "Workroom", waiting: "Waiting room", trouble: "Trouble room", lounge: "Lounge" };
 
@@ -45,38 +49,6 @@ const modeNow = () => (document.documentElement.dataset.mode === "light" ? "ligh
  * Text on the tags and the card changes no frame.
  */
 const pictureOf = (f: Floor) => f.characters.map((c) => `${c.key}|${c.spot.x},${c.spot.z}|${c.pose}|${c.color}|${c.stale ? 1 : 0}`).join(";") + (f.more > 0 ? ";more" : "");
-
-/** A tag's size on screen, measured once per tag and text: reading it every frame would lay the page out each time. */
-const sizes = new WeakMap<HTMLElement, { text: string; w: number; h: number }>();
-function tagSize(el: HTMLElement | undefined): { w: number; h: number } {
-  if (!el) return { w: 0, h: 0 };
-  const known = sizes.get(el);
-  if (known && known.text === el.textContent) return known;
-  const size = { text: el.textContent ?? "", w: el.offsetWidth, h: el.offsetHeight };
-  sizes.set(el, size);
-  return size;
-}
-
-/**
- * Tags that would cover each other, as a team's at one group of desks do from afar, lifted until they don't. A tag
- * sits centred above its point. The one lowest on screen, nearest the camera, stays where it is.
- */
-export function unstacked(at: ReadonlyMap<string, ScreenPoint>, size: (key: string) => { w: number; h: number }): Map<string, ScreenPoint> {
-  const out = new Map<string, ScreenPoint>();
-  const taken: { x0: number; x1: number; y0: number; y1: number }[] = [];
-  for (const [key, p] of [...at].sort((a, b) => b[1].y - a[1].y)) {
-    if (p.off) {
-      out.set(key, p);
-      continue;
-    }
-    const { w, h } = size(key);
-    let y = p.y;
-    for (let hit = taken.find((r) => r.x0 < p.x + w / 2 && r.x1 > p.x - w / 2 && r.y0 < y && r.y1 > y - h); hit; hit = taken.find((r) => r.x0 < p.x + w / 2 && r.x1 > p.x - w / 2 && r.y0 < y && r.y1 > y - h)) y = hit.y0 - 1;
-    taken.push({ x0: p.x - w / 2, x1: p.x + w / 2, y0: y - h, y1: y });
-    out.set(key, { ...p, y });
-  }
-  return out;
-}
 
 /** A tag's text: a subagent's name; for a chat's reply, which all share one name, the chat's title. */
 const tagText = (room: Room, d: Desk) => (d.agent.kind === "reply" ? room.title : d.name);
@@ -156,8 +128,17 @@ export function OfficeBuilding({
   const more = useRef<HTMLButtonElement>(null);
   const [scene, setScene] = useState<OfficeScene>();
   const [selected, setSelected] = useState<string>();
+  const [hovered, setHovered] = useState<string>();
+  const letGo = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const hover = useCallback((key: string | undefined) => {
+    clearTimeout(letGo.current);
+    if (key !== undefined) setHovered(key);
+    else letGo.current = setTimeout(() => setHovered(undefined), HEAD_TO_TAG_GRACE_MS);
+  }, []);
+  useEffect(() => () => clearTimeout(letGo.current), []);
   const mode = useSyncExternalStore(subscribeMode, modeNow);
   const moves = !useSyncExternalStore(subscribeMotion, () => !!reducedMotion()?.matches);
+  const { officeQuality: quality } = useSyncExternalStore(subscribe, getUIPrefs);
   const focused = useWindowFocused();
   const pageHidden = usePageHidden();
   const awake = focused && !pageHidden;
@@ -183,9 +164,10 @@ export function OfficeBuilding({
           canvas.current,
           {
             onPick: setSelected,
+            onHover: hover,
             onFloor: (i) => towerNow.current[i] && setLooked(towerNow.current[i].profile),
             onDrawn(at, rooms, door, floors) {
-              for (const [key, p] of unstacked(at, (key) => tagSize(tags.current.get(key)))) place(tags.current.get(key), p);
+              for (const [key, p] of at) place(tags.current.get(key), p);
               for (const [r, p] of Object.entries(rooms) as [BuildingRoom, ScreenPoint][]) place(roomTags.current.get(r), p);
               place(more.current, door);
               floors.forEach((p, i) => place(floorTags.current[i], p));
@@ -194,7 +176,7 @@ export function OfficeBuilding({
             onFrame: (n) => host.current?.setAttribute("data-frames", String(n)),
             onLost: (why) => live && fallback.current(why),
           },
-          { mode: modeNow(), moves: !reducedMotion()?.matches },
+          { mode: modeNow(), moves: !reducedMotion()?.matches, quality: getUIPrefs().officeQuality },
         );
         setScene(made);
       })
@@ -218,6 +200,7 @@ export function OfficeBuilding({
   useEffect(() => scene?.setTower(towerNow.current), [scene, lights]);
   useEffect(() => scene?.setMode(mode), [scene, mode]);
   useEffect(() => scene?.setMotion(moves), [scene, moves]);
+  useEffect(() => scene?.setQuality(quality), [scene, quality]);
   useEffect(() => scene?.setAwake(awake), [scene, awake]);
   useEffect(() => scene?.setSelected(selected), [scene, selected]);
 
@@ -269,10 +252,13 @@ export function OfficeBuilding({
               style={{ borderColor: TEAM_COLORS[c.color] }}
               data-desk={c.key}
               data-off
+              data-hover={c.key === hovered ? "" : undefined}
               aria-label={deskLabel(c.room, c.desk, profile)}
               aria-haspopup="dialog"
               ref={(el) => void (el ? tags.current.set(c.key, el) : tags.current.delete(c.key))}
               onClick={() => setSelected(c.key)}
+              onPointerEnter={() => hover(c.key)}
+              onPointerLeave={() => hover(undefined)}
             >
               <span className="office-dot" aria-hidden />
               <span className="office-tag-name">{tagText(c.room, c.desk)}</span>
@@ -312,6 +298,7 @@ export function OfficeBuilding({
           {opened === profile ? `${opened}'s floor` : `${opened}'s floor, looked at from ${profile}`}
         </span>
         <span className="office-hint">Drag to turn · scroll to zoom · double-click a room</span>
+        <OfficeQualitySwitch aria-label="Office quality" />
         <button className="btn" onClick={() => scene?.resetCamera()} disabled={!scene}>
           <RotateCcw size={13} aria-hidden /> Reset view
         </button>
