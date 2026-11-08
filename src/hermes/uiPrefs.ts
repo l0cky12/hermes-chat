@@ -66,7 +66,7 @@ export type UIPrefs = {
   /** How many days a finished entry stays in the inbox before it is dismissed on its own, as if by hand; null: never. */
   inboxAutoDismissDays: number | null;
   /**
-   * The keyboard shortcuts the owner changed (ui/keybindings.ts, ADR 0096): each command's chords, by command id. Only
+   * The keyboard shortcuts the owner changed (ui/keybindings.ts, ADR 0097): each command's chords, by command id. Only
    * overrides, so a command never changed takes whatever default this version gives it. Checked for shape here only;
    * keybindings.ts drops an id or chord it doesn't accept.
    */
@@ -77,9 +77,6 @@ export type OfficeView = "building" | "list" | "off";
 export const OFFICE_VIEWS: readonly OfficeView[] = ["building", "list", "off"];
 
 export type FollowUp = "queue" | "steer";
-
-/** The auto-dismiss choices Settings → Inbox offers, in days. */
-export const INBOX_AUTO_DISMISS_DAYS = [1, 2, 7, 14] as const;
 
 /**
  * Idle compaction (idleCompact.ts, ADR 0059). `enabled`: off until the owner turns it on, since a compaction is a model

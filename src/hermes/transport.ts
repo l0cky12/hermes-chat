@@ -39,6 +39,8 @@ import { projectsApi, type ProjectsApi } from "./projects";
 import { STEER, askSideQuestion, listServerCommands, runServerCommand, sideAnswer, type CommandDef, type CommandResult, type ServerCommandList } from "./commands";
 import { callText, offeredSkills, runSkill, skillInvocationText, type SkillCall, type SkillCommands } from "./skillCommands";
 import { CronApi } from "./cronJobs";
+import { followsSession, parseKanbanCreate, sameTask, type DispatchedTask } from "./dispatched";
+import { KanbanApi, KanbanWatch } from "./kanban";
 import { AutomationsApi } from "./automations";
 import { ModelSettingsApi } from "./modelSettings";
 import { ToolsetsApi } from "./toolsets";
@@ -144,7 +146,10 @@ const lostSide = (q: SideQuestion): SideQuestion =>
 const MiB = 1024 * 1024;
 /** The most legacy `image.attach_bytes` and `file.attach` take (research doc §7). PDFs go as files: `pdf.attach`
  * needs `pdftoppm`, which the live server doesn't have. */
-const LIMITS = { image: { bytes: 25 * MiB, what: "images" }, file: { bytes: 256 * MiB, what: "files" } };
+export const LIMITS = { image: { bytes: 25 * MiB, what: "images" }, file: { bytes: 256 * MiB, what: "files" } };
+/** What the owner is told about a file over its limit. */
+export const overLimitNote = (name: string, size: number, limit: (typeof LIMITS)[keyof typeof LIMITS]) =>
+  `${name} is ${(size / MiB).toFixed(1)} MB. Hermes takes ${limit.what} up to ${limit.bytes / MiB} MB.`;
 /** The images Hermes looks at (`cli._IMAGE_EXTENSIONS`); anything else is staged as a file. */
 const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp)$/i;
 /** What the official desktop app asks when an image is sent with no text. */
@@ -242,6 +247,8 @@ type SessionRow = {
   cwd?: string | null;
   /** Running now, or active lately, as the dashboard decides (`_is_active`). */
   is_active?: boolean;
+  /** A compressed chat's row: every segment's id (ADR 0026). */
+  _lineage_ids?: unknown;
 };
 type SessionPage = { sessions: SessionRow[]; total: number };
 /** Dashboard REST `GET /api/sessions/{id}`, as far as this app reads it. Flags come as stored, 0 or 1. */
@@ -572,7 +579,7 @@ export class Hermes {
    * have (ADR 0002). While a chat is here, this flag beats the one the server lists. */
   private pinWanted = new Map<string, boolean>();
   /** The latest write of each chat's pinned flag, so a chat's writes go out one at a time, in order. */
-  private pinWrites = new Map<string, Promise<void>>();
+  private pinWrites = new Map<string, Promise<boolean>>();
   /** Chats whose pinned flag was written since the list sync under way read the list, which may predate the write. */
   private pinnedSinceListRead = new Set<string>();
   /** Chats renamed since the list sync under way read the list, which may predate the rename. */
@@ -873,6 +880,14 @@ export class Hermes {
   /** Hermes's webhook routes, each call naming its profile (automations.ts). Hermes receives and runs the events. */
   readonly automations = new AutomationsApi((method, pathAndQuery, body) => this.rest(method, pathAndQuery, body));
 
+  /** Hermes's kanban board, read for the tasks the shown profile's chats dispatched (kanban.ts, issue #287). */
+  readonly kanban = new KanbanApi((method, pathAndQuery, body) => this.rest(method, pathAndQuery, body));
+  private readonly kanbanWatch = new KanbanWatch({
+    api: this.kanban,
+    sessions: () => new Set(this.snapshot.chats.flatMap((c) => [c.id, ...(c.lineage ?? [])])),
+    publish: (by) => this.placeTasks(by),
+  });
+
   /** Settings → Model's reads and writes, for the profile shown (modelSettings.ts). */
   readonly modelSettings = new ModelSettingsApi(
     (method, pathAndQuery, body) => this.rest(method, pathAndQuery, body),
@@ -1082,6 +1097,7 @@ export class Hermes {
     this.lastHeard = Date.now();
     this.heartbeat = setInterval(() => this.beat(), PING_EVERY_MS);
     this.update({ status: "connected", closedReason: undefined, route: pipe.route, unsecure: isUnsecure(pipe.route) });
+    this.kanbanWatch.start();
     // Without this, Hermes never sends this connection an Approval (research doc §6). Its answer lists the requests
     // Hermes may send, which is how diagnostics knows Approvals are there.
     const told = this.request("client.capabilities", { server_requests: true });
@@ -1358,6 +1374,7 @@ export class Hermes {
     this.staleItems.clear();
     this.resumeOnReconnect.clear();
     this.revealed.clear();
+    this.kanbanWatch.reset();
     this.update({
       profile: name,
       chats: withOutbox(this.cache.load(name), loadOutbox(this.cache, name)),
@@ -2448,8 +2465,7 @@ export class Hermes {
       }
       const kind = IMAGE_EXTENSIONS.test(f.name) ? "image" : "file";
       const limit = LIMITS[kind];
-      if (f.size > limit.bytes)
-        refused.push(`${f.name} is ${(f.size / MiB).toFixed(1)} MB. Hermes takes ${limit.what} up to ${limit.bytes / MiB} MB.`);
+      if (f.size > limit.bytes) refused.push(overLimitNote(f.name, f.size, limit));
       else attachments.push({ path: f.path, name: f.name, size: f.size, kind });
     }
     return { attachments, refused };
@@ -2739,12 +2755,31 @@ export class Hermes {
 
   /** Moves a chat to Settled here at once, and unpins it on the server (ADR 0002). `unsettle` undoes it. */
   settle(chatId: string): Promise<void> {
-    return this.setSettled(chatId, true);
+    return this.setSettled(chatId, true).then(() => undefined);
+  }
+
+  /**
+   * Settles each chat at once, all writes going out together, and resolves to the ids whose write didn't go in. Such a
+   * chat is back in Active and isn't written again, unless the owner moved it meanwhile. A chat already Settled or gone
+   * counts as settled.
+   */
+  async settleAll(chatIds: string[]): Promise<string[]> {
+    const wrote = await Promise.all(
+      chatIds.map(async (id) => {
+        if (await this.setSettled(id, true)) return true;
+        if (this.pinWanted.get(id) === false) {
+          this.pinWanted.delete(id);
+          this.patchChat(id, (c) => ({ ...c, settled: false }));
+        }
+        return false;
+      }),
+    );
+    return chatIds.filter((_, i) => !wrote[i]);
   }
 
   /** Moves a chat to Active here at once, and pins it on the server. `settle` undoes it. */
   unsettle(chatId: string): Promise<void> {
-    return this.setSettled(chatId, false);
+    return this.setSettled(chatId, false).then(() => undefined);
   }
 
   /**
@@ -3251,6 +3286,7 @@ export class Hermes {
     this.abortDial?.(new Error("Closed by the app."));
     this.generation++;
     this.capabilities.disconnected();
+    this.kanbanWatch.stop();
     clearTimeout(this.retryTimer);
     clearInterval(this.heartbeat);
     this.cancelNotify();
@@ -3303,6 +3339,10 @@ export class Hermes {
       void this.sync();
       return;
     }
+    if (type === "status.update") {
+      if (payload.kind === "process" && typeof payload.text === "string") this.kanbanWatch.nudge(payload.text);
+      return;
+    }
     const chat = session_id ? this.snapshot.chats.find((c) => c.runtimeId === session_id) : undefined;
     if (!chat) return;
     // A side question's answer is no part of the chat or of a turn running in it.
@@ -3326,7 +3366,15 @@ export class Hermes {
       this.patchChat(chat.id, (c) => ({ ...c, subagents: onSubagentEvent(c.subagents, type, payload, at) }));
       return;
     }
-    if (type === "message.start") this.turnStart.set(chat.id, chat.items.at(-1)?.id ?? null);
+    if (type === "message.start") {
+      this.turnStart.set(chat.id, chat.items.at(-1)?.id ?? null);
+      this.kanbanWatch.turnStarted([chat.id, ...(chat.lineage ?? [])]);
+    }
+    if (type === "tool.complete") {
+      const call = chat.items.find((i) => i.kind === "tool" && i.id === String(payload.tool_id));
+      const task = call?.kind === "tool" && call.name === "kanban_create" ? parseKanbanCreate(call.args, payload.result, Date.now(), this.kanbanWatch.currentBoard()) : undefined;
+      if (task) this.kanbanWatch.add(task, chat.id);
+    }
     const usage = type === "message.complete" ? this.turnUsage(session_id!, payload.usage) : undefined;
     const from = this.turnStart.get(chat.id);
     if (type === "message.complete" || type === "error") this.turnStart.delete(chat.id);
@@ -3538,6 +3586,7 @@ export class Hermes {
     this.heldScreen = undefined;
     this.generation++;
     this.capabilities.disconnected();
+    this.kanbanWatch.stop();
     clearInterval(this.heartbeat);
     // Lets the Rust side end the tunnel.
     if (pipe) this.droppedClosing = pipe.close().catch(() => {}).finally(() => (this.droppedClosing = undefined));
@@ -3551,7 +3600,8 @@ export class Hermes {
     this.sideAwaiting.clear();
     for (const c of this.snapshot.chats) {
       if (c.runtimeId) this.staleItems.set(c.id, c.items.length);
-      if (c.running || c.items.some(isWaiting)) this.resumeOnReconnect.add(c.id);
+      // So is a chat whose subagents work or whose wake turn is due, so the reconnect hears them (dispatched.ts).
+      if (c.running || c.items.some(isWaiting) || followsSession(c, Date.now())) this.resumeOnReconnect.add(c.id);
     }
     // What the dropped connection last heard about the shown profile's sessions is older than its chats' own state,
     // which the reconnect resumes; the next check, once connected, reads it again.
@@ -3834,9 +3884,10 @@ export class Hermes {
     return this.archiveWanted.get(r.id) ?? !!r.archived;
   }
 
-  private setSettled(chatId: string, settled: boolean): Promise<void> {
+  /** Resolves to false only when the write to Hermes failed. */
+  private setSettled(chatId: string, settled: boolean): Promise<boolean> {
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
-    if (!chat || chat.settled === settled) return Promise.resolve();
+    if (!chat || chat.settled === settled) return Promise.resolve(true);
     this.pinWanted.set(chatId, !settled);
     this.patchChat(chatId, (c) => ({ ...c, settled }));
     return this.writePin(chatId);
@@ -3847,21 +3898,27 @@ export class Hermes {
    * out, so a quick Undo leaves the server where the owner left the chat. A failed write stays wanted: the chat stays
    * where the owner put it here, and the next finished turn or refresh tries again. A chat with a turn running may
    * not be stored yet, so its failure isn't reported until the end of the turn. `profile` is the chat's, which the
-   * owner may have switched away from by the time the write goes out.
+   * owner may have switched away from by the time the write goes out. Resolves to false when the write failed; a refused
+   * edit, kept on this computer instead, resolves to true.
    */
-  private writePin(chatId: string, profile = this.profile): Promise<void> {
-    const write = (this.pinWrites.get(chatId) ?? Promise.resolve()).then(async () => {
+  private writePin(chatId: string, profile = this.profile): Promise<boolean> {
+    const write = (this.pinWrites.get(chatId) ?? Promise.resolve(true)).then(async () => {
       const pinned = this.pinWanted.get(chatId);
-      if (pinned === undefined) return;
+      if (pinned === undefined) return true;
       const running = this.snapshot.chats.find((c) => c.id === chatId)?.running;
       try {
         await this.patchSession(chatId, profile, { pinned });
         this.pinnedSinceListRead.add(chatId);
         if (this.pinWanted.get(chatId) === pinned) this.pinWanted.delete(chatId);
         this.patchChat(chatId, (c) => (c.settledHere ? { ...c, settledHere: undefined } : c));
+        return true;
       } catch (e) {
-        if (e instanceof EditRefusedError) return this.keepSettledHere(chatId, profile, pinned);
+        if (e instanceof EditRefusedError) {
+          this.keepSettledHere(chatId, profile, pinned);
+          return true;
+        }
         if (!running) this.update({ syncError: `Couldn't keep a chat ${pinned ? "Active" : "Settled"} on the server: ${(e as Error).message}` });
+        return false;
       }
     });
     this.pinWrites.set(chatId, write);
@@ -3975,6 +4032,7 @@ export class Hermes {
           unread: !!r.unread && !readHere && !onScreen,
           // List rows carry the stored token and cost totals too.
           usage: newerChatUsage(c?.usage, chatUsageOf(r, Date.now())),
+          ...(Array.isArray(r._lineage_ids) && { lineage: r._lineage_ids.filter((x): x is string => typeof x === "string") }),
         };
       });
     // Chats started or resumed on this connection stay even before Hermes stores them (a new chat has no row
@@ -3989,6 +4047,7 @@ export class Hermes {
     this.listedAt = Date.now();
     const switched = !!this.snapshot.switching;
     this.update({ chats, syncError: undefined, switching: undefined });
+    this.kanbanWatch.chatsListed();
     for (const chatId of readOnScreen) this.seen(chatId);
     this.saveList(profile, chats);
     if (switched) this.cache.rememberProfile(profile);
@@ -4420,6 +4479,20 @@ export class Hermes {
       const reaches = (after?: number) => whole || (after !== undefined && readBack.some((m) => m.rowId !== undefined && m.rowId <= after));
       for (const row of chat.items.filter(isOutgoing)) this.setOutgoing(profile, chat.id, row.id, (r) => settle(r, readBack, reaches));
     }
+  }
+
+  /** Gives each chat the dispatched tasks the watch has for its id or any of its lineage; a chat whose tasks didn't change is kept. */
+  private placeTasks(by: ReadonlyMap<string, readonly DispatchedTask[]>) {
+    let changed = false;
+    const chats = this.snapshot.chats.map((c) => {
+      const seen = new Set<string>();
+      const tasks = [c.id, ...(c.lineage ?? [])].flatMap((sid) => by.get(sid) ?? []).filter((t) => !seen.has(t.id) && seen.add(t.id));
+      const was = c.tasks ?? [];
+      if (was.length === tasks.length && was.every((t, i) => sameTask(t, tasks[i]))) return c;
+      changed = true;
+      return { ...c, tasks: tasks.length ? tasks : undefined };
+    });
+    if (changed) this.update({ chats });
   }
 
   private patchChat(id: string, fn: (c: Chat) => Chat, nextFrame = false) {

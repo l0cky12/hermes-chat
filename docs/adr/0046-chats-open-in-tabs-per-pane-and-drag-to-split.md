@@ -19,7 +19,8 @@ a pane opens in a new tab there, or splits the chat area, side by side or one ab
   than copies, all four edges split, and tabs move along their strip.
 - **HTML5 drag and drop, not pointer events.** Rows and tabs carry the chat id as `application/x-hermes-chat`. Tauri's
   native drop handler on Linux (wry's WebKitGTK `drag_drop.rs`) only takes drags carrying file URIs, so in-page drags
-  reach the webview, and file drops still attach to the composer as before.
+  reach the webview, and file drops still attach to the composer as before. On Windows that handler takes every drag;
+  ADR 0094 turns it off there.
 - **Every drag has a keyboard way too.** The chat menu has Open in a new tab beside its pane items. The end of
   each tab strip has Split right (Ctrl+\) and Split down (ADR 0048). Ctrl+Tab and Ctrl+Shift+Tab move between the active pane's tabs; the
   arrow keys, Home and End move along a focused tab strip, and Delete closes the focused tab.

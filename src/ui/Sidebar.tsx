@@ -3,17 +3,19 @@
 // rail's foot. Right-clicking a chat opens its menu (ChatMenu.tsx).
 import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Inbox as InboxIcon, LockOpen, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
+import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Hourglass, Inbox as InboxIcon, LockOpen, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
+import { waitingLabel, type Handoff } from "../hermes/dispatched";
 import type { Chat, ConnectionStatus, OtherProfile, OtherProfiles } from "../hermes/model";
 import { SOURCE_LABEL, isWaiting } from "../hermes/model";
 import { CHECK_EVERY_MS, totalUnread } from "../hermes/otherProfiles";
 import type { Route } from "../hermes/pipe";
 import { RenameConflict, TitleModelUnavailable, type Snapshot } from "../hermes/transport";
-import { SECTION_LABEL, chatSections, wakeFull, wakeLabel, type Pins, type SectionKey, type Snoozes } from "../hermes/snooze";
+import { SECTION_LABEL, chatSections, inboxSettle, wakeFull, wakeLabel, type InboxSettle, type Pins, type SectionKey, type Snoozes } from "../hermes/snooze";
 import { getUIPrefs, setUIPrefs, subscribe as subscribeUIPrefs } from "../hermes/uiPrefs";
-import { ChatMenu, type ChatPin, type ChatProjects, type ChatSnooze, type ChatTags } from "./ChatMenu";
+import { ChatMenu, type ChatPin, type ChatProjects, type ChatSnooze, type ChatStopWaiting, type ChatTags } from "./ChatMenu";
 import { SnoozeDialog, useSnoozeClock } from "./Snooze";
 import { DeleteChatDialog } from "./DeleteChat";
+import { SettleAllDialog } from "./SettleAll";
 import { CloneProfileDialog } from "./CloneProfile";
 import type { ProfileCloneApi } from "../hermes/profileClone";
 import { ArchiveButton, STATUS_LABEL, SettleButton, SourceIcon, Spinner, composing, relTime, routeLabel, useReturnFocus } from "./bits";
@@ -395,6 +397,8 @@ function ChatRow({
   tags,
   snooze,
   pin,
+  handoff,
+  onStopWaiting,
   section,
   hidden,
 }: {
@@ -421,11 +425,16 @@ function ChatRow({
   tags?: ChatTags;
   snooze?: ChatSnooze;
   pin?: ChatPin;
+  /** The work the chat handed off and waits on, or that needs the owner (dispatched.ts). */
+  handoff?: Handoff;
+  /** Stops waiting on that work, on this computer only. */
+  onStopWaiting?: () => void;
   section?: string;
   /** In a collapsed section: kept, with its rename box or menu, but out of sight. */
   hidden?: boolean;
 }) {
   const [renaming, setRenaming] = useState(false);
+  const waiting = !chat.running && handoff?.kind === "waiting" ? waitingLabel(handoff) : undefined;
   const [retitling, setRetitling] = useState(false);
   /** Why the title wasn't regenerated. `detail`: Hermes's own words; `settings`: the fix is the Text generation model. */
   const [retitleError, setRetitleError] = useState<{ text: string; detail?: string; settings?: boolean }>();
@@ -510,8 +519,17 @@ function ChatRow({
         )}
         <span className="row-meta">
           {sleepsUntil && <span className="row-wake">{wakeLabel(sleepsUntil, now)}</span>}
+          {handoff?.kind === "needsOwner" && (
+            <span className="row-owner" role="img" aria-label={handoff.reason} title={handoff.reason}>
+              <CircleAlert size={12} />
+            </span>
+          )}
           {chat.running || retitling ? (
             <Spinner />
+          ) : waiting ? (
+            <span className="row-wait" role="img" aria-label={waiting} title={waiting}>
+              <Hourglass size={12} />
+            </span>
           ) : chat.unread ? (
             <span className="dot" title="Unread" />
           ) : (
@@ -551,6 +569,7 @@ function ChatRow({
           snooze={snooze}
           settle={chat.archived ? undefined : { settled: chat.settled, onSettle }}
           pin={pin}
+          stopWaiting={waiting && onStopWaiting ? { label: waiting, onStop: onStopWaiting } : undefined}
           onOpenIn={onOpenIn}
           onOpenTab={onOpenTab}
           onRename={() => setRenaming(true)}
@@ -948,10 +967,13 @@ export function ChatList({
   onOpenIn = () => {},
   onOpenTab = () => {},
   onSettle,
+  onSettleAll,
   snoozes = {},
   attentionSince,
   pins = {},
   onPin,
+  handoffs,
+  onStopWaiting,
   onSnooze,
   onWake,
   onArchive,
@@ -990,6 +1012,8 @@ export function ChatList({
   /** Opens a chat in a new tab of the active pane. */
   onOpenTab?: (id: string) => void;
   onSettle: (id: string, settled: boolean) => void;
+  /** Settles these chats at once, from the Inbox header's Settle all; without it the Inbox has no such button. */
+  onSettleAll?: (ids: string[]) => void;
   /** When each snoozed chat wakes (snooze.ts). */
   snoozes?: Snoozes;
   /** When each chat last stopped working, so the top lists it as new then (snooze.ts `AttentionClock`). */
@@ -998,6 +1022,10 @@ export function ChatList({
   pins?: Pins;
   /** Pins a chat to the top of the list, or unpins it. */
   onPin?: (id: string, pinned: boolean) => void;
+  /** Each chat's dispatched work (dispatched.ts `handoffs`), which keeps it in Working, waiting. */
+  handoffs?: ReadonlyMap<string, Handoff>;
+  /** Stops waiting on a chat's dispatched work, on this computer only (snooze.ts `StopWaitingStore`). */
+  onStopWaiting?: (id: string) => void;
   onSnooze?: (id: string, until: number) => void;
   onWake?: (id: string) => void;
   onArchive: (id: string, archived: boolean) => void;
@@ -1031,7 +1059,10 @@ export function ChatList({
   const deletingGone = !!deleting && !chats.some((c) => c.id === deleting.chat.id && !c.running);
   // Re-sorts the list when the next snooze wakes.
   const now = useSnoozeClock(snoozes);
-  const sections = chatSections(chats, snoozes, now, attentionSince, pins);
+  const sections = chatSections(chats, snoozes, now, attentionSince, pins, handoffs);
+  const [askedInbox, setAskedInbox] = useState<InboxSettle>();
+  const stillInbox = askedInbox ? sections.inbox.filter((c) => askedInbox.ids.includes(c.id)).map((c) => c.id) : [];
+  const askedInboxGone = !!askedInbox && !stillInbox.length;
   // The dialog closes if its chat leaves the list, or is settled or archived meanwhile (in another window or client).
   const customGone = !!customFor && !chats.some((c) => c.id === customFor.id && !c.settled && !c.archived);
   useEffect(() => {
@@ -1040,6 +1071,9 @@ export function ChatList({
   useEffect(() => {
     if (deletingGone) setDeleting(undefined);
   }, [deletingGone]);
+  useEffect(() => {
+    if (askedInboxGone) setAskedInbox(undefined);
+  }, [askedInboxGone]);
   // Opening a chat in a collapsed section, say from a search, opens the section; settling or snoozing the chat on
   // screen doesn't.
   const selectedIn = shown.find((k) => sections[k].some((c) => c.id === selectedId));
@@ -1073,6 +1107,8 @@ export function ChatList({
           : undefined
       }
       pin={onPin && !c.archived ? { pinned: pins[c.id] !== undefined, onPin: (on) => onPin(c.id, on) } : undefined}
+      handoff={handoffs?.get(c.id)}
+      onStopWaiting={onStopWaiting && (() => onStopWaiting(c.id))}
     />
   );
   // Archived can hold every chat the profile has ever had, so a collapsed one draws no rows (Settled, the drawer, neither).
@@ -1082,13 +1118,22 @@ export function ChatList({
   const busy = sections.working.length + sections.snoozed.length > 0;
   const header = (k: SectionKey, list: Chat[], open: boolean) => {
     const unread = list.filter((c) => c.unread).length;
-    return (
+    const toggle = (
       <button key={`section-${k}`} className="section-toggle" data-section-head={k} aria-expanded={open} onClick={() => setCollapsed(k, open)}>
         <ChevronRight size={14} className={`chev ${open ? "open" : ""}`} />
         {SECTION_LABEL[k]}
         <span className="count">{list.length}</span>
         {unread > 0 && !open && <span className="dot" title={`${unread} unread`} />}
       </button>
+    );
+    if (k !== "inbox" || !onSettleAll || !list.length) return toggle;
+    return (
+      <div key={`section-${k}`} className="section-head">
+        {toggle}
+        <button className="section-action" data-settle-all onClick={() => setAskedInbox(inboxSettle(list))}>
+          Settle all
+        </button>
+      </div>
     );
   };
   const settledOpen = !collapsed.includes("settled");
@@ -1177,6 +1222,21 @@ export function ChatList({
           onSnooze={(until) => {
             setCustomFor(undefined);
             onSnooze?.(customFor.id, until);
+          }}
+        />
+      )}
+      {askedInbox && !askedInboxGone && (
+        <SettleAllDialog
+          inbox={askedInbox}
+          returnTo={{
+            get current() {
+              return document.querySelector<HTMLElement>("[data-settle-all]") ?? document.querySelector<HTMLElement>('[data-section-head="inbox"]');
+            },
+          }}
+          onClose={() => setAskedInbox(undefined)}
+          onSettle={() => {
+            setAskedInbox(undefined);
+            onSettleAll?.(stillInbox);
           }}
         />
       )}

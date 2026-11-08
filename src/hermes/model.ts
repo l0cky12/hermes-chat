@@ -2,6 +2,7 @@
 import type { ModelPick } from "./models";
 import type { ChatUsage, ReplyUsage } from "./usage";
 import type { SubagentTree } from "./subagents";
+import type { DispatchedTask } from "./dispatched";
 
 /** `import`: a transcript file imported into Hermes (ADR 0031). Hermes Chat shows it read-only. */
 export type Source = "app" | "telegram" | "discord" | "cli" | "desktop" | "import" | "other";
@@ -187,6 +188,13 @@ export type Chat = {
   usageError?: string;
   /** The Subagents its replies started that this connection has heard of (subagents.ts, ADR 0072). Kept until the app closes. */
   subagents?: SubagentTree;
+  /**
+   * The kanban tasks its replies created, in any of its lineage's segments, that are outstanding, need the owner, or
+   * are over but inside the wake grace (dispatched.ts, kanban.ts). Set by the transport only.
+   */
+  tasks?: DispatchedTask[];
+  /** The ids of every segment of a compressed chat (`_lineage_ids`, ADR 0026), so a task filed under an earlier one matches. */
+  lineage?: string[];
   /**
    * Its side questions on screen, oldest first. They are never among its items, so nothing that saves, exports,
    * branches or sends the chat sees them; the transcript shows each where it was asked (ADR 0070, ADR 0086).

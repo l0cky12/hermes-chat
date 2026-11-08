@@ -34,6 +34,7 @@ const shoulder = (side: -1 | 1, y: number, z = 0): [number, number, number] => [
 /** Each pose's parts, in the character's own frame: on the floor at its seat, facing +z. Arms hang from the shoulder. */
 const FIGURE: Record<Pose, Figure> = {
   typing: { ...sitting(0.05), arms: [{ at: shoulder(-1, 1.0), turn: [-1.3, 0, 0] }, { at: shoulder(1, 1.0), turn: [-1.3, 0, 0] }] },
+  seated: { ...sitting(0.05), arms: [{ at: shoulder(-1, 1.0), turn: [-0.5, 0, -0.15] }, { at: shoulder(1, 1.0), turn: [-0.5, 0, 0.15] }] },
   "hand-up": { ...standing, arms: [{ at: shoulder(-1, 0.95), turn: [0, 0, -0.12] }, { at: shoulder(1, 0.98), turn: [Math.PI - 0.15, 0, 0.1] }], marker: "ask" },
   slumped: {
     body: { at: [0, SEAT_Y + BODY_H / 2 - 0.04, 0.12], turn: [0.55, 0, 0] },
