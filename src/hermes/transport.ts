@@ -47,7 +47,7 @@ import { readBack, sendImport, type PlannedChat } from "./importTranscripts";
 import { memoryApi, type MemoryApi } from "./memory";
 import { MemoryProvidersApi } from "./memoryProviders";
 import { SkillsApi } from "./skills";
-import { CapabilityStore, CapabilityUnsupportedError } from "./capabilities";
+import { CapabilityStore, CapabilityUnsupportedError, failureOf, isNoRoute } from "./capabilities";
 import { BOT_CHAT_TITLE, BotChats, BotModeUnsupportedError, isBotChat, isBotChatTitle, rosterOf, type Bot } from "./bots";
 import type { OpenPipe, Pipe, PipeEvent, RestMethod, Route, Speech, Transcript, VoiceSetup } from "./pipe";
 import { RemoteFilesError, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, SESSION_GONE, previewSupport, remoteFiles, type EditIo, type RemoteFiles } from "./remoteFiles";
@@ -1136,8 +1136,8 @@ export class Hermes {
     try {
       rows = await timeLimit(env, PROVIDERS_TIMEOUT_MS);
     } catch (e) {
-      // No answer in time is worth trying again; an answer saying no means this server can't take keys from here.
-      if (!answered) throw e;
+      // Only a route the server doesn't have means it can't take keys from here; any other failure is worth trying again.
+      if (!answered || !isNoRoute(failureOf(e))) throw e;
       return { keys: [], ready, unsupported: (e as Error).message };
     }
     return { keys: providerKeys(rows), ready };
@@ -1179,10 +1179,13 @@ export class Hermes {
   private oneKeyChangeAtATime<T>(profile: string, change: (pipe: Pipe) => Promise<T>): Promise<T> {
     const run = async () => {
       if (!this.pipe) throw new Error("Not connected to Hermes.");
-      const result = await change(this.pipe);
-      if (this.snapshot.models?.profile === profile) this.update({ models: undefined });
-      void this.loadModels();
-      return result;
+      try {
+        return await change(this.pipe);
+      } finally {
+        // Also after a failure: one that timed out may have changed the key on the server anyway.
+        if (this.snapshot.models?.profile === profile) this.update({ models: undefined });
+        void this.loadModels();
+      }
     };
     const before = this.keyChanges.get(profile) ?? Promise.resolve();
     const next = before.then(run, run);

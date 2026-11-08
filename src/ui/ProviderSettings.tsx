@@ -116,8 +116,9 @@ export function ProviderSettings({ hermes, profile, connected, openModel }: { he
     }
     if (!live(scope)) return;
     // Whatever the removal answered, the list decides: one that timed out after the delete may have removed the key.
-    const after = await load(scope);
+    const read = await load(scope);
     if (!live(scope)) return;
+    const after = read?.unsupported ? undefined : read;
     setUi(IDLE);
     if (!after)
       setNote(

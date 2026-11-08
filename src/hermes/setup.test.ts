@@ -297,4 +297,34 @@ describe("Model provider keys", () => {
     expect((await listed).keys.find((k) => k.provider === "openrouter")?.isSet).toBe(true);
     await hermes.close();
   });
+
+  it("reads the models again after a removal that failed once the key was already gone", async () => {
+    const server = new FakeHermes();
+    const hermes = await connect(async (onEvent, profile, signal) => {
+      const pipe = await server.openPipe(onEvent, profile, signal);
+      return {
+        ...pipe,
+        removeProviderKey: async (...a) => {
+          await pipe.removeProviderKey(...a);
+          throw new Error("Hermes didn't finish removing the key within 30 s.");
+        },
+      };
+    });
+    await hermes.loadModels();
+    const asked = server.requests.filter((r) => r.method === "model.options").length;
+    await expect(hermes.removeProviderKey("OPENROUTER_API_KEY")).rejects.toThrow("didn't finish");
+    await hermes.idle();
+    expect(server.requests.filter((r) => r.method === "model.options").length).toBe(asked + 1);
+    await hermes.close();
+  });
+
+  it("throws, rather than calling the server unsupported, when GET /api/env fails for another reason than a missing route", async () => {
+    const server = new FakeHermes();
+    server.rest["GET /api/env"] = () => {
+      throw new Error(`The dashboard answered 500: {"detail":"Internal server error"}`);
+    };
+    const hermes = await connect(server.openPipe);
+    await expect(hermes.providerSetup()).rejects.toThrow("500");
+    await hermes.close();
+  });
 });

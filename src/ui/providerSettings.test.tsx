@@ -416,6 +416,24 @@ describe("Settings → Providers for another profile", () => {
     expect(screen.getByText("Removed the OpenRouter key from the default profile.")).toBeTruthy();
     expect(screen.queryByText(/Not removed/)).toBeNull();
   });
+
+  it("keeps the list and offers to read again when the read after a removal fails, rather than calling the server unsupported", async () => {
+    const s = new FakeHermes();
+    const { user } = await shown({ s });
+    await screen.findByLabelText("Provider");
+    const rows = s.rest["GET /api/env"];
+    s.rest["GET /api/env"] = () => {
+      throw new Error(`The dashboard answered 500: {"detail":"Internal server error"}`);
+    };
+    await removeOpenRouter(user);
+    await screen.findByText("Removed the OpenRouter key, but the list couldn't be read again to confirm it.");
+    expect(savedRow("OpenRouter")).toBeTruthy();
+    expect(screen.queryByText(/doesn't let Hermes Chat set provider keys/)).toBeNull();
+
+    s.rest["GET /api/env"] = rows;
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(savedRow("OpenRouter")).toBeNull());
+  });
 });
 
 describe("The Providers tab in Settings", () => {
