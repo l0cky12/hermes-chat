@@ -118,7 +118,7 @@ export const FIXED: readonly FixedKey[] = [
   { title: "Redo in a text field", keys: [chord("Ctrl+Shift+Z"), chord("Ctrl+Y")], when: "textFieldFocus", group: "chat" },
   { title: "Undo what the notice offers to undo", keys: [chord("Ctrl+Z")], when: "!textFieldFocus && noticeShown", group: "chat" },
   { title: "Close the chat's menu", keys: [chord("Escape")], when: "chatMenuOpen", group: "threads" },
-  { title: "Pick a menu item by its letter; Tab stays inside the menu", keys: [chord("A"), chord("Tab")], when: "chatMenuOpen", group: "threads" },
+  { title: "Keep Tab inside the chat's menu; the letter beside an item picks it", keys: [chord("Tab")], when: "chatMenuOpen", group: "threads" },
   { title: "Cancel a delete question, or close a dialog", keys: [chord("Escape")], when: "dialogOpen", group: "navigation" },
 ];
 
