@@ -37,18 +37,14 @@ const WARN = new Color("#e3a72f");
 const BAD = new Color("#d6455d");
 
 export type HairStyle = "short" | "long" | "bun" | "bald";
-/** What makes one character look unlike the next; the shirt is its team's, not part of this. */
 export type Look = { skin: number; hair: HairStyle; hairColor: number; pants: number };
 
-// Skin and pants stay clear of every team color, so a shirt never melts into the person wearing it.
 export const SKIN_TONES = [0xf3d3b6, 0xe6bb98, 0xcf9a6e, 0x8e5f45, 0x6b4630, 0x4a3022] as const;
 export const HAIR_COLORS = [0x1d1a18, 0x3a281d, 0x7a3f24, 0x8b5a34, 0xb58c4e, 0xe0c27c] as const;
 export const PANTS_COLORS = [0x2f3b57, 0x3a3d44, 0xa89a78, 0x55585f] as const;
-/** Short hair is the commonest, bald the rarest. */
 const HAIR_STYLES: readonly HairStyle[] = ["short", "short", "short", "long", "long", "bun", "bun", "bald"];
 
-/** FNV-1a: the same text gives the same number on every launch. */
-function hash(text: string): number {
+function fnv1a(text: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
   return h >>> 0;
@@ -66,7 +62,7 @@ const pick = <T>(list: readonly T[], h: number, salt: number): T => list[mix(h, 
 
 /** A character's look, from its key alone: the same agent keeps its look between launches. */
 export function lookOf(key: string): Look {
-  const h = hash(key);
+  const h = fnv1a(key);
   return { skin: pick(SKIN_TONES, h, 1), hair: pick(HAIR_STYLES, h, 2), hairColor: pick(HAIR_COLORS, h, 3), pants: pick(PANTS_COLORS, h, 4) };
 }
 
@@ -83,16 +79,16 @@ const SHOULDER = { x: 0.215, y: TORSO - 0.06 };
 const HIP_X = 0.09;
 const ARM = { upper: 0.26, lower: 0.24 };
 const LEG = { upper: 0.42, lower: 0.38 };
-/** The thigh's radius: seated, the hip hinges this far above the seat. */
-const SEATED_HIP = SEAT_Y + 0.075;
-const STAND_HIP = LEG.upper + LEG.lower + 0.04;
+const THIGH_R = 0.075;
+/** How far a shoe's sole is below the ankle. */
+const SOLE = 0.04;
+const SEATED_HIP = SEAT_Y + THIGH_R;
+const STAND_HIP = LEG.upper + LEG.lower + SOLE;
 /** A marker's height over the head's centre. The hand-up pose's marker clears its raised hand. */
 const MARKER_LIFT = { ask: 0.5, trouble: 0.32 } as const;
 
-/** A point `d` up a torso hinged at `hip` and leaned forward by `lean`, `side` across. */
 const along = (hip: Vec3, lean: number, d: number, side = 0): Vec3 => [hip[0] + side, hip[1] + d * Math.cos(lean), hip[2] + d * Math.sin(lean)];
 
-/** The torso hinged at `hip`, the head on its neck (nodding `nod` forward) and a shoulder each side. */
 function upperBody(hip: Vec3, lean: number, nod = 0) {
   return {
     torso: { at: hip, turn: [lean, 0, 0] } satisfies Part,
@@ -181,17 +177,16 @@ function partMatrix(base: Matrix4, p: Part, out = new Matrix4()): Matrix4 {
 
 /**
  * A limb's three matrices: its upper segment (hung from `at`), its lower segment (hung from the upper's end, bent by
- * `bend` and `more`) and the end piece, a hand or a shoe, at the lower segment's end.
+ * `bend` and `extraBend`) and the end piece, a hand or a shoe, at the lower segment's end.
  */
-function limbMatrices(base: Matrix4, l: Limb, seg: { upper: number; lower: number }, out: readonly [Matrix4, Matrix4, Matrix4], more = 0): void {
+function limbMatrices(base: Matrix4, l: Limb, seg: { upper: number; lower: number }, out: readonly [Matrix4, Matrix4, Matrix4], extraBend = 0): void {
   partMatrix(base, { at: l.at, turn: l.turn }, out[0]);
   step.makeTranslation(0, -seg.upper, 0);
-  elbow.makeRotationX(l.bend + more);
+  elbow.makeRotationX(l.bend + extraBend);
   out[1].multiplyMatrices(out[0], step).multiply(elbow);
   out[2].multiplyMatrices(out[1], step.makeTranslation(0, -seg.lower, 0));
 }
 
-/** The head's ellipsoid, a little taller than wide; hair and face sit on its surface, all in a frame centred on it. */
 const HEAD_R = new Vector3(0.145, 0.165, 0.155);
 const onHead = (x: number, y: number) => HEAD_R.z * Math.sqrt(1 - (x / HEAD_R.x) ** 2 - (y / HEAD_R.y) ** 2);
 
@@ -213,14 +208,12 @@ const HAIR: Record<Exclude<HairStyle, "bald">, () => BufferGeometry> = {
   bun: () => mergeGeometries([cap(), ball(new Vector3(0.075, 0.075, 0.075), [0, 0.165, -0.1], 8, 6)])!,
 };
 
-/** Eyes and a mouth, dark, on the head's front. */
 function faceGeometry(): BufferGeometry {
   const eye = (side: number) => ball(new Vector3(0.021, 0.024, 0.021), [side * 0.052, 0.015, onHead(side * 0.052, 0.015) - 0.004], 6, 5);
   const mouth = new BoxGeometry(0.05, 0.012, 0.014).translate(0, -0.06, onHead(0, -0.06) - 0.002);
   return mergeGeometries([eye(-1), eye(1), mouth])!;
 }
 
-/** Shoulders: a tapered trunk under a flattened, rounded top. */
 function torsoGeometry(): BufferGeometry {
   const trunk = new CylinderGeometry(0.165, 0.145, TORSO - 0.04, 10).translate(0, (TORSO - 0.04) / 2, 0);
   const top = new SphereGeometry(1, 10, 6).scale(0.2, 0.09, 0.2).translate(0, TORSO - 0.06, 0);
@@ -230,14 +223,12 @@ function torsoGeometry(): BufferGeometry {
 /** A segment hangs down from its top joint, so turning it turns it at the joint. */
 const segment = (r: number, len: number) => new CapsuleGeometry(r, len, 3, 7).translate(0, -len / 2, 0);
 
-/** The forearm and, on its end, the hand: both skin. */
 function forearmGeometry(): BufferGeometry {
   const hand = ball(new Vector3(0.05, 0.062, 0.034), [0, -ARM.lower - 0.04, 0.0], 8, 6);
   return mergeGeometries([segment(0.042, ARM.lower), hand])!;
 }
 
-/** A shoe is a flat ellipsoid under the ankle, its toe forward; its lowest point is the sole, 0.04 below the ankle. */
-const shoeGeometry = () => ball(new Vector3(0.058, 0.04, 0.115), [0, 0, 0.05], 8, 6);
+const shoeGeometry = () => ball(new Vector3(0.058, SOLE, 0.115), [0, 0, 0.05], 8, 6);
 
 export type Figures = {
   group: Group;
@@ -246,7 +237,6 @@ export type Figures = {
   /** Moves typing arms for time `t` (ms). Whether any character types, so the scene knows to keep drawing. */
   animate(t: number, moves: boolean): boolean;
   select(key: string | undefined): void;
-  /** Faces are drawn only when the camera is near enough to see them. */
   showFaces(on: boolean): void;
   /** The meshes a click can hit, and which character an instance of one of them is. */
   pickable: InstancedMesh[];
@@ -255,6 +245,9 @@ export type Figures = {
   tagAt(i: number, out: Vector3): Vector3;
   dispose(): void;
 };
+
+/** Every character has two of each limb part. */
+const LIMB_CAP = 2 * FLOOR_CAP;
 
 export function buildFigures(): Figures {
   const group = new Group();
@@ -275,12 +268,11 @@ export function buildFigures(): Figures {
     bun: make("hair-bun", HAIR.bun(), lambert()),
   };
   const face = make("face", faceGeometry(), lambert());
-  // Two of each limb part per character.
-  const upperArm = make("upper-arm", segment(0.05, ARM.upper), lambert(), 2 * FLOOR_CAP);
-  const forearm = make("forearm", forearmGeometry(), lambert(), 2 * FLOOR_CAP);
-  const thigh = make("thigh", segment(0.075, LEG.upper), lambert(), 2 * FLOOR_CAP);
-  const shin = make("shin", segment(0.06, LEG.lower), lambert(), 2 * FLOOR_CAP);
-  const shoe = make("shoe", shoeGeometry(), lambert(), 2 * FLOOR_CAP);
+  const upperArm = make("upper-arm", segment(0.05, ARM.upper), lambert(), LIMB_CAP);
+  const forearm = make("forearm", forearmGeometry(), lambert(), LIMB_CAP);
+  const thigh = make("thigh", segment(THIGH_R, LEG.upper), lambert(), LIMB_CAP);
+  const shin = make("shin", segment(0.06, LEG.lower), lambert(), LIMB_CAP);
+  const shoe = make("shoe", shoeGeometry(), lambert(), LIMB_CAP);
   const bang = make("bang", new BoxGeometry(0.07, 0.24, 0.07).translate(0, 0.17, 0), new MeshBasicMaterial({ color: 0xffffff }));
   const dot = make("dot", new BoxGeometry(0.08, 0.08, 0.08), new MeshBasicMaterial({ color: 0xffffff }));
   const flag = make("flag", new OctahedronGeometry(0.11, 0), new MeshBasicMaterial({ color: 0xffffff }));
@@ -305,7 +297,6 @@ export function buildFigures(): Figures {
 
   return {
     group,
-    // Hair and faces lie on the head, which a click through them hits.
     pickable: [torso, head, ...limbs],
     set(characters) {
       shown = characters.slice(0, FLOOR_CAP);

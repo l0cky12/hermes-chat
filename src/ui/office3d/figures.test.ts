@@ -17,8 +17,7 @@ const positionOf = (m: Matrix4) => new Vector3().setFromMatrixPosition(m);
 const SEAT_TOP = 0.42 * FIGURE_SCALE;
 const DESK_TOP = 0.74 * FIGURE_SCALE;
 
-/** One of every pose: a typing agent and one queued at the door, then one waiting, one failed and one finished. */
-const MIXED = officeFloor([team("a", "running", "queued"), team("b", "approval", "failed", "completed")], EMPTY_FLOOR_MEMORY);
+const EVERY_POSE = officeFloor([team("a", "running", "queued"), team("b", "approval", "failed", "completed")], EMPTY_FLOOR_MEMORY);
 
 function drawn(characters: readonly Character[]) {
   const figures = buildFigures();
@@ -30,7 +29,6 @@ function drawn(characters: readonly Character[]) {
     mesh(name).getColorAt(i, c);
     return c.getHex();
   };
-  /** An instance's vertices, in the world. */
   const points = (name: string, i: number) => {
     const m = mesh(name);
     const at = m.geometry.getAttribute("position");
@@ -49,8 +47,7 @@ function drawn(characters: readonly Character[]) {
 }
 
 const indexOfPose = (characters: readonly Character[], pose: Pose) => characters.findIndex((c) => c.pose === pose);
-/** How far ahead of a character's seat a point is, along the way it faces. */
-const forward = (c: Character, p: Vector3) => (p.x - c.spot.x) * Math.sin(c.spot.facing) + (p.z - c.spot.z) * Math.cos(c.spot.facing);
+const aheadOfSeat = (c: Character, p: Vector3) => (p.x - c.spot.x) * Math.sin(c.spot.facing) + (p.z - c.spot.z) * Math.cos(c.spot.facing);
 
 describe("The office's characters", () => {
   it("stands each body at its own seat, over the floor plan's spot", () => {
@@ -94,21 +91,19 @@ describe("The office's characters", () => {
       }
     const bald = floor.characters.filter((c) => lookOf(c.key).hair === "bald").length;
     expect(mesh("hair-short").count + mesh("hair-long").count + mesh("hair-bun").count).toBe(n - bald);
-    // Every part is one mesh for all the characters, so what is drawn is a fixed list, not a list per person.
     const calls = figures.group.children.filter((o): o is InstancedMesh => o instanceof InstancedMesh && o.count > 0);
     expect(calls.length).toBeLessThanOrEqual(16);
   });
 
   describe("poses", () => {
-    const { mesh, matrix, top, bottom, handTip } = drawn(MIXED.characters);
-    const chars = MIXED.characters;
+    const { mesh, matrix, top, bottom, handTip } = drawn(EVERY_POSE.characters);
+    const chars = EVERY_POSE.characters;
     const hip = (i: number) => positionOf(matrix("thigh", 2 * i));
 
     it.each(["door", "hand-up"] as const)("stands a %s agent on both feet, its head over its hips", (pose) => {
       const i = indexOfPose(chars, pose);
       expect(i).toBeGreaterThanOrEqual(0);
       for (const side of [0, 1]) {
-        // A shoe's sole rests on the floor: touching it, never through it.
         expect(bottom("shoe", 2 * i + side)).toBeGreaterThanOrEqual(-0.001);
         expect(bottom("shoe", 2 * i + side)).toBeLessThan(0.02);
       }
@@ -143,7 +138,7 @@ describe("The office's characters", () => {
       for (const side of [0, 1]) {
         const tip = handTip(2 * i + side);
         expect(Math.abs(tip.y - DESK_TOP)).toBeLessThan(0.12);
-        expect(forward(chars[i], tip) - forward(chars[i], positionOf(matrix("torso", i)))).toBeGreaterThan(0.25);
+        expect(aheadOfSeat(chars[i], tip) - aheadOfSeat(chars[i], positionOf(matrix("torso", i)))).toBeGreaterThan(0.25);
       }
     });
 
@@ -153,8 +148,7 @@ describe("The office's characters", () => {
       const headT = positionOf(matrix("head", t));
       const headS = positionOf(matrix("head", s));
       expect(headS.y).toBeLessThan(headT.y - 0.2);
-      expect(forward(chars[s], headS) - forward(chars[t], headT)).toBeGreaterThan(0.2);
-      // Its forearms lie along the desk top.
+      expect(aheadOfSeat(chars[s], headS) - aheadOfSeat(chars[t], headT)).toBeGreaterThan(0.2);
       for (const side of [0, 1]) expect(Math.abs(handTip(2 * s + side).y - DESK_TOP)).toBeLessThan(0.12);
     });
   });
@@ -165,16 +159,15 @@ describe("The office's characters", () => {
     const distance = (a: number, b: number) => Math.hypot(...rgb(a).map((c, k) => c - rgb(b)[k]));
 
     it("is the same for the same key, in any run", () => {
-      const a = drawn(MIXED.characters);
-      const b = drawn(MIXED.characters);
-      // No dice: the look comes from the key alone, so it is the same on the next launch. (three draws its object ids
-      // from Math.random, which is why the spy goes up only once the meshes exist.)
+      const a = drawn(EVERY_POSE.characters);
+      const b = drawn(EVERY_POSE.characters);
+      // three draws its object ids from Math.random, which is why the spy goes up only once the meshes exist.
       const random = vi.spyOn(Math, "random");
       for (const key of keys) expect(lookOf(key)).toEqual(lookOf(key));
-      a.figures.set(MIXED.characters);
+      a.figures.set(EVERY_POSE.characters);
       expect(random).not.toHaveBeenCalled();
       random.mockRestore();
-      MIXED.characters.forEach((_, i) => {
+      EVERY_POSE.characters.forEach((_, i) => {
         for (const [part, at] of [["head", i], ["thigh", 2 * i]] as const) expect(a.color(part, at)).toBe(b.color(part, at));
       });
     });
@@ -201,9 +194,9 @@ describe("The office's characters", () => {
     });
 
     it("dresses the torso and sleeves in the team's color and the head, hands and legs in the look's", () => {
-      const { color } = drawn(MIXED.characters);
+      const { color } = drawn(EVERY_POSE.characters);
       const hex = (c: number | string) => new Color(c).getHex();
-      MIXED.characters.forEach((c, i) => {
+      EVERY_POSE.characters.forEach((c, i) => {
         const look = lookOf(c.key);
         expect(color("torso", i)).toBe(hex(TEAM_COLORS[c.color]));
         expect(color("upper-arm", 2 * i)).toBe(hex(TEAM_COLORS[c.color]));
@@ -219,7 +212,6 @@ describe("The office's characters", () => {
       for (const part of ["torso", "head", "face", "upper-arm", "forearm", "thigh", "shin", "shoe", "hair-short", "hair-long", "hair-bun"]) {
         const m = mesh(part);
         if (!m.count) continue;
-        // Grey: no channel stands out from the others.
         const [r, g, b] = [color(part, 0) >> 16, (color(part, 0) >> 8) & 255, color(part, 0) & 255];
         expect(Math.max(r, g, b) - Math.min(r, g, b), part).toBeLessThan(25);
       }
@@ -254,26 +246,25 @@ describe("The office's characters", () => {
         expect(changed.every((i) => i < 2)).toBe(true);
       } else expect(changed, m.name).toEqual([]);
     }
-    // And the next beat moves them again, the other way.
     const lifted = Float32Array.from(mesh("forearm").instanceMatrix.array.slice(0, 32));
     figures.animate(160, true);
     expect(Float32Array.from(mesh("forearm").instanceMatrix.array.slice(0, 32))).not.toEqual(lifted);
   });
 
   it("picks a standing agent by its legs, as a click on them does", () => {
-    const { figures } = drawn(MIXED.characters);
-    const i = indexOfPose(MIXED.characters, "door");
-    const { x, z, facing } = MIXED.characters[i].spot;
+    const { figures } = drawn(EVERY_POSE.characters);
+    const i = indexOfPose(EVERY_POSE.characters, "door");
+    const { x, z, facing } = EVERY_POSE.characters[i].spot;
     // Knee-high at one leg, a hip's width to its side, from three metres in front of it, looking back at it.
     const leg = new Vector3(x + 0.12 * Math.cos(facing), 0.4, z - 0.12 * Math.sin(facing));
     const from = leg.clone().add(new Vector3(3 * Math.sin(facing), 0, 3 * Math.cos(facing)));
     const hit = new Raycaster(from, leg.clone().sub(from).normalize()).intersectObjects(figures.pickable, false)[0];
     expect(["thigh", "shin"]).toContain(hit.object.name);
-    expect(figures.keyAt(hit.object, hit.instanceId!)).toBe(MIXED.characters[i].key);
+    expect(figures.keyAt(hit.object, hit.instanceId!)).toBe(EVERY_POSE.characters[i].key);
   });
 
   it("shows faces only when told the camera is close", () => {
-    const { figures, mesh } = drawn(MIXED.characters);
+    const { figures, mesh } = drawn(EVERY_POSE.characters);
     figures.showFaces(false);
     expect(mesh("face").visible).toBe(false);
     figures.showFaces(true);
