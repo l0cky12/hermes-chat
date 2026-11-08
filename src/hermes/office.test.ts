@@ -47,6 +47,18 @@ describe("The office's rooms", () => {
     expect(brief(rooms(chats, { dismissed: keys }))).toEqual(["default/busy: running"]);
   });
 
+  it("says a reply's entry was dismissed when that leaves it with none, so its agent goes home, and not once there is something new", () => {
+    // Its subagent finished before the chat's last update, so the reply waits on nothing handed off.
+    const finished = onSubagentEvent(started(undefined, "a"), "subagent.complete", { subagent_id: "a", status: "completed" }, 2_500);
+    const chats = [chat("done", { unread: true, updatedAt: 2_600, subagents: finished })];
+    const keys = new Set(inboxEntries({ profile: "default", chats, connected: true, others: none }).entries.map((e) => e.key));
+    expect(rooms(chats)[0].desks[0].agent).toEqual({ kind: "reply", entry: expect.objectContaining({ kind: "completed" }) });
+    expect(rooms(chats, { dismissed: keys })[0].desks[0]).toMatchObject({ state: "idle", agent: { kind: "reply", dismissed: true } });
+    const again = [chat("done", { unread: true, running: true, updatedAt: 2_600, subagents: finished })];
+    expect(rooms(again, { dismissed: keys })[0].desks[0]).toMatchObject({ state: "running", agent: { kind: "reply", entry: expect.anything() } });
+    expect(rooms([chat("quiet", { updatedAt: 2_600, subagents: finished })])[0].desks[0].agent).toEqual({ kind: "reply" });
+  });
+
   it("never shows a reply as finished on an unread chat alone, nor counts it as work", () => {
     const stopped = { kind: "assistant", id: "m-1", text: "Half a repl", stopped: true } as unknown as Chat["items"][number];
     const rs = rooms([chat("read-later", { unread: true }), chat("cut-short", { unread: true, items: [stopped], subagents: started(undefined, "a") })]);

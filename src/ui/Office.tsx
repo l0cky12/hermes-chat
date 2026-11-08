@@ -6,10 +6,9 @@
 import { useEffect, useId, useRef, useState, type FocusEvent, type KeyboardEvent, type RefObject } from "react";
 import { Building2, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleHelp, CircleStop, Clock, Coffee, Hourglass, List, Loader, ShieldAlert, X } from "lucide-react";
 import { officeTally, type Desk, type DeskState, type Room } from "../hermes/office";
-import type { FloorMemory } from "../hermes/officeFloor";
 import type { OfficeView } from "../hermes/uiPrefs";
 import { composing, relTime } from "./bits";
-import { OfficeBuilding } from "./OfficeBuilding";
+import { OfficeBuilding, type OfficeMemory } from "./OfficeBuilding";
 import { STATE_LABEL, deskLabel } from "./officeText";
 
 const STATE_ICON: Record<DeskState, typeof X> = {
@@ -38,6 +37,7 @@ export function Office({
   onView,
   server,
   profile,
+  profiles = [],
   connected,
   leaving,
   onOpen,
@@ -45,11 +45,13 @@ export function Office({
 }: {
   rooms: Room[];
   /** Who sits where in the building, kept by the app across the office's closes and minimizes. */
-  floorMemory: RefObject<FloorMemory>;
+  floorMemory: RefObject<OfficeMemory>;
   view: Exclude<OfficeView, "off">;
   onView: (view: Exclude<OfficeView, "off">) => void;
   server: string;
   profile: string;
+  /** The server's other profiles, as far as the app knows them: a floor each in the building. */
+  profiles?: readonly string[];
   connected: boolean;
   leaving?: string;
   onOpen: (room: Room, desk: Desk) => void;
@@ -166,7 +168,7 @@ export function Office({
         </div>
       )}
       {shows === "building" ? (
-        <OfficeBuilding rooms={rooms} memory={floorMemory} profile={profile} onOpen={open} onFallback={setNoBuilding} onMore={() => setListFor(true)} />
+        <OfficeBuilding rooms={rooms} memory={floorMemory} profile={profile} profiles={profiles} onOpen={open} onFallback={setNoBuilding} onMore={() => setListFor(true)} />
       ) : rooms.length === 0 ? (
         <div className="empty-hint inbox-empty">No agent is at work. One shows here while a reply runs, waits for you or failed, and for each subagent it starts.</div>
       ) : (

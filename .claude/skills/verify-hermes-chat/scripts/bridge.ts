@@ -16,6 +16,9 @@
 //   `session.interrupt` (the composer's Stop) ends the reply's turn with `message.complete` status `interrupted`, as
 //   Hermes does, so a reply that runs on (a "delegate" prompt's) can be stopped.
 //   `POST /__subagent?id=<subagent id>&status=completed|failed` ends one as Hermes reports it (a test's control).
+//   `POST /__live?profile=<p>&id=<chat id>&status=working|waiting|end[&title=<t>]` runs a reply in another profile, as
+//   `session.active_list` reports one: the chat is stored in that profile, listed as working or waiting, and `end`
+//   takes it off the list and leaves it Unread there (a test's control).
 //   `POST /__kanban?id=<task id>&status=<running|done|blocked|review|archived>` moves a task as a worker would (a test's
 //   control). `done`, `blocked` and `review` send the chat a `status.update` naming the task and, 2 s later,
 //   a streamed wake turn when the chat is live, subscribed, not stopped, and no turn runs, as Hermes's poller does.
@@ -249,6 +252,18 @@ const http = createServer(async (req, res) => {
   if (url.pathname === "/__subagent" && req.method === "POST") {
     const id = url.searchParams.get("id") ?? "";
     return endSubagent(id, url.searchParams.get("status") ?? "completed") ? json(200, { ok: true }) : json(404, { detail: `No running stand-in subagent ${id}` });
+  }
+  if (url.pathname === "/__live" && req.method === "POST") {
+    const [profile, id, status] = ["profile", "id", "status"].map((k) => url.searchParams.get(k) ?? "");
+    if (!(profile in server.otherProfiles) || !id || !["working", "waiting", "end"].includes(status)) return json(400, { detail: "Needs profile (another profile), id and status working|waiting|end" });
+    const t = Date.now() / 1000;
+    const list = server.otherProfiles[profile];
+    const stored = list.find((r) => r.id === id) ?? (list.push(row(id, 0, { title: url.searchParams.get("title") ?? `Chat ${id}`, last_read_at: 0 })), list[list.length - 1]);
+    stored.last_active = t;
+    server.liveSessions = server.liveSessions.filter((l) => l.session_key !== id);
+    if (status !== "end") server.liveSessions.push({ id: `rt-${id}`, session_key: id, status, last_active: t, started_at: t, title: stored.title ?? "" });
+    save();
+    return json(200, { ok: true, live: server.liveSessions.length });
   }
   if (url.pathname === "/__kanban" && req.method === "POST") {
     const id = url.searchParams.get("id") ?? "";

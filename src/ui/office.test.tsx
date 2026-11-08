@@ -10,13 +10,14 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import { inboxEntries } from "../hermes/inbox";
 import { officeRooms, type Room } from "../hermes/office";
-import { EMPTY_FLOOR_MEMORY, type Floor } from "../hermes/officeFloor";
+import type { Floor } from "../hermes/officeFloor";
 import { SUBAGENTS_MAX, onSubagentEvent, type SubagentTree } from "../hermes/subagents";
 import { connect, type Hermes } from "../hermes/transport";
-import { setUIPrefs } from "../hermes/uiPrefs";
+import { getUIPrefs, setUIPrefs } from "../hermes/uiPrefs";
 import { Main } from "../App";
 import { Office } from "./Office";
-import { unstacked } from "./OfficeBuilding";
+import { OfficeSettings } from "./OfficeSettings";
+import { EMPTY_OFFICE_MEMORY } from "./OfficeBuilding";
 import { setWindowHidden } from "./windowState";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
@@ -25,17 +26,19 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 /** The scene the building mounted last, and what it was told. */
 const drawn = vi.hoisted(() => ({
   mounts: 0,
-  scene: undefined as undefined | { floor?: Floor; moves?: boolean; awake?: boolean; selected?: string; resets: number; disposed: boolean },
+  scene: undefined as undefined | { floors: string[]; floor?: Floor; profile?: string; tower?: readonly { lit: boolean }[]; moves?: boolean; awake?: boolean; selected?: string; resets: number; disposed: boolean; quality?: string; events: { onHover(key: string | undefined): void } },
 }));
 vi.mock("./office3d/scene", () => ({
-  mountOfficeScene: (_canvas: HTMLCanvasElement, _events: unknown, start: { moves: boolean }) => {
+  mountOfficeScene: (_canvas: HTMLCanvasElement, events: { onHover(key: string | undefined): void }, start: { moves: boolean; quality: string }) => {
     drawn.mounts++;
-    const s: NonNullable<typeof drawn.scene> = { moves: start.moves, resets: 0, disposed: false };
+    const s: NonNullable<typeof drawn.scene> = { floors: [], moves: start.moves, resets: 0, disposed: false, quality: start.quality, events };
     drawn.scene = s;
     return {
-      setFloor: (f: Floor) => void (s.floor = f),
+      setFloor: (f: Floor, profile: string) => void ((s.floor = f), (s.profile = profile), s.floors.push(`${profile}: ${f.characters.map((c) => c.key).join(", ")}`)),
+      setTower: (t: readonly { lit: boolean }[]) => void (s.tower = t),
       setMode: () => {},
       setMotion: (m: boolean) => void (s.moves = m),
+      setQuality: (q: string) => void (s.quality = q),
       setSelected: (k?: string) => void (s.selected = k),
       resetCamera: () => void s.resets++,
       setAwake: (a: boolean) => void (s.awake = a),
@@ -45,7 +48,7 @@ vi.mock("./office3d/scene", () => ({
 }));
 
 /** The floor memory the app keeps for the office, new. */
-const fresh = () => ({ current: EMPTY_FLOOR_MEMORY });
+const fresh = () => ({ current: EMPTY_OFFICE_MEMORY });
 
 /** This computer has WebGL, as far as the office's check can tell. */
 function withWebGL() {
@@ -73,6 +76,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   setWindowHidden(false);
+  setUIPrefs({ officeQuality: "normal" });
   await Promise.all(running.splice(0).map((h) => h.close()));
   localStorage.clear();
 });
@@ -181,8 +185,8 @@ describe("The building and the list", () => {
     const chats = Array.from({ length: 10 }, (_, n) => {
       let tree: SubagentTree | undefined;
       for (let i = 0; i < SUBAGENTS_MAX; i++)
-        tree = onSubagentEvent(tree, i % 3 ? "subagent.complete" : "subagent.start", who(`s${i}`, `Task ${i}`, { status: "completed" }), 1_000);
-      return { id: `c${n}`, title: `Chat ${n}`, source: "app" as const, settled: false, updatedAt: 1_000, items: [], running: true, subagents: tree };
+        tree = onSubagentEvent(tree, i % 3 ? "subagent.complete" : "subagent.start", who(`s${i}`, `Task ${i}`, { status: "completed" }), Date.now());
+      return { id: `c${n}`, title: `Chat ${n}`, source: "app" as const, settled: false, updatedAt: Date.now(), items: [], running: true, subagents: tree };
     });
     const { entries } = inboxEntries({ profile: "default", chats, connected: true, others: { byName: {} } });
     const rooms = officeRooms({ entries, shown: () => true, chats, profile: "default", connected: true });
@@ -221,15 +225,15 @@ describe("The building and the list", () => {
   });
 });
 
-/** Rooms as officeRooms makes them, for the component alone: a chat in another profile, and one with two subagents. */
-function sample(): Room[] {
+/** Rooms as officeRooms makes them, for the component alone: a chat waiting in `deployIn`, and one with two subagents. */
+function sample(deployIn = "default"): Room[] {
   return [
     {
-      key: "work deploy",
-      profile: "work",
+      key: `${deployIn} deploy`,
+      profile: deployIn,
       chatId: "deploy",
       title: "Deploy plan",
-      desks: [{ key: "work deploy reply", agent: { kind: "reply" }, name: "The chat's reply", state: "approval", doing: { text: "A command is waiting for your approval.", at: 0 } }],
+      desks: [{ key: `${deployIn} deploy reply`, agent: { kind: "reply" }, name: "The chat's reply", state: "approval", doing: { text: "A command is waiting for your approval.", at: 0 } }],
     },
     {
       key: "default audit",
@@ -251,8 +255,9 @@ function office(view: View, over: Partial<Parameters<typeof Office>[0]> = {}) {
   const onClose = vi.fn();
   const onView = vi.fn();
   const props = { rooms: sample(), floorMemory: fresh(), view, onView, server: "hermes", profile: "default", connected: true, onOpen, onClose, ...over };
-  const { rerender } = render(<Office {...props} />);
-  return { onOpen, onClose, onView, desks: agents, user: userEvent.setup(), rerender: (more: Partial<typeof props>) => rerender(<Office {...props} {...more} />) };
+  const { rerender, unmount } = render(<Office {...props} />);
+  return {
+    unmount, onOpen, onClose, onView, desks: agents, user: userEvent.setup(), rerender: (more: Partial<typeof props>) => rerender(<Office {...props} {...more} />) };
 }
 
 describe("The office from the keyboard", () => {
@@ -278,7 +283,7 @@ describe("The office from the keyboard", () => {
   });
 
   it("asks before an agent in another profile leaves something behind, and Escape backs out of the question first", async () => {
-    const { onOpen, onClose, user } = office("list", { leaving: "Switching profiles leaves a reply running here." });
+    const { onOpen, onClose, user } = office("list", { rooms: sample("work"), leaving: "Switching profiles leaves a reply running here." });
     await user.keyboard("{Enter}");
     const ask = screen.getByRole("alertdialog", { name: "Switch to work?" });
     expect(onOpen).not.toHaveBeenCalled();
@@ -296,7 +301,7 @@ describe("The office from the keyboard", () => {
     const { onView, user, desks } = office("building");
     const labels = desks().map((d) => d.getAttribute("aria-label"));
     expect(labels[3]).toBe("Check expiry, Finished, started by “Read the auth code”, in “Audit”.");
-    expect(labels[0]).toBe("The chat's reply, Waiting for your approval, in “Deploy plan”, profile work. A command is waiting for your approval.");
+    expect(labels[0]).toBe("The chat's reply, Waiting for your approval, in “Deploy plan”. A command is waiting for your approval.");
     await user.click(screen.getByRole("button", { name: "List" }));
     expect(onView).toHaveBeenCalledWith("list");
     cleanup();
@@ -311,7 +316,7 @@ describe("The building", () => {
     await waitFor(() => expect(drawn.scene?.floor).toBeTruthy());
     expect(drawn.mounts).toBe(1);
     expect(drawn.scene!.floor!.characters.map((c) => `${c.key}: ${c.place}/${c.pose}`)).toEqual([
-      "work deploy reply: waiting/hand-up",
+      "default deploy reply: waiting/hand-up",
       "default audit reply: workroom/typing",
       "default audit a: workroom/typing",
       "default audit b: lounge/couch",
@@ -327,6 +332,62 @@ describe("The building", () => {
     const edges = agents().map((t) => t.style.borderColor);
     expect(edges[1]).toBe(edges[2]);
     expect(edges[0]).not.toBe(edges[1]);
+  });
+
+  it("opens the shown profile's floor, puts the others in the tower, and looks at another floor without switching the app", async () => {
+    const { onOpen, user } = office("building", { rooms: sample("work"), profiles: ["work", "home"], leaving: "Switching profiles leaves a reply running here." });
+    await waitFor(() => expect(drawn.scene?.profile).toBe("default"));
+    expect(agents().map((t) => t.textContent)).toEqual(["Audit", "Read the auth code", "Check expiry"]);
+    const floors = () => within(screen.getByRole("group", { name: "The other profiles' floors" })).getAllByRole("button").map((b) => b.getAttribute("aria-label"));
+    expect(floors()).toEqual(["home: 0 agents. Look at its floor.", "work: 1 agent, one needs you. Look at its floor."]);
+    expect(drawn.scene!.tower).toEqual([{ profile: "home", agents: 0, lit: false }, { profile: "work", agents: 1, lit: true }]);
+    expect(document.querySelector(".office-floor-open")!.textContent).toBe("default's floor");
+
+    await user.click(screen.getByRole("button", { name: /^work: 1 agent/ }));
+    await waitFor(() => expect(drawn.scene?.profile).toBe("work"));
+    expect(agents().map((t) => t.textContent)).toEqual(["Deploy plan"]);
+    expect(floors()).toEqual(["default: 3 agents. Look at its floor.", "home: 0 agents. Look at its floor."]);
+    expect(document.querySelector(".office-floor-open")!.textContent).toBe("work's floor, looked at from default");
+    expect(onOpen).not.toHaveBeenCalled();
+
+    // Open chat on a card from another floor switches profile as the inbox does: asking first.
+    await user.click(agents()[0]);
+    await user.click(screen.getByRole("button", { name: "Open chat" }));
+    expect(screen.getByRole("alertdialog", { name: "Switch to work?" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Switch to work" }));
+    expect(onOpen.mock.calls[0][0]).toMatchObject({ profile: "work", chatId: "deploy" });
+  });
+
+  it("opens again on the floor last looked at, from the picture it last drew, so an agent dismissed meanwhile walks out", async () => {
+    const floorMemory = fresh();
+    const { user, unmount } = office("building", { rooms: sample("work"), profiles: ["work"], floorMemory });
+    await user.click(await screen.findByRole("button", { name: /^work: 1 agent/ }));
+    await waitFor(() => expect(drawn.scene?.profile).toBe("work"));
+    unmount();
+
+    // Its entry dismissed while the office was closed, the chat's reply is no longer on the work floor.
+    office("building", { rooms: sample("work").slice(1), profiles: ["work"], floorMemory });
+    await waitFor(() => expect(drawn.scene?.floors).toEqual(["work: work deploy reply", "work: "]));
+    expect(document.querySelector(".office-floor-open")!.textContent).toBe("work's floor, looked at from default");
+  });
+
+  it("says where the agents are when none is on the open floor, while the header and List still count them", async () => {
+    const done: Room = { key: "default old", profile: "default", chatId: "old", title: "Old chat", desks: [{ key: "default old reply", agent: { kind: "reply" }, name: "The chat's reply", state: "unread", doing: { text: "Something new.", at: Date.now() - 2 * 60 * 60_000 } }] };
+    office("building", { rooms: [done] });
+    await waitFor(() => expect(drawn.scene?.floor).toBeTruthy());
+    expect(agents()).toEqual([]);
+    expect(screen.getByText(/^No agent is on this floor\. Finished agents go home 30 minutes after their last change/)).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Office" }).textContent).toContain("1 agent");
+    cleanup();
+    office("list", { rooms: [done] });
+    expect(agents()).toHaveLength(1);
+  });
+
+  it("says only that a floor is empty when its profile has no agent, while another floor has some", async () => {
+    const { user } = office("building", { rooms: sample(), profiles: ["home"] });
+    await user.click(await screen.findByRole("button", { name: /^home: 0 agents/ }));
+    await waitFor(() => expect(drawn.scene?.profile).toBe("home"));
+    expect(document.querySelector(".office-note")!.textContent).toBe("No agent is on this floor.");
   });
 
   it("shows an agent's card, kept up to date while open, with Open chat as its only action", async () => {
@@ -447,18 +508,76 @@ describe("The building", () => {
     expect(spotOf("default a reply")).not.toEqual(b);
   });
 
-  it("lifts tags that would cover each other until none do, leaving the nearest where it is", () => {
-    const at = new Map([
-      ["far", { x: 100, y: 200, off: false }],
-      ["near", { x: 110, y: 205, off: false }],
-      ["apart", { x: 400, y: 205, off: false }],
-      ["hidden", { x: 105, y: 205, off: true }],
-    ]);
-    const out = unstacked(at, () => ({ w: 80, h: 18 }));
-    expect(out.get("near")).toEqual(at.get("near"));
-    expect(out.get("apart")).toEqual(at.get("apart"));
-    expect(out.get("hidden")).toEqual(at.get("hidden"));
-    expect(out.get("far")!.y).toBeLessThanOrEqual(205 - 18 - 1);
+  it("shows a tag while the pointer is over its character, and lets go after a short wait the tag itself can cancel", async () => {
+    office("building");
+    await waitFor(() => expect(drawn.scene?.floor).toBeTruthy());
+    const tag = () => document.querySelector<HTMLElement>('[data-desk="default audit a"]')!;
+    const shown = () => Array.from(document.querySelectorAll("[data-hover]")).map((t) => t.getAttribute("data-desk"));
+    expect(shown()).toEqual([]);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    act(() => drawn.scene!.events.onHover("default audit a"));
+    expect(shown()).toEqual(["default audit a"]);
+    expect(tag().getAttribute("aria-label")).toBeTruthy();
+
+    act(() => drawn.scene!.events.onHover(undefined));
+    act(() => void vi.advanceTimersByTime(200));
+    expect(shown()).toEqual(["default audit a"]);
+    fireEvent.pointerEnter(tag());
+    act(() => void vi.advanceTimersByTime(1_000));
+    expect(shown()).toEqual(["default audit a"]);
+    fireEvent.pointerLeave(tag());
+    act(() => void vi.advanceTimersByTime(300));
+    expect(shown()).toEqual([]);
+
+    act(() => drawn.scene!.events.onHover("default audit a"));
+    act(() => drawn.scene!.events.onHover(undefined));
+    act(() => void vi.advanceTimersByTime(300));
+    expect(shown()).toEqual([]);
+  });
+
+  it("moves the shown tag straight to the next character the pointer reaches", async () => {
+    office("building");
+    await waitFor(() => expect(drawn.scene?.floor).toBeTruthy());
+    const keys = agents().map((t) => t.dataset.desk!);
+    act(() => drawn.scene!.events.onHover(keys[0]));
+    act(() => drawn.scene!.events.onHover(keys[1]));
+    expect(Array.from(document.querySelectorAll("[data-hover]")).map((t) => t.getAttribute("data-desk"))).toEqual([keys[1]]);
+  });
+
+  it("switches quality from the open office, applying it to the scene at once without drawing a new one", async () => {
+    const { user } = office("building");
+    await waitFor(() => expect(drawn.scene?.floor).toBeTruthy());
+    const scene = drawn.scene!;
+    expect(scene.quality).toBe("normal");
+    const group = screen.getByRole("group", { name: "Office quality" });
+    await user.click(within(group).getByRole("button", { name: "Low" }));
+    expect(getUIPrefs().officeQuality).toBe("low");
+    await waitFor(() => expect(scene.quality).toBe("low"));
+    expect(within(group).getByRole("button", { name: "Low" }).getAttribute("aria-pressed")).toBe("true");
+    expect(drawn.mounts).toBe(1);
+    expect(drawn.scene).toBe(scene);
+    expect(scene.disposed).toBe(false);
+    await user.click(within(group).getByRole("button", { name: "Normal" }));
+    await waitFor(() => expect(scene.quality).toBe("normal"));
+  });
+
+  it("opens the building at the quality the owner chose", async () => {
+    setUIPrefs({ officeQuality: "low" });
+    office("building");
+    await waitFor(() => expect(drawn.scene).toBeTruthy());
+    expect(drawn.scene!.quality).toBe("low");
+  });
+
+  it("offers Normal and Low in Settings, and saves the one clicked", async () => {
+    const user = userEvent.setup();
+    render(<OfficeSettings />);
+    const group = screen.getByRole("group", { name: "Office quality" });
+    expect(within(group).getByRole("button", { name: "Normal" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText(/at most 15 frames a second/)).toBeTruthy();
+    await user.click(within(group).getByRole("button", { name: "Low" }));
+    expect(getUIPrefs().officeQuality).toBe("low");
+    expect(within(group).getByRole("button", { name: "Low" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("group", { name: "Office" })).toBeTruthy();
   });
 
   it("resets the view from its button", async () => {
@@ -473,7 +592,7 @@ describe("The building", () => {
 describe("An agent that goes while it has focus", () => {
   it.each(["building", "list"] as const)("leaves focus on the agent now in its place, where the keys still work (%s)", async (view) => {
     const { onClose, user, rerender } = office(view);
-    expect(document.activeElement?.getAttribute("data-desk")).toBe("work deploy reply");
+    expect(document.activeElement?.getAttribute("data-desk")).toBe("default deploy reply");
     rerender({ rooms: sample().slice(1) });
     expect(document.activeElement?.getAttribute("data-desk")).toBe("default audit reply");
     await user.keyboard("{ArrowDown}");
@@ -600,9 +719,34 @@ describe("The office in the app", () => {
     expect(officeButton()!.getAttribute("aria-expanded")).toBe("true");
   });
 
+  it("keeps the other profiles live with one small check every 15 s while it is seen, and never reads their chat lists sooner", async () => {
+    const { hermes, user } = await auditing();
+    const live = vi.spyOn(hermes, "checkLive");
+    const lists = vi.spyOn(hermes, "checkOtherProfiles");
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    await user.click(officeButton()!);
+    expect(live).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(4 * 15_000));
+    expect(live).toHaveBeenCalledTimes(5);
+
+    act(() => setWindowHidden(true));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(live).toHaveBeenCalledTimes(5);
+    act(() => setWindowHidden(false));
+    expect(live).toHaveBeenCalledTimes(6);
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    expect(live).toHaveBeenCalledTimes(7);
+
+    await user.keyboard("{Escape}");
+    expect(document.querySelector(".office")).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(live).toHaveBeenCalledTimes(7);
+    expect(lists).not.toHaveBeenCalled();
+  });
+
   it("isn't drawn, and stops asking Hermes for checks, while the window is hidden to the tray or minimized", async () => {
     const { hermes, user } = await auditing();
-    const checks = vi.spyOn(hermes, "checkOtherProfiles");
+    const checks = vi.spyOn(hermes, "checkLive");
     await user.click(officeButton()!);
     expect(document.querySelector(".office")).toBeTruthy();
     expect(checks).toHaveBeenCalledTimes(1);

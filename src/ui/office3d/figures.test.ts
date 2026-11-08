@@ -8,6 +8,9 @@ import { EMPTY_FLOOR_MEMORY, FLOOR_CAP, TEAM_COLORS, officeFloor, type Character
 import { FIGURE_SCALE } from "./building";
 import { HAIR_COLORS, PANTS_COLORS, SKIN_TONES, buildFigures, lookOf } from "./figures";
 
+/** When each floor is laid out, as Unix ms. */
+const NOW = Date.UTC(2026, 10, 7, 12);
+
 function team(key: string, ...states: DeskState[]): Room {
   const desks = states.map((state, i) => ({ key: `${key} ${i}`, agent: { kind: "reply" }, name: `${key} ${i}`, state }) as Desk);
   return { key, profile: "default", chatId: key, title: key, desks };
@@ -17,7 +20,7 @@ const positionOf = (m: Matrix4) => new Vector3().setFromMatrixPosition(m);
 const SEAT_TOP = 0.42 * FIGURE_SCALE;
 const DESK_TOP = 0.74 * FIGURE_SCALE;
 
-const EVERY_POSE = officeFloor([team("a", "running", "queued", "handedOff"), team("b", "approval", "failed", "completed")], EMPTY_FLOOR_MEMORY);
+const EVERY_POSE = officeFloor([team("a", "running", "queued", "handedOff"), team("b", "approval", "failed", "completed")], EMPTY_FLOOR_MEMORY, NOW);
 
 function drawn(characters: readonly Character[]) {
   const figures = buildFigures();
@@ -51,7 +54,7 @@ const aheadOfSeat = (c: Character, p: Vector3) => (p.x - c.spot.x) * Math.sin(c.
 
 describe("The office's characters", () => {
   it("stands each body at its own seat, over the floor plan's spot", () => {
-    const floor = officeFloor([team("a", "running", "running", "running"), team("b", "approval", "failed", "completed", "queued")], EMPTY_FLOOR_MEMORY);
+    const floor = officeFloor([team("a", "running", "running", "running"), team("b", "approval", "failed", "completed", "queued")], EMPTY_FLOOR_MEMORY, NOW);
     const figures = buildFigures();
     figures.set(floor.characters);
     const [torso, head] = figures.pickable;
@@ -76,7 +79,7 @@ describe("The office's characters", () => {
   });
 
   it("draws every character as one head and torso, two of each limb part, and one head of hair unless bald", () => {
-    const floor = officeFloor(Array.from({ length: 10 }, (_, t) => team(`t${t}`, "running", t % 2 ? "running" : "failed", "approval", "completed")), EMPTY_FLOOR_MEMORY);
+    const floor = officeFloor(Array.from({ length: 10 }, (_, t) => team(`t${t}`, "running", t % 2 ? "running" : "failed", "approval", "completed")), EMPTY_FLOOR_MEMORY, NOW);
     const n = floor.characters.length;
     expect(n).toBe(FLOOR_CAP);
     const { mesh, matrix, figures } = drawn(floor.characters);
@@ -218,7 +221,7 @@ describe("The office's characters", () => {
     });
 
     it("greys every part of a stale character", () => {
-      const stale = officeFloor([{ ...team("s", "running"), desks: [{ ...team("s", "running").desks[0], stale: "As last seen." }] }], EMPTY_FLOOR_MEMORY);
+      const stale = officeFloor([{ ...team("s", "running"), desks: [{ ...team("s", "running").desks[0], stale: "As last seen." }] }], EMPTY_FLOOR_MEMORY, NOW);
       const { mesh, color } = drawn(stale.characters);
       for (const part of ["torso", "head", "face", "upper-arm", "forearm", "thigh", "shin", "shoe", "hair-short", "hair-long", "hair-bun"]) {
         const m = mesh(part);
@@ -230,23 +233,39 @@ describe("The office's characters", () => {
   });
 
   it("moves only a typing, current agent's arms, and none when nothing may move", () => {
-    const floor = officeFloor([team("a", "running", "completed")], EMPTY_FLOOR_MEMORY);
-    const stale = officeFloor([{ ...team("s", "running"), desks: [{ ...team("s", "running").desks[0], stale: "As last seen." }] }], EMPTY_FLOOR_MEMORY);
+    const floor = officeFloor([team("a", "running", "completed")], EMPTY_FLOOR_MEMORY, NOW);
+    const stale = officeFloor([{ ...team("s", "running"), desks: [{ ...team("s", "running").desks[0], stale: "As last seen." }] }], EMPTY_FLOOR_MEMORY, NOW);
     const figures = buildFigures();
     figures.set(floor.characters);
-    expect(figures.animate(0, false)).toBe(false);
-    expect(figures.animate(0, true)).toBe(true);
+    expect(figures.animate(0, false, 160)).toBe(false);
+    expect(figures.animate(0, true, 160)).toBe(true);
     figures.set(stale.characters);
-    expect(figures.animate(0, true)).toBe(false);
+    expect(figures.animate(0, true, 160)).toBe(false);
+  });
+
+  it("swaps a typing agent's hands on every frame drawn one beat apart, at any pace", () => {
+    const floor = officeFloor([team("a", "running")], EMPTY_FLOOR_MEMORY, NOW);
+    const figures = buildFigures();
+    figures.set(floor.characters);
+    const arms = figures.group.getObjectByName("forearm") as InstancedMesh;
+    const pose = () => Array.from(arms.instanceMatrix.array.slice(0, 16)).join(",");
+    for (const beat of [1000 / 6, 1000 / 3]) {
+      const seen: string[] = [];
+      for (let frame = 0; frame < 6; frame++) {
+        figures.animate(5_000 + frame * beat + 1, true, beat);
+        seen.push(pose());
+      }
+      seen.slice(1).forEach((p, i) => expect(p).not.toBe(seen[i]));
+    }
   });
 
   it("re-poses only the typing character's forearms between frames; nothing else's matrices change", () => {
-    const floor = officeFloor([team("a", "running", "completed")], EMPTY_FLOOR_MEMORY);
+    const floor = officeFloor([team("a", "running", "completed")], EMPTY_FLOOR_MEMORY, NOW);
     const { figures, mesh } = drawn(floor.characters);
     expect(floor.characters.map((c) => c.pose)).toEqual(["typing", "couch"]);
     const meshes = figures.group.children.filter((o): o is InstancedMesh => o instanceof InstancedMesh);
     const before = new Map(meshes.map((m) => [m, Float32Array.from(m.instanceMatrix.array)]));
-    figures.animate(0, true);
+    figures.animate(0, true, 160);
     for (const m of meshes) {
       const was = before.get(m)!;
       const now = Array.from(m.instanceMatrix.array.slice(0, was.length));
@@ -258,7 +277,7 @@ describe("The office's characters", () => {
       } else expect(changed, m.name).toEqual([]);
     }
     const lifted = Float32Array.from(mesh("forearm").instanceMatrix.array.slice(0, 32));
-    figures.animate(160, true);
+    figures.animate(160, true, 160);
     expect(Float32Array.from(mesh("forearm").instanceMatrix.array.slice(0, 32))).not.toEqual(lifted);
   });
 
@@ -283,8 +302,8 @@ describe("The office's characters", () => {
   });
 
   it("keeps the selection ring under the selected agent when the floor moves it, and drops it when the agent goes", () => {
-    const queued = officeFloor([team("a", "running", "queued")], EMPTY_FLOOR_MEMORY);
-    const started = officeFloor([team("a", "running", "running")], queued.memory);
+    const queued = officeFloor([team("a", "running", "queued")], EMPTY_FLOOR_MEMORY, NOW);
+    const started = officeFloor([team("a", "running", "running")], queued.memory, NOW);
     const figures = buildFigures();
     const ring = figures.group.children.find((o): o is Mesh => o instanceof Mesh && !(o instanceof InstancedMesh))!;
     figures.set(queued.characters);
@@ -298,7 +317,26 @@ describe("The office's characters", () => {
     expect(desk).not.toEqual(door);
     expect([ring.position.x, ring.position.z]).toEqual([desk.x, desk.z]);
 
-    figures.set(officeFloor([team("a", "running")], started.memory).characters);
+    figures.set(officeFloor([team("a", "running")], started.memory, NOW).characters);
     expect(ring.visible).toBe(false);
+  });
+  it("swings a walker's arms and legs with its stride, and can't pick one walking out of the building", () => {
+    const [stays, leaves] = officeFloor([team("a", "running", "running")], EMPTY_FLOOR_MEMORY, NOW).characters;
+    const walker = (stride: number) => ({ ...leaves, pose: "walking" as const, stride });
+    const { figures, mesh, matrix } = drawn([]);
+    const limbsAt = (stride: number) => {
+      figures.set([stays, walker(stride)], 1);
+      return ["upper-arm", "thigh"].map((part) => positionOf(matrix(part, 2).multiply(new Matrix4().makeTranslation(0, -0.3, 0))));
+    };
+    const [armForward, legBack] = limbsAt(-Math.PI / 2);
+    const [armBack, legForward] = limbsAt(Math.PI / 2);
+    // The left arm and leg swing opposite ways along the walker's facing, as one stride turns to the next.
+    expect(aheadOfSeat(leaves, armForward) - aheadOfSeat(leaves, armBack)).toBeGreaterThan(0.05);
+    expect(aheadOfSeat(leaves, legForward) - aheadOfSeat(leaves, legBack)).toBeGreaterThan(0.05);
+
+    expect(mesh("torso").count).toBe(2);
+    expect(figures.keyAt(mesh("torso"), 0)).toBe(stays.key);
+    for (const part of ["torso", "head"]) expect(figures.keyAt(mesh(part), 1)).toBeUndefined();
+    for (const part of ["upper-arm", "thigh", "shoe"]) expect(figures.keyAt(mesh(part), 3)).toBeUndefined();
   });
 });

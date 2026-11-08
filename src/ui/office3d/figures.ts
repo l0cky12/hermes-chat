@@ -1,6 +1,7 @@
 // The agents as low-poly people (ADR 0089): a shirt in their team's color, a head with hair and, close up, a face, arms
-// and legs, posed for their room. Each part is one instanced mesh for every character, so forty cost a handful of draw
-// calls. Only a typing character's arms move, and only from `animate`, which the pacer calls inside a frame.
+// and legs, posed for their room, or walking. Each part is one instanced mesh for every character, so forty cost a
+// handful of draw calls. Only a typing character's arms move by themselves, from `animate`, which the pacer calls inside
+// a frame; a walking one is placed again on each frame of its walk.
 import {
   BoxGeometry,
   BufferGeometry,
@@ -24,6 +25,15 @@ import {
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { FLOOR_CAP, TEAM_COLORS, type Character, type Pose } from "../../hermes/officeFloor";
 import { FIGURE_SCALE } from "./building";
+
+/**
+ * A character as drawn: where the floor seats it, or where its walk has got to. `stride` swings a walker's arms and
+ * legs. Characters past the floor's are leaving the building: they can't be picked.
+ */
+export type Placed = Pick<Character, "key" | "color" | "stale" | "spot"> & { pose: Pose | "walking"; stride?: number };
+
+/** Characters on the floor, and as many again walking out of the building. */
+const CAPACITY = FLOOR_CAP * 2;
 
 const STALE = new Color("#9aa0a8");
 const STALE_SKIN = new Color("#b9bdc3");
@@ -112,7 +122,7 @@ const LOUNGE = upperBody([0, SEATED_HIP, -0.08], -0.22, -0.1);
 const STAND = upperBody([0, STAND_HIP, 0], 0);
 
 /** Each pose's parts, in the character's own frame: on the floor at its seat, facing +z. */
-const FIGURE: Record<Pose, Figure> = {
+const FIGURE: Record<Pose | "walking", Figure> = {
   typing: {
     ...TYPING,
     arms: [
@@ -135,6 +145,14 @@ const FIGURE: Record<Pose, Figure> = {
     arms: [
       { at: STAND.shoulders[0], turn: [0, 0, -0.1], bend: -0.2 },
       { at: STAND.shoulders[1], turn: [0, 0, 0.1], bend: -0.2 },
+    ],
+    legs: standingLegs,
+  },
+  walking: {
+    ...STAND,
+    arms: [
+      { at: STAND.shoulders[0], turn: [0, 0, -0.1], bend: -0.3 },
+      { at: STAND.shoulders[1], turn: [0, 0, 0.1], bend: -0.3 },
     ],
     legs: standingLegs,
   },
@@ -167,6 +185,12 @@ const FIGURE: Record<Pose, Figure> = {
     legs: seatedLegs(-0.08),
   },
 };
+
+/** How far a walker's arms and legs swing back and forth with its stride, opposite each other, in radians. */
+const SWING = { arm: 0.5, leg: 0.45 };
+
+/** A limb swung forward (+) or back (-) at its top joint. */
+const swung = (l: Limb, by: number): Limb => (by ? { ...l, turn: [l.turn[0] - by, l.turn[1], l.turn[2]] } : l);
 
 const v = new Vector3();
 const s = new Vector3();
@@ -241,10 +265,10 @@ const shoeGeometry = () => ball(new Vector3(0.058, SOLE, 0.115), [0, 0, 0.05], 8
 
 export type Figures = {
   group: Group;
-  /** Places the characters; drawn on the next frame. */
-  set(characters: readonly Character[]): void;
-  /** Moves typing arms for time `t` (ms). Whether any character types, so the scene knows to keep drawing. */
-  animate(t: number, moves: boolean): boolean;
+  /** Places the characters; drawn on the next frame. The first `onFloor` are the floor's; the rest walk out. */
+  set(characters: readonly Placed[], onFloor?: number): void;
+  /** Moves typing arms for time `t` (ms), a hand up or down each `beat` (ms). Whether any character types, so the scene keeps drawing. */
+  animate(t: number, moves: boolean, beat: number): boolean;
   select(key: string | undefined): void;
   showFaces(on: boolean): void;
   /** The meshes a click can hit, and which character an instance of one of them is. */
@@ -256,12 +280,12 @@ export type Figures = {
 };
 
 /** Every character has two of each limb part. */
-const LIMB_CAP = 2 * FLOOR_CAP;
+const LIMB_CAP = 2 * CAPACITY;
 
 export function buildFigures(): Figures {
   const group = new Group();
   const lambert = () => new MeshLambertMaterial({ color: 0xffffff });
-  const make = (name: string, geo: BufferGeometry, mat: MeshLambertMaterial | MeshBasicMaterial, cap = FLOOR_CAP) => {
+  const make = (name: string, geo: BufferGeometry, mat: MeshLambertMaterial | MeshBasicMaterial, cap = CAPACITY) => {
     const mesh = new InstancedMesh(geo, mat, cap);
     mesh.name = name;
     mesh.count = 0;
@@ -291,7 +315,8 @@ export function buildFigures(): Figures {
   group.add(ring);
 
   const meshes = [torso, head, ...Object.values(hair), face, upperArm, forearm, thigh, shin, shoe, bang, dot, flag, shadow];
-  let shown: readonly Character[] = [];
+  let shown: readonly Placed[] = [];
+  let pickable = 0;
   /** The selected character, whose ring follows it to wherever the next floor puts it. */
   let picked: string | undefined;
   const ringOn = () => {
@@ -307,8 +332,9 @@ export function buildFigures(): Figures {
   return {
     group,
     pickable: [torso, head, ...limbs],
-    set(characters) {
-      shown = characters.slice(0, FLOOR_CAP);
+    set(characters, onFloor = characters.length) {
+      shown = characters.slice(0, CAPACITY);
+      pickable = Math.min(onFloor, shown.length);
       typing.length = 0;
       const used = { short: 0, long: 0, bun: 0, bangs: 0, flags: 0 };
       const [teamColor, skinColor, hairColor, pantsColor] = [new Color(), new Color(), new Color(), new Color()];
@@ -332,14 +358,17 @@ export function buildFigures(): Figures {
         }
         shadow.setMatrixAt(i, m.copy(base).multiply(local.makeTranslation(0, 0.015, c.pose === "slumped" ? 0.1 : 0)));
         const pants = c.stale ? STALE_PANTS : pantsColor.setHex(look.pants);
+        // A walker swings each arm with the opposite leg.
+        const stride = c.pose === "walking" ? Math.sin(c.stride ?? 0) : 0;
         for (const side of [0, 1] as const) {
           const at = 2 * i + side;
-          limbMatrices(base, f.arms[side], ARM, chain);
+          const sway = side ? stride : -stride;
+          limbMatrices(base, swung(f.arms[side], sway * SWING.arm), ARM, chain);
           upperArm.setMatrixAt(at, chain[0]);
           upperArm.setColorAt(at, shirt);
           forearm.setMatrixAt(at, chain[1]);
           forearm.setColorAt(at, skin);
-          limbMatrices(base, f.legs[side], LEG, chain);
+          limbMatrices(base, swung(f.legs[side], -sway * SWING.leg), LEG, chain);
           thigh.setMatrixAt(at, chain[0]);
           thigh.setColorAt(at, pants);
           shin.setMatrixAt(at, chain[1]);
@@ -376,12 +405,12 @@ export function buildFigures(): Figures {
       }
       ringOn();
     },
-    animate(t, moves) {
+    animate(t, moves, beatMs) {
       if (!moves || typing.length === 0) return typing.length > 0 && moves;
       for (const i of typing) {
         FIGURE.typing.arms.forEach((arm, side) => {
           // Two poses, hands resting and a forearm lifted, swapped each beat: at a few frames a second that reads as typing.
-          const beat = Math.floor(t / 160) + i;
+          const beat = Math.floor(t / beatMs) + i;
           limbMatrices(bases[i], arm, ARM, chain, (beat + side) % 2 ? -0.16 : 0);
           upperArm.setMatrixAt(2 * i + side, chain[0]);
           forearm.setMatrixAt(2 * i + side, chain[1]);
@@ -397,7 +426,10 @@ export function buildFigures(): Figures {
     showFaces(on) {
       face.visible = on;
     },
-    keyAt: (mesh, instance) => shown[limbs.includes(mesh as InstancedMesh) ? instance >> 1 : instance]?.key,
+    keyAt(mesh, instance) {
+      const i = limbs.includes(mesh as InstancedMesh) ? instance >> 1 : instance;
+      return i < pickable ? shown[i]?.key : undefined;
+    },
     tagAt(i, out) {
       const f = FIGURE[shown[i].pose];
       return out.set(...f.head.at).add(v.set(0, f.marker ? MARKER_LIFT[f.marker] + 0.43 : 0.32, 0)).applyMatrix4(bases[i]);

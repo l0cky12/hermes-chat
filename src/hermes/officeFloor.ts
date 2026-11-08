@@ -41,6 +41,13 @@ const ROOMS: Record<BuildingRoom, Bounds> = {
 const HALLWAY: Bounds = { x: -12, z: -1, w: 24, d: 2 };
 /** Where the Workroom door is, and where agents queue for it: along the hallway, nearest first. */
 const WORKROOM_DOOR: Spot = { x: -5, z: -1, facing: 0 };
+/** Each room's door onto the hallway, in the wall it shares with the hallway. */
+const DOORS: Record<BuildingRoom, { x: number; z: number }> = {
+  workroom: { x: WORKROOM_DOOR.x, z: HALLWAY.z },
+  waiting: { x: ROOMS.waiting.x + ROOMS.waiting.w / 2, z: HALLWAY.z },
+  trouble: { x: ROOMS.trouble.x + ROOMS.trouble.w / 2, z: HALLWAY.z + HALLWAY.d },
+  lounge: { x: ROOMS.lounge.x + ROOMS.lounge.w / 2, z: HALLWAY.z + HALLWAY.d },
+};
 
 /** Desks in the Workroom come in pods of four, facing in pairs. A team takes whole pods. */
 export const POD_SIZE = 4;
@@ -87,6 +94,9 @@ export const PLAN = {
   rooms: ROOMS,
   hallway: HALLWAY,
   workroomDoor: WORKROOM_DOOR,
+  doors: DOORS,
+  /** The front door is the hallway's open east end; agents come from, and go home to, just outside it. */
+  outside: { x: 13.5, z: 0 },
   seats: {
     workroom: workroomSeats(),
     waiting: grid(ROOMS.waiting, 4, 3, Math.PI),
@@ -116,19 +126,27 @@ export type Character = {
   stale: boolean;
 };
 
+/** An agent's state, and since when (Unix ms) as far as the app knows: when it changed, or last had something new. */
+export type Since = { readonly state: DeskState; readonly at: number };
+
 /**
  * What the floor keeps from one call to the next, handed back by the caller: each team's color, the Workroom pods a
- * working team holds, and the desk each working agent sits at. Never written: each call returns a new one, or the same
- * one when nothing in it changed.
+ * working team holds, the desk each working agent sits at, and since when each agent is in its state. Never written:
+ * each call returns a new one, or the same one when nothing in it changed.
  */
 export type FloorMemory = {
   readonly colors: ReadonlyMap<string, number>;
   readonly pods: ReadonlyMap<string, readonly number[]>;
   readonly desks: ReadonlyMap<string, number>;
+  readonly since: ReadonlyMap<string, Since>;
 };
-export const EMPTY_FLOOR_MEMORY: FloorMemory = { colors: new Map(), pods: new Map(), desks: new Map() };
+export const EMPTY_FLOOR_MEMORY: FloorMemory = { colors: new Map(), pods: new Map(), desks: new Map(), since: new Map() };
 
-export type Floor = { characters: Character[]; more: number; memory: FloorMemory };
+/** `wakeAt`: when the next agent on the floor goes home (Unix ms), so the caller asks again then. */
+export type Floor = { characters: Character[]; more: number; memory: FloorMemory; wakeAt?: number };
+
+/** A finished agent goes home this long after its state last changed (ADR 0089). */
+export const HOME_AFTER_MS = 30 * 60_000;
 
 /** Which agents are drawn when not all fit: those that need the owner first, then those at work, then the rest. */
 const KEEP_ORDER: readonly BuildingRoom[] = ["waiting", "trouble", "workroom", "lounge"];
@@ -147,11 +165,25 @@ const holdsDesk = (s: DeskState) => s === "running" || s === "handedOff";
  *   Workroom door.
  * - A team keeps its color while it is on the floor; a new team takes the color fewest teams wear.
  * - At most `cap` characters, and no more than a room has seats. Those not drawn are counted in `more`.
+ * - An agent in the Lounge goes home, and isn't on the floor, once the owner dismissed its reply's inbox entry or
+ *   HOME_AFTER_MS after it last changed state. It comes back when its state changes or its chat has something new.
  */
-export function officeFloor(rooms: readonly Room[], memory: FloorMemory, cap = FLOOR_CAP): Floor {
+export function officeFloor(rooms: readonly Room[], memory: FloorMemory, now: number, cap = FLOOR_CAP): Floor {
   type Agent = { room: Room; desk: Desk; order: number; place: BuildingRoom };
-  const agents: Agent[] = rooms.flatMap((room) => room.desks.map((desk) => ({ room, desk, place: ROOM_OF[desk.state], order: 0 })));
+  const all: Agent[] = rooms.flatMap((room) => room.desks.map((desk) => ({ room, desk, place: ROOM_OF[desk.state], order: 0 })));
+
+  // Since when each agent is in its state. A change the app sees counts from now; an agent first seen counts from
+  // what it last did, when that is known; something new while the state stays counts from then.
+  const since = new Map<string, Since>();
+  for (const { desk } of all) {
+    const was = memory.since.get(desk.key);
+    const at = desk.doing?.at || 0;
+    since.set(desk.key, !was ? { state: desk.state, at: at || now } : was.state !== desk.state ? { state: desk.state, at: now } : at > was.at ? { state: desk.state, at } : was);
+  }
+  const homeAt = (a: Agent) => (a.place === "lounge" ? (a.desk.agent.kind === "reply" && a.desk.agent.dismissed ? -Infinity : since.get(a.desk.key)!.at + HOME_AFTER_MS) : Infinity);
+  const agents = all.filter((a) => homeAt(a) > now);
   agents.forEach((a, i) => (a.order = i));
+  const wakeAt = Math.min(...agents.map(homeAt));
 
   // Who is drawn: by room, those that need the owner first, each room up to its seats, all up to the cap.
   const lineOf = (a: Agent): BuildingRoom | "door" => (a.desk.state === "queued" ? "door" : a.place);
@@ -216,7 +248,7 @@ export function officeFloor(rooms: readonly Room[], memory: FloorMemory, cap = F
   // Spots: desks as assigned; the door line in order; the other rooms' seats in order.
   const next: Record<BuildingRoom | "door", number> = { workroom: 0, waiting: 0, trouble: 0, lounge: 0, door: 0 };
   const characters: Character[] = [];
-  let more = agents.length - drawn.size;
+  let freed = 0;
   for (const a of agents) {
     if (!drawn.has(a)) continue;
     const desk = desks.get(a.desk.key);
@@ -229,15 +261,50 @@ export function officeFloor(rooms: readonly Room[], memory: FloorMemory, cap = F
       spot = PLAN.door[next.door++];
       pose = "door";
     } else spot = PLAN.seats[a.place][next[a.place]++];
-    // A running agent with no desk and a full line at the door isn't drawn.
     if (!spot) {
-      more++;
+      freed++;
       continue;
     }
     characters.push({ key: a.desk.key, room: a.room, desk: a.desk, color: colors.get(a.room.key)!, place: a.place, spot, pose, stale: !!a.desk.stale });
   }
+  // A Workroom agent's seat depends on its team's pods, which are given out by now.
+  const seatLeft = (a: Agent) => a.place !== "workroom" && used[a.place] < PLAN.seats[a.place].length;
+  for (const a of byNeed) {
+    if (freed === 0) break;
+    if (drawn.has(a) || !seatLeft(a)) continue;
+    used[a.place]++;
+    freed--;
+    characters.push({ key: a.desk.key, room: a.room, desk: a.desk, color: colors.get(a.room.key)!, place: a.place, spot: PLAN.seats[a.place][next[a.place]++], pose: POSE_IN[a.place], stale: !!a.desk.stale });
+  }
+  const order = new Map(agents.map((a) => [a.desk.key, a.order]));
+  characters.sort((x, y) => order.get(x.key)! - order.get(y.key)!);
+  const more = agents.length - characters.length;
 
-  return { characters, more, memory: same(memory, { colors, pods, desks }) };
+  return { characters, more, memory: same(memory, { colors, pods, desks, since }), ...(wakeAt < Infinity && { wakeAt }) };
+}
+
+/** Each profile's floor, and what the building keeps from one call to the next: a `FloorMemory` per profile. */
+export type BuildingMemory = ReadonlyMap<string, FloorMemory>;
+export const EMPTY_BUILDING_MEMORY: BuildingMemory = new Map();
+
+/**
+ * A floor for each profile `rooms` has agents in, by `officeFloor`, each with its own memory. `wakeAt`: the soonest
+ * any floor's next agent goes home. The memory is the same one when no floor's changed.
+ */
+export function officeFloors(rooms: readonly Room[], memory: BuildingMemory, now: number): { floors: Map<string, Floor>; memory: BuildingMemory; wakeAt?: number } {
+  const byProfile = new Map<string, Room[]>();
+  for (const r of rooms) byProfile.set(r.profile, [...(byProfile.get(r.profile) ?? []), r]);
+  const floors = new Map<string, Floor>();
+  const next = new Map<string, FloorMemory>();
+  let wakeAt = Infinity;
+  for (const [profile, list] of byProfile) {
+    const f = officeFloor(list, memory.get(profile) ?? EMPTY_FLOOR_MEMORY, now);
+    floors.set(profile, f);
+    next.set(profile, f.memory);
+    if (f.wakeAt !== undefined) wakeAt = Math.min(wakeAt, f.wakeAt);
+  }
+  const unchanged = next.size === memory.size && [...next].every(([p, m]) => memory.get(p) === m);
+  return { floors, memory: unchanged ? memory : next, ...(wakeAt < Infinity && { wakeAt }) };
 }
 
 /** `memory` itself when `next` holds the same, so a caller comparing memories sees no change. */
@@ -246,5 +313,6 @@ function same(memory: FloorMemory, next: FloorMemory): FloorMemory {
     a.size === b.size && [...a].every(([k, v]) => b.has(k) && is(v, b.get(k)!));
   const num = (x: number, y: number) => x === y;
   const list = (x: readonly number[], y: readonly number[]) => x.length === y.length && x.every((v, i) => v === y[i]);
-  return eq(memory.colors, next.colors, num) && eq(memory.pods, next.pods, list) && eq(memory.desks, next.desks, num) ? memory : next;
+  const since = (x: Since, y: Since) => x.state === y.state && x.at === y.at;
+  return eq(memory.colors, next.colors, num) && eq(memory.pods, next.pods, list) && eq(memory.desks, next.desks, num) && eq(memory.since, next.since, since) ? memory : next;
 }

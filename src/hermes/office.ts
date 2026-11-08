@@ -18,8 +18,11 @@ export type DeskState = "queued" | "running" | "handedOff" | "approval" | "faile
 
 export type Desk = {
   key: string;
-  /** The chat's own reply, with the inbox entry its state comes from, or one of the chat's subagents. */
-  agent: { kind: "reply"; entry?: InboxEntry } | { kind: "subagent"; id: SubagentId; depth: number; parent?: SubagentId };
+  /**
+   * The chat's own reply, with the inbox entry its state comes from, or one of the chat's subagents. `dismissed`: the
+   * reply has no entry left because the owner dismissed the chat's last one.
+   */
+  agent: { kind: "reply"; entry?: InboxEntry; dismissed?: true } | { kind: "subagent"; id: SubagentId; depth: number; parent?: SubagentId };
   name: string;
   state: DeskState;
   /** What it last did, if known, and when; `at` 0 when that isn't known. */
@@ -120,7 +123,10 @@ export function officeRooms({
     if (!rooms.has(key)) rooms.set(key, { profile: p, chatId, title, entries: [] });
     return rooms.get(key)!;
   };
-  for (const e of entries) if (isLive(e) || (!e.ended && shown(e))) room(e.profile, e.chatId, e.title).entries.push(e);
+  const dismissed = new Set<string>();
+  for (const e of entries)
+    if (isLive(e) || (!e.ended && shown(e))) room(e.profile, e.chatId, e.title).entries.push(e);
+    else if (!e.ended) dismissed.add(`${e.profile} ${e.chatId}`);
   for (const c of chats) if (c.subagents?.subagents.length) room(profile, c.id, c.title);
 
   return [...rooms.entries()].map(([key, r]) => {
@@ -129,7 +135,7 @@ export function officeRooms({
     const chat = r.profile === profile ? chats.find((c) => c.id === r.chatId) : undefined;
     const reply: Desk = {
       key: `${key} reply`,
-      agent: { kind: "reply", ...(entry && { entry }) },
+      agent: { kind: "reply", ...(entry ? { entry } : dismissed.has(key) && { dismissed: true as const }) },
       name: "The chat's reply",
       // A drop ends the app's word on whether the reply runs; it's resumed and known again once connected.
       state: entry ? (entry.waiting ? "handedOff" : REPLY_STATE[entry.kind]) : connected ? "idle" : "unknown",
