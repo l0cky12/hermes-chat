@@ -17,7 +17,7 @@ A reply that hands work to another agent and ends its turn leaves its chat in **
 - Send a message with the word `dispatch` in it in any chat. The reply calls `kanban_create` and ends.
 - Send a message with the word `background` in it. The reply starts two subagents and ends.
 - Right-click a waiting chat's row for **Stop waiting**.
-- The rail's Inbox button, filter Running; the rail's Office button.
+- The tray menu's Open Inbox, filter Running (the rail has no Inbox button, ADR 0097); the rail's Office button.
 
 ## Driving it with wd.mjs
 
@@ -31,7 +31,7 @@ Preconditions:
 - **Needs the owner.** Start another `dispatch` chat, then `curl -s -X POST "http://127.0.0.1:$BRIDGE_PORT/__kanban?id=<task>&status=blocked"`. The chat moves to the Inbox with `.row-owner[aria-label="A dispatched task is blocked."]`, and no wake reply streams.
 - **Stop waiting.** Start another `dispatch` chat. Right-click its row with `$S/wd.mjs rightclick .row-open "<title>"` and `$S/wd.mjs click '[role=menuitem]' "Stop waiting"`. The chat is in the Inbox. Send `dispatch again` in it: it is back in Working with the hourglass.
 - **Subagents.** `$S/wd.mjs keys 'do it in the background\n'` in a new chat, then `$S/wd.mjs wait .msg "background"`. The reply ends and the row shows `.row-wait[aria-label="Waiting on 2 subagents"]`. End them with `curl -s -X POST "http://127.0.0.1:$BRIDGE_PORT/__subagent?id=sa-1&status=completed"` and the same for `sa-2`: the hourglass goes and the chat is in the Inbox.
-- **Rail inbox and Office.** With a chat waiting, `$S/wd.mjs click button "Inbox"` and read the entry: state `Waiting`, summary "Hermes is waiting on work it handed off.", and no "Completed, unread" entry for that chat. Close it, `$S/wd.mjs click button Office`, `$S/wd.mjs wait .office-tag`: the chat's tag reads `Waiting on handed-off work` in its `aria-label`, in the Workroom. **List** shows the same label.
+- **Rail inbox and Office.** With a chat waiting, open the Rail inbox as [rail-inbox.md](rail-inbox.md) Open does, by emitting the tray's `tray-open-inbox` event, and read the entry: state `Waiting`, summary "Hermes is waiting on work it handed off.", and no "Completed, unread" entry for that chat. Close it, `$S/wd.mjs click button Office`, `$S/wd.mjs wait .office-tag`: the chat's tag reads `Waiting on handed-off work` in its `aria-label`, in the Workroom. **List** shows the same label.
 - **Relaunch.** With a chat waiting, `$S/wd.mjs close` then `$S/wd.mjs open` and sign in again. Once the list loads the row is in Working with the hourglass again, read from the board (`GET /api/plugins/kanban/boards` and `board?board=default` in the bridge's log).
 
 ## Gotchas

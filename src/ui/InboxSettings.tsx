@@ -38,7 +38,7 @@ export function InboxSettings() {
         nameId="inbox-auto-dismiss-label"
         hint="Finished chats leave the inbox after this many days. Empty is off."
         hintId="inbox-auto-dismiss-hint"
-        more="Only Completed entries are dismissed, as if by hand. Approvals, failures and running work never are. Whole days from 1 to 365."
+        more="The inbox opens from Open Inbox in the tray menu. Only Completed entries are dismissed, as if by hand. Approvals, failures and running work never are. Whole days from 1 to 365."
         control={
           <input
             className="model-num days"

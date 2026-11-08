@@ -83,13 +83,12 @@ export function Inbox({
   const headId = useId();
   useReturnFocus();
 
-  // A press anywhere outside it closes it: another rail tool, the chat, the side panel (ADR 0055). The Inbox button is
-  // left to toggle it, or the press would close it and the click open it again. A press in a frame (the Preview's page)
-  // never reaches this document, so focus going into one closes it too; the window losing focus to another app doesn't.
+  // A press in a frame (the Preview's page) never reaches this document, so focus going into one closes it too; the
+  // window losing focus to another app doesn't.
   useEffect(() => {
     const away = (e: PointerEvent) => {
       const at = e.target;
-      if (at instanceof Node && !root.current?.contains(at) && !(at instanceof Element && at.closest(".inbox-btn"))) onClose();
+      if (at instanceof Node && !root.current?.contains(at)) onClose();
     };
     let later: ReturnType<typeof setTimeout> | undefined;
     // Read once the blur is over, when the frame is the active element.

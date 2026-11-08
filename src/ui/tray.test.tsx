@@ -7,7 +7,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import { memoryCache } from "../hermes/memoryCache";
 import { connect, type Hermes } from "../hermes/transport";
-import type { TrayStatus, TrayWiring } from "../hermes/tauriTray";
+import type { TrayStatus } from "../hermes/tauriTray";
+import { FakeTray } from "../hermes/fakeTray";
 import { Main } from "../App";
 import { TraySettings } from "./TraySettings";
 import { setWindowHidden } from "./windowState";
@@ -27,35 +28,6 @@ afterEach(async () => {
   await Promise.all(running.splice(0).map((h) => h.close()));
   localStorage.clear();
 });
-
-/** What Rust would do: keeps the setting, sends menu picks and status changes, and records the Inbox counts. */
-class FakeTray implements TrayWiring {
-  stored: TrayStatus = { closeToTray: false, tray: "shown" };
-  counts: number[] = [];
-  failWrite?: string;
-  private fns = { status: new Set<(s: TrayStatus) => void>(), newChat: new Set<() => void>(), inbox: new Set<() => void>() };
-  status = async () => ({ ...this.stored });
-  setCloseToTray = async (on: boolean) => {
-    if (this.failWrite) throw new Error(this.failWrite);
-    this.stored = { ...this.stored, closeToTray: on };
-    return { ...this.stored };
-  };
-  onStatus = (fn: (s: TrayStatus) => void) => this.on(this.fns.status, fn);
-  onNewChat = (fn: () => void) => this.on(this.fns.newChat, fn);
-  onOpenInbox = (fn: () => void) => this.on(this.fns.inbox, fn);
-  reportInbox = (n: number) => void this.counts.push(n);
-  pick(item: "newChat" | "inbox") {
-    act(() => this.fns[item].forEach((f) => f()));
-  }
-  change(s: Partial<TrayStatus>) {
-    this.stored = { ...this.stored, ...s };
-    act(() => this.fns.status.forEach((f) => f({ ...this.stored })));
-  }
-  private on<F>(set: Set<F>, fn: F) {
-    set.add(fn);
-    return () => void set.delete(fn);
-  }
-}
 
 const nowS = () => Date.now() / 1000;
 let launches = 0;

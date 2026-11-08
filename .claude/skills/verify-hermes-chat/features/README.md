@@ -42,7 +42,7 @@ Each feature file starts with an H1 and one paragraph describing the behaviour t
 - [Gateways](gateways.md): Settings → Gateways: Telegram and Discord state, token replace and remove with read-back, the switch, a turned-down token, a missing library, a change on the server meanwhile, Check status.
 - [Search chats](search.md): Ctrl+K or the rail opens search, a body-text match opens its chat, and a miss shows No matches.
 - [Chat list](chat-list.md): the Settled drawer at the foot (open, close, its own scroll, kept across a relaunch), Settle and Unsettle from the menu, Up and Down into the drawer, and Archived in the scroll, with the `HV_LIST=24` seed.
-- [Rail inbox](rail-inbox.md): Check now, Clear done, and auto-dismissing old completed entries, with the `HV_INBOX=1` seed.
+- [Rail inbox](rail-inbox.md): opened as the tray's Open Inbox is (an emitted event), then Check now, Clear done, and auto-dismissing old completed entries, with the `HV_INBOX=1` seed.
 - [Launch on the saved chats](launch.md): a relaunch over a slow stand-in shows the saved list at once, Connecting, and a wrong saved password goes back to Sign in. Needs a throwaway keyring.
 - [Connections](connections.md): Settings → General → Connection, Test a saved connection, and Sign out.
 - [Approval mode](approval-mode.md): the composer's pill: Smart, Manual, YOLO with its warning, "YOLO · all chats", and the narrow face, against the real Hermes in `~/.cache/hermes-live-277`.
