@@ -10,6 +10,7 @@ The floor has every pose at once: a chat whose reply delegated to two subagents 
 4. `*-3-hand-up.png`: the Approval in the Waiting room, one hand raised, under its "!".
 5. `*-4-slumped.png`: the failure, slumped over its Trouble room desk under the red marker.
 6. `*-5-couch.png`: the two Unread chats sitting back on a Lounge couch.
+7. `*-6-seated-waiting.png`: after only (#334 added the pose while this change was open). A chat that dispatched a task (`dispatch a research task`) and is waiting on it sits at its Workroom desk in orange, arms down and hands in its lap, beside the blue team typing. Its row in Working shows the hourglass.
 
 Each comes in `dark-` and `light-`. The building's colors follow the theme; team colors, skin, hair and trousers don't.
 
