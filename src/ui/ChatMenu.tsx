@@ -2,7 +2,7 @@
 // menu uses too. Escape or a click elsewhere closes one, and focus goes back to what had it. The arrow keys move
 // between a menu's items, and an item's letter (`aria-keyshortcuts`) picks it.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { AlarmClock, AlarmClockOff, AppWindow, Archive, ArchiveRestore, CalendarClock, Check, Columns2, Link2, PanelLeft, PanelRight, Pencil, Pin, PinOff, Sparkles, Tag as TagIcon, Trash2 } from "lucide-react";
+import { AlarmClock, AlarmClockOff, AppWindow, Archive, ArchiveRestore, CalendarClock, Check, Columns2, Hourglass, Link2, PanelLeft, PanelRight, Pencil, Pin, PinOff, Sparkles, Tag as TagIcon, Trash2 } from "lucide-react";
 import type { Chat } from "../hermes/model";
 import type { Project } from "../hermes/projects";
 import { snoozePresets, wakeFull } from "../hermes/snooze";
@@ -35,6 +35,9 @@ export type ChatSettle = { settled: boolean; onSettle: (settled: boolean) => voi
 
 /** Pinning the chat to the top of the list, or unpinning it (snooze.ts `PinStore`, ADR 0085). */
 export type ChatPin = { pinned: boolean; onPin: (pinned: boolean) => void };
+
+/** Stop waiting on the work the chat handed off (dispatched.ts), on this computer only; `label` says what it waits on. */
+export type ChatStopWaiting = { label: string; onStop: () => void };
 
 /** The Pin or Unpin item of a chat's menus, which P picks while the menu is open. */
 export function PinItem({ pin, onClose }: { pin: ChatPin; onClose: () => void }) {
@@ -77,6 +80,7 @@ export function ChatMenu({
   snooze,
   settle,
   pin,
+  stopWaiting,
   onDelete,
   onClose,
 }: {
@@ -95,6 +99,7 @@ export function ChatMenu({
   snooze?: ChatSnooze;
   settle?: ChatSettle;
   pin?: ChatPin;
+  stopWaiting?: ChatStopWaiting;
   onDelete?: () => void;
   onClose: () => void;
 }) {
@@ -182,6 +187,22 @@ export function ChatMenu({
           </button>
         ))}
       {pin && <PinItem pin={pin} onClose={onClose} />}
+      {stopWaiting && (
+        <button
+          role="menuitem"
+          className="menu-item"
+          title={`${stopWaiting.label}. Put this chat in the Inbox without waiting; nothing on Hermes is cancelled`}
+          onClick={() => {
+            onClose();
+            stopWaiting.onStop();
+          }}
+        >
+          <span className="menu-icon">
+            <Hourglass size={15} />
+          </span>
+          <span className="menu-label">Stop waiting</span>
+        </button>
+      )}
       {settle && (
         <button
           role="menuitem"

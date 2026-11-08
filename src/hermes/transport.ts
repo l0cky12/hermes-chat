@@ -39,6 +39,8 @@ import { projectsApi, type ProjectsApi } from "./projects";
 import { STEER, askSideQuestion, listServerCommands, runServerCommand, sideAnswer, type CommandDef, type CommandResult, type ServerCommandList } from "./commands";
 import { callText, offeredSkills, runSkill, skillInvocationText, type SkillCall, type SkillCommands } from "./skillCommands";
 import { CronApi } from "./cronJobs";
+import { followsSession, parseKanbanCreate, sameTask, type DispatchedTask } from "./dispatched";
+import { KanbanApi, KanbanWatch } from "./kanban";
 import { AutomationsApi } from "./automations";
 import { ModelSettingsApi } from "./modelSettings";
 import { ToolsetsApi } from "./toolsets";
@@ -245,6 +247,8 @@ type SessionRow = {
   cwd?: string | null;
   /** Running now, or active lately, as the dashboard decides (`_is_active`). */
   is_active?: boolean;
+  /** A compressed chat's row: every segment's id (ADR 0026). */
+  _lineage_ids?: unknown;
 };
 type SessionPage = { sessions: SessionRow[]; total: number };
 /** Dashboard REST `GET /api/sessions/{id}`, as far as this app reads it. Flags come as stored, 0 or 1. */
@@ -876,6 +880,14 @@ export class Hermes {
   /** Hermes's webhook routes, each call naming its profile (automations.ts). Hermes receives and runs the events. */
   readonly automations = new AutomationsApi((method, pathAndQuery, body) => this.rest(method, pathAndQuery, body));
 
+  /** Hermes's kanban board, read for the tasks the shown profile's chats dispatched (kanban.ts, issue #287). */
+  readonly kanban = new KanbanApi((method, pathAndQuery, body) => this.rest(method, pathAndQuery, body));
+  private readonly kanbanWatch = new KanbanWatch({
+    api: this.kanban,
+    sessions: () => new Set(this.snapshot.chats.flatMap((c) => [c.id, ...(c.lineage ?? [])])),
+    publish: (by) => this.placeTasks(by),
+  });
+
   /** Settings → Model's reads and writes, for the profile shown (modelSettings.ts). */
   readonly modelSettings = new ModelSettingsApi(
     (method, pathAndQuery, body) => this.rest(method, pathAndQuery, body),
@@ -1085,6 +1097,7 @@ export class Hermes {
     this.lastHeard = Date.now();
     this.heartbeat = setInterval(() => this.beat(), PING_EVERY_MS);
     this.update({ status: "connected", closedReason: undefined, route: pipe.route, unsecure: isUnsecure(pipe.route) });
+    this.kanbanWatch.start();
     // Without this, Hermes never sends this connection an Approval (research doc §6). Its answer lists the requests
     // Hermes may send, which is how diagnostics knows Approvals are there.
     const told = this.request("client.capabilities", { server_requests: true });
@@ -1361,6 +1374,7 @@ export class Hermes {
     this.staleItems.clear();
     this.resumeOnReconnect.clear();
     this.revealed.clear();
+    this.kanbanWatch.reset();
     this.update({
       profile: name,
       chats: withOutbox(this.cache.load(name), loadOutbox(this.cache, name)),
@@ -3272,6 +3286,7 @@ export class Hermes {
     this.abortDial?.(new Error("Closed by the app."));
     this.generation++;
     this.capabilities.disconnected();
+    this.kanbanWatch.stop();
     clearTimeout(this.retryTimer);
     clearInterval(this.heartbeat);
     this.cancelNotify();
@@ -3324,6 +3339,10 @@ export class Hermes {
       void this.sync();
       return;
     }
+    if (type === "status.update") {
+      if (payload.kind === "process" && typeof payload.text === "string") this.kanbanWatch.nudge(payload.text);
+      return;
+    }
     const chat = session_id ? this.snapshot.chats.find((c) => c.runtimeId === session_id) : undefined;
     if (!chat) return;
     // A side question's answer is no part of the chat or of a turn running in it.
@@ -3347,7 +3366,15 @@ export class Hermes {
       this.patchChat(chat.id, (c) => ({ ...c, subagents: onSubagentEvent(c.subagents, type, payload, at) }));
       return;
     }
-    if (type === "message.start") this.turnStart.set(chat.id, chat.items.at(-1)?.id ?? null);
+    if (type === "message.start") {
+      this.turnStart.set(chat.id, chat.items.at(-1)?.id ?? null);
+      this.kanbanWatch.turnStarted([chat.id, ...(chat.lineage ?? [])]);
+    }
+    if (type === "tool.complete") {
+      const call = chat.items.find((i) => i.kind === "tool" && i.id === String(payload.tool_id));
+      const task = call?.kind === "tool" && call.name === "kanban_create" ? parseKanbanCreate(call.args, payload.result, Date.now(), this.kanbanWatch.currentBoard()) : undefined;
+      if (task) this.kanbanWatch.add(task, chat.id);
+    }
     const usage = type === "message.complete" ? this.turnUsage(session_id!, payload.usage) : undefined;
     const from = this.turnStart.get(chat.id);
     if (type === "message.complete" || type === "error") this.turnStart.delete(chat.id);
@@ -3559,6 +3586,7 @@ export class Hermes {
     this.heldScreen = undefined;
     this.generation++;
     this.capabilities.disconnected();
+    this.kanbanWatch.stop();
     clearInterval(this.heartbeat);
     // Lets the Rust side end the tunnel.
     if (pipe) this.droppedClosing = pipe.close().catch(() => {}).finally(() => (this.droppedClosing = undefined));
@@ -3572,7 +3600,8 @@ export class Hermes {
     this.sideAwaiting.clear();
     for (const c of this.snapshot.chats) {
       if (c.runtimeId) this.staleItems.set(c.id, c.items.length);
-      if (c.running || c.items.some(isWaiting)) this.resumeOnReconnect.add(c.id);
+      // So is a chat whose subagents work or whose wake turn is due, so the reconnect hears them (dispatched.ts).
+      if (c.running || c.items.some(isWaiting) || followsSession(c, Date.now())) this.resumeOnReconnect.add(c.id);
     }
     // What the dropped connection last heard about the shown profile's sessions is older than its chats' own state,
     // which the reconnect resumes; the next check, once connected, reads it again.
@@ -4003,6 +4032,7 @@ export class Hermes {
           unread: !!r.unread && !readHere && !onScreen,
           // List rows carry the stored token and cost totals too.
           usage: newerChatUsage(c?.usage, chatUsageOf(r, Date.now())),
+          ...(Array.isArray(r._lineage_ids) && { lineage: r._lineage_ids.filter((x): x is string => typeof x === "string") }),
         };
       });
     // Chats started or resumed on this connection stay even before Hermes stores them (a new chat has no row
@@ -4017,6 +4047,7 @@ export class Hermes {
     this.listedAt = Date.now();
     const switched = !!this.snapshot.switching;
     this.update({ chats, syncError: undefined, switching: undefined });
+    this.kanbanWatch.chatsListed();
     for (const chatId of readOnScreen) this.seen(chatId);
     this.saveList(profile, chats);
     if (switched) this.cache.rememberProfile(profile);
@@ -4448,6 +4479,20 @@ export class Hermes {
       const reaches = (after?: number) => whole || (after !== undefined && readBack.some((m) => m.rowId !== undefined && m.rowId <= after));
       for (const row of chat.items.filter(isOutgoing)) this.setOutgoing(profile, chat.id, row.id, (r) => settle(r, readBack, reaches));
     }
+  }
+
+  /** Gives each chat the dispatched tasks the watch has for its id or any of its lineage; a chat whose tasks didn't change is kept. */
+  private placeTasks(by: ReadonlyMap<string, readonly DispatchedTask[]>) {
+    let changed = false;
+    const chats = this.snapshot.chats.map((c) => {
+      const seen = new Set<string>();
+      const tasks = [c.id, ...(c.lineage ?? [])].flatMap((sid) => by.get(sid) ?? []).filter((t) => !seen.has(t.id) && seen.add(t.id));
+      const was = c.tasks ?? [];
+      if (was.length === tasks.length && was.every((t, i) => sameTask(t, tasks[i]))) return c;
+      changed = true;
+      return { ...c, tasks: tasks.length ? tasks : undefined };
+    });
+    if (changed) this.update({ chats });
   }
 
   private patchChat(id: string, fn: (c: Chat) => Chat, nextFrame = false) {
