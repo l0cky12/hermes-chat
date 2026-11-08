@@ -498,13 +498,7 @@ pub fn check_plain_http_from(direct: &DirectUrl, source: impl Fn(IpAddr) -> Opti
 
 /// Whether `ip` is in 100.64.0.0/10, which Tailscale and carrier-grade NAT both use, written as IPv4 or IPv4-mapped.
 fn in_tailscale_v4(ip: IpAddr) -> bool {
-    let v4 = match ip {
-        IpAddr::V4(v4) => v4,
-        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
-            Some(v4) => v4,
-            None => return false,
-        },
-    };
+    let IpAddr::V4(v4) = ip.to_canonical() else { return false };
     let [a, b, ..] = v4.octets();
     a == 100 && (64..=127).contains(&b)
 }
@@ -512,6 +506,7 @@ fn in_tailscale_v4(ip: IpAddr) -> bool {
 /// The address this computer sends from to reach `ip`, as its routing table picks it. Connecting a UDP socket sends
 /// nothing.
 fn source_toward(ip: IpAddr) -> Option<IpAddr> {
+    let ip = ip.to_canonical();
     let any: IpAddr = if ip.is_ipv4() { Ipv4Addr::UNSPECIFIED.into() } else { Ipv6Addr::UNSPECIFIED.into() };
     let socket = std::net::UdpSocket::bind((any, 0)).ok()?;
     socket.connect((ip, 9)).ok()?;
