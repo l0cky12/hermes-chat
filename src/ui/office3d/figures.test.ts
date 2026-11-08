@@ -2,7 +2,7 @@
 // room's pose, and only typing arms move between frames. Positions are read back from the instance matrices, in the
 // world and in metres, against what the furniture in building.ts makes them.
 import { describe, expect, it, vi } from "vitest";
-import { Color, InstancedMesh, Matrix4, Mesh, Vector3 } from "three";
+import { Color, InstancedMesh, Matrix4, Mesh, Raycaster, Vector3 } from "three";
 import type { Desk, DeskState, Room } from "../../hermes/office";
 import { EMPTY_FLOOR_MEMORY, FLOOR_CAP, TEAM_COLORS, officeFloor, type Character, type Pose } from "../../hermes/officeFloor";
 import { FIGURE_SCALE } from "./building";
@@ -75,7 +75,7 @@ describe("The office's characters", () => {
       return `${p.x.toFixed(2)},${p.z.toFixed(2)}`;
     });
     expect(new Set(places).size).toBe(places.length);
-    expect(figures.keyAt(2)).toBe("a 2");
+    expect(figures.keyAt(torso, 2)).toBe("a 2");
   });
 
   it("draws every character as one head and torso, two of each limb part, and one head of hair unless bald", () => {
@@ -258,6 +258,18 @@ describe("The office's characters", () => {
     const lifted = Float32Array.from(mesh("forearm").instanceMatrix.array.slice(0, 32));
     figures.animate(160, true);
     expect(Float32Array.from(mesh("forearm").instanceMatrix.array.slice(0, 32))).not.toEqual(lifted);
+  });
+
+  it("picks a standing agent by its legs, as a click on them does", () => {
+    const { figures } = drawn(MIXED.characters);
+    const i = indexOfPose(MIXED.characters, "door");
+    const { x, z, facing } = MIXED.characters[i].spot;
+    // Knee-high at one leg, a hip's width to its side, from three metres in front of it, looking back at it.
+    const leg = new Vector3(x + 0.12 * Math.cos(facing), 0.4, z - 0.12 * Math.sin(facing));
+    const from = leg.clone().add(new Vector3(3 * Math.sin(facing), 0, 3 * Math.cos(facing)));
+    const hit = new Raycaster(from, leg.clone().sub(from).normalize()).intersectObjects(figures.pickable, false)[0];
+    expect(["thigh", "shin"]).toContain(hit.object.name);
+    expect(figures.keyAt(hit.object, hit.instanceId!)).toBe(MIXED.characters[i].key);
   });
 
   it("shows faces only when told the camera is close", () => {

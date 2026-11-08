@@ -152,7 +152,7 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
     raycaster.setFromCamera(ndc(e), camera);
     const hit = raycaster.intersectObjects(figures.pickable, false)[0];
-    events.onPick(hit?.instanceId === undefined ? undefined : figures.keyAt(hit.instanceId));
+    events.onPick(hit?.instanceId === undefined ? undefined : figures.keyAt(hit.object, hit.instanceId));
   };
   // A double click on a room zooms to it, keeping the direction the camera looks from.
   const onDouble = (e: MouseEvent) => {

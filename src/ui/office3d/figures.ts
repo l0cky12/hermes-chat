@@ -248,9 +248,9 @@ export type Figures = {
   select(key: string | undefined): void;
   /** Faces are drawn only when the camera is near enough to see them. */
   showFaces(on: boolean): void;
-  /** The meshes a click can hit, and which character an instance of them is. */
+  /** The meshes a click can hit, and which character an instance of one of them is. */
   pickable: InstancedMesh[];
-  keyAt(instance: number): string | undefined;
+  keyAt(mesh: object, instance: number): string | undefined;
   /** Where a character's name tag goes: just above its head, in world space. */
   tagAt(i: number, out: Vector3): Vector3;
   dispose(): void;
@@ -301,10 +301,12 @@ export function buildFigures(): Figures {
   const bases: Matrix4[] = [];
   const typing: number[] = [];
   const chain: [Matrix4, Matrix4, Matrix4] = [new Matrix4(), new Matrix4(), new Matrix4()];
+  const limbs: readonly InstancedMesh[] = [upperArm, forearm, thigh, shin, shoe];
 
   return {
     group,
-    pickable: [torso, head],
+    // Hair and faces lie on the head, which a click through them hits.
+    pickable: [torso, head, ...limbs],
     set(characters) {
       shown = characters.slice(0, FLOOR_CAP);
       typing.length = 0;
@@ -363,7 +365,7 @@ export function buildFigures(): Figures {
       hair.short.count = used.short;
       hair.long.count = used.long;
       hair.bun.count = used.bun;
-      for (const mesh of [upperArm, forearm, thigh, shin, shoe]) mesh.count = 2 * shown.length;
+      for (const mesh of limbs) mesh.count = 2 * shown.length;
       bang.count = dot.count = used.bangs;
       flag.count = used.flags;
       for (const mesh of meshes) {
@@ -395,7 +397,7 @@ export function buildFigures(): Figures {
     showFaces(on) {
       face.visible = on;
     },
-    keyAt: (instance) => shown[instance]?.key,
+    keyAt: (mesh, instance) => shown[limbs.includes(mesh as InstancedMesh) ? instance >> 1 : instance]?.key,
     tagAt(i, out) {
       const f = FIGURE[shown[i].pose];
       return out.set(...f.head.at).add(v.set(0, f.marker ? MARKER_LIFT[f.marker] + 0.43 : 0.32, 0)).applyMatrix4(bases[i]);
