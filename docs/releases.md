@@ -142,6 +142,7 @@ The app trusts exactly one public key, the one it was built with. A release sign
 - a manifest announcing a version the AppImage wasn't signed for, and a signature with no version;
 - an older and the same version, not offered;
 - a failed download, a download given up on, and an endpoint that doesn't answer, each leaving the AppImage alone;
+- an AppImage a package owns, checked against a stand-in `pacman` script: one nothing owns is replaced, one already owned is refused and left alone, and one taken over during the download is left alone and installs once the package lets go;
 - the folder a dry run staged, with `HERMES_TEST_RELEASE=<folder>`, installed into a copy at version 0.0.0. Without the variable it does nothing.
 
 The `rust` CI job runs it. `scripts/release/verify.test.sh` covers the release scripts' own check, in the dry-run workflow: a genuine folder passes, and another key, an AppImage for another architecture, a tampered or truncated AppImage, a manifest announcing a version other than the signed one, a staged private key and a missing AppImage are each refused.
