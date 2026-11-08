@@ -10,13 +10,27 @@ const CHOICES: { value: OfficeView; label: string }[] = [
   { value: "off", label: "Off" },
 ];
 
-export const QUALITIES: { value: OfficeQuality; label: string }[] = [
+const QUALITIES: { value: OfficeQuality; label: string }[] = [
   { value: "normal", label: "Normal" },
   { value: "low", label: "Low" },
 ];
 
+/** Normal or Low, in Settings and in the office's tools: Settings takes the office's place, so only the office's applies while it is seen. */
+export function OfficeQualitySwitch(name: { "aria-labelledby": string } | { "aria-label": string }) {
+  const { officeQuality } = useSyncExternalStore(subscribe, getUIPrefs);
+  return (
+    <div className="segmented office-quality" role="group" {...name}>
+      {QUALITIES.map((q) => (
+        <button key={q.value} type="button" aria-pressed={officeQuality === q.value} onClick={() => setUIPrefs({ officeQuality: q.value })}>
+          {q.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function OfficeSettings() {
-  const { agentOffice, officeQuality } = useSyncExternalStore(subscribe, getUIPrefs);
+  const { agentOffice } = useSyncExternalStore(subscribe, getUIPrefs);
   return (
     <SettingsSection title="Agent office">
       <SettingRow
@@ -47,15 +61,7 @@ export function OfficeSettings() {
         name="Office quality"
         nameId="office-quality-label"
         hint="Low draws at most 15 frames a second at a lower resolution, agents type at half the pace, and they appear in their new room instead of walking. It applies to Building, and the office has the same switch."
-        control={
-          <div className="segmented" role="group" aria-labelledby="office-quality-label">
-            {QUALITIES.map((c) => (
-              <button key={c.value} type="button" aria-pressed={officeQuality === c.value} onClick={() => setUIPrefs({ officeQuality: c.value })}>
-                {c.label}
-              </button>
-            ))}
-          </div>
-        }
+        control={<OfficeQualitySwitch aria-labelledby="office-quality-label" />}
       />
     </SettingsSection>
   );

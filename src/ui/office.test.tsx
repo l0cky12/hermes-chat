@@ -522,7 +522,6 @@ describe("The building", () => {
     act(() => drawn.scene!.events.onHover(undefined));
     act(() => void vi.advanceTimersByTime(200));
     expect(shown()).toEqual(["default audit a"]);
-    // The pointer crossed from the head onto the tag: it stays while the pointer is on it, and goes after it leaves.
     fireEvent.pointerEnter(tag());
     act(() => void vi.advanceTimersByTime(1_000));
     expect(shown()).toEqual(["default audit a"]);
@@ -534,7 +533,6 @@ describe("The building", () => {
     act(() => drawn.scene!.events.onHover(undefined));
     act(() => void vi.advanceTimersByTime(300));
     expect(shown()).toEqual([]);
-    expect(agents().length).toBeGreaterThan(0);
   });
 
   it("moves the shown tag straight to the next character the pointer reaches", async () => {

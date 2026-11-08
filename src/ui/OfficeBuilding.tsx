@@ -2,20 +2,19 @@
 // the other profiles' floors, and the card of the one picked. three.js loads with the scene (office3d/scene.ts) the
 // first time this mounts, as its own chunk. Where everyone stands is officeFloors's to say; the scene only draws it.
 // The tags are real buttons named as List names its rows, so the building and List read the same to a screen reader
-// and the arrow keys move between them. A tag shows while the pointer is over its character or it has focus, and stays
-// for the picked one; the rest stay in the tab order, hidden by opacity alone.
+// and the arrow keys move between them.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type RefObject } from "react";
 import { RotateCcw } from "lucide-react";
 import type { Desk, Room } from "../hermes/office";
-import { getUIPrefs, setUIPrefs, subscribe } from "../hermes/uiPrefs";
+import { getUIPrefs, subscribe } from "../hermes/uiPrefs";
 import { EMPTY_BUILDING_MEMORY, EMPTY_FLOOR_MEMORY, ROOM_OF, TEAM_COLORS, officeFloors, type BuildingMemory, type BuildingRoom, type Floor } from "../hermes/officeFloor";
 import type { OfficeScene, ScreenPoint } from "./office3d/scene";
 import { OfficeCard } from "./OfficeCard";
-import { QUALITIES } from "./OfficeSettings";
+import { OfficeQualitySwitch } from "./OfficeSettings";
 import { deskLabel } from "./officeText";
 import { usePageHidden, useWindowFocused } from "./windowState";
 
-const HOVER_GRACE_MS = 250;
+const HEAD_TO_TAG_GRACE_MS = 250;
 
 const ROOM_NAME: Record<BuildingRoom, string> = { workroom: "Workroom", waiting: "Waiting room", trouble: "Trouble room", lounge: "Lounge" };
 
@@ -129,14 +128,12 @@ export function OfficeBuilding({
   const more = useRef<HTMLButtonElement>(null);
   const [scene, setScene] = useState<OfficeScene>();
   const [selected, setSelected] = useState<string>();
-  // The tag shown for the pointer: the one whose character it is over, or over the tag itself. Let go after a short
-  // wait, so crossing the gap between a head and its tag, where the canvas says "nothing", doesn't hide the tag.
   const [hovered, setHovered] = useState<string>();
   const letGo = useRef<ReturnType<typeof setTimeout>>(undefined);
   const hover = useCallback((key: string | undefined) => {
     clearTimeout(letGo.current);
     if (key !== undefined) setHovered(key);
-    else letGo.current = setTimeout(() => setHovered(undefined), HOVER_GRACE_MS);
+    else letGo.current = setTimeout(() => setHovered(undefined), HEAD_TO_TAG_GRACE_MS);
   }, []);
   useEffect(() => () => clearTimeout(letGo.current), []);
   const mode = useSyncExternalStore(subscribeMode, modeNow);
@@ -301,14 +298,7 @@ export function OfficeBuilding({
           {opened === profile ? `${opened}'s floor` : `${opened}'s floor, looked at from ${profile}`}
         </span>
         <span className="office-hint">Drag to turn · scroll to zoom · double-click a room</span>
-        {/* Here as well as in Settings, which takes the office's place: a change there shows only once it is opened again. */}
-        <div className="segmented office-quality" role="group" aria-label="Office quality">
-          {QUALITIES.map((q) => (
-            <button key={q.value} type="button" aria-pressed={quality === q.value} onClick={() => setUIPrefs({ officeQuality: q.value })}>
-              {q.label}
-            </button>
-          ))}
-        </div>
+        <OfficeQualitySwitch aria-label="Office quality" />
         <button className="btn" onClick={() => scene?.resetCamera()} disabled={!scene}>
           <RotateCcw size={13} aria-hidden /> Reset view
         </button>

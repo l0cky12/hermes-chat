@@ -62,7 +62,7 @@ export type UIPrefs = {
   chatSectionsCollapsed: SectionKey[];
   /** How the agent office shows the agents at work: as a 3D building (ADR 0089), as a list, or not at all, with no rail button (ADR 0077). */
   agentOffice: OfficeView;
-  /** How much the office's building may cost: Low draws fewer frames at a lower resolution and has agents appear, not walk. */
+  /** How much the office's building may cost to draw (ADR 0089). */
   officeQuality: OfficeQuality;
   /** How many days a finished entry stays in the inbox before it is dismissed on its own, as if by hand; null: never. */
   inboxAutoDismissDays: number | null;

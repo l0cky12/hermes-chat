@@ -2338,8 +2338,7 @@ label.memory-pick { cursor: pointer; }
   padding: 2px 7px 2px 5px; border: 1px solid var(--line-2); border-left: 3px solid; border-radius: 4px;
   background: color-mix(in srgb, var(--raised) 88%, transparent); color: var(--text); font-size: calc(11rem / 14);
   line-height: 16px; white-space: nowrap;
-  /* Shown for the pointer's character, the picked one and the focused tag. Hidden by opacity, not visibility or display,
-     which would take the tag out of the tab order. */
+  /* Opacity, not visibility or display, which would take the tag out of the tab order (CSS Display 3, section 4). */
   opacity: 0; pointer-events: none;
 }
 .office-tag[data-hover], .office-tag.on, .office-tag:focus-visible { opacity: 1; pointer-events: auto; }

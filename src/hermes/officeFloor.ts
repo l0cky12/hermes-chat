@@ -256,17 +256,17 @@ export function officeFloor(rooms: readonly Room[], memory: FloorMemory, now: nu
       spot = PLAN.door[next.door++];
       pose = "door";
     } else spot = PLAN.seats[a.place][next[a.place]++];
-    // A running agent with no desk and a full line at the door isn't drawn, and its place in the cap goes to another.
     if (!spot) {
       freed++;
       continue;
     }
     characters.push({ key: a.desk.key, room: a.room, desk: a.desk, color: colors.get(a.room.key)!, place: a.place, spot, pose, stale: !!a.desk.stale });
   }
-  // The Workroom and its door are full by now, so only another room's agents can take those places.
+  // A Workroom agent's seat depends on its team's pods, which are given out by now.
+  const seatLeft = (a: Agent) => a.place !== "workroom" && used[a.place] < PLAN.seats[a.place].length;
   for (const a of byNeed) {
     if (freed === 0) break;
-    if (drawn.has(a) || a.place === "workroom" || used[a.place] >= PLAN.seats[a.place].length) continue;
+    if (drawn.has(a) || !seatLeft(a)) continue;
     used[a.place]++;
     freed--;
     characters.push({ key: a.desk.key, room: a.room, desk: a.desk, color: colors.get(a.room.key)!, place: a.place, spot: PLAN.seats[a.place][next[a.place]++], pose: POSE_IN[a.place], stale: !!a.desk.stale });

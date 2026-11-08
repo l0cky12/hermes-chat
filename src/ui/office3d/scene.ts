@@ -52,13 +52,6 @@ export type OfficeScene = {
   dispose(): void;
 };
 
-/**
- * What each quality allows. Normal holds the device pixel ratio at 1.5 at most: past it the cost grows faster than
- * anyone can see. Low is for a computer where the office costs too much: no walking, and a frame cheaper to draw.
- * Typing needs a few distinct poses a second, not smooth motion, and each of its frames redraws the whole building.
- * It is most of what an open office costs, so Low types at half the pace: on a screen at pixel ratio 1, that is all
- * that makes Low cheaper while agents work.
- */
 const QUALITY: Record<OfficeQuality, { maxFps: number; maxDpr: number; walks: boolean; typingFps: number }> = {
   normal: { maxFps: 30, maxDpr: 1.5, walks: true, typingFps: 6 },
   low: { maxFps: 15, maxDpr: 1, walks: false, typingFps: 3 },
@@ -80,8 +73,7 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
   let mode = start.mode;
   let moves = start.moves;
   let quality = start.quality;
-  // Whether agents walk to a new spot; otherwise they appear in it. `moves` still decides typing arms and camera moves.
-  const walking = () => moves && QUALITY[quality].walks;
+  const mayWalk = () => moves && QUALITY[quality].walks;
   const building = buildBuilding(mode);
   const tower = buildTower(mode);
   const figures = buildFigures();
@@ -185,7 +177,6 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     const r = canvas.getBoundingClientRect();
     return new Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   };
-  /** The nearest thing under the pointer: a character, a tower floor, or one walking out, which can't be picked. */
   type Under = { kind: "figure"; key: string } | { kind: "floor"; index: number } | { kind: "leaving" } | { kind: "nothing" };
   const under = (e: MouseEvent): Under => {
     raycaster.setFromCamera(ndc(e), camera);
@@ -203,7 +194,6 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     if (hit.kind === "floor") return events.onFloor(hit.index);
     if (hit.kind !== "leaving") events.onPick(hit.kind === "figure" ? hit.key : undefined);
   };
-  // Hover changes no frame, so it never goes through the pacer.
   let hovered: string | undefined;
   const hover = (key: string | undefined, pointer: boolean) => {
     canvas.style.cursor = pointer ? "pointer" : "";
@@ -258,7 +248,7 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     setFloor(next, profile) {
       const t = performance.now();
       floor = next;
-      crowd.set(next.characters, profile, t, walking());
+      crowd.set(next.characters, profile, t, mayWalk());
       walks = place(t);
       pacer.animating("typing", moves && next.characters.some((c) => c.pose === "typing" && !c.stale), QUALITY[quality].typingFps);
       pacer.invalidate();
@@ -279,7 +269,7 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
     setMotion(next) {
       moves = next;
       if (!moves) pacer.animating("typing", false);
-      if (!walking()) {
+      if (!mayWalk()) {
         crowd.stop();
         walks = place(performance.now());
       }
@@ -289,7 +279,7 @@ export function mountOfficeScene(canvas: HTMLCanvasElement, events: SceneEvents,
       quality = next;
       pacer.setMaxFps(QUALITY[quality].maxFps);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, QUALITY[quality].maxDpr));
-      if (!walking()) {
+      if (!mayWalk()) {
         crowd.stop();
         walks = place(performance.now());
       }

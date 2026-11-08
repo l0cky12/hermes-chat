@@ -77,11 +77,7 @@ export type Figures = {
   group: Group;
   /** Places the characters; drawn on the next frame. The first `onFloor` are the floor's; the rest walk out. */
   set(characters: readonly Placed[], onFloor?: number): void;
-  /**
-   * Moves typing arms for time `t` (ms), a hand up or down for each `beat` (ms), which is how often typing is drawn:
-   * a pose held longer than a frame would show the same pose twice. Whether any character types, so the scene keeps
-   * drawing.
-   */
+  /** Moves typing arms for time `t` (ms), a hand up or down each `beat` (ms). Whether any character types, so the scene keeps drawing. */
   animate(t: number, moves: boolean, beat: number): boolean;
   select(key: string | undefined): void;
   /** The meshes a click can hit, and which character an instance of them is. */

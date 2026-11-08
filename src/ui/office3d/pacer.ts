@@ -37,7 +37,6 @@ const browserClock: Clock = {
  * of something slow it waits on a timer, not on animation frames.
  */
 export function createPacer({ draw, onFrame, maxFps: startFps = 30, clock = browserClock }: { draw: () => void; onFrame?: (frames: number) => void; maxFps?: number; clock?: Clock }): Pacer {
-  // Each mover's own pace; Infinity is "the most", so a mover that asked for that follows a later setMaxFps.
   const moving = new Map<string, number>();
   let maxFps = startFps;
   let fastest = 1000 / maxFps;
@@ -100,7 +99,6 @@ export function createPacer({ draw, onFrame, maxFps: startFps = 30, clock = brow
     setMaxFps(fps) {
       maxFps = fps;
       fastest = 1000 / fps;
-      // A frame already waited for at the old pace is waited for again at the new one.
       stop();
       schedule();
     },
