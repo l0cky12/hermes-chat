@@ -239,11 +239,9 @@ function toLastOpenChat(v: unknown): Record<string, string> | undefined {
   return Object.fromEntries(entries.slice(0, LAST_OPEN_LIMIT)) as Record<string, string>;
 }
 
-/** The most commands `keybindings` keeps, and the most chords for one; a hand-edited document can't grow the prefs without end. */
 const KEYBINDINGS_LIMIT = 100;
 const CHORDS_LIMIT = 8;
 
-/** Overrides as stored: an object of non-empty lists of short strings; undefined when it isn't one. */
 function toKeybindings(v: unknown): Record<string, string[]> | undefined {
   if (!isDoc(v)) return undefined;
   const entries = Object.entries(v)

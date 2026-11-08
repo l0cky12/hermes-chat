@@ -60,7 +60,6 @@ describe("A rebound shortcut", () => {
     expect(palette()).toBeNull();
     await s.user.keyboard("{Control>}j{/Control}");
     expect(focused()).toBe(screen.getByPlaceholderText("Search all chats, including Settled"));
-    // Its own chord closes it too.
     await s.user.keyboard("{Control>}j{/Control}");
     expect(palette()).toBeNull();
     expect(focused()).toBe(composer());
@@ -130,7 +129,6 @@ describe("The Keyboard Shortcuts page", () => {
     expect(screen.getByText(/No key answers an Approval/)).toBeTruthy();
     expect(screen.queryByText("Custom")).toBeNull();
     expect(button("Reset all").hasAttribute("disabled")).toBe(true);
-    // The screenshot shortcut is listed where it is changed, not here.
     expect(screen.getByText("Take a screenshot for the composer")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^Change Take a screenshot/ })).toBeNull();
   });
@@ -143,7 +141,6 @@ describe("The Keyboard Shortcuts page", () => {
     expect(focused()).toBe(capture);
     expect(capture.textContent).toContain("Press the shortcut…");
     expect(button("Save").hasAttribute("disabled")).toBe(true);
-    // Only modifiers: still waiting. The chord shows as pressed, and Search didn't open.
     await s.user.keyboard("{Control>}{/Control}");
     expect(capture.textContent).toContain("Press the shortcut…");
     await s.user.keyboard("{Control>}k{/Control}");
@@ -194,7 +191,6 @@ describe("The Keyboard Shortcuts page", () => {
     expect(button("Save").hasAttribute("disabled")).toBe(false);
     await s.user.click(button("Save"));
     expect(button(/^Change Close the find bar/).getAttribute("aria-label")).toBe("Change Close the find bar (Esc)");
-    // The same as the default, so nothing is kept as an override.
     expect(stored().keybindings ?? {}).toEqual({});
     expect(screen.queryByText("Custom")).toBeNull();
   });

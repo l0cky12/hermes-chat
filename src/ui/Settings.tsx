@@ -1,4 +1,4 @@
-// The Settings screen, in ten tabs. General, ported from the prototype: the connection and Sign out, what shows on
+// The Settings screen, in twelve tabs. General, ported from the prototype: the connection and Sign out, what shows on
 // launch, screenshots, updates, the local cache, older history, importing transcripts, and backups. Appearance: how the app looks on this
 // computer (AppearanceSettings.tsx). Keyboard Shortcuts: every command and its keys, changed here (KeyboardSettings.tsx). Model: the profile's models on Hermes (ModelSettings.tsx), and Idle compaction on this computer
 // (IdleCompactSettings.tsx). Voice: Dictation, Read aloud and voice

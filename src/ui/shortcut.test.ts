@@ -60,11 +60,9 @@ describe("Shortcuts that clash", () => {
     expect(checkShortcut("Ctrl+1").error).toMatch(/left/);
     expect(checkShortcut("Super+2").error).toMatch(/right/);
     expect(checkShortcut("Ctrl+Shift+PageUp").error).toMatch(/Move the tab left/);
-    // A chord matches only with exactly its modifiers, so these are free.
     expect(checkShortcut("Ctrl+Shift+N")).toEqual({});
     expect(checkShortcut("Ctrl+Alt+B")).toEqual({});
     expect(checkShortcut("Ctrl+Shift+1")).toEqual({});
-    // Once the owner moves Search, Ctrl+K is free and the new chord is taken.
     const moved = bindingsOf({ search: ["Ctrl+J"] }, null);
     expect(checkShortcut("Ctrl+K", moved)).toEqual({});
     expect(checkShortcut("Ctrl+J", moved).error).toMatch(/Search all chats/);

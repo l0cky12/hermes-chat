@@ -148,7 +148,6 @@ describe("Which command a key press is", () => {
   it("prefers the command the owner changed when two share a chord, then the first in the table", () => {
     setUIPrefs({ keybindings: { toggleList: ["Ctrl+K"] } });
     expect(pickApp(press("k", "KeyK", { ctrl: true }))).toBe("toggleList");
-    // Both changed: Search comes first in the table.
     setUIPrefs({ keybindings: { toggleList: ["Ctrl+Shift+K"], search: ["Ctrl+Shift+K"] } });
     expect(pickApp(press("k", "KeyK", { ctrl: true, shift: true }))).toBe("search");
     setUIPrefs({ keybindings: { rowDelete: ["ArrowDown"] } });
@@ -166,7 +165,6 @@ describe("Bindings that clash", () => {
         ["toggleList", [COMMANDS.search.title]],
       ]),
     );
-    // Enter in the composer and in the find bar are different controls; so are Ctrl+Enter there, both local.
     expect(conflicts(bindingsOf({ findNext: ["Ctrl+Enter"] }, null), null)).toEqual(new Map());
   });
 

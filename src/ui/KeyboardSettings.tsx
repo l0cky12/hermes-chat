@@ -30,7 +30,6 @@ import {
   type Group,
 } from "./keybindings";
 
-/** The row whose new chord is being pressed, the chord pressed so far, and why it can't be saved. */
 type Capture = { id: CommandId; chord?: Chord; problem?: string };
 
 const ESCAPE = parseChord("Escape")!;
@@ -54,9 +53,7 @@ export function KeyboardSettings() {
 
   const record = (id: CommandId) => (e: KeyboardEvent) => {
     if (composing(e)) return;
-    // Tab and Shift+Tab still reach Save and Cancel.
     if (e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey) return;
-    // Nothing pressed here reaches the app's own shortcuts.
     e.preventDefault();
     e.stopPropagation();
     if (onlyModifiers(e)) return;

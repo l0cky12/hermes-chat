@@ -2196,8 +2196,6 @@ export function Main({
   };
 
   useEffect(() => {
-    // Only chords with Ctrl or Alt, never mid-composition: keybindings.ts refuses a bare key for an app-wide command,
-    // so nothing typed with focus outside an input can answer an Approval or stop a reply.
     const onKey = (e: KeyboardEvent) => {
       if (covered || composing(e)) return;
       // Ctrl+Z outside a text field runs the notice's Undo, as its button does; in one it is always text undo.
@@ -2215,15 +2213,13 @@ export function Main({
         if (!e.repeat) takeScreenshot();
         return;
       }
-      // A control that took the key (a list that uses the same keys, like the queue) keeps it from an app-wide command.
       if (e.defaultPrevented) return;
       const onChat = !covering && !previewCovers && !projectScreenOpen && !searchOpen;
       const command = pickApp(e);
       switch (command) {
         case "chatBelow":
         case "chatAbove": {
-          // The chat above or below the one showing, in Pinned, the Inbox or Working, as the list orders them. Only
-          // while the chat is on screen, and a select keeps Alt+Down to open.
+          // A select keeps Alt+Down to open.
           if (!onChat || (e.target as Element | null)?.tagName === "SELECT") return;
           const { pinned, inbox, working } = chatSections(listed, snoozes, Date.now(), attention.since, pins);
           const order = [...pinned, ...inbox, ...working];
@@ -2430,7 +2426,7 @@ export function Main({
             </button>
           }
         />,
-        // Splitting is Ctrl+\, a tab's menu, or dragging a tab to an edge (ADR 0055); a split pane keeps its Close.
+        // Splitting is its shortcut (Settings → Keyboard Shortcuts), a tab's menu, or dragging a tab to an edge (ADR 0055); a split pane keeps its Close.
         split && (
           <button className="icon-btn" title={`Close the ${paneNames(splitDir)[i].toLowerCase()} pane${isActive ? "" : ` (${chordLabel(keys.toggleSplit[0])})`}`} aria-label={`Close the ${paneNames(splitDir)[i].toLowerCase()} pane`} onClick={() => closePane(p.key)}>
             <X size={16} />
@@ -3095,7 +3091,6 @@ export function Main({
           onSave={(name, f) => tagsStore.saveFilter(name, f)}
           onBulk={(p) => tagsStore.applyBulk(p)}
           onManageTags={() => openTags()}
-          // Search's own chord closes the palette, and the screenshot shortcut closes it to take one.
           passKey={(e) => pickApp(e) === "search" || (!!screenshotShortcut && shortcutOf(e.nativeEvent) === screenshotShortcut)}
         />
       )}

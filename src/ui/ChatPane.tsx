@@ -47,8 +47,8 @@ import { turnsOf, type ReplayKind, type Variant } from "../hermes/replay";
 import type { FollowUp } from "../hermes/uiPrefs";
 import { sttRoute } from "../hermes/sttRoute";
 
-/** The chords a textarea answers with a new line itself. */
 const NATIVE_NEW_LINE: readonly string[] = ["Enter", "Shift+Enter"];
+const insertAsTyping = (text: string) => document.execCommand("insertText", false, text);
 
 /**
  * What a message sent while the chat's reply runs does (ADR 0057). `mode`: what Enter does, the Follow-up behavior
@@ -1570,10 +1570,8 @@ function Composer({
               // Enter queues or steers only while the hint below says so; Dictation hides it.
               if (!(queueing && dictation.active)) send(command === "sendOther");
             } else if (command === "newLine" && !NATIVE_NEW_LINE.includes(chordOf(e)!)) {
-              // The textarea puts in a new line on Enter and Shift+Enter itself. Any other chord is written as typing
-              // is, so the composer's own history (ADR 0095) sees it.
               e.preventDefault();
-              document.execCommand("insertText", false, "\n");
+              insertAsTyping("\n");
             }
           }}
         />

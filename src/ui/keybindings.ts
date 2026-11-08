@@ -104,7 +104,6 @@ export function chordOf(e: KeyLike): Chord | undefined {
 /** A stored string as a chord, if it has a chord's shape. */
 export const parseChord = (s: unknown): Chord | undefined => (typeof s === "string" && CHORD.test(s) ? (s as Chord) : undefined);
 
-/** A chord written in this file; a typo fails at load, not in an owner's hands. */
 function chord(s: string): Chord {
   const c = parseChord(s);
   if (!c) throw new Error(`"${s}" is not a chord`);
@@ -190,7 +189,7 @@ export function checkChord(id: CommandId, chord: Chord, screenshot: string | nul
 /**
  * The chords in use: the owner's overrides over the defaults. An override for a command this version doesn't know is
  * left out; of a known one, a string that isn't a chord, or a chord `checkChord` refuses, is dropped, and a command
- * left with none keeps its defaults. So a hand-edited document can't put a bare key on an app-wide command.
+ * left with none keeps its defaults.
  */
 export function bindingsOf(overrides: Readonly<Record<string, readonly string[]>>, screenshot: string | null): Bindings {
   const out = { ...DEFAULT_BINDINGS } as Record<CommandId, readonly Chord[]>;
