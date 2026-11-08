@@ -10,6 +10,8 @@ export type Pacer = {
    * it says it stopped. While several move, the fastest sets the pace.
    */
   animating(who: string, on: boolean, fps?: number): void;
+  /** Changes the most frames a second, from the next frame on. Movers that asked for the most follow it. */
+  setMaxFps(fps: number): void;
   /** Whether frames may be drawn: the office is on screen and its window has focus. Waking draws what changed. */
   setAwake(awake: boolean): void;
   /** How many frames have been drawn. */
@@ -34,9 +36,11 @@ const browserClock: Clock = {
  * wake draws. While nothing moves and nothing changed, no animation frame is even asked for, and between the frames
  * of something slow it waits on a timer, not on animation frames.
  */
-export function createPacer({ draw, onFrame, maxFps = 30, clock = browserClock }: { draw: () => void; onFrame?: (frames: number) => void; maxFps?: number; clock?: Clock }): Pacer {
+export function createPacer({ draw, onFrame, maxFps: startFps = 30, clock = browserClock }: { draw: () => void; onFrame?: (frames: number) => void; maxFps?: number; clock?: Clock }): Pacer {
+  // Each mover's own pace; Infinity is "the most", so a mover that asked for that follows a later setMaxFps.
   const moving = new Map<string, number>();
-  const fastest = 1000 / maxFps;
+  let maxFps = startFps;
+  let fastest = 1000 / maxFps;
   // The time a frame waits after the last: a change draws as soon as maxFps allows, so turning the camera stays smooth;
   // motion alone waits for the fastest mover's next beat.
   const gap = () => (dirty ? fastest : 1000 / Math.min(maxFps, Math.max(...moving.values())));
@@ -88,9 +92,16 @@ export function createPacer({ draw, onFrame, maxFps = 30, clock = browserClock }
       waiting = undefined;
       schedule();
     },
-    animating(who, on, fps = maxFps) {
+    animating(who, on, fps = Infinity) {
       if (on) moving.set(who, fps);
       else moving.delete(who);
+      schedule();
+    },
+    setMaxFps(fps) {
+      maxFps = fps;
+      fastest = 1000 / fps;
+      // A frame already waited for at the old pace is waited for again at the new one.
+      stop();
       schedule();
     },
     setAwake(on) {
