@@ -34,6 +34,11 @@ pub async fn open(target: &str, remote_port: u16) -> Result<Tunnel, TunnelError>
 /// `open`, giving up sooner when `quick` is set: ssh's TCP connect after `quick`, and the whole tunnel after twice
 /// that. A connection with several routes uses it, so a route that is down doesn't hold up the next (ADR 0056).
 pub async fn open_within(target: &str, remote_port: u16, quick: Option<Duration>) -> Result<Tunnel, TunnelError> {
+    open_through("ssh", target, remote_port, quick).await
+}
+
+/// `open_within` with `program` as ssh.
+async fn open_through(program: &str, target: &str, remote_port: u16, quick: Option<Duration>) -> Result<Tunnel, TunnelError> {
     let target = target.trim();
     // A leading '-' would be read as an ssh option.
     if target.is_empty() || target.starts_with('-') || target.contains(char::is_whitespace) {
@@ -42,7 +47,7 @@ pub async fn open_within(target: &str, remote_port: u16, quick: Option<Duration>
     let local_port = free_port().await.map_err(|e| TunnelError::Spawn(e.to_string()))?;
     let ready_within = quick.map_or(READY_TIMEOUT, |q| q * 2);
     let connect_timeout = quick.map(|q| format!("ConnectTimeout={}", q.as_secs().max(1)));
-    let mut child = background_ssh();
+    let mut child = background(program);
     if let Some(option) = &connect_timeout {
         child.args(["-o", option]);
     }
@@ -99,7 +104,11 @@ pub const PLATFORM_SSH_OPTIONS: &[&str] = &[];
 /// `ssh` with `PLATFORM_SSH_OPTIONS`, run in the background: on Windows without a console window of its own, which
 /// the app (a windowed program) would otherwise open for it.
 pub fn background_ssh() -> Command {
-    let mut command = Command::new("ssh");
+    background("ssh")
+}
+
+fn background(program: &str) -> Command {
+    let mut command = Command::new(program);
     command.args(PLATFORM_SSH_OPTIONS);
     #[cfg(windows)]
     {
@@ -111,4 +120,167 @@ pub fn background_ssh() -> Command {
 
 async fn free_port() -> std::io::Result<u16> {
     Ok(TcpListener::bind(("127.0.0.1", 0)).await?.local_addr()?.port())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::AsyncWriteExt;
+
+    /// A stand-in for ssh: it writes the local end it was told to listen on (`-L <listen>:<host>:<port>`) to
+    /// `<dir>/listen`, takes a second to "sign in", then listens there and forwards each connection to `<host>:<port>`
+    /// here. As real ssh with `ExitOnForwardFailure=yes`, it exits 255 if it can't listen.
+    const FAKE_SSH: &str = r#"
+import os, socket, sys, threading, time
+d, args = sys.argv[1], sys.argv[2:]
+listen, host, port = args[args.index("-L") + 1].rsplit(":", 2)
+with open(os.path.join(d, "listen.tmp"), "w") as f:
+    f.write(listen)
+os.rename(os.path.join(d, "listen.tmp"), os.path.join(d, "listen"))
+time.sleep(1)
+if listen.startswith("/"):
+    os.umask(0o177)
+    srv = socket.socket(socket.AF_UNIX)
+    srv.bind(listen)
+else:
+    h, p = listen.rsplit(":", 1)
+    srv = socket.socket()
+    try:
+        srv.bind((h, int(p)))
+    except OSError:
+        sys.stderr.write(f"bind [{h}]:{p}: Address already in use\nCould not request local forwarding.\n")
+        sys.exit(255)
+srv.listen(16)
+def pump(a, b):
+    try:
+        while True:
+            data = a.recv(65536)
+            if not data:
+                break
+            b.sendall(data)
+    except OSError:
+        pass
+    for s in (a, b):
+        try:
+            s.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+def handle(c):
+    r = socket.create_connection((host, int(port)))
+    threading.Thread(target=pump, args=(c, r), daemon=True).start()
+    pump(r, c)
+while True:
+    c, _ = srv.accept()
+    threading.Thread(target=handle, args=(c,), daemon=True).start()
+"#;
+
+    struct FakeSsh {
+        dir: PathBuf,
+        program: String,
+    }
+
+    impl FakeSsh {
+        fn new(name: &str) -> FakeSsh {
+            let dir = std::env::temp_dir().join(format!("hermes-chat-fake-tunnel-ssh-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("fake.py"), FAKE_SSH).unwrap();
+            let program = dir.join("ssh");
+            std::fs::write(&program, format!("#!/bin/sh\nexec python3 {}/fake.py {} \"$@\"\n", dir.display(), dir.display())).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+            FakeSsh { program: program.to_str().unwrap().to_owned(), dir }
+        }
+
+        async fn listen(&self) -> String {
+            for _ in 0..200 {
+                if let Ok(listen) = std::fs::read_to_string(self.dir.join("listen")) {
+                    return listen;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            panic!("the fake ssh never started");
+        }
+    }
+
+    impl Drop for FakeSsh {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// One HTTP request off `s`: its head and a `Content-Length` body.
+    async fn read_request(s: &mut TcpStream) -> String {
+        let mut got = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let text = String::from_utf8_lossy(&got).into_owned();
+            if let Some(head_end) = text.find("\r\n\r\n") {
+                let length = text[..head_end].lines().find_map(|l| l.strip_prefix("Content-Length: ")).map_or(0, |n| n.trim().parse().unwrap());
+                if got.len() >= head_end + 4 + length {
+                    return text;
+                }
+            }
+            match s.read(&mut buf).await {
+                Ok(0) | Err(_) => return String::from_utf8_lossy(&got).into_owned(),
+                Ok(n) => got.extend_from_slice(&buf[..n]),
+            }
+        }
+    }
+
+    /// A Hermes-shaped HTTP server on `listener` that writes down every request it gets.
+    fn serve_http(listener: TcpListener) -> Arc<Mutex<Vec<String>>> {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let kept = seen.clone();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = listener.accept().await {
+                let kept = kept.clone();
+                tokio::spawn(async move {
+                    let request = read_request(&mut s).await;
+                    kept.lock().unwrap().push(request);
+                    let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await;
+                });
+            }
+        });
+        seen
+    }
+
+    #[tokio::test]
+    async fn a_program_that_takes_the_tunnels_port_first_never_gets_the_password() {
+        let dashboard = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let dashboard_port = dashboard.local_addr().unwrap().port();
+        let dashboard = serve_http(dashboard);
+        let ssh = FakeSsh::new("port-race");
+
+        let opening = tokio::spawn({
+            let program = ssh.program.clone();
+            async move { open_through(&program, "me@hermes", dashboard_port, None).await }
+        });
+        // Another program on this computer watches for the tunnel's local end and takes it while ssh signs in.
+        let listen = ssh.listen().await;
+        let mut thief = None;
+        if let Some(port) = listen.strip_prefix("127.0.0.1:") {
+            thief = Some(serve_http(TcpListener::bind(("127.0.0.1", port.parse::<u16>().unwrap())).await.unwrap()));
+        }
+        let tunnel = opening.await.unwrap().expect("the tunnel opens");
+
+        let password = "correct-horse-battery-staple";
+        let body = format!(r#"{{"username":"liam","password":"{password}"}}"#);
+        let mut s = TcpStream::connect(("127.0.0.1", tunnel.local_port)).await.unwrap();
+        s.write_all(
+            format!("POST /api/auth/password-login HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
+        let mut answer = String::new();
+        tokio::time::timeout(Duration::from_secs(5), s.read_to_string(&mut answer)).await.expect("an answer").unwrap();
+
+        let stolen: Vec<String> = thief.map(|t| t.lock().unwrap().clone()).unwrap_or_default();
+        assert!(stolen.iter().all(|r| !r.contains(password)), "the password went to the program that took the port: {stolen:?}");
+        assert!(dashboard.lock().unwrap().iter().any(|r| r.contains(password)), "the sign-in reached the dashboard through ssh");
+        assert!(TcpListener::bind(("127.0.0.1", tunnel.local_port)).await.is_err(), "the tunnel's port is held, so no other program can listen on it");
+    }
 }
