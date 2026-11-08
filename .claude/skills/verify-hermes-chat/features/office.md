@@ -13,12 +13,14 @@ The rail's Office button opens the agent office in place of the chat panes. By d
 - `floors`: each profile is a floor. The shown profile's is open; the others are `.office-floor-tag` buttons on the tower beside the building, each with its agent count and a "!" when one there waits or failed. One opens that floor without switching the app's profile; `.office-floor-open` says which floor is open.
 - `live`: while the office is on screen, the app sends `session.active_list` every 15 s, so a reply started in another profile shows on that floor within about 15 s.
 - `walk`: an agent whose state moves it to another room walks there along the hallway in one to two seconds; one that leaves the floor walks out of the front door. Frames are drawn only while someone walks.
+- `quality`: Settings → Chats → Office quality, Normal or Low, applies to the open building at once. Low draws at most 15 frames a second at pixel ratio 1, and agents appear in their new room instead of walking.
+- `tags`: a tag is invisible (opacity 0) until the pointer is over its character, it has keyboard focus, or it is picked. A click on a hidden tag lands on the canvas, so hover the character first or Tab to the tag; `.office-tag[data-hover]` marks the one the pointer holds.
 - `home`: a Lounge agent goes home 30 minutes after it last changed state, or once its inbox entry is dismissed.
 
 ## How to get to it (user POV)
 
 - The Office button on the rail.
-- Settings (Ctrl+,) → Chats → Office, for Building, List or Off.
+- Settings (Ctrl+,) → Chats → Office, for Building, List or Off, and Office quality for Normal or Low.
 
 ## Driving it with wd.mjs
 
