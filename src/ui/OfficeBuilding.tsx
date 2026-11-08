@@ -7,10 +7,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type RefObject } from "react";
 import { RotateCcw } from "lucide-react";
 import type { Desk, Room } from "../hermes/office";
-import { getUIPrefs, subscribe } from "../hermes/uiPrefs";
+import { getUIPrefs, setUIPrefs, subscribe } from "../hermes/uiPrefs";
 import { EMPTY_BUILDING_MEMORY, EMPTY_FLOOR_MEMORY, ROOM_OF, TEAM_COLORS, officeFloors, type BuildingMemory, type BuildingRoom, type Floor } from "../hermes/officeFloor";
 import type { OfficeScene, ScreenPoint } from "./office3d/scene";
 import { OfficeCard } from "./OfficeCard";
+import { QUALITIES } from "./OfficeSettings";
 import { deskLabel } from "./officeText";
 import { usePageHidden, useWindowFocused } from "./windowState";
 
@@ -300,6 +301,14 @@ export function OfficeBuilding({
           {opened === profile ? `${opened}'s floor` : `${opened}'s floor, looked at from ${profile}`}
         </span>
         <span className="office-hint">Drag to turn · scroll to zoom · double-click a room</span>
+        {/* Here as well as in Settings, which takes the office's place: a change there shows only once it is opened again. */}
+        <div className="segmented office-quality" role="group" aria-label="Office quality">
+          {QUALITIES.map((q) => (
+            <button key={q.value} type="button" aria-pressed={quality === q.value} onClick={() => setUIPrefs({ officeQuality: q.value })}>
+              {q.label}
+            </button>
+          ))}
+        </div>
         <button className="btn" onClick={() => scene?.resetCamera()} disabled={!scene}>
           <RotateCcw size={13} aria-hidden /> Reset view
         </button>

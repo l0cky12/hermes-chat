@@ -546,17 +546,20 @@ describe("The building", () => {
     expect(Array.from(document.querySelectorAll("[data-hover]")).map((t) => t.getAttribute("data-desk"))).toEqual([keys[1]]);
   });
 
-  it("applies the office's quality to the open scene at once, without drawing a new one", async () => {
-    office("building");
+  it("switches quality from the open office, applying it to the scene at once without drawing a new one", async () => {
+    const { user } = office("building");
     await waitFor(() => expect(drawn.scene?.floor).toBeTruthy());
     const scene = drawn.scene!;
     expect(scene.quality).toBe("normal");
-    act(() => void setUIPrefs({ officeQuality: "low" }));
+    const group = screen.getByRole("group", { name: "Office quality" });
+    await user.click(within(group).getByRole("button", { name: "Low" }));
+    expect(getUIPrefs().officeQuality).toBe("low");
     await waitFor(() => expect(scene.quality).toBe("low"));
+    expect(within(group).getByRole("button", { name: "Low" }).getAttribute("aria-pressed")).toBe("true");
     expect(drawn.mounts).toBe(1);
     expect(drawn.scene).toBe(scene);
     expect(scene.disposed).toBe(false);
-    act(() => void setUIPrefs({ officeQuality: "normal" }));
+    await user.click(within(group).getByRole("button", { name: "Normal" }));
     await waitFor(() => expect(scene.quality).toBe("normal"));
   });
 

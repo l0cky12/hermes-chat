@@ -10,7 +10,7 @@ const CHOICES: { value: OfficeView; label: string }[] = [
   { value: "off", label: "Off" },
 ];
 
-const QUALITIES: { value: OfficeQuality; label: string }[] = [
+export const QUALITIES: { value: OfficeQuality; label: string }[] = [
   { value: "normal", label: "Normal" },
   { value: "low", label: "Low" },
 ];
