@@ -4,10 +4,12 @@
     "windows": [
       {
         "title": "Hermes Chat",
+        "create": false,
         "width": 1280,
         "height": 820,
         "minWidth": 760,
         "minHeight": 500,
+        "dragDropEnabled": false,
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9333"
       }
     ]

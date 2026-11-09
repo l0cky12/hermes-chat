@@ -22,4 +22,11 @@ describe("The app's windows", () => {
     const strip = ({ dragDropEnabled: _, ...rest }: Record<string, unknown>) => rest;
     expect(read("tauri.windows.conf.json").map(strip)).toEqual(read("tauri.conf.json").map(strip));
   });
+
+  it("are the same in the Windows smoke build apart from its DevTools port, since its config replaces the whole list too", () => {
+    const smoke = JSON.parse(readFileSync(".github/windows-smoke/tauri.smoke.conf.json", "utf8")).app.windows as Record<string, unknown>[];
+    for (const w of smoke) expect(w.additionalBrowserArgs, "msedgedriver attaches to this port").toContain("--remote-debugging-port=");
+    const strip = ({ additionalBrowserArgs: _, ...rest }: Record<string, unknown>) => rest;
+    expect(smoke.map(strip)).toEqual(read("tauri.windows.conf.json"));
+  });
 });
