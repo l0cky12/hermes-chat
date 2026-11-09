@@ -28,6 +28,7 @@
 // HV_LIST=<n> adds n Active, read chats to `default`, one an hour apart, so its Inbox is longer than the list panel.
 // HV_DELAY_MS=<ms> holds each /api/ answer that long, as a distant server's round trip would.
 // HV_FAIL_PATCH=<id>,<id> answers 503 to every edit (PATCH) of those sessions, as a server that fails a write does.
+// HV_MEMORY_URL=<url> is the address `default`'s Honcho gives for its documentation and its API key's "Get one" link.
 // Read-only check of what the server holds (the side-effect proof): `GET /__state` returns sessions and transcripts.
 // The same JSON is rewritten to <state-file> after every change, so it survives the bridge being stopped.
 import { createHash } from "node:crypto";
@@ -35,6 +36,7 @@ import { writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { FakeHermes, row } from "../../../../src/hermes/fakeHermes";
+import { HONCHO, RETAINDB } from "../../../../src/hermes/fakeMemoryProviders";
 import type { Pipe } from "../../../../src/hermes/pipe";
 
 const port = Number(process.argv[2] ?? 47990);
@@ -103,6 +105,11 @@ server.mcp.catalogEntries = [
 server.souls.default = "You are Hermes, the house's ops assistant. Answer briefly and name the command to run.\n";
 for (const name of ["restic-unlock", "nginx-rotate", "vpn-mtu", "trip-planner", "disk-usage", "cert-renew"])
   server.skills.add("default", { dir: `/home/liam/.hermes/skills/ops/${name}`, source: "agent", category: "ops" }, `---\nname: ${name}\ndescription: Synthetic ${name} skill.\n---\n\n## When to Use\n\nWhen asked about ${name}.\n`);
+
+const memoryUrl = process.env.HV_MEMORY_URL;
+const honcho = memoryUrl ? { ...HONCHO, docsUrl: memoryUrl, fields: HONCHO.fields.map((f) => (f.kind === "secret" ? { ...f, url: memoryUrl } : f)) } : HONCHO;
+server.memoryProviders.add(honcho, { ...RETAINDB });
+server.memoryProviders.active = { default: "honcho", work: "" };
 
 // MCP servers as each profile's config holds them; the `.env` (tokens) stays out.
 const dump = () => JSON.stringify({ sessions: server.sessions, transcripts: server.transcripts, mcp: server.mcp.servers, kanban: server.kanban.boards }, null, 2);

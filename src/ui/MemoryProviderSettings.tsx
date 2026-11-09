@@ -4,7 +4,7 @@
 // change its settings, copy another profile's to share its memory, and install what a provider needs. Nothing is
 // written until the owner saves; every write is checked against a fresh read and read back. Typed secrets live only in
 // this form and go only to Hermes.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, Check, Copy, Download, ExternalLink, Info, RefreshCw, ChevronRight } from "lucide-react";
 import {
   MemoryProvidersUnsupported,
@@ -21,7 +21,9 @@ import {
   type ProviderSetup,
   type SetupStep,
 } from "../hermes/memoryProviders";
+import { linkTarget } from "../hermes/preview";
 import { SettingNote, SettingsSection } from "./SettingRows";
+import { PreviewLink } from "./previewContext";
 
 type Notice = { tone: "ok" | "warn" | "error"; text: string };
 type Busy = "use" | "save" | "setup" | "copy";
@@ -430,10 +432,10 @@ export function MemoryProviderSettings({
           />
         )}
         {hint && <span className={`field-hint block ${problem ? "err" : ""}`}>{hint}</span>}
-        {f.url && f.kind === "secret" && (
-          <a className="field-hint" href={f.url} target="_blank" rel="noreferrer">
+        {f.kind === "secret" && (
+          <WebPageLink href={f.url} className="field-hint">
             Get one <ExternalLink size={11} />
-          </a>
+          </WebPageLink>
         )}
       </label>
     );
@@ -651,11 +653,9 @@ export function MemoryProviderSettings({
               )}
             </>
           )}
-          {form.docsUrl && (
-            <a className="link small provider-docs" href={form.docsUrl} target="_blank" rel="noreferrer">
-              {form.label} documentation <ExternalLink size={11} />
-            </a>
-          )}
+          <WebPageLink href={form.docsUrl} className="link small provider-docs">
+            {form.label} documentation <ExternalLink size={11} />
+          </WebPageLink>
           <div className="confirm-actions">
             {dirty && (
               <button className="btn" disabled={!!busy} onClick={() => setEdits({})}>
@@ -816,5 +816,15 @@ export function MemoryProviderSettings({
         </SettingsSection>
       )}
     </>
+  );
+}
+
+function WebPageLink({ href, className, children }: { href: string; className: string; children: ReactNode }) {
+  const link = linkTarget(href, location.origin);
+  if (!link || link.kind === "elsewhere") return null;
+  return (
+    <PreviewLink href={link.url} className={className} click="menu">
+      {children}
+    </PreviewLink>
   );
 }

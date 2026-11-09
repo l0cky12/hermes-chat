@@ -17,6 +17,7 @@ export type FakeField = {
   placeholder?: string;
   /** Honcho's workspace and AI peer: blank means the profile's host, which Hermes shows as the placeholder. */
   hostWhenBlank?: boolean;
+  url?: string;
 };
 
 export type FakeProvider = {
@@ -32,6 +33,7 @@ export type FakeProvider = {
   installed?: boolean;
   /** Setup prepares its Python packages in an environment the running Hermes doesn't use until it restarts. */
   restartAfterSetup?: boolean;
+  docsUrl?: string;
 };
 
 const answered = (status: number, detail: string) => new Error(`The dashboard answered ${status}: ${JSON.stringify({ detail })}`);
@@ -167,6 +169,7 @@ export class FakeMemoryProviders {
       options: (f.options ?? []).map((o) => ({ value: o, label: o, description: "" })),
       value: f.kind === "secret" ? "" : (v[f.key] ?? f.default ?? ""),
       is_set: f.kind === "secret" ? this.secretSet(profile, p.name).has(f.key) : f.key in v,
+      ...(f.url ? { url: f.url } : {}),
     }));
   }
 
@@ -229,7 +232,7 @@ export class FakeMemoryProviders {
       }
       if (req.method === "GET") {
         if (!p || (declared ? p.surface !== "declared" : p.surface !== "legacy")) return declared ? { name, label: name, docs_url: "", fields: [] } : { name, label: name, fields: [], setup: {} };
-        return { name, label: p.name[0].toUpperCase() + p.name.slice(1), docs_url: declared ? `https://docs.example/${name}` : undefined, fields: this.fields(profile, p) };
+        return { name, label: p.name[0].toUpperCase() + p.name.slice(1), docs_url: declared ? (p.docsUrl ?? `https://docs.example/${name}`) : undefined, fields: this.fields(profile, p) };
       }
       if (req.method !== "PUT") throw answered(405, "Method Not Allowed");
       if (!p) throw answered(404, `Unknown memory provider: ${name}`);

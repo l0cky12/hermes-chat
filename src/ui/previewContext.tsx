@@ -138,22 +138,39 @@ function LinkMenu({
  * server (ADR 0052); anything else does nothing, since following it would replace Hermes Chat's own window. Same-page
  * `#anchors` still scroll, and keep WebKit's own menu. A link whose address react-markdown emptied (`file:`,
  * `javascript:`) has nothing to open or copy, so it gets no menu, and not WebKit's either: its Open Link would load this
- * window's own page.
+ * window's own page. On a screen that covers the Preview, such as Settings, `click="menu"` opens the link menu instead, so
+ * the owner picks where it opens.
  */
-export function PreviewLink({ href, children, title }: { href?: string; children?: ReactNode; title?: string }) {
+export function PreviewLink({
+  href,
+  children,
+  title,
+  className,
+  click = "preview",
+}: {
+  href?: string;
+  children?: ReactNode;
+  title?: string;
+  className?: string;
+  click?: "preview" | "menu";
+}) {
   const open = useOpenPreview();
   const menu = useLinkMenu();
   const link = linkTarget(href, location.origin);
   const url = link && link.kind !== "elsewhere" ? link.url : undefined;
-  const follow = (e: ReactMouseEvent) => {
+  const follow = (e: ReactMouseEvent<HTMLElement>) => {
     if (href?.startsWith("#") && e.type === "click") return;
     e.preventDefault();
-    if (url && e.type === "click") open?.({ kind: "web", url });
+    if (e.type !== "click") return;
+    if (click === "menu") {
+      if (link) menu?.(e, link);
+    } else if (url) open?.({ kind: "web", url });
   };
   return (
     <a
       href={href}
-      title={title ?? (url ? `${url}\nOpens in the preview${link?.kind === "serverPage" ? ", from the Hermes server" : ""}` : href)}
+      className={className}
+      title={title ?? (url && click === "preview" ? `${url}\nOpens in the preview${link?.kind === "serverPage" ? ", from the Hermes server" : ""}` : (url ?? href))}
       onClick={follow}
       onAuxClick={follow}
       onContextMenu={

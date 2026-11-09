@@ -1,35 +1,40 @@
 // @vitest-environment jsdom
 // Settings → Memory → External memory on screen, against the fake dashboard: the profiles' providers and shared stores,
 // switching, saving settings, copying another profile's to share its memory, installing, refusals and unsaved changes.
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeHermes } from "../hermes/fakeHermes";
-import { BYTEROVER, HONCHO, RETAINDB } from "../hermes/fakeMemoryProviders";
+import { BYTEROVER, HONCHO, RETAINDB, type FakeProvider } from "../hermes/fakeMemoryProviders";
 import { connect } from "../hermes/transport";
 import { MemoryProviderSettings } from "./MemoryProviderSettings";
+import { LinksProvider } from "./previewContext";
 import { SettingsScreen } from "./Settings";
 import { appearanceStore } from "./appearance";
 import { searchText } from "./settingsSearch";
 
 afterEach(cleanup);
 
-async function shown(opts: { profile?: string; connected?: boolean } = {}) {
+async function shown(opts: { profile?: string; connected?: boolean; honcho?: Partial<FakeProvider> } = {}) {
   const server = new FakeHermes();
   server.otherProfiles = { research: [], work: [] };
-  const fake = server.memoryProviders.add({ ...HONCHO, profiles: ["default", "research"] }, { ...RETAINDB }, { ...BYTEROVER });
+  const fake = server.memoryProviders.add({ ...HONCHO, profiles: ["default", "research"], ...opts.honcho }, { ...RETAINDB }, { ...BYTEROVER });
   fake.active = { default: "honcho", research: "honcho", work: "" };
   fake.set("default", "honcho", { workspace: "shared-ws", aiPeer: "hermes", peerName: "owner" });
   fake.setSecret("default", "honcho", "apiKey");
   const hermes = await connect(server.openPipe, "default");
   const user = userEvent.setup();
   const dirty: boolean[] = [];
+  const preview = vi.fn();
+  const openInBrowser = vi.fn(async () => "Firefox");
   const view = (discardSignal = 0) => (
-    <MemoryProviderSettings api={hermes.memoryProviders} profile={opts.profile ?? "default"} connected={opts.connected ?? true} onDirtyChange={(d) => dirty.push(d)} discardSignal={discardSignal} />
+    <LinksProvider preview={preview} web={{ openInBrowser }} onToast={() => {}}>
+      <MemoryProviderSettings api={hermes.memoryProviders} profile={opts.profile ?? "default"} connected={opts.connected ?? true} onDirtyChange={(d) => dirty.push(d)} discardSignal={discardSignal} />
+    </LinksProvider>
   );
   const r = render(view());
   if (opts.connected !== false) await screen.findByRole("table", { name: "Memory provider by profile" });
-  return { server, fake, user, dirty, rerender: (signal: number) => r.rerender(view(signal)) };
+  return { server, fake, user, dirty, preview, openInBrowser, rerender: (signal: number) => r.rerender(view(signal)) };
 }
 
 const table = () => screen.getByRole("table", { name: "Memory provider by profile" });
@@ -291,4 +296,31 @@ describe("Settings → Memory → External memory as cards of rows (ADR 0059)", 
     expect(done.closest(".set-more")).toBeNull();
     expect(done.closest(".set-card")).toBeTruthy();
   });
+
+  it("shows no link for an address the server sent that isn't a web page (#345)", async () => {
+    const { user } = await shown({ honcho: withLinks("file:///etc/passwd") });
+    await user.click(within(await providers("default")).getByRole("button", { name: /honcho/ }));
+    await screen.findByRole("group", { name: "honcho settings for default" });
+    expect(document.querySelector('a[href="file:///etc/passwd"]')).toBeNull();
+    expect(screen.queryByText(/Get one/)).toBeNull();
+    expect(screen.queryByText(/Honcho documentation/)).toBeNull();
+  });
+
+  it("opens the link menu on a click of Get one or the provider's documentation, and the browser from it (#345)", async () => {
+    const { user, preview, openInBrowser } = await shown({ honcho: withLinks("https://example.com/docs") });
+    await user.click(within(await providers("default")).getByRole("button", { name: /honcho/ }));
+    for (const name of [/Get one/, /Honcho documentation/]) {
+      await user.click(await screen.findByRole("link", { name }));
+      const menu = screen.getByRole("menu", { name: "Link" });
+      expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Open in the Preview", "Open in your browser", "Copy link"]);
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("menu")).toBeNull();
+    }
+    fireEvent.contextMenu(screen.getByRole("link", { name: /Honcho documentation/ }));
+    await user.click(within(screen.getByRole("menu", { name: "Link" })).getByRole("menuitem", { name: "Open in your browser" }));
+    expect(openInBrowser).toHaveBeenCalledWith("https://example.com/docs");
+    expect(preview).not.toHaveBeenCalled();
+  });
 });
+
+const withLinks = (url: string): Partial<FakeProvider> => ({ docsUrl: url, fields: HONCHO.fields.map((f) => (f.kind === "secret" ? { ...f, url } : f)) });
