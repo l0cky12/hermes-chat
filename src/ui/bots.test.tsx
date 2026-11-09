@@ -116,7 +116,7 @@ describe("The Bots view", () => {
     expect(within(head).queryByText("Settled")).toBeNull();
     await user.click(within(head).getByRole("button", { name: "More" }));
     const menu = screen.getByRole("menu", { name: /More actions for Bot Chat/ });
-    expect(within(menu).getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Export as Markdown…"]);
+    expect(within(menu).getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Export…"]);
   });
 
   it("starts a Bot Chat once for a bot without one, and sends nothing", async () => {

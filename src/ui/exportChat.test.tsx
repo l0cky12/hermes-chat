@@ -11,8 +11,8 @@ import { Main } from "../App";
 import { ExportChatDialog } from "./ExportChat";
 
 const tauri = vi.hoisted(() => ({
-  saved: [] as { markdown: string; fileName: string }[],
-  invoke: async (cmd: string, args?: { markdown: string; fileName: string }) => {
+  saved: [] as { text: string; fileName: string; format: string }[],
+  invoke: async (cmd: string, args?: { text: string; fileName: string; format: string }) => {
     if (cmd !== "chat_export") throw new Error(`${cmd} isn't available in tests`);
     tauri.saved.push(args!);
     return `/home/liam/exports/${args!.fileName}`;
@@ -56,7 +56,7 @@ describe("Exporting from the chat's More menu", () => {
     await act(async () => void (await hermes.idle()));
 
     await user.click(screen.getByRole("button", { name: "More" }));
-    await user.click(screen.getByRole("menuitem", { name: "Export as Markdown…" }));
+    await user.click(screen.getByRole("menuitem", { name: "Export…" }));
     const dialog = screen.getByRole("dialog", { name: "Export “Deploy keys”" });
     expect((within(dialog).getByRole("checkbox", { name: /Tool calls and Approvals/ }) as HTMLInputElement).checked).toBe(false);
     expect((within(dialog).getByRole("checkbox", { name: /Redact API key/ }) as HTMLInputElement).checked).toBe(true);
@@ -66,9 +66,9 @@ describe("Exporting from the chat's More menu", () => {
 
     await user.click(within(dialog).getByRole("button", { name: "Save…" }));
     expect(tauri.saved).toHaveLength(1);
-    expect(tauri.saved[0].fileName).toBe("Deploy keys.md");
-    expect(tauri.saved[0].markdown).not.toContain(KEY);
-    expect(tauri.saved[0].markdown).not.toContain("DB_HOST");
+    expect(tauri.saved[0]).toMatchObject({ fileName: "Deploy keys.md", format: "markdown" });
+    expect(tauri.saved[0].text).not.toContain(KEY);
+    expect(tauri.saved[0].text).not.toContain("DB_HOST");
     expect((await screen.findByRole("status")).textContent).toContain("Exported to /home/liam/exports/Deploy keys.md.");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "More" }));

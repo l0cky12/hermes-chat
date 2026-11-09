@@ -165,7 +165,7 @@ async function clipboardImages(): Promise<File[]> {
  * The header's More (⋯) menu: the chat's less-used actions, each with its name. It opens below its button, at the
  * button's right edge, and the arrow keys move between its items (ChatMenu.tsx's Menu). `onDelete`, left out while a
  * reply runs, adds Delete chat… last; it asks first (DeleteChat.tsx), and a reply starting meanwhile takes the question
- * away for good. Export as Markdown… opens the Export dialog (ExportChat.tsx); `onExport` gets its notice once saved.
+ * away for good. Export… opens the Export dialog (ExportChat.tsx); `onExport` gets its notice once saved.
  */
 function MoreMenu({
   chat,
@@ -229,7 +229,7 @@ function MoreMenu({
       </button>
       {at && (
         <Menu label={`More actions for ${chat.title}`} x={at.x} y={at.y} onClose={close}>
-          {onExport && item("Export as Markdown…", <FileDown size={15} />, () => setExporting(true))}
+          {onExport && item("Export…", <FileDown size={15} />, () => setExporting(true))}
           {/* A Bot Chat is opened from its bot's row, found by its title (ADR 0066): no link to it by id, and nothing
               that would retire it, which would leave its bot to start another. */}
           {onCopyLink && !isBotChat(chat) && item("Copy chat link", <Link2 size={15} />, onCopyLink, "Copy a link that opens this chat in Hermes Chat on this computer")}

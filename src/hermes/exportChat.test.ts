@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
-import { FIRST_DRAFT, chatMarkdown, exportFileName, exportPreview, saveExport, type ExportDraft } from "./exportChat";
+import { FIRST_DRAFT, chatJson, chatMarkdown, exportFileName, exportPreview, saveExport, saveImage, type ExportDraft } from "./exportChat";
 import { planImport } from "./importTranscripts";
 import type { ApprovalChoice, Chat, Item } from "./model";
 
@@ -177,6 +177,54 @@ describe("A chat as Markdown", () => {
   });
 });
 
+describe("A chat as JSON", () => {
+  const items: Item[] = [
+    { kind: "user", id: "u1", text: "Is the backup running?", at: 1_762_092_300_000 },
+    { kind: "approval", ...offered, id: "ap", requestId: "req-1", command: "systemctl restart backup", description: "Restart", answer: "once" },
+    { kind: "user", id: "u2", text: "Also check the disk", at: 1_762_092_301_000, steer: true },
+    { kind: "assistant", id: "a1", text: "It runs now." },
+    { kind: "thinking", id: "r1", text: "Nothing more to do." },
+  ];
+  const parse = (text: string) => JSON.parse(text) as Record<string, unknown>[];
+
+  it("is one Hermes session: a row without a known time has none, a steer is marked, and thinking at the end is its own row", () => {
+    const usage = { input: 1200, output: 300, calls: 2, cost: { kind: "estimated" as const, usd: 0.0123 }, readAt: 0 };
+    const text = chatJson(chat(items, { model: { provider: "anthropic", model: "claude-x" }, usage }), AT);
+    expect(text.startsWith('[\n  {\n    "id": "20261102_140500_abc123",')).toBe(true);
+    expect(text.endsWith("]\n")).toBe(true);
+    const [s] = parse(text);
+    expect(s).toMatchObject({ title: "Fix nightly backup cron", model: "claude-x", started_at: 1_762_092_300, input_tokens: 1200, output_tokens: 300, api_call_count: 2, estimated_cost_usd: 0.0123 });
+    expect(s).not.toHaveProperty("source");
+    expect(s.messages).toEqual([
+      { role: "user", content: "Is the backup running?", timestamp: 1_762_092_300 },
+      { role: "user", content: "Also check the disk", timestamp: 1_762_092_301, display_kind: "steer" },
+      { role: "assistant", content: "It runs now." },
+      { role: "assistant", content: "", reasoning: "Nothing more to do." },
+    ]);
+    const notes = (s.hermes_chat_export as { notes: string[] }).notes;
+    expect(notes).toContain("Approvals aren't in a JSON export: Hermes's session format has no place for them.");
+    expect(notes.at(-1)).toMatch(/^This file may contain sensitive information\. .* replaced with \[redacted\] \(0 places in this file\)/);
+  });
+
+  it("names a file .json from the title as the file has it, and leaves out Approvals' note when tool calls are left out", () => {
+    const p = exportPreview(chat(items, { title: "Backup on db-1" }), { ...FIRST_DRAFT, picked: ["db-1"] }, AT, "json");
+    expect(p.fileName).toBe("Backup on [redacted].json");
+    const [s] = parse(p.text);
+    expect(s.title).toBe("Backup on [redacted]");
+    expect((s.hermes_chat_export as { notes: string[] }).notes.join("\n")).not.toMatch(/Approvals aren't/);
+  });
+});
+
+describe("Saving an image", () => {
+  it("hands the PNG and its file name to the Save dialog, and says where it went", async () => {
+    const saved: string[][] = [];
+    const notice = await saveImage("iVBORw0KGgo=", "Fix.png", async (png, name) => (saved.push([png, name]), "/home/liam/Fix.png"));
+    expect(saved).toEqual([["iVBORw0KGgo=", "Fix.png"]]);
+    expect(notice).toMatch(/^Exported to \/home\/liam\/Fix\.png\./);
+    expect(await saveImage("iVBORw0KGgo=", "Fix.png", async () => null)).toBeUndefined();
+  });
+});
+
 describe("The suggested file name", () => {
   it("is the title as a Markdown file name", () => {
     expect(exportFileName("Fix nightly backup cron")).toBe("Fix nightly backup cron.md");
@@ -191,17 +239,17 @@ describe("The suggested file name", () => {
 describe("Saving an export", () => {
   it("hands the Markdown and file name to the Save dialog, and says where it went", async () => {
     const saved: string[][] = [];
-    const notice = await saveExport("# Fix\n", "Fix.md", async (md, name) => (saved.push([md, name]), "/home/liam/notes/Fix.md"));
-    expect(saved).toEqual([["# Fix\n", "Fix.md"]]);
+    const notice = await saveExport("# Fix\n", "Fix.md", "markdown", async (md, name, format) => (saved.push([md, name, format]), "/home/liam/notes/Fix.md"));
+    expect(saved).toEqual([["# Fix\n", "Fix.md", "markdown"]]);
     expect(notice).toMatch(/^Exported to \/home\/liam\/notes\/Fix\.md\. Read it before you share it/);
   });
 
   it("does nothing when the owner cancels", async () => {
-    expect(await saveExport("# Fix\n", "Fix.md", async () => null)).toBeUndefined();
+    expect(await saveExport("# Fix\n", "Fix.md", "markdown", async () => null)).toBeUndefined();
   });
 
   it("passes a failure on to show", async () => {
-    await expect(saveExport("# Fix\n", "Fix.md", async () => Promise.reject(new Error("Permission denied (os error 13)")))).rejects.toThrow("Permission denied");
+    await expect(saveExport("# Fix\n", "Fix.md", "markdown", async () => Promise.reject(new Error("Permission denied (os error 13)")))).rejects.toThrow("Permission denied");
   });
 });
 
@@ -215,7 +263,7 @@ describe("Choosing what goes in an export", () => {
     { kind: "assistant", id: "a1", text: "The host was wrong. Fixed and restarted." },
     { kind: "user", id: "u2", text: "Thanks, unrelated: what's for lunch?" },
   ];
-  const md = (draft: Partial<ExportDraft>) => exportPreview(chat(items), { ...FIRST_DRAFT, ...draft }, AT).markdown;
+  const md = (draft: Partial<ExportDraft>) => exportPreview(chat(items), { ...FIRST_DRAFT, ...draft }, AT).text;
 
   it("leaves out tool calls, Approvals and attachment names at first, and says so", () => {
     const first = md({});
@@ -267,16 +315,16 @@ describe("Flagging likely secrets in an export", () => {
       { text: "Pa55w0rd!", kind: "password in a link", times: 1, redacted: true },
       { text: pem, kind: "private key", times: 1, redacted: true },
     ]);
-    for (const s of [key, "Pa55w0rd!", "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ", "BEGIN OPENSSH"]) expect(p.markdown).not.toContain(s);
-    expect(p.markdown).toContain("My key is [redacted], and the db is postgres://app:[redacted]@db.internal:5432/app");
-    expect(p.markdown).toContain("(4 places in this file)");
+    for (const s of [key, "Pa55w0rd!", "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ", "BEGIN OPENSSH"]) expect(p.text).not.toContain(s);
+    expect(p.text).toContain("My key is [redacted], and the db is postgres://app:[redacted]@db.internal:5432/app");
+    expect(p.text).toContain("(4 places in this file)");
   });
 
   it("keeps a flagged text the owner says isn't secret", () => {
     const p = preview({ kept: new Set(["Pa55w0rd!"]) });
-    expect(p.markdown).toContain("postgres://app:Pa55w0rd!@db.internal");
+    expect(p.text).toContain("postgres://app:Pa55w0rd!@db.internal");
     expect(p.secrets.find((s) => s.text === "Pa55w0rd!")!.redacted).toBe(false);
-    expect(p.markdown).not.toContain(key);
+    expect(p.text).not.toContain(key);
   });
 
   it("only flags what the file would hold", () => {
@@ -288,7 +336,7 @@ describe("Flagging likely secrets in an export", () => {
     expect(exportPreview(chat(withTool), FIRST_DRAFT, AT).secrets.some((s) => s.kind === "bearer token")).toBe(false);
     const p = exportPreview(chat(withTool), { ...FIRST_DRAFT, toolCalls: true }, AT);
     expect(p.secrets.find((s) => s.kind === "bearer token")!.text).toBe("7f3a9c2e8b1d4f6a0e5c");
-    expect(p.markdown).not.toContain("7f3a9c2e8b1d4f6a0e5c");
+    expect(p.text).not.toContain("7f3a9c2e8b1d4f6a0e5c");
   });
 
   it("redacts all of a quoted password with an escaped quote or backslash in it", async () => {
@@ -297,7 +345,7 @@ describe("Flagging likely secrets in an export", () => {
     ];
     const p = exportPreview(chat(withTool), { ...FIRST_DRAFT, toolCalls: true }, AT);
     let bytes = "";
-    await saveExport(p.markdown, p.fileName, async (md) => ((bytes = md), "/tmp/x.md"));
+    await saveExport(p.text, p.fileName, "markdown", async (md) => ((bytes = md), "/tmp/x.md"));
     for (const gone of ["Mov3rs", "SecretTail", "kv0lt", "Vault9"]) expect(bytes).not.toContain(gone);
     expect(bytes).toContain("./deploy.sh");
   });
@@ -307,7 +355,7 @@ describe("Flagging likely secrets in an export", () => {
     const p = exportPreview(chat(withTool), { ...FIRST_DRAFT, toolCalls: true }, AT);
     expect(p.secrets.map((s) => [s.kind, s.text])).toEqual([["password or key", "Mov3rs!2026"]]);
     let bytes = "";
-    await saveExport(p.markdown, p.fileName, async (md) => ((bytes = md), "/tmp/x.md"));
+    await saveExport(p.text, p.fileName, "markdown", async (md) => ((bytes = md), "/tmp/x.md"));
     expect(bytes).toContain("./deploy.sh");
     expect(bytes).not.toContain("Mov3rs");
   });
@@ -323,9 +371,9 @@ describe("Redacting by hand", () => {
     const p = exportPreview(chat(items, { title: "Shipping to 14 Larch Lane" }), { ...FIRST_DRAFT, picked: ["14 Larch Lane"] }, AT);
     expect(p.picked).toEqual([{ text: "14 Larch Lane", times: 4 }]);
     let written = new Uint8Array();
-    await saveExport(p.markdown, p.fileName, async (markdown, name) => ((written = new TextEncoder().encode(markdown)), `/tmp/${name}`));
+    await saveExport(p.text, p.fileName, "markdown", async (markdown, name) => ((written = new TextEncoder().encode(markdown)), `/tmp/${name}`));
     const bytes = new TextDecoder().decode(written);
-    expect(bytes).toBe(p.markdown);
+    expect(bytes).toBe(p.text);
     expect(bytes).not.toContain("Larch");
     expect(bytes).toContain("# Shipping to [redacted]");
     expect(bytes).toContain("Noted: [redacted], Duluth.");
@@ -334,17 +382,17 @@ describe("Redacting by hand", () => {
 
   it("redacts the whole title line, in the file and its name, however the title was spaced", () => {
     const p = exportPreview(chat(items, { title: "  Client\n Alpha  " }), { ...FIRST_DRAFT, picked: ["# Client Alpha"] }, AT);
-    expect(p.markdown.split("\n")[0]).toBe("[redacted]");
+    expect(p.text.split("\n")[0]).toBe("[redacted]");
     expect(p.fileName).toBe("[redacted].md");
     expect(exportPreview(chat(items, { title: "Client  Alpha" }), { ...FIRST_DRAFT, picked: ["Client Alpha"] }, AT).fileName).toBe("[redacted].md");
   });
 
   it("keeps overlapping redactions whole in any order, and after one of them is taken back", () => {
     const both = ["14 Larch Lane", "address is 14 Larch"];
-    const first = exportPreview(chat(items), { ...FIRST_DRAFT, picked: both }, AT).markdown;
+    const first = exportPreview(chat(items), { ...FIRST_DRAFT, picked: both }, AT).text;
     expect(first).toContain("My home [redacted], Duluth.");
-    expect(exportPreview(chat(items), { ...FIRST_DRAFT, picked: [...both].reverse() }, AT).markdown).toBe(first);
-    const second = exportPreview(chat(items), { ...FIRST_DRAFT, picked: [both[1]] }, AT).markdown;
+    expect(exportPreview(chat(items), { ...FIRST_DRAFT, picked: [...both].reverse() }, AT).text).toBe(first);
+    const second = exportPreview(chat(items), { ...FIRST_DRAFT, picked: [both[1]] }, AT).text;
     expect(second).toContain("My home [redacted] Lane, Duluth.");
     expect(second).not.toContain("address is");
   });
@@ -353,7 +401,7 @@ describe("Redacting by hand", () => {
     const key = "sk-ant-api03-Zx8Kq2LmN4pR7tVw9yBc";
     const keyed: Item[] = [{ kind: "user", id: "u", text: `key ${key} here` }];
     for (const kept of [new Set<string>(), new Set([key])]) {
-      const md = exportPreview(chat(keyed), { ...FIRST_DRAFT, kept, picked: ["Zx8Kq2"] }, AT).markdown;
+      const md = exportPreview(chat(keyed), { ...FIRST_DRAFT, kept, picked: ["Zx8Kq2"] }, AT).text;
       expect(md).not.toContain("Zx8Kq2");
       if (!kept.size) expect(md).toContain("key [redacted] here");
     }

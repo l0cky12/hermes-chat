@@ -1,10 +1,20 @@
-// The Export dialog: the owner picks the messages, whether tool calls and attachment names go in, and what is redacted,
-// and sees the file exactly as Save writes it (exportChat.ts `exportPreview`, ADR 0076). It works on the chat as it was
-// when the dialog opened, so a reply that arrives meanwhile doesn't change a file already read.
+// The Export dialog: the owner picks the format, the messages, whether tool calls and attachment names go in, and what is
+// redacted, and sees the file exactly as Save writes it (exportChat.ts `exportPreview`, ADR 0076). It works on the chat
+// as it was when the dialog opened, so a reply that arrives meanwhile doesn't change a file already read.
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { Download, FileDown } from "lucide-react";
 import type { Chat, Item } from "../hermes/model";
-import { FIRST_DRAFT, REDACTED, exportPreview, isMessage, saveExport, type ExportDraft, type SaveFile } from "../hermes/exportChat";
+import {
+  EXPORT_FORMATS,
+  FIRST_DRAFT,
+  REDACTED,
+  exportPreview,
+  isMessage,
+  saveExport,
+  type ExportDraft,
+  type ExportFormat,
+  type SaveFile,
+} from "../hermes/exportChat";
 import { composing } from "./bits";
 import { useModal } from "./modal";
 
@@ -23,6 +33,11 @@ function short(text: string): string {
 }
 
 const places = (n: number) => (n === 1 ? "1 place" : `${n} places`);
+
+const ABOUT: Record<ExportFormat, string> = {
+  markdown: "A Markdown file of the chat, to read.",
+  json: "A JSON file of the chat in Hermes's own session format, with each message's time. Import transcripts reads it back.",
+};
 
 /** Escape, Cancel or a click outside closes it without saving. `onSaved` gets the notice to show once a file is saved. */
 export function ExportChatDialog({
@@ -44,14 +59,16 @@ export function ExportChatDialog({
   const secretsId = useId();
   const pickId = useId();
   const pickHelpId = useId();
+  const formatName = useId();
   const [shot] = useState(() => chat);
   const [at] = useState(() => new Date());
+  const [format, setFormat] = useState<ExportFormat>("markdown");
   const [draft, setDraft] = useState<ExportDraft>(FIRST_DRAFT);
   const [toRedact, setToRedact] = useState("");
   const [note, setNote] = useState<string>();
   const [saving, setSaving] = useState(false);
   const pre = useRef<HTMLPreElement>(null);
-  const preview = useMemo(() => exportPreview(shot, draft, at), [draft]);
+  const preview = useMemo(() => exportPreview(shot, draft, at, format), [draft, format]);
   const messages = shot.items.filter(isMessage);
   const tools = shot.items.filter((i) => i.kind === "tool" || i.kind === "approval").length;
   const attached = shot.items.reduce((n, i) => n + (i.kind === "user" ? (i.attachments?.length ?? 0) : 0), 0);
@@ -89,7 +106,7 @@ export function ExportChatDialog({
     setSaving(true);
     setNote(undefined);
     try {
-      const notice = await saveExport(preview.markdown, preview.fileName, save);
+      const notice = await saveExport(preview.text, preview.fileName, format, save);
       if (notice) {
         onSaved(notice);
         onClose();
@@ -101,7 +118,7 @@ export function ExportChatDialog({
     }
   };
 
-  const parts = preview.markdown.split(REDACTED);
+  const parts = preview.text.split(REDACTED);
   return (
     <div className="leave-overlay" onMouseDown={(e) => e.target === e.currentTarget && !saving && onClose()}>
       <div
@@ -121,8 +138,17 @@ export function ExportChatDialog({
         <h2 id={titleId} className="leave-title">
           <FileDown size={14} aria-hidden /> Export “{shot.title}”
         </h2>
+        <fieldset className="export-format">
+          <legend>Format</legend>
+          {(Object.keys(EXPORT_FORMATS) as ExportFormat[]).map((f) => (
+            <label key={f}>
+              <input type="radio" name={formatName} checked={format === f} onChange={() => setFormat(f)} />
+              <span>{EXPORT_FORMATS[f].label}</span>
+            </label>
+          ))}
+        </fieldset>
         <p>
-          A Markdown file of the chat as it was when you opened this; later messages aren't added. Nothing is uploaded: you choose where to save it.
+          {ABOUT[format]} It has the chat as it was when you opened this; later messages aren't added. Nothing is uploaded: you choose where to save it.
         </p>
         <fieldset className="export-messages">
           <legend>

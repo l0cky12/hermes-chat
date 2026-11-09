@@ -993,9 +993,9 @@ async fn token_delete(connection: Option<String>) -> Result<(), String> {
     saved_password::delete(saved_password::account(saved_password::TOKEN, connection.as_deref())?).await
 }
 
-/// Writes `text` where the owner picks in the native Save dialog, which asks before replacing a file. The webview
+/// Writes `contents` where the owner picks in the native Save dialog, which asks before replacing a file. The webview
 /// never names the path. `None`: the owner cancelled, and nothing was written.
-async fn save_with_dialog(app: &tauri::AppHandle, title: &str, file_name: String, filter: (&str, &[&str]), text: String) -> Result<Option<String>, String> {
+async fn save_with_dialog(app: &tauri::AppHandle, title: &str, file_name: String, filter: (&str, &[&str]), contents: impl AsRef<[u8]>) -> Result<Option<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let mut dialog = app.dialog().file().set_title(title).set_file_name(file_name).add_filter(filter.0, filter.1);
     if let Some(window) = app.get_webview_window("main") {
@@ -1006,7 +1006,7 @@ async fn save_with_dialog(app: &tauri::AppHandle, title: &str, file_name: String
     });
     let Some(path) = rx.await.map_err(|e| e.to_string())? else { return Ok(None) };
     let path = path.into_path().map_err(|e| e.to_string())?;
-    std::fs::write(&path, text).map_err(|e| e.to_string())?;
+    std::fs::write(&path, contents).map_err(|e| e.to_string())?;
     Ok(Some(path.display().to_string()))
 }
 
@@ -1068,11 +1068,46 @@ fn read_transcript(path: &std::path::Path, max_bytes: u64) -> Result<String, Str
     Ok(text.strip_prefix('\u{feff}').map(str::to_owned).unwrap_or(text))
 }
 
+/// The formats a chat exports as text (src/hermes/exportChat.ts `ExportFormat`). Any other is refused.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum ExportFormat {
+    Markdown,
+    Json,
+}
+
+impl ExportFormat {
+    fn filter(self) -> (&'static str, &'static [&'static str]) {
+        match self {
+            ExportFormat::Markdown => ("Markdown", &["md"]),
+            ExportFormat::Json => ("JSON", &["json"]),
+        }
+    }
+}
+
+const EXPORT_TITLE: &str = "Export chat — the file may contain sensitive information from the chat";
+
 /// Saves an exported chat (src/hermes/exportChat.ts) where the owner picks.
 #[tauri::command]
-async fn chat_export(app: tauri::AppHandle, markdown: String, file_name: String) -> Result<Option<String>, String> {
-    let title = "Export chat — the file may contain sensitive information from the chat";
-    save_with_dialog(&app, title, file_name, ("Markdown", &["md"]), markdown).await
+async fn chat_export(app: tauri::AppHandle, text: String, file_name: String, format: ExportFormat) -> Result<Option<String>, String> {
+    save_with_dialog(&app, EXPORT_TITLE, file_name, format.filter(), text).await
+}
+
+/// A PNG's bytes from plain base64, refused unless they start with the PNG signature.
+fn png_bytes(base64: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(base64).map_err(|_| "The image isn't valid base64.".to_string())?;
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("The image isn't a PNG.".into());
+    }
+    Ok(bytes)
+}
+
+/// Saves a chat exported as a PNG image (src/hermes/exportChat.ts `saveImage`) where the owner picks.
+#[tauri::command]
+async fn chat_export_image(app: tauri::AppHandle, png_base64: String, file_name: String) -> Result<Option<String>, String> {
+    let png = png_bytes(&png_base64)?;
+    save_with_dialog(&app, EXPORT_TITLE, file_name, ("PNG image", &["png"]), png).await
 }
 
 /// Saves the owner's message templates (src/hermes/templates.ts `exportFile`) where the owner picks.
@@ -1423,6 +1458,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             token_saved,
             token_delete,
             chat_export,
+            chat_export_image,
             import_pick_file,
             templates_export,
             usage_export,
@@ -1496,6 +1532,27 @@ pub fn run(screenshot: bool, link: Option<String>) {
 mod tests {
     use super::Transfers;
     use std::time::Duration;
+
+    #[test]
+    fn a_chat_exports_only_as_markdown_or_json_each_with_its_own_extension() {
+        let format = |s: &str| serde_json::from_str::<super::ExportFormat>(s);
+        assert_eq!(format("\"markdown\"").unwrap().filter(), ("Markdown", &["md"][..]));
+        assert_eq!(format("\"json\"").unwrap().filter(), ("JSON", &["json"][..]));
+        for other in ["\"png\"", "\"Markdown\"", "\"md\"", "\"\""] {
+            assert!(format(other).is_err(), "{other} should be refused");
+        }
+    }
+
+    #[test]
+    fn an_exported_image_is_saved_only_when_its_bytes_are_a_png() {
+        use base64::Engine;
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+        assert_eq!(super::png_bytes(&b64(png)).unwrap(), png.to_vec());
+        assert!(super::png_bytes(&b64(b"GIF89a....")).unwrap_err().contains("isn't a PNG"));
+        assert!(super::png_bytes(&b64(b"")).unwrap_err().contains("isn't a PNG"));
+        assert!(super::png_bytes("data:image/png;base64,iVBORw0KGgo=").unwrap_err().contains("base64"));
+    }
 
     #[test]
     fn a_transcript_is_read_whole_only_when_it_is_small_utf8_text() {

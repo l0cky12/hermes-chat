@@ -3380,6 +3380,7 @@ p.logs-status { margin: 0 0 8px; line-height: 1.5; }
 .export-dialog label > span { min-width: 0; overflow-wrap: anywhere; }
 .export-dialog ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .export-messages ul { max-height: 170px; overflow-y: auto; padding-right: 4px; }
+.export-dialog .export-format { flex-direction: row; flex-wrap: wrap; gap: 6px 16px; }
 .export-bulk, .export-pick { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .export-dialog .btn.small { height: 26px; padding: 0 10px; font-size: calc(12.5rem / 14); }
 .export-secrets { display: flex; flex-direction: column; gap: 6px; }
