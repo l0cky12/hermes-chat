@@ -433,9 +433,9 @@ export function MemoryProviderSettings({
         )}
         {hint && <span className={`field-hint block ${problem ? "err" : ""}`}>{hint}</span>}
         {f.kind === "secret" && (
-          <ServerLink href={f.url} className="field-hint">
+          <WebPageLink href={f.url} className="field-hint">
             Get one <ExternalLink size={11} />
-          </ServerLink>
+          </WebPageLink>
         )}
       </label>
     );
@@ -653,9 +653,9 @@ export function MemoryProviderSettings({
               )}
             </>
           )}
-          <ServerLink href={form.docsUrl} className="link small provider-docs">
+          <WebPageLink href={form.docsUrl} className="link small provider-docs">
             {form.label} documentation <ExternalLink size={11} />
-          </ServerLink>
+          </WebPageLink>
           <div className="confirm-actions">
             {dirty && (
               <button className="btn" disabled={!!busy} onClick={() => setEdits({})}>
@@ -819,11 +819,7 @@ export function MemoryProviderSettings({
   );
 }
 
-/**
- * An address the server sent, as a link only when it is a web page the Preview would load (ADR 0079): anything else
- * could have WebKit's own Open Link load it over this window. Settings covers the Preview, so a click opens the link menu.
- */
-function ServerLink({ href, className, children }: { href: string; className: string; children: ReactNode }) {
+function WebPageLink({ href, className, children }: { href: string; className: string; children: ReactNode }) {
   const link = linkTarget(href, location.origin);
   if (!link || link.kind === "elsewhere") return null;
   return (

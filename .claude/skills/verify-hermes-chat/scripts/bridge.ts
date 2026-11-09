@@ -104,7 +104,6 @@ server.souls.default = "You are Hermes, the house's ops assistant. Answer briefl
 for (const name of ["restic-unlock", "nginx-rotate", "vpn-mtu", "trip-planner", "disk-usage", "cert-renew"])
   server.skills.add("default", { dir: `/home/liam/.hermes/skills/ops/${name}`, source: "agent", category: "ops" }, `---\nname: ${name}\ndescription: Synthetic ${name} skill.\n---\n\n## When to Use\n\nWhen asked about ${name}.\n`);
 
-// Settings → Memory → External memory: Honcho active on `default`, RetainDB to switch to.
 const memoryUrl = process.env.HV_MEMORY_URL;
 const honcho = memoryUrl ? { ...HONCHO, docsUrl: memoryUrl, fields: HONCHO.fields.map((f) => (f.kind === "secret" ? { ...f, url: memoryUrl } : f)) } : HONCHO;
 server.memoryProviders.add(honcho, { ...RETAINDB });

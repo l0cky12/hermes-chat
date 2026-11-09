@@ -17,7 +17,6 @@ export type FakeField = {
   placeholder?: string;
   /** Honcho's workspace and AI peer: blank means the profile's host, which Hermes shows as the placeholder. */
   hostWhenBlank?: boolean;
-  /** Where to get a secret's value, as a provider's schema names it. */
   url?: string;
 };
 
@@ -34,7 +33,6 @@ export type FakeProvider = {
   installed?: boolean;
   /** Setup prepares its Python packages in an environment the running Hermes doesn't use until it restarts. */
   restartAfterSetup?: boolean;
-  /** The declared surface's `docs_url`; `https://docs.example/<name>` when left out. */
   docsUrl?: string;
 };
 
