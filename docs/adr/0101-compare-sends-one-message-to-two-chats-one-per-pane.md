@@ -1,6 +1,6 @@
 # Compare sends one message to two chats, one per pane
 
-Issue #351. The owner wants to send one prompt to two models at once and read the answers side by side, so picking a model for a task is a quick comparison instead of two chats and two sends by hand. The app already has two panes (ADR 0052) and a model picker in each composer. Each pane holds its own chat, so until now a message typed in one went to one model.
+Issue #351. The owner wants to send one prompt to two models at once and read the answers side by side, so picking a model for a task is a quick comparison instead of two chats and two sends by hand. The app already has two panes (ADR 0010) and a model picker in each composer. Each pane holds its own chat, so until now a message typed in one went to one model.
 
 ## Decisions
 
