@@ -491,7 +491,7 @@ describe("Interrupting", () => {
     await settle(s.hermes);
     expect(s.server.recordings).toHaveLength(1);
     await s.user.click(await screen.findByRole("button", { name: "Approve once" }));
-    await waitFor(() => expect(s.server.responses).toHaveLength(1));
+    await waitFor(() => expect(s.server.approvalAnswers).toHaveLength(1));
     await reply(s, "Deleted.");
     await waitFor(() => expect(status()).toMatch(/Hermes is speaking/));
   });

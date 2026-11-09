@@ -25,12 +25,16 @@
 //   `POST /__kanban?id=<task id>&status=<running|done|blocked|review|archived>` moves a task as a worker would (a test's
 //   control). `done`, `blocked` and `review` send the chat a `status.update` naming the task and, 2 s later,
 //   a streamed wake turn when the chat is live, subscribed, not stopped, and no turn runs, as Hermes's poller does.
+//   `POST /__ask?chat=<chat id>&method=<method>` with a JSON body of params asks the app something, as a Hermes tool's
+//   server request does (`preview.act`, `preview.read`), in that chat's live session (a test's control). It answers
+//   the request's id; the app's answer shows in `/__state` under `answers`.
 // HV_INBOX=1 gives the `work` profile two Unread chats for the Rail inbox: one last active 3 days ago, one an hour ago.
 // HV_LIST=<n> adds n Active, read chats to `default`, one an hour apart, so its Inbox is longer than the list panel.
 // HV_DELAY_MS=<ms> holds each /api/ answer that long, as a distant server's round trip would.
 // HV_FAIL_PATCH=<id>,<id> answers 503 to every edit (PATCH) of those sessions, as a server that fails a write does.
 // HV_MEMORY_URL=<url> is the address `default`'s Honcho gives for its documentation and its API key's "Get one" link.
-// Read-only check of what the server holds (the side-effect proof): `GET /__state` returns sessions and transcripts.
+// Read-only check of what the server holds (the side-effect proof): `GET /__state` returns sessions, transcripts, and
+// the app's answers to what the stand-in asked it.
 // The same JSON is rewritten to <state-file> after every change, so it survives the bridge being stopped.
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -113,7 +117,8 @@ server.memoryProviders.add(honcho, { ...RETAINDB });
 server.memoryProviders.active = { default: "honcho", work: "" };
 
 // MCP servers as each profile's config holds them; the `.env` (tokens) stays out.
-const dump = () => JSON.stringify({ sessions: server.sessions, transcripts: server.transcripts, mcp: server.mcp.servers, kanban: server.kanban.boards }, null, 2);
+const dump = () =>
+  JSON.stringify({ sessions: server.sessions, transcripts: server.transcripts, mcp: server.mcp.servers, kanban: server.kanban.boards, answers: server.responses }, null, 2);
 const save = () => stateFile && writeFileSync(stateFile, dump());
 save();
 
@@ -130,7 +135,7 @@ const mathReply = (broken: boolean) =>
   "The prune runs after the check:\n\n" +
   (broken ? "```mermaid\nsequenceDiagram\n  cron->>restic: unlock\n  restic-->>\n```\n" : "```mermaid\nsequenceDiagram\n  cron->>restic: unlock\n  restic-->>cron: ok\n  cron->>restic: check --read-data-subset=5%\n  restic-->>cron: no errors\n  cron->>restic: forget --prune\n```\n");
 
-function replyTo(sessionId: string, prompt: string, said?: string) {
+function replyTo(sessionId: string, prompt: string, said?: string, persisted_turn?: Record<string, unknown>) {
   const long = longParagraphs > 0 && prompt.startsWith("long");
   const math = prompt.startsWith("math") || prompt.startsWith("badmath");
   const text =
@@ -151,7 +156,7 @@ function replyTo(sessionId: string, prompt: string, said?: string) {
     const stored = server.runtime.get(sessionId);
     if (stored) server.storeMessage(stored, { role: "assistant", text });
     setTimeout(() => {
-      server.event(sessionId, "message.complete", { text, status: "complete" });
+      server.event(sessionId, "message.complete", { text, status: "complete", ...(persisted_turn && { persisted_turn }) });
       save();
     }, 120);
   };
@@ -159,7 +164,7 @@ function replyTo(sessionId: string, prompt: string, said?: string) {
 }
 
 server.kanban.wakeDelayMs = 2_000;
-server.kanban.wakeWith = (sid, _stored, text) => replyTo(sid, "", text);
+server.kanban.wakeWith = (sid, _stored, text, user_row_id) => replyTo(sid, "", text, { user_row_id });
 
 // The subagents a "delegate" prompt started, as `subagent.start` / `subagent.complete` payloads carry them
 // (`tools/delegate_tool.py` at the deployed `f0d94882`). Each is also in Hermes's registry, for `subagent.list`.
@@ -296,6 +301,14 @@ const http = createServer(async (req, res) => {
     const moved = server.kanban.move(id, url.searchParams.get("status") ?? "done");
     save();
     return moved ? json(200, { ok: true, task: server.kanban.find(id) }) : json(404, { detail: `No stand-in task ${id}` });
+  }
+  if (url.pathname === "/__ask" && req.method === "POST") {
+    const runtime = server.runtimeIdOf(url.searchParams.get("chat") ?? "");
+    const method = url.searchParams.get("method") ?? "";
+    if (!runtime || !method) return json(400, { detail: "Needs chat (a chat open in the app) and method" });
+    const id = server.ask(runtime, method, JSON.parse(body ?? "{}"));
+    setTimeout(save, 500);
+    return id ? json(200, { id }) : json(409, { detail: "The app didn't say it answers server requests" });
   }
   if (url.pathname === "/auth/password-login") {
     const b = JSON.parse(body ?? "{}");

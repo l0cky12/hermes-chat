@@ -149,6 +149,8 @@ describe("a check of a new Hermes (upstream 74b2ed6)", () => {
       // Only a chat's own subagent.list can learn this.
       subagents: "unknown",
       subagentRoster: "supported",
+      // Only answering an Approval can learn this.
+      approvalAnswers: "unknown",
     });
     expect(snap.facts).toEqual({
       version: "0.17.0",

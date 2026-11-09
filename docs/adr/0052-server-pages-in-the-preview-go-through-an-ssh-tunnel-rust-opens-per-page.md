@@ -1,5 +1,7 @@
 # Server pages in the Preview go through an SSH tunnel that Rust opens for each page
 
+> **Partly superseded by [ADR 0103](0103-the-preview-is-a-browser-only-the-owner-drives.md)** (#376). The switch above the page is gone: the badge in the address box reads **Server** or **This computer**, and clicking it opens the page from the other side. A tunnel is for an origin and stays open while web pages follow one another in the Preview, so it no longer closes on the switch or on Reload; it closes when a file or tool output shows, when a page needs another server origin, or when the Preview hides. Reload opens a tunnel that failed or closed. The rest of this ADR stands.
+
 A link to `http://localhost:3000` in a reply means the Hermes server's own port 3000, where Hermes started the dev server. The Preview loaded it from this computer's loopback, where nothing (or something else) listens (ADR 0007, "Consequences"). Issue #171.
 
 Now a web page on a loopback address (`localhost`, `127.0.0.1`, `[::1]`, `0.0.0.0`), from a reply, a tool call or the address box, opens on the **Hermes server** by default. Rust opens an SSH tunnel to the server's loopback when the page shows, and the frame loads the page through the tunnel's end on this computer. A switch above the page, **Hermes server** / **This computer**, opens it from this computer's loopback instead. The badge in the Preview's header says which: `Server · <target>` or `This computer`. Typing `localhost:5173` without a scheme opens `http://localhost:5173/`. Any address that isn't http(s) is refused, and the message names its scheme.
@@ -33,7 +35,7 @@ A URL sign-in (ADR 0004) has no SSH target. The page then says so, offers **Open
 
 ## Consequences
 
-- Any program on this computer can connect to a tunnel's port while it is open, as with any `ssh -L`, and reach that one port on the server's loopback. The port is ephemeral and the tunnel lasts only while the page shows.
+- Any program on this computer can connect to a tunnel's port while it is open, as with any `ssh -L`. On Linux, since ADR 0105, the relay closes a connection from a program run by another account unanswered. On Windows and macOS such a program can reach that one port on the server's loopback (#378). The port is ephemeral and the tunnel lasts only while the page shows.
 - A page that links or redirects to `http://localhost:3000/…` by its full address sends the frame to this computer's port 3000, since the frame can't be followed. Relative links stay in the tunnel.
 - The server's page sees requests for `Host: 127.0.0.1:<port>`. Dev servers allow loopback addresses by default (Vite, webpack, Django in debug).
 - The `HEAD /` that checks a new http tunnel reaches the page's server.

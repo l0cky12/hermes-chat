@@ -470,6 +470,19 @@ export class FakeHermes {
   /** The client's answers to server→client requests, in order. */
   readonly responses: Response[] = [];
   /**
+   * False: a Hermes without `approval.respond`, which answers "method not found", so an Approval can be answered only
+   * in a response frame to its request.
+   */
+  approvalRespond = true;
+  /**
+   * True: `dashboard.turn_isolation`. A turn's requests wait in a compute-host child that this process only mirrors
+   * (`tui_gateway/compute_host_bridge.py`): `approval.received` and `approval.respond` find nothing in its own queue,
+   * `session.active_list` lists the session as working, and only a response frame, relayed to the child, settles one.
+   */
+  turnIsolation = false;
+  /** The Approvals this client answered, by either way: `approval.respond`, or a response frame to the request. */
+  readonly approvalAnswers: { id: string; choice: unknown; via: "approval.respond" | "response" }[] = [];
+  /**
    * What `model.options` answers. Undefined answers JSON-RPC "method not found", as a server without the method would.
    * `model` and `provider` in it are the profile's default.
    */
@@ -651,7 +664,7 @@ export class FakeHermes {
   readonly handlers: Record<string, Handler> = {
     // `tui_gateway/contracts/liveness.py` at upstream `74b2ed6`: what this build enforces, as flags.
     "gateway.capabilities": (r) => this.respond(r.id, { per_session_exclusive_submit: true }),
-    "session.active_list": (r) => this.respond(r.id, { sessions: this.liveSessions.map((l) => ({ current: false, message_count: 0, model: "", preview: "", title: "", started_at: l.last_active, ...l })) }),
+    "session.active_list": (r) => this.respond(r.id, { sessions: this.liveRows().map((l) => ({ current: false, message_count: 0, model: "", preview: "", title: "", started_at: l.last_active, ...l })) }),
     // Bot Mode at the deployed `f0d94882` (research doc "Bot Mode", probed live on 2026-11-04).
     "profiles.list": (r) => {
       if (this.botMode === "none") return this.fail(r.id, -32601, "unknown method: profiles.list");
@@ -984,9 +997,24 @@ export class FakeHermes {
       if ("server_requests" in r.params) this.answersRequests = !!r.params.server_requests;
       this.respond(r.id, { server_requests: ["approval", "clarify", "secret", "sudo"], declines_not_shown: true });
     },
+    // `tui_gateway/methods_prompt.py` at the deployed `bf0203a`: settles the Approval in Hermes's queue, whose settle
+    // hook then withdraws the request from every client on the session, this one too (`request.cancel`, `resolved`).
+    // Answers how many it settled: 0 when nothing waits under that request id, as once another client has answered.
+    "approval.respond": (r) => {
+      if (!this.approvalRespond) return this.fail(r.id, -32601, "unknown method: approval.respond");
+      const sid = String(r.params.session_id ?? "");
+      if (!this.runtime.has(sid)) return this.fail(r.id, 4001, "session not found");
+      const open = [...this.openRequests].filter(([, q]) => q.sid === sid && q.method === "approval" && !this.turnIsolation);
+      const settled = r.params.request_id ? open.filter(([, q]) => q.params.request_id === r.params.request_id) : open.slice(0, 1);
+      for (const [id] of settled) {
+        this.approvalAnswers.push({ id, choice: r.params.choice, via: "approval.respond" });
+        this.cancelRequest(id, "resolved");
+      }
+      this.respond(r.id, { resolved: settled.length });
+    },
     // `tui_gateway/methods_prompt.py` at the deployed `bf0203a`: records that a client has the card on screen.
     "approval.received": (r) => {
-      const pending = [...this.openRequests.values()].some((q) => q.sid === r.params.session_id && q.params.request_id === r.params.request_id);
+      const pending = !this.turnIsolation && [...this.openRequests.values()].some((q) => q.sid === r.params.session_id && q.params.request_id === r.params.request_id);
       this.respond(r.id, { acknowledged: pending });
     },
     // `tui_gateway/methods_session.py` at the deployed `bf0203a`: a stateless model call (default task
@@ -1557,6 +1585,7 @@ export class FakeHermes {
       const req = JSON.parse(text) as Request | Response;
       if (!("method" in req)) {
         this.responses.push(req);
+        if (this.openRequests.get(req.id)?.method === "approval" && req.result) this.approvalAnswers.push({ id: req.id, choice: req.result.choice, via: "response" });
         this.openRequests.delete(req.id);
         return;
       }
@@ -2198,6 +2227,28 @@ export class FakeHermes {
     if (!q) return;
     this.openRequests.delete(id);
     this.event(q.sid, "request.cancel", { id, method: q.method, reason });
+  }
+
+  /**
+   * `liveSessions`, with every session that has a server→client request open listed as `waiting`, as
+   * `_session_live_status` reports it, this connection's own sessions too; as `working` with `turnIsolation`.
+   */
+  private liveRows() {
+    const asking = new Map([...this.openRequests.values()].map((q) => [q.sid, q.stored]));
+    const status = this.turnIsolation ? "working" : "waiting";
+    const rows = this.liveSessions.map((l) => (asking.has(l.id) ? { ...l, status } : l));
+    for (const [sid, stored] of asking) if (!rows.some((l) => l.id === sid)) rows.push({ id: sid, session_key: stored, status, last_active: Date.now() / 1000 });
+    return rows;
+  }
+
+  /**
+   * Another Hermes client answers an open request. One that answers with `approval.respond` gets every client a
+   * `request.cancel`; one that answers in a response frame, as an older client does, removes the request first, so
+   * Hermes tells no other client (`server_requests.resolve_response`).
+   */
+  answerElsewhere(id: string, via: "approval.respond" | "response") {
+    if (via === "approval.respond") return this.cancelRequest(id, "resolved");
+    this.openRequests.delete(id);
   }
 
   drop(reason = "closed by the server (1006 )") {
@@ -3063,8 +3114,8 @@ export class FakeKanban {
   missing = false;
   /** How long after a task moves the poller wakes its chat. */
   wakeDelayMs = 0;
-  /** How the wake turn is sent: at once in one go unless set, as the stand-in streams it (bridge.ts). */
-  wakeWith?: (runtimeId: string, stored: string, text: string) => void;
+  /** How the wake turn is sent: at once in one go unless set, as the stand-in streams it (bridge.ts). `userRowId`: the stored notice that began it. */
+  wakeWith?: (runtimeId: string, stored: string, text: string, userRowId: number) => void;
   private seq = 0;
   private runSeq = 0;
 
@@ -3101,15 +3152,20 @@ export class FakeKanban {
     const runtime = t.session_id ? this.server.runtimeIdOf(t.session_id) : undefined;
     if (!notice || !runtime) return true;
     const [glyph, said] = notice;
-    this.server.event(runtime, "status.update", { kind: "process", text: `${glyph} [${t.board}] ${t.assignee ? `@${t.assignee} ` : ""}Kanban ${t.id} ${said}` });
+    const noticeText = `${glyph} [${t.board}] ${t.assignee ? `@${t.assignee} ` : ""}Kanban ${t.id} ${said}`;
+    this.server.event(runtime, "status.update", { kind: "process", text: noticeText });
+    // The wake turn's prompt is the notice itself, stored as a user row as its turn starts; its `message.start` carries
+    // only the turn's id (`_notif_poll_kanban_scoped` → `_run_prompt_submit`).
     const wake = () => {
       if (!t.subscribed || this.server.turns.has(runtime) || this.server.stopped.has(runtime) || !t.session_id) return;
+      this.server.storeMessage(t.session_id, { role: "user", text: noticeText });
+      const user_row_id = this.server.transcripts[t.session_id].at(-1)!.row_id!;
       const text = `Results are in for ${t.id} (${status}): ${t.title}. Here is the synthesis.`;
-      if (this.wakeWith) return this.wakeWith(runtime, t.session_id, text);
-      this.server.event(runtime, "message.start");
+      if (this.wakeWith) return this.wakeWith(runtime, t.session_id, text, user_row_id);
+      this.server.event(runtime, "message.start", { turn_id: `wake-${t.id}` });
       this.server.event(runtime, "message.delta", { text });
       this.server.storeMessage(t.session_id, { role: "assistant", text });
-      this.server.event(runtime, "message.complete", { text, status: "complete" });
+      this.server.event(runtime, "message.complete", { text, status: "complete", persisted_turn: { user_row_id } });
     };
     setTimeout(wake, this.wakeDelayMs);
     return true;

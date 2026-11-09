@@ -165,7 +165,7 @@ describe("The inbox", () => {
     await waitFor(() => expect(document.activeElement?.getAttribute("data-item")).toBe("srq-work"));
     expect(screen.queryByRole("dialog", { name: /Inbox/ })).toBeNull();
     // Nothing was answered for the owner.
-    expect(server.responses).toEqual([]);
+    expect(server.approvalAnswers).toEqual([]);
   });
 
   it("opens a waiting chat older than the profile's list holds", async () => {
@@ -198,7 +198,7 @@ describe("The inbox", () => {
     await user.click(entry);
     await waitFor(() => expect(document.activeElement?.getAttribute("data-item")).toBe(id));
     expect(document.activeElement?.classList.contains("approval")).toBe(true);
-    expect(server.responses).toEqual([]);
+    expect(server.approvalAnswers).toEqual([]);
   });
 
   it("asks before taking the owner to another profile while an Approval waits here", async () => {

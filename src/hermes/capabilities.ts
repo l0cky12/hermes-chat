@@ -24,6 +24,7 @@ import { redact as redactSecrets } from "./logs";
 export type CapabilityId =
   | "chat"
   | "approvals"
+  | "approvalAnswers"
   | "projects"
   | "commands"
   | "liveSessions"
@@ -125,6 +126,17 @@ export const CAPABILITIES: readonly CapabilitySpec[] = [
     without: "Approval cards don't show. Hermes decides by the profile's own settings, or waits.",
     anchor: "approvals",
     notChecked: "Known once a connection opens.",
+  },
+  {
+    id: "approvalAnswers",
+    label: "Answering Approvals",
+    usedBy: "Approval cards in a chat another Hermes app also has open",
+    needs: "approval.respond on /api/ws.",
+    without: "Approvals are answered in reply to Hermes's request. Another Hermes app with the chat open keeps showing the card until Hermes next lists the chat as not waiting.",
+    anchor: "answering-approvals",
+    notChecked: "Diagnostics can't check this by reading. Known once this app answers an Approval.",
+    methods: ["approval.respond"],
+    writeMethods: /^approval\.respond$/,
   },
   {
     id: "projects",
