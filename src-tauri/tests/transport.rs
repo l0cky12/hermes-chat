@@ -3021,9 +3021,15 @@ async fn echo_422(Json(body): Json<Value>) -> Response {
 #[tokio::test]
 async fn a_failed_password_sign_in_never_shows_the_password() {
     let echo_text = |Json(body): Json<Value>| async move { (StatusCode::BAD_GATEWAY, format!("upstream refused {body}")).into_response() };
+    // As Python's json.dumps writes it, non-ASCII as \uXXXX, inside a page that isn't JSON.
+    let echo_ascii = |Json(body): Json<Value>| async move {
+        let ascii: String = body.to_string().chars().map(|c| if c.is_ascii() { c.to_string() } else { format!("\\u{:04x}", c as u32) }).collect();
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("<pre>{ascii}</pre>")).into_response()
+    };
     let base_422 = serve(Router::new().route("/auth/password-login", post(echo_422))).await;
     let base_text = serve(Router::new().route("/auth/password-login", post(echo_text))).await;
-    for (base, status) in [(&base_422, 422), (&base_text, 502)] {
+    let base_ascii = serve(Router::new().route("/auth/password-login", post(echo_ascii))).await;
+    for (base, status) in [(&base_422, 422), (&base_text, 502), (&base_ascii, 500)] {
         for password in ["hunter2", "pässwörd-ünïcode", "Q", "bell\u{7}"] {
             for headers in [sign_in(password).headers, access_sign_in().headers] {
                 let signing_in = SignIn { headers, ..sign_in(password) };
@@ -3031,7 +3037,19 @@ async fn a_failed_password_sign_in_never_shows_the_password() {
                 let shown = err.to_string();
                 assert!(matches!(&err, TransportError::Unexpected { status: s, .. } if *s == status), "{err:?}");
                 assert!(!shown.contains(password), "{password:?} shown: {shown}");
+                assert!(shown.contains("(not shown, as it may repeat your password or a request header)"), "{password:?} shown: {shown}");
             }
         }
+    }
+}
+
+#[tokio::test]
+async fn a_failed_password_sign_in_shows_a_body_that_doesnt_repeat_the_password() {
+    let gateway = || async { (StatusCode::BAD_GATEWAY, "Bad Gateway: upstream hermes is down").into_response() };
+    let disabled = || async { (StatusCode::FORBIDDEN, Json(json!({"detail": "This account is disabled"}))).into_response() };
+    for (route, status, said) in [(post(gateway), 502, "upstream hermes is down"), (post(disabled), 403, "This account is disabled")] {
+        let base = serve(Router::new().route("/auth/password-login", route)).await;
+        let err = sign_in_at(&base, &sign_in("hunter2")).await.err().unwrap();
+        assert!(matches!(&err, TransportError::Unexpected { status: s, body } if *s == status && body.contains(said)), "{err:?}");
     }
 }

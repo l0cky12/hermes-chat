@@ -1143,16 +1143,8 @@ impl Dashboard {
                     s if s.is_success() => {}
                     StatusCode::UNAUTHORIZED => return Err(TransportError::BadCredentials),
                     StatusCode::TOO_MANY_REQUESTS => return Err(TransportError::RateLimited),
-                    status => {
-                        // The password went in this body alone, and a 422 or a gateway can echo it back.
-                        let Ok(mut secret) = HeaderValue::from_bytes(password.as_bytes()) else {
-                            return Err(TransportError::Unexpected { status: status.as_u16(), body: HIDDEN.into() });
-                        };
-                        secret.set_sensitive(true);
-                        let mut hide = sign_in.headers.clone();
-                        hide.append(HeaderName::from_static("x-hermes-chat-password"), secret);
-                        return Err(unexpected(login, &hide).await);
-                    }
+                    // A 422, or a gateway in front, can echo the body back, password and all.
+                    _ => return Err(unexpected_sent(login, &sign_in.headers, password).await),
                 }
                 dashboard.keep_cookies(&login);
                 Ok(dashboard)
@@ -2317,7 +2309,7 @@ const HIDDEN: &str = "(not shown, as it may repeat your password or a request he
 const HEADER_PIECE: usize = 8;
 
 /// Whether `text` repeats one of the values in `headers`: the owner's extra request headers, as a gateway such as
-/// Cloudflare Access can in the page it turns a request away with, or a token or password sent with them. Any
+/// Cloudflare Access can in the page it turns a request away with, or a token sent with them. Any
 /// `HEADER_PIECE` bytes of a value count, so a value cut short, as in a WebSocket close reason, still does.
 fn repeats_header(text: &str, headers: &HeaderMap) -> bool {
     repeats_any(text.as_bytes(), headers.values().map(HeaderValue::as_bytes))
@@ -2354,10 +2346,10 @@ fn strings_in(v: &serde_json::Value, out: &mut String) {
     }
 }
 
-/// An error body as it may be shown, for a request that carried `headers`: its extra request headers, and a token or
-/// password it sent. With none, its start as sent. Otherwise only the dashboard's own JSON `detail`, whole and
-/// repeating none of their values: a refusal (401, 403, 407) or any other page could come from a gateway in front,
-/// which can echo a value it turned down, and a 422 echoes the body it was sent.
+/// An error body as it may be shown, for a request that carried `headers`: its extra request headers, and a token it
+/// sent. With none, its start as sent. Otherwise only the dashboard's own JSON `detail`, whole and repeating none of
+/// their values: a refusal (401, 403, 407) or any other page could come from a gateway in front, which can echo a value
+/// it turned down.
 fn shown_body(status: StatusCode, text: &str, headers: &HeaderMap) -> String {
     if headers.is_empty() {
         return text.chars().take(300).collect();
@@ -2377,15 +2369,25 @@ fn shown_body(status: StatusCode, text: &str, headers: &HeaderMap) -> String {
 
 /// A failed answer as an error, with the start of its body. Reads only the first few KB, so a huge or endless error
 /// body can't fill memory. `headers`: what the request carried that mustn't be shown (`shown_body`).
-async fn unexpected(mut resp: reqwest::Response, headers: &HeaderMap) -> TransportError {
+async fn unexpected(resp: reqwest::Response, headers: &HeaderMap) -> TransportError {
+    unexpected_sent(resp, headers, "").await
+}
+
+/// `unexpected` for a request whose body carried `secret`, such as a password: an error that repeats it anywhere, as
+/// sent or JSON-escaped, is shown as `HIDDEN`. Unlike extra request headers, it doesn't limit what else is shown.
+async fn unexpected_sent(mut resp: reqwest::Response, headers: &HeaderMap, secret: &str) -> TransportError {
     const KEEP: usize = 4096;
+    let forms = sent_forms(secret);
+    let forms = || forms.iter().map(|f| f.as_bytes());
     // A redirect that came back unfollowed: `same_origin_redirects` stopped it at another site.
     if resp.status().is_redirection() {
         let to = resp.headers().get(header::LOCATION).and_then(|l| resp.url().join(l.to_str().ok()?).ok());
         if let Some(to) = to.filter(|to| to.origin() != resp.url().origin()) {
             // A gateway can put a header value it turned down into the address, even the host name.
             let to = to.origin().ascii_serialization();
-            return if address_repeats_header(&to, headers) { TransportError::RedirectedHidden } else { TransportError::Redirected(to) };
+            let lower: Vec<Vec<u8>> = forms().map(<[u8]>::to_ascii_lowercase).collect();
+            let hidden = address_repeats_header(&to, headers) || repeats_any(to.as_bytes(), lower.iter().map(Vec::as_slice));
+            return if hidden { TransportError::RedirectedHidden } else { TransportError::Redirected(to) };
         }
     }
     let status = resp.status().as_u16();
@@ -2397,8 +2399,31 @@ async fn unexpected(mut resp: reqwest::Response, headers: &HeaderMap) -> Transpo
         }
     }
     head.truncate(KEEP);
-    let body = shown_body(resp.status(), &String::from_utf8_lossy(&head), headers);
+    let text = String::from_utf8_lossy(&head);
+    let mut said = text.to_string();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+        strings_in(&v, &mut said);
+    }
+    let body = if repeats_any(said.as_bytes(), forms()) { HIDDEN.into() } else { shown_body(resp.status(), &text, headers) };
     TransportError::Unexpected { status, body }
+}
+
+/// `secret` as an error body might repeat it: as sent, JSON-escaped, and JSON-escaped to ASCII as Python's `json` does.
+fn sent_forms(secret: &str) -> Vec<String> {
+    if secret.is_empty() {
+        return vec![];
+    }
+    let quoted = serde_json::to_string(secret).expect("a string serializes");
+    let escaped = &quoted[1..quoted.len() - 1];
+    let ascii = escaped.chars().fold(String::new(), |mut out, c| {
+        if c.is_ascii() {
+            out.push(c);
+        } else {
+            c.encode_utf16(&mut [0; 2]).iter().for_each(|u| out.push_str(&format!("\\u{u:04x}")));
+        }
+        out
+    });
+    vec![secret.to_owned(), escaped.to_owned(), ascii]
 }
 
 /// How far a connection test got before it failed, so setup can say what to fix.
