@@ -114,7 +114,16 @@ function plain(code: Element) {
  */
 const typesetMath = lru<ElementContent[]>(2_000_000);
 
-/** `tex` typeset, or undefined for what KaTeX can't take; TeX it can't parse comes back as itself, in red. */
+const frozen = <T,>(value: T): T => {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) Object.values(Object.freeze(value)).forEach(frozen);
+  return value;
+};
+
+/**
+ * `tex` typeset, or undefined for what KaTeX can't take; TeX it can't parse comes back as itself, in red. Unlike
+ * highlighted code it goes into the tree uncopied, frozen: find-in-chat leaves typeset math alone, and copying it was
+ * most of a streamed delta's work (bench/parse.ts `math`).
+ */
 function typeset(tex: string, display: boolean): ElementContent[] | undefined {
   const key = (display ? "display\n" : "inline\n") + tex;
   let math = typesetMath.get(key);
@@ -125,11 +134,10 @@ function typeset(tex: string, display: boolean): ElementContent[] | undefined {
     } catch {
       return undefined;
     }
-    math = fromHtmlIsomorphic(html, { fragment: true }).children as ElementContent[];
+    math = frozen(fromHtmlIsomorphic(html, { fragment: true }).children as ElementContent[]);
     typesetMath.set(key, math, html.length);
   }
-  // A copy, as with highlighted code, so nothing done to the tree reaches the cache.
-  return structuredClone(math);
+  return math;
 }
 
 /**
