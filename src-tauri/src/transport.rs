@@ -25,7 +25,7 @@ use reqwest::{header, redirect, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
@@ -133,7 +133,10 @@ pub enum TransportError {
     /// Plain http:// to an address that isn't this computer, a LAN or Tailscale (ADR 0056).
     #[error("Plain http:// is only used on this computer, a LAN or Tailscale, and {0} is a public address. Use https:// or SSH to reach it.")]
     PlainHttpPublic(String),
-    #[error("The dashboard sent Hermes Chat on to another site, whose address isn't shown, as it may repeat your extra request headers. Hermes Chat doesn't follow it there, so your headers aren't sent to it. If a gateway such as Cloudflare Access is in front of the dashboard, check the headers it needs.")]
+    /// Plain http:// to an address in 100.64.0.0/10 that this computer doesn't reach over Tailscale (ADR 0004).
+    #[error("Plain http:// is only used on this computer, a LAN or Tailscale, and this computer doesn't reach {0} over Tailscale. Turn Tailscale on here, or use https:// or SSH to reach it.")]
+    PlainHttpNotTailscale(String),
+    #[error("The dashboard sent Hermes Chat on to another site, whose address isn't shown, as it may repeat your password or a request header. Hermes Chat doesn't follow it there, so nothing is sent to it. If a gateway such as Cloudflare Access is in front of the dashboard, check the headers it needs.")]
     RedirectedHidden,
 }
 
@@ -447,14 +450,12 @@ where
     Ok(DirectUrl { base, addresses })
 }
 
-/// Whether `ip` is this computer, a private LAN range, link-local, or Tailscale (100.64.0.0/10, or fd7a:115c:a1e0::/48,
-/// which the unique-local fc00::/7 holds): the only places a plain http:// route goes (ADR 0056).
+/// Whether `ip` is this computer, a private LAN range, link-local, or Tailscale's IPv6 range (fd7a:115c:a1e0::/48,
+/// which the unique-local fc00::/7 holds). Tailscale's IPv4 range, 100.64.0.0/10, isn't one of them: carrier-grade NAT
+/// uses it too, so a plain http:// route goes there only over Tailscale (`check_plain_http`, ADR 0004 and 0056).
 pub fn is_local_or_private(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => {
-            let [a, b, ..] = v4.octets();
-            v4.is_loopback() || v4.is_private() || v4.is_link_local() || (a == 100 && (64..=127).contains(&b))
-        }
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
         IpAddr::V6(v6) => {
             let first = v6.segments()[0];
             v6.is_loopback()
@@ -466,26 +467,50 @@ pub fn is_local_or_private(ip: IpAddr) -> bool {
 }
 
 /// Refuses a plain http:// dashboard whose host is, or resolves to, anything but this computer, a LAN or Tailscale:
-/// the password would cross the internet unencrypted (ADR 0056). https:// goes anywhere.
+/// the password would cross the internet, or a carrier's network, unencrypted (ADR 0004 and 0056). https:// goes
+/// anywhere.
 pub fn check_plain_http(direct: &DirectUrl) -> Result<(), TransportError> {
+    check_plain_http_from(direct, source_toward)
+}
+
+/// `check_plain_http`, with `source` naming the address this computer sends from to reach an address.
+pub fn check_plain_http_from(direct: &DirectUrl, source: impl Fn(IpAddr) -> Option<IpAddr>) -> Result<(), TransportError> {
     if direct.base.scheme() != "http" {
         return Ok(());
     }
     let host = direct.base.host_str().unwrap_or_default().to_owned();
-    let literal = match direct.base.host() {
-        Some(url::Host::Ipv4(ip)) => Some(IpAddr::V4(ip)),
-        Some(url::Host::Ipv6(ip)) => Some(IpAddr::V6(ip)),
-        _ => None,
+    let addresses = match direct.base.host() {
+        Some(url::Host::Ipv4(ip)) => vec![IpAddr::V4(ip)],
+        Some(url::Host::Ipv6(ip)) => vec![IpAddr::V6(ip)],
+        _ => direct.addresses.clone(),
     };
-    let local = match literal {
-        Some(ip) => is_local_or_private(ip),
-        None => !direct.addresses.is_empty() && direct.addresses.iter().all(|ip| is_local_or_private(*ip)),
-    };
-    if local {
-        Ok(())
-    } else {
-        Err(TransportError::PlainHttpPublic(host))
+    if addresses.is_empty() {
+        return Err(TransportError::PlainHttpPublic(host));
     }
+    // Tailscale reaches a peer's 100.64.0.0/10 address from this computer's own; a carrier's network doesn't.
+    let over_tailscale = |ip: IpAddr| in_tailscale_v4(ip) && source(ip).is_some_and(in_tailscale_v4);
+    match addresses.iter().find(|ip| !is_local_or_private(**ip) && !over_tailscale(**ip)) {
+        None => Ok(()),
+        Some(ip) if in_tailscale_v4(*ip) => Err(TransportError::PlainHttpNotTailscale(host)),
+        Some(_) => Err(TransportError::PlainHttpPublic(host)),
+    }
+}
+
+/// Whether `ip` is in 100.64.0.0/10, which Tailscale and carrier-grade NAT both use, written as IPv4 or IPv4-mapped.
+fn in_tailscale_v4(ip: IpAddr) -> bool {
+    let IpAddr::V4(v4) = ip.to_canonical() else { return false };
+    let [a, b, ..] = v4.octets();
+    a == 100 && (64..=127).contains(&b)
+}
+
+/// The address this computer sends from to reach `ip`, as its routing table picks it. Connecting a UDP socket sends
+/// nothing.
+fn source_toward(ip: IpAddr) -> Option<IpAddr> {
+    let ip = ip.to_canonical();
+    let any: IpAddr = if ip.is_ipv4() { Ipv4Addr::UNSPECIFIED.into() } else { Ipv6Addr::UNSPECIFIED.into() };
+    let socket = std::net::UdpSocket::bind((any, 0)).ok()?;
+    socket.connect((ip, 9)).ok()?;
+    Some(socket.local_addr().ok()?.ip())
 }
 
 /// A Hermes install's id as this app keeps it: a hash, so the id itself, which `/api/status` shows anyone who asks,
@@ -1114,7 +1139,8 @@ impl Dashboard {
                     s if s.is_success() => {}
                     StatusCode::UNAUTHORIZED => return Err(TransportError::BadCredentials),
                     StatusCode::TOO_MANY_REQUESTS => return Err(TransportError::RateLimited),
-                    _ => return Err(unexpected(login, &sign_in.headers).await),
+                    // A 422, or a gateway in front, can echo the body back, password and all.
+                    _ => return Err(unexpected_sent(login, &sign_in.headers, password).await),
                 }
                 dashboard.keep_cookies(&login);
                 Ok(dashboard)
@@ -1212,7 +1238,7 @@ impl Dashboard {
                         Some(Ok(Message::Close(frame))) => {
                             break frame.map_or("closed by the server".into(), |f| {
                                 // A gateway in front of the dashboard may close with the header values it turned down.
-                                let why = if repeats_header(&f.reason, &headers) { HIDDEN_FOR_HEADERS } else { f.reason.as_str() };
+                                let why = if repeats_header(&f.reason, &headers) { HIDDEN } else { f.reason.as_str() };
                                 format!("closed by the server ({} {why})", f.code)
                             });
                         }
@@ -2273,28 +2299,29 @@ pub fn profile_create_allowed(body: Option<&str>) -> bool {
 }
 
 /// Said in place of an error body that can't be shown.
-const HIDDEN_FOR_HEADERS: &str = "(not shown, as it may repeat your extra request headers)";
+const HIDDEN: &str = "(not shown, as it may repeat your password or a request header)";
 
 /// How much of a header value `repeats_header` counts as repeating it.
 const HEADER_PIECE: usize = 8;
 
-/// Whether `text` repeats one of the owner's extra request header values, as a gateway such as Cloudflare Access can
-/// in the page it turns a request away with. Any `HEADER_PIECE` bytes of a value count, so a value cut short, as in
-/// a WebSocket close reason, still does. Header values `to_str` accepts are ASCII.
+/// Whether `text` repeats one of the values in `headers`: the owner's extra request headers, as a gateway such as
+/// Cloudflare Access can in the page it turns a request away with, or a token sent with them. Any
+/// `HEADER_PIECE` bytes of a value count, so a value cut short, as in a WebSocket close reason, still does.
 fn repeats_header(text: &str, headers: &HeaderMap) -> bool {
-    repeats_any(text, headers.values().filter_map(|v| v.to_str().ok()))
+    repeats_any(text.as_bytes(), headers.values().map(HeaderValue::as_bytes))
 }
 
 /// `repeats_header` for an address, whose host the URL parser lowercased.
 fn address_repeats_header(address: &str, headers: &HeaderMap) -> bool {
-    let values: Vec<String> = headers.values().filter_map(|v| v.to_str().ok()).map(str::to_ascii_lowercase).collect();
-    repeats_any(&address.to_ascii_lowercase(), values.iter().map(String::as_str))
+    let values: Vec<Vec<u8>> = headers.values().map(|v| v.as_bytes().to_ascii_lowercase()).collect();
+    repeats_any(address.to_ascii_lowercase().as_bytes(), values.iter().map(Vec::as_slice))
 }
 
-fn repeats_any<'a>(text: &str, values: impl Iterator<Item = &'a str>) -> bool {
+/// Compared as bytes: a password need not be ASCII, and a piece of it need not end on a character.
+fn repeats_any<'a>(text: &[u8], values: impl Iterator<Item = &'a [u8]>) -> bool {
     values.filter(|v| !v.is_empty()).any(|v| {
         let piece = v.len().min(HEADER_PIECE);
-        (0..=v.len() - piece).any(|i| text.contains(&v[i..i + piece]))
+        v.windows(piece).any(|p| text.windows(piece).any(|t| t == p))
     })
 }
 
@@ -2315,37 +2342,48 @@ fn strings_in(v: &serde_json::Value, out: &mut String) {
     }
 }
 
-/// An error body as it may be shown, for a request that carried `headers`. With none, its start as sent. With extra
-/// request headers, only the dashboard's own JSON `detail`, whole and repeating none of their values: a refusal (401,
-/// 403, 407) or any other page could come from a gateway in front, which can echo a value it turned down.
+/// An error body as it may be shown, for a request that carried `headers`: its extra request headers, and a token it
+/// sent. With none, its start as sent. Otherwise only the dashboard's own JSON `detail`, whole and repeating none of
+/// their values: a refusal (401, 403, 407) or any other page could come from a gateway in front, which can echo a value
+/// it turned down.
 fn shown_body(status: StatusCode, text: &str, headers: &HeaderMap) -> String {
     if headers.is_empty() {
         return text.chars().take(300).collect();
     }
     if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::PROXY_AUTHENTICATION_REQUIRED) {
-        return HIDDEN_FOR_HEADERS.into();
+        return HIDDEN.into();
     }
     let detail = serde_json::from_str::<serde_json::Value>(text).ok().and_then(|v| v.get("detail").cloned());
-    let Some(detail) = detail else { return HIDDEN_FOR_HEADERS.into() };
+    let Some(detail) = detail else { return HIDDEN.into() };
     let mut said = String::new();
     strings_in(&detail, &mut said);
     if repeats_header(text, headers) || repeats_header(&said, headers) {
-        return HIDDEN_FOR_HEADERS.into();
+        return HIDDEN.into();
     }
     json!({ "detail": detail }).to_string().chars().take(300).collect()
 }
 
 /// A failed answer as an error, with the start of its body. Reads only the first few KB, so a huge or endless error
-/// body can't fill memory. `headers`: the extra request headers the request carried (`shown_body`).
-async fn unexpected(mut resp: reqwest::Response, headers: &HeaderMap) -> TransportError {
+/// body can't fill memory. `headers`: what the request carried that mustn't be shown (`shown_body`).
+async fn unexpected(resp: reqwest::Response, headers: &HeaderMap) -> TransportError {
+    unexpected_sent(resp, headers, "").await
+}
+
+/// `unexpected` for a request whose body carried `secret`, such as a password: an error that repeats it anywhere, as
+/// sent or JSON-escaped, is shown as `HIDDEN`. Unlike extra request headers, it doesn't limit what else is shown.
+async fn unexpected_sent(mut resp: reqwest::Response, headers: &HeaderMap, secret: &str) -> TransportError {
     const KEEP: usize = 4096;
+    let forms = sent_forms(secret);
+    let forms = || forms.iter().map(|f| f.as_bytes());
     // A redirect that came back unfollowed: `same_origin_redirects` stopped it at another site.
     if resp.status().is_redirection() {
         let to = resp.headers().get(header::LOCATION).and_then(|l| resp.url().join(l.to_str().ok()?).ok());
         if let Some(to) = to.filter(|to| to.origin() != resp.url().origin()) {
             // A gateway can put a header value it turned down into the address, even the host name.
             let to = to.origin().ascii_serialization();
-            return if address_repeats_header(&to, headers) { TransportError::RedirectedHidden } else { TransportError::Redirected(to) };
+            let lower: Vec<Vec<u8>> = forms().map(<[u8]>::to_ascii_lowercase).collect();
+            let hidden = address_repeats_header(&to, headers) || repeats_any(to.as_bytes(), lower.iter().map(Vec::as_slice));
+            return if hidden { TransportError::RedirectedHidden } else { TransportError::Redirected(to) };
         }
     }
     let status = resp.status().as_u16();
@@ -2357,8 +2395,31 @@ async fn unexpected(mut resp: reqwest::Response, headers: &HeaderMap) -> Transpo
         }
     }
     head.truncate(KEEP);
-    let body = shown_body(resp.status(), &String::from_utf8_lossy(&head), headers);
+    let text = String::from_utf8_lossy(&head);
+    let mut said = text.to_string();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+        strings_in(&v, &mut said);
+    }
+    let body = if repeats_any(said.as_bytes(), forms()) { HIDDEN.into() } else { shown_body(resp.status(), &text, headers) };
     TransportError::Unexpected { status, body }
+}
+
+/// `secret` as an error body might repeat it: as sent, JSON-escaped, and JSON-escaped to ASCII as Python's `json` does.
+fn sent_forms(secret: &str) -> Vec<String> {
+    if secret.is_empty() {
+        return vec![];
+    }
+    let quoted = serde_json::to_string(secret).expect("a string serializes");
+    let escaped = &quoted[1..quoted.len() - 1];
+    let ascii = escaped.chars().fold(String::new(), |mut out, c| {
+        if c.is_ascii() {
+            out.push(c);
+        } else {
+            c.encode_utf16(&mut [0; 2]).iter().for_each(|u| out.push_str(&format!("\\u{u:04x}")));
+        }
+        out
+    });
+    vec![secret.to_owned(), escaped.to_owned(), ascii]
 }
 
 /// How far a connection test got before it failed, so setup can say what to fix.

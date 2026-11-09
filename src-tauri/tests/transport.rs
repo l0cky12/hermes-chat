@@ -2633,25 +2633,50 @@ async fn something_that_isnt_hermes_never_gets_the_password() {
 
 #[test]
 fn plain_http_goes_only_to_this_computer_a_lan_or_tailscale() {
-    for ip in [
-        "127.0.0.1",
-        "10.1.2.3",
-        "172.16.0.9",
-        "192.168.1.10",
-        "169.254.3.4",
-        "100.64.0.1",
-        "100.127.255.254",
-        "::1",
-        "fd7a:115c:a1e0::1",
-        "fc00::5",
-        "fe80::1",
-        "::ffff:192.168.1.10",
-    ] {
+    for ip in ["127.0.0.1", "10.1.2.3", "172.16.0.9", "192.168.1.10", "169.254.3.4", "::1", "fd7a:115c:a1e0::1", "fc00::5", "fe80::1", "::ffff:192.168.1.10"] {
         assert!(transport::is_local_or_private(ip.parse().unwrap()), "{ip}");
     }
-    for ip in ["8.8.8.8", "100.63.255.255", "100.128.0.1", "172.32.0.1", "2001:4860:4860::8888", "::ffff:8.8.8.8", "0.0.0.0"] {
+    // 100.64.0.0/10 is carrier-grade NAT as well as Tailscale, so it counts only when Tailscale carries it.
+    for ip in [
+        "8.8.8.8",
+        "100.64.0.1",
+        "100.127.255.254",
+        "::ffff:100.64.0.1",
+        "100.63.255.255",
+        "100.128.0.1",
+        "172.32.0.1",
+        "2001:4860:4860::8888",
+        "::ffff:8.8.8.8",
+        "0.0.0.0",
+    ] {
         assert!(!transport::is_local_or_private(ip.parse().unwrap()), "{ip}");
     }
+}
+
+#[test]
+fn plain_http_to_100_64_goes_only_over_tailscale() {
+    let direct = |url: &str, addresses: &[&str]| transport::DirectUrl {
+        base: Url::parse(url).unwrap(),
+        addresses: addresses.iter().map(|a| a.parse().unwrap()).collect(),
+    };
+    let tailnet = |_: IpAddr| Some("100.119.13.105".parse().unwrap());
+    let carrier = |_: IpAddr| Some("10.2.1.121".parse().unwrap());
+    let both = |ip: IpAddr| Some(if ip.to_string() == "100.100.64.121" { "100.119.13.105" } else { "10.2.1.121" }.parse().unwrap());
+    for url in ["http://100.100.64.121:9119/", "http://[::ffff:100.100.64.121]:9119/"] {
+        assert!(transport::check_plain_http_from(&direct(url, &[]), tailnet).is_ok(), "{url}");
+    }
+    assert!(transport::check_plain_http_from(&direct("http://hermes:9119/", &["100.100.64.121", "192.168.1.10"]), both).is_ok());
+    assert!(transport::check_plain_http_from(&direct("https://100.100.64.121/", &[]), carrier).is_ok());
+    for (url, addresses) in [("http://100.64.0.1:9119/", &[][..]), ("http://hermes:9119/", &["100.100.64.121", "100.64.0.1"][..])] {
+        let refused = transport::check_plain_http_from(&direct(url, addresses), both).unwrap_err();
+        assert!(matches!(refused, TransportError::PlainHttpNotTailscale(_)), "{url}: {refused:?}");
+        let said = refused.to_string();
+        assert!(said.starts_with("Plain http:// is only used") && said.contains("over Tailscale"), "{said}");
+    }
+    // 100.64.0.1 is no tailnet peer, so the routing table sends it out through the LAN's gateway.
+    let real = transport::check_plain_http(&direct("http://100.64.0.1:9119/", &[])).unwrap_err();
+    assert!(matches!(real, TransportError::PlainHttpNotTailscale(_)), "{real:?}");
+    assert!(transport::check_plain_http(&direct("http://127.0.0.1:9119/", &[])).is_ok());
 }
 
 #[tokio::test]
@@ -2662,7 +2687,6 @@ async fn a_plain_http_route_to_a_public_address_is_refused() {
     };
     assert!(transport::check_plain_http(&direct("http://192.168.1.10:9119/", &[])).is_ok());
     assert!(transport::check_plain_http(&direct("http://[fd7a:115c:a1e0::9]:9119/", &[])).is_ok());
-    assert!(transport::check_plain_http(&direct("http://hermes:9119/", &["100.100.64.121"])).is_ok());
     assert!(transport::check_plain_http(&direct("https://hermes.example.com/", &["203.0.113.7"])).is_ok());
     let refused = transport::check_plain_http(&direct("http://203.0.113.7:9119/", &[])).unwrap_err().to_string();
     assert!(refused.contains("203.0.113.7 is a public address"), "{refused}");
@@ -3030,4 +3054,46 @@ async fn a_connection_with_several_routes_limits_each_step_and_one_with_a_single
     // A single route waits on a slow sign-in as long as the whole attempt allows (ADR 0056).
     let slow = stalling_at("/auth/password-login").await;
     assert!(tokio::time::timeout(Duration::from_secs(1), open_route(&slow, None, |_| {})).await.is_err(), "a single route gave up early");
+}
+
+/// FastAPI's 422 for a body that failed validation, which echoes the request it was sent as `input`.
+async fn echo_422(Json(body): Json<Value>) -> Response {
+    (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"detail": [{"type": "missing", "loc": ["body", "totp"], "msg": "Field required", "input": body}]})))
+        .into_response()
+}
+
+#[tokio::test]
+async fn a_failed_password_sign_in_never_shows_the_password() {
+    let echo_text = |Json(body): Json<Value>| async move { (StatusCode::BAD_GATEWAY, format!("upstream refused {body}")).into_response() };
+    // As Python's json.dumps writes it, non-ASCII as \uXXXX, inside a page that isn't JSON.
+    let echo_ascii = |Json(body): Json<Value>| async move {
+        let ascii: String = body.to_string().chars().map(|c| if c.is_ascii() { c.to_string() } else { format!("\\u{:04x}", c as u32) }).collect();
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("<pre>{ascii}</pre>")).into_response()
+    };
+    let base_422 = serve(Router::new().route("/auth/password-login", post(echo_422))).await;
+    let base_text = serve(Router::new().route("/auth/password-login", post(echo_text))).await;
+    let base_ascii = serve(Router::new().route("/auth/password-login", post(echo_ascii))).await;
+    for (base, status) in [(&base_422, 422), (&base_text, 502), (&base_ascii, 500)] {
+        for password in ["hunter2", "pässwörd-ünïcode", "Q", "bell\u{7}"] {
+            for headers in [sign_in(password).headers, access_sign_in().headers] {
+                let signing_in = SignIn { headers, ..sign_in(password) };
+                let err = sign_in_at(base, &signing_in).await.err().unwrap();
+                let shown = err.to_string();
+                assert!(matches!(&err, TransportError::Unexpected { status: s, .. } if *s == status), "{err:?}");
+                assert!(!shown.contains(password), "{password:?} shown: {shown}");
+                assert!(shown.contains("(not shown, as it may repeat your password or a request header)"), "{password:?} shown: {shown}");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_failed_password_sign_in_shows_a_body_that_doesnt_repeat_the_password() {
+    let gateway = || async { (StatusCode::BAD_GATEWAY, "Bad Gateway: upstream hermes is down").into_response() };
+    let disabled = || async { (StatusCode::FORBIDDEN, Json(json!({"detail": "This account is disabled"}))).into_response() };
+    for (route, status, said) in [(post(gateway), 502, "upstream hermes is down"), (post(disabled), 403, "This account is disabled")] {
+        let base = serve(Router::new().route("/auth/password-login", route)).await;
+        let err = sign_in_at(&base, &sign_in("hunter2")).await.err().unwrap();
+        assert!(matches!(&err, TransportError::Unexpected { status: s, body } if *s == status && body.contains(said)), "{err:?}");
+    }
 }
