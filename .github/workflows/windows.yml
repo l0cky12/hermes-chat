@@ -47,8 +47,19 @@ jobs:
         working-directory: src-tauri
         env:
           RUSTFLAGS: ""
+      # The bundler downloads NSIS from GitHub releases on every run, and a 5xx there fails the whole job. A retry
+      # rebuilds only the bundle: the compiled release binary is kept.
       - name: Build the NSIS installer
-        run: npx tauri build --bundles nsis
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/tauri-build.log"
+          for try in 1 2 3; do
+            npx tauri build --bundles nsis 2>&1 | tee "$log" && exit 0
+            status=$(grep -o 'http status: 5[0-9][0-9]' "$log" | head -1) || exit 1
+            echo "::warning::A download answered $status (try $try of 3)"
+            sleep 30
+          done
+          exit 1
       - uses: actions/upload-artifact@v4
         with:
           name: hermes-chat-windows-nsis
