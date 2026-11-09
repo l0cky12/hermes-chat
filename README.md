@@ -126,7 +126,7 @@ The interface is available in these languages:
 
 Pick one in Settings → Appearance → **Interface language**. **System**, the default, uses the first of your desktop's languages that Hermes Chat has, and English when it has none of them. The change applies at once, and open chats and drafts stay as they are. Dates and numbers in the chat list and the Usage screens follow the language and your desktop's region, for example `5min` and `12.345` in Spanish.
 
-The interface is being translated screen by screen. Settings → Appearance and the names of the Settings tabs are translated now. Other screens are still in English, and a word that a language doesn't have yet shows in English. The Spanish was written with machine help; corrections are welcome. See [ADR 0100](docs/adr/0100-interface-text-comes-from-a-typed-catalogue-and-the-language-is-an-appearance-setting.md).
+The interface is being translated screen by screen. Settings → Appearance, the Settings heading and search box, and the names of the Settings tabs are translated now. Other screens are still in English, and a word that a language doesn't have yet shows in English. The Spanish was written with machine help; corrections are welcome. See [ADR 0100](docs/adr/0100-interface-text-comes-from-a-typed-catalogue-and-the-language-is-an-appearance-setting.md).
 
 ### Keyboard shortcuts
 
