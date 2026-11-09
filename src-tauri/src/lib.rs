@@ -1695,7 +1695,8 @@ mod tests {
             cmd: "hermes_send_file".into(),
             callback: tauri::ipc::CallbackFn(0),
             error: tauri::ipc::CallbackFn(1),
-            url: "tauri://localhost".parse().unwrap(),
+            // The app's own page, where Tauri's permissions let it call the app's commands.
+            url: if cfg!(windows) { "http://tauri.localhost" } else { "tauri://localhost" }.parse().unwrap(),
             body: tauri::ipc::InvokeBody::Json(serde_json::json!({
                 "head": r#"{"jsonrpc":"2.0","id":1,"method":"prompt.submit","params":{"text":""#,
                 "path": path,
@@ -1744,7 +1745,8 @@ mod tests {
         let leaked = heard("PRIVATE KEY");
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(!leaked, "the stub dashboard got the bytes of a file nobody attached");
-        assert!(sent.is_err(), "hermes_send_file answered Ok for a file nobody attached");
+        let refused = sent.expect_err("hermes_send_file answered Ok for a file nobody attached");
+        assert!(refused.contains("wasn't attached in this app"), "refused for another reason: {refused}");
         assert!(delivered, "the stub dashboard didn't get the attached file");
     }
 }
