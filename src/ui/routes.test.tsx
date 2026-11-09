@@ -172,6 +172,17 @@ describe("Setup's Routes list", () => {
     expect([d.mode, d.sshTarget]).toEqual(["ssh", "liam@hermes"]);
   });
 
+  it("refuses an address with a token in it, and says why", async () => {
+    const user = userEvent.setup();
+    const b = backend({});
+    render(<Onboarding mode="add" initial={BLANK} probe={b.probe} reach={b.reach} onConnect={vi.fn()} onCancel={() => {}} onDone={() => {}} />);
+    await user.selectOptions(screen.getByLabelText("Connect through"), "web");
+    await user.type(screen.getByLabelText("Dashboard URL"), "https://token@hermes.example.com/");
+    expect(screen.getByLabelText("Dashboard URL").getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByText(/can't hold a user name, password or token/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("clears a route's saved header values once its address changes", async () => {
     const user = userEvent.setup();
     const b = backend({});

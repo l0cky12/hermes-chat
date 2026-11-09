@@ -382,14 +382,12 @@ export function stateOfFailure(f: Failure): { state: CapabilityState; why: strin
 }
 
 /**
- * Takes anything that looks like a secret out of text the owner may copy: the Logs screen's rules (logs.ts: cookies,
- * authorization headers, bearer and web tokens, provider keys, user names and passwords in URLs, `secret=` pairs),
- * plus a WebSocket ticket in a URL. The webview never has the password or the extra request headers' values, so this
- * is a second line.
+ * Takes anything that looks like a secret out of text the owner may copy, by the Logs screen's rules (logs.ts: cookies,
+ * authorization headers, bearer and web tokens, provider keys, user names and passwords in URLs, tickets and keys in URL
+ * queries, `secret=` pairs). The webview never has the password or the extra request headers' values, so this is a
+ * second line.
  */
-export function redact(text: string): string {
-  return redactSecrets(text.replace(/([?&](?:ticket|token|key)=)[^&\s"']+/gi, "$1[redacted]")).text;
-}
+export const redact = (text: string): string => redactSecrets(text).text;
 
 /** A short string from an answer, or nothing: only plain text, and no more than `max` characters. */
 const plainText = (v: unknown, max: number) => (typeof v === "string" && v.trim() && v.length <= max && !/[\u0000-\u001f\u007f]/.test(v) ? v.trim() : undefined);
