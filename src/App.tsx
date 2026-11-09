@@ -50,7 +50,7 @@ import type { SubagentId } from "./hermes/subagents";
 import { botActivity, isBotChat, isBotChatTitle, newInBotChatNote, type Bot } from "./hermes/bots";
 import { blocksRestore, inboxAcks, inboxEntries, inboxScope, needsOwner, type InboxEntry } from "./hermes/inbox";
 import { handoffs as handoffsOf, nextHandoffChange, outstandingIds, type Handoff, type StopWaiting } from "./hermes/dispatched";
-import { ChatPane, type FollowUpHost, type JumpTarget } from "./ui/ChatPane";
+import { ChatPane, type Comparing, type FollowUpHost, type JumpTarget } from "./ui/ChatPane";
 import type { ChatPin } from "./ui/ChatMenu";
 import { BranchDialog, BranchedFrom } from "./ui/Branch";
 import { MembershipDialog, MembershipStatus, needsOwner as membershipNeedsOwner } from "./ui/MembershipSync";
@@ -708,6 +708,16 @@ type Pane = {
   worktree?: WorktreeStart;
 };
 
+/** Compare (ADR 0101): two panes whose sends go to both. Each side is a pane and the chat it shows; `model` is what a side's New chat pane starts on. */
+type CompareSide = { pane: string; chatId: string | null; model?: ModelPick };
+type Compare = readonly [CompareSide, CompareSide];
+
+/**
+ * Starts a pane's chat if it hasn't started, and sends to it. `mirrored`: the message was typed in the other compared
+ * pane, so this pane's own draft stays as it is. Resolves whether the message reached the chat's outbox.
+ */
+type Deliver = (text: string, attachments: Attachment[], skill: SkillCall | undefined, mirrored: boolean) => Promise<boolean>;
+
 let panesMade = 0;
 /** A pane's key, which is also its name to Hermes for what is on screen (transport.ts `open`). */
 const newPaneKey = () => `pane-${++panesMade}`;
@@ -1026,6 +1036,15 @@ export function Main({
   const active = panes.find((p) => p.key === activeKey) ?? panes[0];
   const other = panes.find((p) => p !== active);
   const split = panes.length > 1;
+  // Compare lasts while both its panes show the chats it has for them: going elsewhere in either, closing one, a
+  // deleted chat or another profile ends it.
+  const [compare, setCompare] = useState<Compare>();
+  const comparing = compare?.every((side) => panes.some((p) => p.key === side.pane && p.chatId === side.chatId)) ? compare : undefined;
+  useEffect(() => {
+    if (compare && !comparing) setCompare(undefined);
+  }, [compare, comparing]);
+  /** Each pane's latest `deliver`, so a compared pane can send in its partner's chat as that pane would. */
+  const delivers = useRef(new Map<string, RefObject<Deliver>>()).current;
   const [listOpen, setListOpen] = useState(true);
   const [toast, setToast] = useState<Toast | null>(notSaved ? { text: notSaved, at: Date.now() } : null);
   // This app's diagnostics for the Logs screen (ADR 0033): the connection's changes, and the failures the app showed.
@@ -1501,6 +1520,23 @@ export function Main({
     setOutputsOpen(false);
     setUsageOpen(false);
     rememberChat(chatId);
+  });
+
+  // The other pane, or a new one, goes to the New chat pane on `model`; the pane Compare started from keeps its chat and
+  // stays the active one. A chat the other pane showed stays in the list.
+  const startCompare = (from: string, model: ModelPick) => guard(() => {
+    const origin = panes.find((p) => p.key === from);
+    if (!origin) return;
+    navGen.current++;
+    setPanelHidden(true);
+    const partner = panes.find((p) => p.key !== from)?.key ?? newPaneKey();
+    if (split) patchPane(partner, { chatId: null, picked: undefined, jump: undefined, subagent: undefined, worktree: undefined, draftError: undefined });
+    else setPanes((ps) => [...ps, { key: partner, view: newView(), chatId: null, tabs: [null] }]);
+    setCompare([{ pane: from, chatId: origin.chatId }, { pane: partner, chatId: null, model }]);
+    activeKeyRef.current = from;
+    setActiveKey(from);
+    setReopening(undefined);
+    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(`[data-pane="${CSS.escape(from)}"] .composer textarea`)?.focus());
   });
 
   /** Opens a chat in the left (0) or right (1) pane, opening the right one if there's one pane. */
@@ -2351,10 +2387,17 @@ export function Main({
     </>
   );
 
+  // A compared send goes to both chats, so it waits until neither has a reply running or messages waiting.
+  const compareBusy =
+    comparing &&
+    (status !== "connected" ||
+      comparing.some((side) => side.chatId !== null && (chats.find((c) => c.id === side.chatId)?.running || hermes.getSnapshot().queues[side.chatId]?.items.length)));
   const slots: PaneSlot[] = panes.map((p, i) => {
     const listed = p.chatId === null ? undefined : chats.find((c) => c.id === p.chatId);
     const chat = listed ?? draftChat(p.draftError);
     const isActive = p.key === active.key;
+    const side = comparing?.find((s) => s.pane === p.key);
+    const partner = comparing?.find((s) => s !== side);
     return {
       key: p.key,
       title: chat.title,
@@ -2399,6 +2442,7 @@ export function Main({
             if (panesRef.current.find((now) => now.key === p.key)?.view !== p.view) return;
             const stillActive = activeKeyRef.current === p.key;
             patchPane(p.key, { chatId: id, picked: undefined, worktree: undefined });
+            setCompare((c) => c?.map((s) => (s.pane === p.key ? { ...s, chatId: id } : s)) as Compare | undefined);
             setReopening(undefined);
             if (stillActive) rememberChat(id);
           }}
@@ -2406,6 +2450,17 @@ export function Main({
             if (panesRef.current.find((now) => now.key === p.key)?.view === p.view) patchPane(p.key, { draftError: reason });
           }}
           onToast={(text) => setToast({ text, at: Date.now() })}
+          delivers={delivers}
+          compare={
+            side &&
+            partner && {
+              partner: () => delivers.get(partner.pane)?.current,
+              startModel: side.model,
+              refuse: compareBusy ? "Compare sends to both chats, so it waits until both replies have ended. Nothing was sent." : undefined,
+              onStop: () => setCompare(undefined),
+            }
+          }
+          onCompare={comparing ? undefined : (pick) => startCompare(p.key, pick)}
           onMemorySettings={
             hermes.memory
               ? () => {
@@ -3290,6 +3345,9 @@ function ChatView({
   onStarted,
   onDraftError,
   onToast,
+  delivers,
+  compare,
+  onCompare,
   onMemorySettings,
   pin,
   onSettle,
@@ -3345,6 +3403,12 @@ function ChatView({
   onOpenWorktree: (w: WorktreeChat) => void;
   onStarted: (id: string) => void;
   onDraftError: (reason: string) => void;
+  /** Where this pane keeps its `deliver`, by `paneKey`, for a compared pane to send through. */
+  delivers: Map<string, RefObject<Deliver>>;
+  /** One of two compared panes (ADR 0101): a send here goes to `partner` too. `startModel`: what this New chat pane starts on. */
+  compare?: Comparing & { partner: () => Deliver | undefined; startModel?: ModelPick };
+  /** Starts Compare from this pane with a second model, from the model picker. */
+  onCompare?: (pick: ModelPick) => void;
   /** Opens a page of the compatibility guide in the owner's browser. */
   openGuide: (url: string) => void;
   onToast: (text: string) => void;
@@ -3383,7 +3447,7 @@ function ChatView({
   useEffect(() => setChosen(undefined), [chatId, profile]);
   // No default for `project`: an explicit undefined is "no project", never the one this pane last drew.
   const settingsFor = (project: { name: string; defaults?: ProjectDefaults } | undefined) =>
-    resolveNewChat({ chosen, chosenFolder: worktree?.path, project, sticky, profilePick: catalog?.defaultPick, profileEffort: catalog?.defaultEffort });
+    resolveNewChat({ chosen: chosen ?? compare?.startModel, chosenFolder: worktree?.path, project, sticky, profilePick: catalog?.defaultPick, profileEffort: catalog?.defaultEffort });
   const startSettings = settingsFor(shownProject);
   const [applying, setApplying] = useState(false);
   useEffect(() => setApplying(false), [chatId]);
@@ -3447,36 +3511,48 @@ function ChatView({
     }
   };
 
-  // A failed send stays in its chat's outbox. A failure to start a chat restores the New chat draft.
-  const send = async (text: string, attachments: Attachment[], skill?: SkillCall) => {
-    const paths = attachments.map((a) => a.path);
-    screenshots?.hold(paths);
-    const typed = savedDrafts.take(shownDraft);
-    // In no outbox until its chat exists: an update's restart meanwhile keeps it as the draft (unsaved.ts).
+  // A failed send stays in its chat's outbox. A failure to start a chat restores the New chat draft, unless the message
+  // was typed in the other compared pane: there it still is.
+  const deliver: Deliver = async (text, attachments, skill, mirrored) => {
+    // In no outbox until its chat exists: an update's restart meanwhile keeps it as the draft (unsaved.ts). A mirrored
+    // message is held with no text, so it doesn't go either, and is kept once, as the other pane's draft.
+    const typed = mirrored ? "" : savedDrafts.take(shownDraft);
     const held: Sending = { key: shownDraft, text: typed };
     sending.add(held);
     const to = await chatToSendIn().finally(() => sending.delete(held));
     if (held.captured) {
+      if (mirrored) return false;
       // Saved as a draft for the restart, so it doesn't go. Should the restart fail, it is back in the composer.
       const now = savedDrafts.get(held.key);
       savedDrafts.set(held.key, now ? `${now}\n\n${typed}` : typed);
-      screenshots?.sent(attachments, false);
-      return;
+      return false;
     }
     if ("delivery" in to) {
-      savedDrafts.putBack(draftOf(null), typed);
-      screenshots?.sent(attachments, false);
-      return;
+      if (!mirrored) savedDrafts.putBack(draftOf(null), typed);
+      return false;
     }
+    await hermes.send(to.id, text, attachments, skill);
+    return true;
+  };
+  const deliverRef = useRef(deliver);
+  deliverRef.current = deliver;
+  useLayoutEffect(() => {
+    delivers.set(paneKey, deliverRef);
+    return () => void (delivers.get(paneKey) === deliverRef && delivers.delete(paneKey));
+  }, [delivers, paneKey]);
+  // Screenshots are held and let go once for both compared chats: letting go after the first would delete a capture
+  // the second still uploads.
+  const send = async (text: string, attachments: Attachment[], skill?: SkillCall) => {
+    const paths = attachments.map((a) => a.path);
+    screenshots?.hold(paths);
+    const partner = compare?.partner();
+    const went = await Promise.all([deliver(text, attachments, skill, false), partner?.(text, attachments, skill, true)]);
+    if (!went.includes(true)) return screenshots?.sent(attachments, false);
     try {
-      await hermes.send(to.id, text, attachments, skill);
-    } finally {
-      try {
-        await screenshotWiring.syncOutbox?.();
-        screenshots?.finish(paths);
-      } catch {
-        // Retain ownership until Rust protects the outbox, as in the single-pane send path.
-      }
+      await screenshotWiring.syncOutbox?.();
+      screenshots?.finish(paths);
+    } catch {
+      // Retain ownership until Rust protects the outbox, as in the single-pane send path.
     }
   };
   // The chat's queue, shared by every pane showing it (ADR 0018). A chat not started yet has none.
@@ -3727,6 +3803,7 @@ function ChatView({
       commands={commands}
       onDismissSideQuestion={(id) => hermes.dismissSideQuestion(chat.id, id)}
       followUp={followUp}
+      compare={compare}
       headActions={
         <>
           {started && inWorktree && (
@@ -3817,6 +3894,7 @@ function ChatView({
           favorites={favorites}
           onPick={pickModel}
           onToggleFavorite={toggleModelFavorite}
+          onCompare={onCompare}
         >
           {started && (
             <ApprovalsPill key={chat.id} approvals={chat.live?.approvals} connected={status === "connected"} profile={profile} onPick={(pick) => hermes.setApprovals(chat.id, pick)} />
