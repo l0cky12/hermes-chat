@@ -44,7 +44,7 @@ describe("The chat header", () => {
     const actions = document.querySelector<HTMLElement>(".chat-head-actions")!;
     // Only these are buttons on the bar now; the rest went into More or onto the tab strip.
     expect([...actions.querySelectorAll("button")].map(named)).toEqual(["Open the side panel", "Find in chat", "More"]);
-    for (const gone of ["Export as Markdown…", "Copy chat link", "Settle", "Archive", "Split into two panes"])
+    for (const gone of ["Export…", "Copy chat link", "Settle", "Archive", "Split into two panes"])
       expect(actions.querySelector(`[aria-label="${gone}"], [title="${gone}"]`)).toBeNull();
     // Splitting is Ctrl+\, a tab's menu or a drag (ADR 0055), so the tab strip has no split buttons either.
     expect(document.querySelector('.tab-strip [aria-label^="Split into two panes"]')).toBeNull();
@@ -73,8 +73,8 @@ describe("The chat header", () => {
     await user.keyboard("{Enter}");
     const menu = screen.getByRole("menu", { name: "More actions for Nightly backup" });
     expect(more.getAttribute("aria-expanded")).toBe("true");
-    expect([...menu.querySelectorAll("[role=menuitem]")].map((m) => m.textContent)).toEqual(["Export as Markdown…", "Copy chat link", "PinP", "Settle", "Archive", "Delete chat…"]);
-    expect(document.activeElement!.textContent).toBe("Export as Markdown…");
+    expect([...menu.querySelectorAll("[role=menuitem]")].map((m) => m.textContent)).toEqual(["Export…", "Copy chat link", "PinP", "Settle", "Archive", "Delete chat…"]);
+    expect(document.activeElement!.textContent).toBe("Export…");
     await user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}");
     expect(document.activeElement!.textContent).toBe("Settle");
     await user.keyboard("{ArrowUp}{ArrowUp}{ArrowUp}{ArrowUp}");

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatMarkdown } from "./exportChat";
+import { chatJson, chatMarkdown } from "./exportChat";
 import { FakeHermes, row } from "./fakeHermes";
 import { IMPORTS_KEY, IMPORT_LIMITS, ImportFileError, ImportRefusedError, importLedger, planImport, type ImportPlan } from "./importTranscripts";
 import { memoryCache } from "./memoryCache";
@@ -144,6 +144,38 @@ const exported = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 const jsonl = (...sessions: unknown[]) => sessions.map((s) => JSON.stringify(s)).join("\n") + "\n";
+
+describe("a Hermes Chat JSON export", () => {
+  const timed: Chat = {
+    ...chat,
+    id: "20261102_093000_abc123",
+    items: [
+      { kind: "user", id: "u1", text: "Check the logs", at: 1_762_075_800_000, attachments: ["shot.png"] },
+      { kind: "thinking", id: "t1", text: "Look at journalctl." },
+      { kind: "tool", id: "c1", callId: "call_7", name: "terminal", args: { command: "journalctl -n 5" }, status: "done", result: "line 1\nline 2" },
+      { kind: "assistant", id: "a1", text: "Here they are.", at: 1_762_075_812_250 },
+    ],
+  };
+
+  it("comes back as the same chat, with its id, each message's time, its thinking and its tool calls", async () => {
+    const p = await plan("jsonl", chatJson(timed, EXPORTED), "Deploy notes.json");
+    const c = p.chats[0];
+    expect(c).toMatchObject({ id: "20261102_093000_abc123", messages: 2, toolCalls: 1, startedAt: 1_762_075_800 });
+    expect(rows(p)).toEqual([
+      { role: "user", content: "Check the logs", timestamp: 1_762_075_800 },
+      {
+        role: "assistant",
+        content: "",
+        reasoning: "Look at journalctl.",
+        tool_calls: [{ id: "call_7", type: "function", function: { name: "terminal", arguments: '{"command":"journalctl -n 5"}' } }],
+        timestamp: 1_762_075_800,
+      },
+      { role: "tool", tool_call_id: "call_7", tool_name: "terminal", content: "line 1\nline 2", timestamp: 1_762_075_800 },
+      { role: "assistant", content: "Here they are.", timestamp: 1_762_075_812.25 },
+    ]);
+    expect(p.warnings.join("\n")).toMatch(/attachment names aren't imported/i);
+  });
+});
 
 describe("a Hermes session export (JSONL)", () => {
   it("keeps its ids, times, roles, model and tool calls, and leaves out the rest, saying what", async () => {

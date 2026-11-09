@@ -7,7 +7,7 @@ settle, archive, split right, split down), all looking equally important.
 
 - **Two buttons stay on the bar: the side panel and Find in chat.** They are the ones used most. The project defaults
   button and the worktree chip stay beside them when they apply, as before.
-- **The rest are in a labelled More (⋯) menu.** Export as Markdown, Copy chat link, Settle or Unsettle, and Archive or
+- **The rest are in a labelled More (⋯) menu.** Export…, Copy chat link, Settle or Unsettle, and Archive or
   Restore, each with its name and icon. It is the same menu shell as the chat list's right-click menu (ChatMenu.tsx):
   it opens below its button with the first item focused, the arrow keys move between items, Enter runs one, and Escape
   or a click elsewhere closes it and gives focus back to the button. The button says `aria-haspopup="menu"` and

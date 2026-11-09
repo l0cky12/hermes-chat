@@ -8,11 +8,12 @@ import { FakeHermes, row } from "../hermes/fakeHermes";
 import type { Chat } from "../hermes/model";
 import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
+import type { ImagePage } from "../hermes/exportImage";
 import { ExportChatDialog } from "./ExportChat";
 
 const tauri = vi.hoisted(() => ({
-  saved: [] as { markdown: string; fileName: string }[],
-  invoke: async (cmd: string, args?: { markdown: string; fileName: string }) => {
+  saved: [] as { text: string; fileName: string; format: string }[],
+  invoke: async (cmd: string, args?: { text: string; fileName: string; format: string }) => {
     if (cmd !== "chat_export") throw new Error(`${cmd} isn't available in tests`);
     tauri.saved.push(args!);
     return `/home/liam/exports/${args!.fileName}`;
@@ -56,7 +57,7 @@ describe("Exporting from the chat's More menu", () => {
     await act(async () => void (await hermes.idle()));
 
     await user.click(screen.getByRole("button", { name: "More" }));
-    await user.click(screen.getByRole("menuitem", { name: "Export as Markdown…" }));
+    await user.click(screen.getByRole("menuitem", { name: "Export…" }));
     const dialog = screen.getByRole("dialog", { name: "Export “Deploy keys”" });
     expect((within(dialog).getByRole("checkbox", { name: /Tool calls and Approvals/ }) as HTMLInputElement).checked).toBe(false);
     expect((within(dialog).getByRole("checkbox", { name: /Redact API key/ }) as HTMLInputElement).checked).toBe(true);
@@ -66,9 +67,9 @@ describe("Exporting from the chat's More menu", () => {
 
     await user.click(within(dialog).getByRole("button", { name: "Save…" }));
     expect(tauri.saved).toHaveLength(1);
-    expect(tauri.saved[0].fileName).toBe("Deploy keys.md");
-    expect(tauri.saved[0].markdown).not.toContain(KEY);
-    expect(tauri.saved[0].markdown).not.toContain("DB_HOST");
+    expect(tauri.saved[0]).toMatchObject({ fileName: "Deploy keys.md", format: "markdown" });
+    expect(tauri.saved[0].text).not.toContain(KEY);
+    expect(tauri.saved[0].text).not.toContain("DB_HOST");
     expect((await screen.findByRole("status")).textContent).toContain("Exported to /home/liam/exports/Deploy keys.md.");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "More" }));
@@ -92,12 +93,28 @@ const chat = (more: Partial<Chat> = {}): Chat => ({
 });
 
 function open(c = chat()) {
-  const saves: [string, string][] = [];
+  const saves: [string, string, string][] = [];
   const onSaved = vi.fn();
   const onClose = vi.fn();
-  const props = { save: async (md: string, name: string) => (saves.push([md, name]), `/x/${name}`), onSaved, onClose };
+  const drawn: ImagePage[] = [];
+  const pictures: [string, string][] = [];
+  const props = {
+    save: async (text: string, name: string, format: string) => (saves.push([text, name, format]), `/x/${name}`),
+    draw: async (page: ImagePage) => (drawn.push(page), `PNG${drawn.length}`),
+    saveAsImage: async (png: string, name: string) => (pictures.push([png, name]), `/x/${name}`),
+    onSaved,
+    onClose,
+  };
   const view = render(<ExportChatDialog chat={c} {...props} />);
-  return { saves, onSaved, onClose, rerender: (next: Chat) => view.rerender(<ExportChatDialog chat={next} {...props} />), user: userEvent.setup() };
+  return {
+    saves,
+    drawn,
+    pictures,
+    onSaved,
+    onClose,
+    rerender: (next: Chat) => view.rerender(<ExportChatDialog chat={next} {...props} />),
+    user: userEvent.setup(),
+  };
 }
 
 /** Selects the first `text` in the preview, across its marked parts, as a drag would. */
@@ -180,6 +197,71 @@ describe("The Export dialog", () => {
     expect(bytes).not.toContain("pizza place");
     expect(bytes).toContain("Sammy's Pizza");
     expect(bytes).toContain("`lease.pdf`");
+  });
+
+  it("saves JSON with each message's time and the tool call whole, and nothing redacted is left in the bytes", async () => {
+    const timed = chat({
+      items: [
+        { kind: "user", id: "u1", text: `Ship the boxes to 14 Larch Lane. The movers' key is ${KEY}`, at: 1_762_075_800_000 },
+        { kind: "tool", id: "t1", callId: "call_9", name: "web_search", args: { q: "pizza Duluth" }, status: "done", result: "Sammy's Pizza" },
+        { kind: "assistant", id: "a1", text: "Booked for 14 Larch Lane.", at: 1_762_075_805_500 },
+      ],
+    });
+    const { saves, user } = open(timed);
+    await user.click(screen.getByRole("radio", { name: "JSON" }));
+    await user.click(screen.getByRole("checkbox", { name: /Tool calls and Approvals/ }));
+    await user.click(screen.getByRole("textbox", { name: "Text to redact" }));
+    await user.paste("Larch Lane");
+    await user.keyboard("{Enter}");
+    await user.click(screen.getByRole("button", { name: "Save…" }));
+
+    const [[bytes, name, format]] = saves;
+    expect(name).toBe("Moving house.json");
+    expect(format).toBe("json");
+    expect(bytes).toBe(preview().textContent);
+    expect(bytes).not.toContain(KEY);
+    expect(bytes).not.toContain("Larch Lane");
+    const [session] = JSON.parse(bytes) as { messages: Record<string, unknown>[] }[];
+    const rows = session.messages;
+    expect(rows.find((r) => r.role === "user")).toMatchObject({ content: "Ship the boxes to 14 [redacted]. The movers' key is [redacted]", timestamp: 1_762_075_800 });
+    expect(rows.find((r) => r.role === "assistant" && r.content)).toMatchObject({ content: "Booked for 14 [redacted].", timestamp: 1_762_075_805.5 });
+    const call = rows.find((r) => Array.isArray(r.tool_calls))!.tool_calls as { id: string; function: { name: string; arguments: string } }[];
+    expect(call).toHaveLength(1);
+    expect(call[0].function.name).toBe("web_search");
+    expect(JSON.parse(call[0].function.arguments)).toEqual({ q: "pizza Duluth" });
+    expect(rows.find((r) => r.role === "tool")).toMatchObject({ tool_call_id: call[0].id, tool_name: "web_search", content: "Sammy's Pizza" });
+  });
+
+  it("draws the chosen messages as a picture with redactions applied, and saves the picture it shows", async () => {
+    const { drawn, pictures, user } = open();
+    await user.click(screen.getByRole("radio", { name: "Image" }));
+    await user.click(screen.getByRole("checkbox", { name: /pizza place/ }));
+    await user.click(screen.getByRole("textbox", { name: "Text to redact" }));
+    await user.paste("Larch Lane");
+    await user.keyboard("{Enter}");
+    const picture = screen.getByLabelText("The picture, exactly as it will be saved");
+    await waitFor(() => expect(within(picture).getByRole("img").getAttribute("src")).toBe(`data:image/png;base64,PNG${drawn.length}`));
+
+    const page = drawn.at(-1)!;
+    expect(page.title).toBe("Moving house");
+    expect(page.caption).toMatch(/· 3 places redacted$/);
+    expect(page.blocks).toEqual([
+      { who: "You", text: "Ship the boxes to 14 [redacted], Duluth." },
+      { who: "Hermes", text: "Booked for 14 [redacted]. The movers' portal password: [redacted]" },
+    ]);
+    await user.click(screen.getByRole("button", { name: "Save…" }));
+    expect(pictures).toEqual([[`PNG${drawn.length}`, "Moving house.png"]]);
+  });
+
+  it("says why when the picture can't be drawn, and won't save one", async () => {
+    const user = userEvent.setup();
+    const draw = async () => {
+      throw new Error("This image would be 40000 px tall. Leave some messages out and try again.");
+    };
+    render(<ExportChatDialog chat={chat()} draw={draw} onSaved={vi.fn()} onClose={vi.fn()} />);
+    await user.click(screen.getByRole("radio", { name: "Image" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Leave some messages out");
+    expect((screen.getByRole("button", { name: "Save…" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("can't save an empty file", async () => {

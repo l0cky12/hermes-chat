@@ -8,7 +8,7 @@ user data is shown. "Before" is the build of `main` at 93f7b14; "after" is this 
 - `1-before.png`, `1-before-header.png`: eight unlabelled icon buttons after the usage chip.
 - `2-after.png`, `2-after-header.png`: the side panel, Find in chat and More (⋯) on the bar; Split right and Split down
   at the end of the tab strip.
-- `3-more-menu.png`: More opened with the mouse: Export as Markdown, Copy chat link, Settle, Archive.
+- `3-more-menu.png`: More opened with the mouse: Export as Markdown (now named Export…), Copy chat link, Settle, Archive.
 - `4-more-menu-keyboard.png`: More opened with Enter after Escape returned focus to it; Down Down moved to Settle.
 - `5-split.png`: split right; each pane's close button sits at the end of its own tab strip.
 

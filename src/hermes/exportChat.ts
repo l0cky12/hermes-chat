@@ -1,24 +1,39 @@
-// A chat as a Markdown file, saved where the owner picks in the native Save dialog (`chat_export` in
-// src-tauri/src/lib.rs). The Export dialog (ui/ExportChat.tsx) chooses what goes in and what is redacted, and shows the
-// file before it is saved (ADR 0076). Never in it: session ids, connection details, or attachment contents.
+// A chat as a file, saved where the owner picks in the native Save dialog (`chat_export` and `chat_export_image` in
+// src-tauri/src/lib.rs): as Markdown to read, as JSON in Hermes's own session-export shape, which keeps each message's
+// time and which Import reads back, or as a PNG picture to share (exportImage.ts). The Export dialog (ui/ExportChat.tsx) chooses the format, what goes in and what is redacted, and shows the
+// file before it is saved (ADR 0076). Never in it: connection details or attachment contents. Only JSON has the
+// chat's session id, so an import of it is skipped where Hermes already has the chat.
 import { invoke } from "@tauri-apps/api/core";
 import type { ApprovalChoice, Chat, Item } from "./model";
 import { findSecrets } from "./secrets";
 import { asError } from "./tauriPipe";
 import { LOAD_ERROR_ID } from "./transport";
+import type { ImagePage } from "./exportImage";
+import type { ChatUsage } from "./usage";
 
-/** Shows the Save dialog and writes `markdown` where the owner picks. The path saved to, or `null` if cancelled. */
-export type SaveFile = (markdown: string, fileName: string) => Promise<string | null>;
+/** Shows the Save dialog for `format` and writes `text` where the owner picks. The path saved to, or `null` if cancelled. */
+export type SaveFile = (text: string, fileName: string, format: ExportFormat) => Promise<string | null>;
 
-const saveWithDialog: SaveFile = (markdown, fileName) => invoke<string | null>("chat_export", { markdown, fileName }).catch(asError);
+const saveWithDialog: SaveFile = (text, fileName, format) => invoke<string | null>("chat_export", { text, fileName, format }).catch(asError);
+
+const savedNotice = (path: string | null) => (path ? `Exported to ${path}. Read it before you share it: redaction can miss a secret.` : undefined);
 
 /** Saves an export where the owner picks. The notice to show, or nothing when the owner cancelled. Throws when saving fails. */
-export async function saveExport(markdown: string, fileName: string, save = saveWithDialog): Promise<string | undefined> {
-  const path = await save(markdown, fileName);
-  return path ? `Exported to ${path}. Read it before you share it: redaction can miss a secret.` : undefined;
+export async function saveExport(text: string, fileName: string, format: ExportFormat, save = saveWithDialog): Promise<string | undefined> {
+  return savedNotice(await save(text, fileName, format));
 }
 
-export const exportFileName = (title: string) =>
+/** Shows the Save dialog for a PNG and writes it where the owner picks. The path saved to, or `null` if cancelled. */
+export type SaveImage = (pngBase64: string, fileName: string) => Promise<string | null>;
+
+const saveImageWithDialog: SaveImage = (pngBase64, fileName) => invoke<string | null>("chat_export_image", { pngBase64, fileName }).catch(asError);
+
+/** Saves a PNG, as plain base64 without a `data:` prefix, where the owner picks. As `saveExport`. */
+export async function saveImage(pngBase64: string, fileName: string, save = saveImageWithDialog): Promise<string | undefined> {
+  return savedNotice(await save(pngBase64, fileName));
+}
+
+export const exportFileName = (title: string, extension = "md") =>
   `${
     title
       .replace(/[/\\:*?"<>|\x00-\x1f\s]+/g, " ")
@@ -26,7 +41,7 @@ export const exportFileName = (title: string) =>
       .replace(/^\.+\s*/, "")
       .slice(0, 100)
       .trim() || "Chat"
-  }.md`;
+  }.${extension}`;
 
 /** What stands in the file for redacted text. */
 export const REDACTED = "[redacted]";
@@ -54,15 +69,19 @@ export const WHOLE: ExportChoice = { leftOut: new Set(), toolCalls: true, attach
 
 /** `chat` as Markdown: the title, notes on what is and isn't in it, then the chosen items, with `choice.redact` replaced. */
 export function chatMarkdown(chat: Chat, exportedAt: Date, choice: ExportChoice = WHOLE): string {
-  return render(chat, exportedAt, choice);
+  return render("markdown", chat, exportedAt, choice);
 }
 
-/** The title line and the chosen items, before any redaction. */
-function content(chat: Chat, choice: Omit<ExportChoice, "redact">) {
-  const items = chat.items.filter((i) => (isMessage(i) ? !choice.leftOut.has(i.id) : i.kind !== "error" && choice.toolCalls));
-  const title = `# ${chat.title.replace(/\s+/g, " ").trim() || "Untitled chat"}`;
-  return { items, title, body: items.flatMap((i) => block(i, choice.attachments)).join("\n\n") };
+/** `chat` as a Hermes session export holding one session, with `choice.redact` replaced. */
+export function chatJson(chat: Chat, exportedAt: Date, choice: ExportChoice = WHOLE): string {
+  return render("json", chat, exportedAt, choice);
 }
+
+/** The chosen items: messages not left out, tool calls and Approvals only when chosen, and never the app's errors. */
+const chosen = (chat: Chat, choice: Omit<ExportChoice, "redact">) =>
+  chat.items.filter((i) => (isMessage(i) ? !choice.leftOut.has(i.id) : i.kind !== "error" && choice.toolCalls));
+
+const oneLine = (title: string) => title.replace(/\s+/g, " ").trim();
 
 /** `text` with every place each of `redact` is replaced, and how many `[redacted]` it has for them. */
 function redactText(text: string, redact: readonly string[]): { text: string; places: number } {
@@ -82,17 +101,28 @@ function redactText(text: string, redact: readonly string[]): { text: string; pl
   return { text: out + text.slice(at), places };
 }
 
-function render(chat: Chat, exportedAt: Date, choice: ExportChoice): string {
-  const { items, ...raw } = content(chat, choice);
-  const title = redactText(raw.title, choice.redact);
-  const body = redactText(raw.body, choice.redact);
-  const redacted = title.places + body.places;
+function render(format: ExportFormat, chat: Chat, exportedAt: Date, choice: ExportChoice): string {
+  let places = 0;
+  const redact = (s: string) => {
+    const r = redactText(s, choice.redact);
+    places += r.places;
+    return r.text;
+  };
+  return EXPORT_FORMATS[format].write(chat, exportedAt, choice, redact, () => places);
+}
+
+/** How a format sets text apart in a note. */
+type NoteStyle = { strong: (s: string) => string; code: (s: string) => string };
+
+/** What a file says about itself: what is and isn't in it, an empty line, then that it may hold secrets. */
+function exportNotes(chat: Chat, exportedAt: Date, choice: Omit<ExportChoice, "redact">, redacted: number, style: NoteStyle, more: string[] = []): string[] {
+  const items = chosen(chat, choice);
   const messages = chat.items.filter(isMessage).length;
   const left = chat.items.filter((i) => isMessage(i) && choice.leftOut.has(i.id)).length;
   const iso = exportedAt.toISOString();
   const missing =
     chat.loading ? "was still loading" : chat.items.some((i) => i.id === LOAD_ERROR_ID) ? "couldn't be loaded" : !chat.runtimeId ? "wasn't loaded" : undefined;
-  const notes = [
+  return [
     `Exported from Hermes Chat on ${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC.`,
     `Only the history loaded in Hermes Chat is included: what Hermes sent when the chat was opened, and what came after.`,
     missing && `This chat's stored history ${missing}, so earlier messages may be missing.`,
@@ -103,20 +133,181 @@ function render(chat: Chat, exportedAt: Date, choice: ExportChoice): string {
     items.some((i) => i.kind === "tool" && i.result === undefined && i.status === "done") &&
       "Hermes keeps the output of most tool calls only while the reply is running, so earlier tool calls have none.",
     chat.items.some((i) => i.kind === "error") && "Hermes Chat's own error notices are left out.",
+    ...more,
     "",
-    "**This file may contain sensitive information.** It has the chat as written, including anything private pasted " +
+    `${style.strong("This file may contain sensitive information.")} It has the chat as written, including anything private pasted ` +
       "or printed in it, such as passwords, keys or personal details. Before saving, Hermes Chat flags some kinds of " +
-      `secret, and text chosen for redaction is replaced with \`${REDACTED}\` (${redacted === 1 ? "1 place" : `${redacted} places`} in this file). ` +
+      `secret, and text chosen for redaction is replaced with ${style.code(REDACTED)} (${redacted === 1 ? "1 place" : `${redacted} places`} in this file). ` +
       "It can miss a secret written another way.",
-  ].filter((n) => n !== false && n !== undefined);
-  return [title.text, notes.map((n) => (n ? `> ${n}` : ">")).join("\n"), ...(body.text ? [body.text] : [])].join("\n\n") + "\n";
+  ].filter((n): n is string => n !== false && n !== undefined);
+}
+
+/**
+ * Writes a chat as one format. Every free text from the chat goes through `text`, which redacts it or, for the preview,
+ * collects it to look for secrets in; ids, roles and times never do. `places`: how many `[redacted]` the texts so far
+ * have, for the notes.
+ */
+type Write = (chat: Chat, exportedAt: Date, choice: Omit<ExportChoice, "redact">, text: (s: string) => string, places: () => number) => string;
+
+export type ExportFormat = "markdown" | "json" | "image";
+
+/**
+ * Each format the Export dialog offers. A `text` format's file is what `write` returns. An `image` format's `write`
+ * returns its `ImagePage` as JSON, which `exportImage.ts` draws and Save writes as a PNG.
+ */
+export const EXPORT_FORMATS: Record<ExportFormat, { label: string; extension: string; kind: "text" | "image"; write: Write; title: (file: string) => string }> = {
+  markdown: {
+    label: "Markdown",
+    extension: "md",
+    kind: "text",
+    write: (chat, exportedAt, choice, text, places) => {
+      const title = text(`# ${oneLine(chat.title) || "Untitled chat"}`);
+      const body = text(
+        chosen(chat, choice)
+          .flatMap((i) => block(i, choice.attachments))
+          .join("\n\n"),
+      );
+      const notes = exportNotes(chat, exportedAt, choice, places(), { strong: (s) => `**${s}**`, code: (s) => `\`${s}\`` });
+      return [title, notes.map((n) => (n ? `> ${n}` : ">")).join("\n"), ...(body ? [body] : [])].join("\n\n") + "\n";
+    },
+    title: (file) => file.slice(0, file.indexOf("\n")).replace(/^# /, ""),
+  },
+  json: {
+    label: "JSON",
+    extension: "json",
+    kind: "text",
+    write: (chat, exportedAt, choice, text, places) => JSON.stringify([jsonSession(chat, exportedAt, choice, text, places)], null, 2) + "\n",
+    title: (file) => (JSON.parse(file) as { title?: string }[])[0].title ?? "",
+  },
+  image: {
+    label: "Image",
+    extension: "png",
+    kind: "image",
+    write: (chat, exportedAt, choice, text, places) => JSON.stringify(imagePage(chat, exportedAt, choice, text, places)),
+    title: (file) => (JSON.parse(file) as ImagePage).title,
+  },
+};
+
+/**
+ * The chosen items as a picture shows them: each message's words as written, a tool call's name, command and output
+ * (not its arguments), and an Approval's command and outcome. The caption says when it was exported and how much was redacted.
+ */
+function imagePage(chat: Chat, exportedAt: Date, choice: Omit<ExportChoice, "redact">, text: (s: string) => string, places: () => number): ImagePage {
+  const blocks = chosen(chat, choice).flatMap((i): ImagePage["blocks"] => {
+    switch (i.kind) {
+      case "user": {
+        const files = choice.attachments && i.attachments?.length ? `\n\nAttached: ${i.attachments.map(text).join(", ")}` : "";
+        return [{ who: "You", text: text(i.text) + files }];
+      }
+      case "assistant":
+        return [{ who: "Hermes", text: text(i.text) + (i.interrupted ? "\n\n(stopped before it finished)" : "") }];
+      case "thinking":
+        return [{ who: "Hermes, thinking", text: text(i.text) }];
+      case "tool":
+        return [{ who: "Tool", text: [[i.name, i.preview].filter(Boolean).map((t) => text(t!)).join(" "), i.result !== undefined && text(i.result)].filter(Boolean).join("\n") }];
+      case "approval": {
+        const outcome = i.answer ? ANSWER[i.answer] : i.ended ? `No answer from here (${i.ended})` : "Waiting for an answer";
+        return [{ who: "Approval", text: `${text(i.description)}\n${text(i.command)}\n${outcome}` }];
+      }
+      case "error":
+        return [];
+    }
+  });
+  const title = text(oneLine(chat.title) || "Untitled chat");
+  const iso = exportedAt.toISOString();
+  const n = places();
+  const caption = `Exported from Hermes Chat on ${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC · ${n === 1 ? "1 place" : `${n} places`} redacted`;
+  return { title, caption, blocks };
+}
+
+/** A chat's usage under Hermes's session field names, as `usage.ts` `chatUsageOf` reads them. */
+const USAGE_FIELDS: [Exclude<keyof ChatUsage, "cost" | "readAt">, string][] = [
+  ["input", "input_tokens"],
+  ["output", "output_tokens"],
+  ["cacheRead", "cache_read_tokens"],
+  ["cacheWrite", "cache_write_tokens"],
+  ["reasoning", "reasoning_tokens"],
+  ["calls", "api_call_count"],
+];
+
+function usageFields(usage: ChatUsage | undefined): Record<string, number> {
+  const fields: Record<string, number> = {};
+  if (!usage) return fields;
+  for (const [ours, hermes] of USAGE_FIELDS) if (usage[ours] !== undefined) fields[hermes] = usage[ours];
+  if (usage.cost.kind === "actual") fields.actual_cost_usd = usage.cost.usd;
+  else if (usage.cost.kind === "estimated" || usage.cost.kind === "partial") fields.estimated_cost_usd = usage.cost.usd;
+  return fields;
+}
+
+/**
+ * The chat as one session of `hermes sessions export`, which Import's session-export parser reads with its times.
+ * Thinking is the `reasoning` of the assistant row after it, as Hermes stores it. A row whose time isn't known has none.
+ */
+function jsonSession(chat: Chat, exportedAt: Date, choice: Omit<ExportChoice, "redact">, text: (s: string) => string, places: () => number) {
+  const items = chosen(chat, choice);
+  const title = oneLine(chat.title);
+  const session: Record<string, unknown> = { id: chat.id, ...(title && { title: text(title) }), ...(chat.model?.model && { model: chat.model.model }) };
+  const messages: Record<string, unknown>[] = [];
+  let reasoning: string | undefined;
+  let calls = 0;
+  const time = (at: number | undefined) => (at === undefined ? {} : { timestamp: at / 1000 });
+  const assistant = (row: Record<string, unknown>) => {
+    messages.push({ role: "assistant", ...row, ...(reasoning !== undefined && { reasoning }) });
+    reasoning = undefined;
+  };
+  const flushThought = () => reasoning !== undefined && assistant({ content: "" });
+  for (const i of items) {
+    switch (i.kind) {
+      case "user":
+        flushThought();
+        messages.push({
+          role: "user",
+          content: text(i.text),
+          ...time(i.at),
+          ...(i.steer && { display_kind: "steer" }),
+          ...(choice.attachments && i.attachments?.length && { attachments: i.attachments.map(text) }),
+        });
+        break;
+      case "assistant":
+        assistant({ content: text(i.text), ...time(i.at) });
+        break;
+      case "thinking":
+        flushThought();
+        reasoning = text(i.text);
+        break;
+      case "tool": {
+        const id = i.callId ?? `export-call-${++calls}`;
+        assistant({ content: "", tool_calls: [{ id, type: "function", function: { name: text(i.name), arguments: text(JSON.stringify(i.args ?? {})) } }] });
+        messages.push({ role: "tool", tool_call_id: id, tool_name: text(i.name), content: text(i.result ?? "") });
+        break;
+      }
+      case "approval":
+      case "error":
+        break;
+    }
+  }
+  flushThought();
+  const startedAt = messages.find((m) => m.timestamp !== undefined)?.timestamp;
+  const approvals = items.some((i) => i.kind === "approval") ? ["Approvals aren't in a JSON export: Hermes's session format has no place for them."] : [];
+  const plain = (s: string) => s;
+  return {
+    ...session,
+    ...(startedAt !== undefined && { started_at: startedAt }),
+    ...usageFields(chat.usage),
+    hermes_chat_export: {
+      version: 1,
+      exported_at: exportedAt.toISOString(),
+      notes: exportNotes(chat, exportedAt, choice, places(), { strong: plain, code: plain }, approvals).filter(Boolean),
+    },
+    messages,
+  };
 }
 
 /** What the owner is choosing in the Export dialog. Every likely secret found is redacted unless the owner keeps it. */
 export type ExportDraft = Omit<ExportChoice, "redact"> & {
   /** Likely secrets (`findSecrets`) the owner chose to keep in the file. */
   kept: ReadonlySet<string>;
-  /** Text the owner picked to redact, in the order picked, as the title and the items have it (never with `[redacted]` in it). */
+  /** Text the owner picked to redact, in the order picked, as the chat has it (never with `[redacted]` in it). */
   picked: readonly string[];
 };
 
@@ -125,7 +316,7 @@ export const FIRST_DRAFT: ExportDraft = { leftOut: new Set(), toolCalls: false, 
 
 export type ExportPreview = {
   /** Exactly what Save writes. */
-  markdown: string;
+  text: string;
   fileName: string;
   /** Each different likely secret in what the draft includes, first found first, and how many times it is there. */
   secrets: { text: string; kind: string; times: number; redacted: boolean }[];
@@ -133,23 +324,24 @@ export type ExportPreview = {
   picked: { text: string; times: number }[];
 };
 
-export function exportPreview(chat: Chat, draft: ExportDraft, exportedAt: Date): ExportPreview {
-  const { title, body } = content(chat, draft);
-  const times = (text: string) => title.split(text).length + body.split(text).length - 2;
+export function exportPreview(chat: Chat, draft: ExportDraft, exportedAt: Date, format: ExportFormat = "markdown"): ExportPreview {
+  const { write, title, extension } = EXPORT_FORMATS[format];
+  const texts: string[] = [];
+  write(chat, exportedAt, draft, (s) => (texts.push(s), s), () => 0);
+  const times = (text: string) => texts.reduce((n, s) => n + s.split(text).length - 1, 0);
   const secrets = new Map<string, ExportPreview["secrets"][number]>();
-  for (const s of [...findSecrets(title), ...findSecrets(body)])
+  for (const s of texts.flatMap((t) => findSecrets(t)))
     if (!secrets.has(s.text)) secrets.set(s.text, { text: s.text, kind: s.kind, times: times(s.text), redacted: !draft.kept.has(s.text) });
   const redact = [...[...secrets.values()].filter((s) => s.redacted).map((s) => s.text), ...draft.picked];
-  const markdown = render(chat, exportedAt, { leftOut: draft.leftOut, toolCalls: draft.toolCalls, attachments: draft.attachments, redact });
+  const text = render(format, chat, exportedAt, { leftOut: draft.leftOut, toolCalls: draft.toolCalls, attachments: draft.attachments, redact });
   return {
-    markdown,
+    text,
     // The title as the file has it, so a redaction there is one in the name too.
-    fileName: exportFileName(markdown.slice(0, markdown.indexOf("\n")).replace(/^# /, "")),
+    fileName: exportFileName(title(text), extension),
     secrets: [...secrets.values()],
-    picked: draft.picked.map((text) => ({ text, times: text ? times(text) : 0 })),
+    picked: draft.picked.map((t) => ({ text: t, times: t ? times(t) : 0 })),
   };
 }
-
 
 const ANSWER: Record<ApprovalChoice, string> = { once: "Approved once", session: "Approved for this chat", always: "Always approved", deny: "Denied" };
 
