@@ -10,6 +10,7 @@ import { STATUS_BAR_ITEMS, getUIPrefs, setUIPrefs, subscribe } from "../hermes/u
 import { Menu } from "./ChatMenu";
 import { STATUS_LABEL, useReturnFocus } from "./bits";
 import { SettingRow } from "./SettingRows";
+import { useLocale } from "../i18n/locale";
 
 type StatusItem = (typeof STATUS_BAR_ITEMS)[number];
 const LABEL: Record<StatusItem, string> = { context: "Context", model: "Model", status: "Connection" };
@@ -24,13 +25,14 @@ const show = (items: StatusItem[]) => setUIPrefs({ statusBar: items });
 /** The Settings switch that shows the bar again with every item, or hides it: a row in Settings, Appearance's Fonts card. */
 export function StatusBarSetting() {
   const shown = useShown().length > 0;
+  const t = useLocale().appearance.statusBar;
   return (
     <SettingRow
-      name="Status bar"
+      name={t.name}
       nameId="status-bar-label"
-      hint="Context, model and connection under the chat."
+      hint={t.hint}
       hintId="status-bar-help"
-      more={<p>Right-click the bar to pick what it shows, or to hide it. Turning it on here shows every item again.</p>}
+      more={<p>{t.more}</p>}
       control={
         <button
           className="switch"

@@ -100,6 +100,7 @@ import type { RepoApi } from "./hermes/repo";
 import { tauriRepo } from "./ui/tauriRepo";
 import { ApplyDefaults, NewChatSettingsView } from "./ui/ProjectDefaultsNotes";
 import { appearanceStore } from "./ui/appearance";
+import { LocaleContext } from "./i18n/locale";
 import { StatusBar } from "./ui/StatusBar";
 import { ApprovalsPill } from "./ui/ApprovalsPill";
 import { systemFonts } from "./ui/tauriFonts";
@@ -282,7 +283,17 @@ function launch(): Promise<Launch> {
   })());
 }
 
+/** The app in the language Settings → Appearance resolves to. A change re-renders in place; nothing remounts. */
 export default function App({ links = desktopLinks }: { links?: LinkInbox } = {}) {
+  const locale = useSyncExternalStore(appearance.subscribe, appearance.locale);
+  return (
+    <LocaleContext value={locale}>
+      <Screens links={links} />
+    </LocaleContext>
+  );
+}
+
+function Screens({ links }: { links: LinkInbox }) {
   const [hermes, setHermes] = useState<Hermes | null>(null);
   // The connection in use, or the one the sign-in screen is for; none when the owner hasn't picked one.
   const [connection, setConnection] = useState<SavedConnection>();

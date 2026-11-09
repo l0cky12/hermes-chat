@@ -93,8 +93,8 @@ describe("Custom themes", () => {
   });
 
   it("say what's wrong with pasted text that isn't a theme", () => {
-    expect(readThemeJson("{nope", newId)).toBe("That isn't valid JSON.");
-    expect(readThemeJson('{"name": "x"}', newId)).toMatch(/needs a "name"/);
+    expect(readThemeJson("{nope", newId)).toBe("notJson");
+    expect(readThemeJson('{"name": "x"}', newId)).toBe("notTheme");
   });
 
   it("are named so no two share a name", () => {

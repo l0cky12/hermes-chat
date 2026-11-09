@@ -45,12 +45,12 @@ import {
   type UsageIo,
 } from "../hermes/usageAnalytics";
 import { Spinner } from "./bits";
+import { useLocale, type Formats } from "../i18n/locale";
 
 const HERE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const ROLLING = [1, 7, 30, 90, 365] as const;
 const rollingLabel = (d: number) => (d === 1 ? "Last 24 hours" : `Last ${d} days`);
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
-const full = (n: number) => n.toLocaleString();
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
 /** Every time zone this computer knows, its own and UTC first. */
@@ -99,6 +99,7 @@ export type UsageAnalyticsProps = {
 };
 
 export function UsageAnalytics({ io, profile, listProfiles, projects, projectChats, connected, onOpenChat, saveCsv, onClose, now = Date.now }: UsageAnalyticsProps) {
+  const { fmt } = useLocale();
   const [range, setRange] = useState<RangeChoice>({ kind: "rolling", days: 30 });
   const [zone, setZone] = useState(HERE);
   const zones = useMemo(zoneList, []);
@@ -209,7 +210,7 @@ export function UsageAnalytics({ io, profile, listProfiles, projects, projectCha
         return of && [...of].flatMap((id) => projectName(id) ?? []);
       };
       const path = await saveCsv(usageCsv(sortChats(shownChats, { key: "started", dir: "asc" }), zone, names), csvFileName(data.period.from, data.period.to, zone));
-      if (path) setExportNote(`Saved ${shownChats.length.toLocaleString()} chats to ${path}.`);
+      if (path) setExportNote(`Saved ${fmt.number(shownChats.length)} chats to ${path}.`);
     } catch (e) {
       setExportNote(`Couldn't export: ${messageOf(e)}`);
     } finally {
@@ -339,10 +340,10 @@ export function UsageAnalytics({ io, profile, listProfiles, projects, projectCha
               ? "Not connected to Hermes."
               : read.state === "loading"
                 ? read.progress
-                  ? `Reading ${read.progress.profile}: ${read.progress.read.toLocaleString()} chats so far…`
+                  ? `Reading ${read.progress.profile}: ${fmt.number(read.progress.read)} chats so far…`
                   : "Reading Hermes…"
                 : data
-                  ? `Read ${new Date(data.readAt).toLocaleTimeString(undefined, { timeStyle: "short" })}${partial ? " · partly" : ""}`
+                  ? `Read ${fmt.time(data.readAt)}${partial ? " · partly" : ""}`
                   : ""}
           </span>
           {read.state === "loading" && <Spinner />}
@@ -430,12 +431,12 @@ export function UsageAnalytics({ io, profile, listProfiles, projects, projectCha
                   <ArrowLeft size={15} /> Back to the breakdown
                 </button>
                 <h2 id="usage-drill" tabIndex={-1} ref={drillHeading}>
-                  {DIMENSION_LABEL[drill.dim]}: {drill.label}
+                  {DIMENSION_LABEL[drill.dim]}: {drill.dim === "day" ? fmt.day(drill.label) : drill.label}
                 </h2>
                 {drilled ? (
                   <>
                     <p className="usage-note">
-                      {drilled.totals.chats.toLocaleString()} {drilled.totals.chats === 1 ? "chat" : "chats"} · {tokens(totalOf(drilled.totals.counts))} tokens ·{" "}
+                      {fmt.number(drilled.totals.chats)} {drilled.totals.chats === 1 ? "chat" : "chats"} · {tokens(totalOf(drilled.totals.counts))} tokens ·{" "}
                       {tallyLabel(drilled.totals.cost, { partial: unreadChats }).short}
                     </p>
                     <ChatTable chats={sortChats(drilled.chats, chatSort)} sort={chatSort} onSort={setChatSort} zone={zone} shownProfile={profile} onOpen={onOpenChat} />
@@ -461,20 +462,21 @@ export function UsageAnalytics({ io, profile, listProfiles, projects, projectCha
 
 /** What couldn't be read, so a total that is short says so. */
 function Problems({ data }: { data: UsageDataset }) {
+  const { fmt } = useLocale();
   const lines: ReactNode[] = [];
   for (const p of data.profiles) {
     if (p.state === "failed")
       lines.push(
         p.read
-          ? `Couldn't read all of the ${p.profile} profile: ${p.error}. Only the ${p.read.toLocaleString()} chats read before that are counted, as far as they're in the period.`
+          ? `Couldn't read all of the ${p.profile} profile: ${p.error}. Only the ${fmt.number(p.read)} chats read before that are counted, as far as they're in the period.`
           : `Couldn't read the ${p.profile} profile: ${p.error}. Its chats aren't counted.`,
       );
     if (p.state === "capped")
-      lines.push(`The ${p.profile} profile has more chats in this period than Hermes Chat reads at once (${p.read.toLocaleString()}); the oldest aren't counted. Pick a shorter period.`);
+      lines.push(`The ${p.profile} profile has more chats in this period than Hermes Chat reads at once (${fmt.number(p.read)}); the oldest aren't counted. Pick a shorter period.`);
   }
   if (data.missingSegments)
     lines.push(
-      `${data.missingSegments.toLocaleString()} ${data.missingSegments === 1 ? "segment" : "segments"} of compressed chats couldn't be read${data.segmentsSkipped ? " (too many to read at once)" : ""}, so those chats are counted short and marked "+".`,
+      `${fmt.number(data.missingSegments)} ${data.missingSegments === 1 ? "segment" : "segments"} of compressed chats couldn't be read${data.segmentsSkipped ? " (too many to read at once)" : ""}, so those chats are counted short and marked "+".`,
     );
   if (!lines.length) return null;
   return (
@@ -492,6 +494,7 @@ function Problems({ data }: { data: UsageDataset }) {
 }
 
 function TotalsTiles({ totals, partial }: { totals: Totals; partial: boolean }) {
+  const { fmt } = useLocale();
   const c = totals.counts;
   const tile = (label: string, value: number, field?: CountField, sub?: string, short = false) => {
     const missing = field ? totals.unreported[field] : undefined;
@@ -499,11 +502,11 @@ function TotalsTiles({ totals, partial }: { totals: Totals; partial: boolean }) 
       <div className="usage-tile">
         <dt>{label}</dt>
         <dd>
-          {full(value)}
+          {fmt.number(value)}
           {(missing || partial || short) && <span className="usage-plus" aria-label=" or more">+</span>}
         </dd>
         {sub && <dd className="usage-tile-sub">{sub}</dd>}
-        {missing ? <dd className="usage-tile-sub">Not reported for {missing.toLocaleString()} {missing === 1 ? "chat" : "chats"}</dd> : null}
+        {missing ? <dd className="usage-tile-sub">Not reported for {fmt.number(missing)} {missing === 1 ? "chat" : "chats"}</dd> : null}
       </div>
     );
   };
@@ -518,7 +521,7 @@ function TotalsTiles({ totals, partial }: { totals: Totals; partial: boolean }) 
         {tile("Output", c.output, "output")}
         {tile("of which reasoning", c.reasoning, "reasoning", "already in Output")}
         {tile("Model calls", c.calls, "calls")}
-        {tile("Chats", totals.chats, undefined, totals.noUsage ? `${totals.noUsage.toLocaleString()} with no usage recorded` : undefined)}
+        {tile("Chats", totals.chats, undefined, totals.noUsage ? `${fmt.number(totals.noUsage)} with no usage recorded` : undefined)}
       </dl>
       <p className="usage-note">
         Input, cache read and cache written don't overlap: together they are everything the model was sent. Reasoning is part of Output, so the total
@@ -531,6 +534,7 @@ function TotalsTiles({ totals, partial }: { totals: Totals; partial: boolean }) 
 /** The recorded cost, how much of the usage it covers, and by which kind. Never shown as a bill. */
 /** `partial`: whole chats weren't read (a profile failed, or the page limit), so their cost is missing too. */
 function CostCard({ totals, partial }: { totals: Totals; partial: boolean }) {
+  const { fmt } = useLocale();
   const t = totals.cost;
   // A profile that couldn't be read, or chats past the page limit, are missing from the cost too.
   const label = tallyLabel(t, { partial });
@@ -578,8 +582,8 @@ function CostCard({ totals, partial }: { totals: Totals; partial: boolean }) {
                     <th scope="row">
                       <span className={`usage-swatch cost-${k}`} aria-hidden /> {COST_KIND_LABEL[k]}
                     </th>
-                    <td>{t.kinds[k].chats.toLocaleString()}</td>
-                    <td>{full(t.kinds[k].tokens)}</td>
+                    <td>{fmt.number(t.kinds[k].chats)}</td>
+                    <td>{fmt.number(t.kinds[k].tokens)}</td>
                     <td>{pct(t.kinds[k].tokens / t.tokens)}</td>
                     <td>{k === "included" ? "No charge recorded" : k === "unknown" ? "None" : `${k === "actual" ? "" : "~"}${usd(t.kinds[k].usd)}${k === "partial" ? "+" : ""}`}</td>
                   </tr>
@@ -610,9 +614,9 @@ function SortHeader({ col, sort, onSort, children }: { col: SortKey; sort: Sort;
 }
 
 /** A group's count, "+" when some chat didn't report it or whole chats weren't read. */
-const cell = (t: Totals, field: CountField, short: boolean) => (
+const cell = (fmt: Formats, t: Totals, field: CountField, short: boolean) => (
   <>
-    {field === "calls" ? full(t.counts.calls) : tokens(t.counts[field])}
+    {field === "calls" ? fmt.number(t.counts.calls) : tokens(t.counts[field])}
     {t.unreported[field] || t.partialChats || short ? <span className="usage-plus">+</span> : null}
   </>
 );
@@ -635,6 +639,9 @@ function GroupTable({
   /** Whole chats weren't read, so any group may be short of some. */
   unreadChats: boolean;
 }) {
+  const { fmt } = useLocale();
+  /** A day group is keyed and sorted by its ISO day; it shows as a date. */
+  const label = (g: Group) => (dim === "day" ? fmt.day(g.label) : g.label);
   return (
     <div className="ua-table-wrap">
       <table className="ua-table">
@@ -657,19 +664,19 @@ function GroupTable({
             return (
               <tr key={g.key}>
                 <th scope="row">
-                  <button className="usage-drill" data-group={g.key} onClick={() => onDrill(g)} aria-label={`${g.label}: show its ${g.totals.chats} chats`}>
-                    <span className="usage-drill-label">{g.label}</span>
+                  <button className="usage-drill" data-group={g.key} onClick={() => onDrill(g)} aria-label={`${label(g)}: show its ${g.totals.chats} chats`}>
+                    <span className="usage-drill-label">{label(g)}</span>
                     <span className="usage-share" aria-hidden>
                       <span style={{ width: total ? `${(sum / total) * 100}%` : 0 }} />
                     </span>
                   </button>
                 </th>
                 <td>
-                  {g.totals.chats.toLocaleString()}
+                  {fmt.number(g.totals.chats)}
                   {unreadChats && <span className="usage-plus">+</span>}
                 </td>
                 {(["input", "cacheRead", "cacheWrite", "output", "reasoning", "calls"] as const).map((f) => (
-                  <td key={f}>{cell(g.totals, f, unreadChats)}</td>
+                  <td key={f}>{cell(fmt, g.totals, f, unreadChats)}</td>
                 ))}
                 <td>
                   {tokens(sum)}
@@ -687,6 +694,7 @@ function GroupTable({
 }
 
 function ChatTable({ chats, sort, onSort, zone, shownProfile, onOpen }: { chats: UsageChat[]; sort: Sort; onSort: (s: Sort) => void; zone: string; shownProfile: string; onOpen: (c: UsageChat) => void }) {
+  const { fmt } = useLocale();
   return (
     <div className="ua-table-wrap">
       <table className="ua-table usage-chats">
@@ -742,7 +750,7 @@ function ChatTable({ chats, sort, onSort, zone, shownProfile, onOpen }: { chats:
                     {c.segments.length + c.missing > 1 && ` · ${c.segments.length + c.missing} segments`}
                   </span>
                 </th>
-                <td>{dayIn(zone, c.startedAt)}</td>
+                <td>{fmt.day(dayIn(zone, c.startedAt))}</td>
                 <td className="mono">{c.model ?? "—"}</td>
                 {(["input", "cacheRead", "output", "calls"] as const).map((f) => (
                   <td key={f}>
@@ -750,7 +758,7 @@ function ChatTable({ chats, sort, onSort, zone, shownProfile, onOpen }: { chats:
                       <span className="faint" title="Hermes didn't report this count">—</span>
                     ) : (
                       <>
-                        {f === "calls" ? full(c.counts.calls) : tokens(c.counts[f])}
+                        {f === "calls" ? fmt.number(c.counts.calls) : tokens(c.counts[f])}
                         {(c.unreported.includes(f) || c.missing > 0) && (
                           <span className="usage-plus" title="Part of this chat didn't report this count, or couldn't be read">+</span>
                         )}
@@ -785,6 +793,7 @@ function BreakdownNote({ dim, zone }: { dim: Dimension; zone: string }) {
 
 /** Hermes's own sums for the same rolling period, beside what the chats add up to, and its helper tasks. */
 function HermesTotalsCard({ data, filtered }: { data: UsageDataset; filtered: boolean }) {
+  const { fmt } = useLocale();
   const checks = crossCheck(data);
   const unsupported = data.profiles.filter((p) => p.hermes?.state === "unsupported").map((p) => p.profile);
   const failed = data.profiles.flatMap((p) => (p.hermes?.state === "failed" ? [`${p.profile}: ${p.hermes.error}`] : []));
@@ -823,23 +832,23 @@ function HermesTotalsCard({ data, filtered }: { data: UsageDataset; filtered: bo
                       {c.profile}
                     </th>
                     <td>Hermes</td>
-                    <td>{h.sessions?.toLocaleString() ?? "—"}</td>
-                    <td>{h.input !== undefined ? full(h.input) : "—"}</td>
-                    <td>{h.cacheRead !== undefined ? full(h.cacheRead) : "—"}</td>
-                    <td>{h.output !== undefined ? full(h.output) : "—"}</td>
-                    <td>{h.calls !== undefined ? full(h.calls) : "—"}</td>
+                    <td>{h.sessions !== undefined ? fmt.number(h.sessions) : "—"}</td>
+                    <td>{h.input !== undefined ? fmt.number(h.input) : "—"}</td>
+                    <td>{h.cacheRead !== undefined ? fmt.number(h.cacheRead) : "—"}</td>
+                    <td>{h.output !== undefined ? fmt.number(h.output) : "—"}</td>
+                    <td>{h.calls !== undefined ? fmt.number(h.calls) : "—"}</td>
                     <td>{h.estimatedUsd !== undefined ? `~${usd(h.estimatedUsd)}` : "—"}</td>
                   </tr>,
                   c.complete ? (
                     <tr key={`${c.profile}-c`}>
                       <td>Chats here</td>
                       <td>
-                        {c.sessions.toLocaleString()} in {c.chats.toLocaleString()} chats
+                        {fmt.number(c.sessions)} in {fmt.number(c.chats)} chats
                       </td>
-                      <td>{full(c.input)}</td>
-                      <td>{full(c.cacheRead)}</td>
-                      <td>{full(c.output)}</td>
-                      <td>{full(c.calls)}</td>
+                      <td>{fmt.number(c.input)}</td>
+                      <td>{fmt.number(c.cacheRead)}</td>
+                      <td>{fmt.number(c.output)}</td>
+                      <td>{fmt.number(c.calls)}</td>
                       <td>{tallyLabel(t.cost).short}</td>
                     </tr>
                   ) : (
@@ -863,7 +872,7 @@ function HermesTotalsCard({ data, filtered }: { data: UsageDataset; filtered: bo
       {checks.map((c) =>
         c.complete && c.hermes.sessions !== undefined && c.hermes.sessions > c.sessions ? (
           <p key={c.profile} className="usage-note">
-            In {c.profile}, Hermes counts {(c.hermes.sessions - c.sessions).toLocaleString()} more sessions ({tokens(Math.max(0, (c.hermes.input ?? 0) - c.input))} more input) than the
+            In {c.profile}, Hermes counts {fmt.number(c.hermes.sessions - c.sessions)} more sessions ({tokens(Math.max(0, (c.hermes.input ?? 0) - c.input))} more input) than the
             chats here hold: subagent runs, and segments of compressed chats that started earlier.
           </p>
         ) : null,
@@ -896,9 +905,9 @@ function HermesTotalsCard({ data, filtered }: { data: UsageDataset; filtered: bo
                     <th scope="row">{h.task.replace(/_/g, " ")}</th>
                     <td>{h.profile}</td>
                     <td className="mono">{h.models.join(", ") || "—"}</td>
-                    <td>{full(h.input)}</td>
-                    <td>{full(h.output)}</td>
-                    <td>{full(h.calls)}</td>
+                    <td>{fmt.number(h.input)}</td>
+                    <td>{fmt.number(h.output)}</td>
+                    <td>{fmt.number(h.calls)}</td>
                     <td>~{usd(h.estimatedUsd)}</td>
                   </tr>
                 ))}

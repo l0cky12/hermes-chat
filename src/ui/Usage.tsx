@@ -4,8 +4,9 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { Chat } from "../hermes/model";
 import { costLabel, tokens, totalTokens, type ChatUsage, type ReplyUsage } from "../hermes/usage";
 import { useReturnFocus } from "./bits";
+import { useLocale, type Formats } from "../i18n/locale";
 
-const full = (n: number | undefined) => (n === undefined ? "Not reported" : n.toLocaleString());
+const counter = (fmt: Formats) => (n: number | undefined) => (n === undefined ? "Not reported" : fmt.number(n));
 
 /** One row of a breakdown. `sub`: a part of the row above it. */
 function Row({ label, value, sub }: { label: string; value: string; sub?: boolean }) {
@@ -31,6 +32,7 @@ export const REPLY_NOTES = {
 
 /** The tokens one reply's turn took: a line under the reply, and its breakdown when clicked. */
 export function ReplyUsageLine({ usage }: { usage: ReplyUsage }) {
+  const full = counter(useLocale().fmt);
   const [open, setOpen] = useState(false);
   const id = useId();
   const split = usage.input !== undefined;
@@ -116,6 +118,8 @@ export function ChatUsageButton({ chat, onRefresh }: { chat: Pick<Chat, "usage" 
 }
 
 function ChatUsagePopover({ usage, error, onClose }: { usage?: ChatUsage; error?: string; onClose: () => void }) {
+  const { fmt } = useLocale();
+  const full = counter(fmt);
   useReturnFocus();
   const cost = usage && costLabel(usage.cost);
   return (
@@ -150,7 +154,7 @@ function ChatUsagePopover({ usage, error, onClose }: { usage?: ChatUsage; error?
           </div>
           <p className="usage-note">
             Hermes's own totals for every model call in this chat, from any client and across model changes. Its helper
-            tasks, such as titling, aren't included. Read {new Date(usage.readAt).toLocaleTimeString(undefined, { timeStyle: "short" })}.
+            tasks, such as titling, aren't included. Read {fmt.time(usage.readAt)}.
           </p>
         </>
       )}

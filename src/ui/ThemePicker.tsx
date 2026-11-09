@@ -2,13 +2,13 @@
 // is four colors per mode (themes.ts); the editor shows a small copy of the app in both modes as the colors change.
 import { useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { Check, Copy, Moon, Paintbrush, Pencil, Plus, RotateCcw, Sun, Trash2 } from "lucide-react";
+import { useLocale } from "../i18n/locale";
 import { CHAT_WIDTHS, DEFAULT_APPEARANCE, MAX_CUSTOM_THEMES, themeOf, type Appearance, type AppearanceStore } from "./appearance";
 import { arrowSelect } from "./bits";
 import { SettingRow, SettingsSection } from "./SettingRows";
 import {
   BUILTIN_THEMES,
   PALETTE_KEYS,
-  PALETTE_LABELS,
   MAX_THEME_NAME,
   freeName,
   isHex,
@@ -51,22 +51,14 @@ const orb = (p: Palette, mode: Mode): CSSProperties => ({
   background: `radial-gradient(circle at 32% 28%, ${mix(p.accent, mode === "light" ? "#ffffff" : p.text, 0.75)} 0%, ${p.accent} 42%, ${mix(p.accent, p.background, 0.75)} 78%, ${p.background} 100%)`,
 });
 
-const SCHEMES: { id: Scheme; label: string }[] = [
-  { id: "system", label: "System" },
-  { id: "light", label: "Light" },
-  { id: "dark", label: "Dark" },
-];
+const SCHEMES: Scheme[] = ["system", "light", "dark"];
 
 function SchemePicker({ a, set }: { a: Appearance; set: (c: Partial<Appearance>) => void }) {
+  const t = useLocale().appearance.scheme;
   const theme = themeOf(a);
   return (
-    <div
-      className="scheme-grid"
-      role="radiogroup"
-      aria-label="Color scheme"
-      onKeyDown={(e) => arrowSelect(e, SCHEMES.map((s) => s.id), a.scheme, (scheme) => set({ scheme }))}
-    >
-      {SCHEMES.map(({ id, label }) => (
+    <div className="scheme-grid" role="radiogroup" aria-label={t.title} onKeyDown={(e) => arrowSelect(e, SCHEMES, a.scheme, (scheme) => set({ scheme }))}>
+      {SCHEMES.map((id) => (
         <button
           key={id}
           className={`scheme-card ${a.scheme === id ? "on" : ""}`}
@@ -83,7 +75,7 @@ function SchemePicker({ a, set }: { a: Appearance; set: (c: Partial<Appearance>)
           ) : (
             <MiniApp palette={theme[id]} mode={id} contrast={a.contrast} />
           )}
-          <span className="scheme-label">{label}</span>
+          <span className="scheme-label">{t[id]}</span>
         </button>
       ))}
     </div>
@@ -97,25 +89,26 @@ function SchemePicker({ a, set }: { a: Appearance; set: (c: Partial<Appearance>)
 type Draft = { id?: string; session: number; name: string; light: Palette; dark: Palette };
 
 function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (hex: string) => void }) {
+  const t = useLocale().appearance.editor;
   const [text, setText] = useState(value);
   const [shown, setShown] = useState(value);
   if (value !== shown) {
     setShown(value);
     setText(value);
   }
-  const typed = (t: string) => {
-    setText(t);
-    const hex = t.startsWith("#") ? t : `#${t}`;
+  const typed = (s: string) => {
+    setText(s);
+    const hex = s.startsWith("#") ? s : `#${s}`;
     if (isHex(hex)) onChange(hex.toLowerCase());
   };
   return (
     <label className="color-field">
       <span className="color-name">{label}</span>
-      <input type="color" value={value} aria-label={`${label} color`} onChange={(e) => onChange(e.target.value)} />
+      <input type="color" value={value} aria-label={t.color(label)} onChange={(e) => onChange(e.target.value)} />
       <input
         className="color-hex mono"
         value={text}
-        aria-label={`${label} hex`}
+        aria-label={t.hex(label)}
         spellCheck={false}
         maxLength={7}
         aria-invalid={!isHex(text.startsWith("#") ? text : `#${text}`)}
@@ -140,18 +133,20 @@ function ThemeEditor({
   onSave: (t: Draft) => void;
   onCancel: () => void;
 }) {
+  const l = useLocale();
+  const t = l.appearance.editor;
   const [draft, setDraft] = useState(initial);
   const [copied, setCopied] = useState(false);
   const name = draft.name.trim();
   const clash = taken.includes(name);
   const color = (mode: Mode, key: keyof Palette, hex: string) => setDraft((d) => ({ ...d, [mode]: { ...d[mode], [key]: hex } }));
   return (
-    <div className="theme-editor" role="group" aria-label={initial.id ? `Edit ${initial.name}` : "New theme"}>
+    <div className="theme-editor" role="group" aria-label={initial.id ? l.appearance.themes.edit(initial.name) : t.new}>
       <div className="theme-editor-head">
         <input
           className="theme-name"
-          aria-label="Theme name"
-          placeholder="Theme name"
+          aria-label={t.name}
+          placeholder={t.name}
           value={draft.name}
           maxLength={MAX_THEME_NAME}
           autoFocus
@@ -159,40 +154,38 @@ function ThemeEditor({
         />
         <button
           className="btn"
-          title="Copy this theme as JSON, to keep or share"
+          title={t.copyTitle}
           onClick={() => {
-            void navigator.clipboard?.writeText(themeJson({ id: "", ...draft, name: name || "Untitled" }));
+            void navigator.clipboard?.writeText(themeJson({ id: "", ...draft, name: name || t.untitled }));
             setCopied(true);
           }}
         >
-          {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? "Copied" : "Copy JSON"}
+          {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? t.copied : t.copy}
         </button>
       </div>
       <div className="theme-editor-modes">
         {(["light", "dark"] as const).map((mode) => (
           <div key={mode} className="theme-editor-mode">
             <div className="theme-editor-title">
-              {mode === "light" ? <Sun size={13} /> : <Moon size={13} />} {mode === "light" ? "Light" : "Dark"}
+              {mode === "light" ? <Sun size={13} /> : <Moon size={13} />} {l.appearance.scheme[mode]}
             </div>
             <MiniApp palette={draft[mode]} mode={mode} contrast={contrast} className="mini-large" />
             <div className="color-fields">
               {PALETTE_KEYS.map((key) => (
-                <ColorField key={key} label={PALETTE_LABELS[key]} value={draft[mode][key]} onChange={(hex) => color(mode, key, hex)} />
+                <ColorField key={key} label={t.colors[key]} value={draft[mode][key]} onChange={(hex) => color(mode, key, hex)} />
               ))}
             </div>
           </div>
         ))}
       </div>
-      <p className="muted small theme-editor-hint">
-        Surface is for the composer, menus and cards. Borders, muted text, code blocks and the list panel are worked out from these four.
-      </p>
+      <p className="muted small theme-editor-hint">{t.hint}</p>
       <div className="theme-editor-actions">
-        {clash && <span className="small sign-in-error">Another theme is already called that.</span>}
+        {clash && <span className="small sign-in-error">{t.taken}</span>}
         <button className="btn" onClick={onCancel}>
-          Cancel
+          {l.common.cancel}
         </button>
         <button className="btn primary" disabled={!name || clash} onClick={() => onSave({ ...draft, name })}>
-          {initial.id ? "Save theme" : "Create theme"}
+          {initial.id ? t.save : t.create}
         </button>
       </div>
     </div>
@@ -200,19 +193,21 @@ function ThemeEditor({
 }
 
 function ImportTheme({ onImport, onCancel }: { onImport: (t: Theme) => void; onCancel: () => void }) {
+  const l = useLocale();
+  const t = l.appearance.import;
   const [text, setText] = useState("");
   const [error, setError] = useState<string>();
   return (
-    <div className="theme-editor" role="group" aria-label="Add a theme">
-      <div className="theme-editor-title">Paste a theme's JSON, as Copy JSON gives it</div>
+    <div className="theme-editor" role="group" aria-label={t.group}>
+      <div className="theme-editor-title">{t.title}</div>
       <textarea
         className="theme-json mono"
-        aria-label="Theme JSON"
+        aria-label={t.json}
         rows={8}
         spellCheck={false}
         autoFocus
         value={text}
-        placeholder={'{\n  "name": "…",\n  "light": { "background": "#ffffff", "surface": "#ffffff", "text": "#111111", "accent": "#3366ff" },\n  "dark": { … }\n}'}
+        placeholder={t.placeholder}
         onChange={(e) => {
           setText(e.target.value);
           setError(undefined);
@@ -225,18 +220,18 @@ function ImportTheme({ onImport, onCancel }: { onImport: (t: Theme) => void; onC
           </span>
         )}
         <button className="btn" onClick={onCancel}>
-          Cancel
+          {l.common.cancel}
         </button>
         <button
           className="btn primary"
           disabled={!text.trim()}
           onClick={() => {
             const read = readThemeJson(text, newThemeId);
-            if (typeof read === "string") setError(read);
+            if (typeof read === "string") setError(t[read]);
             else onImport(read);
           }}
         >
-          Add theme
+          {t.add}
         </button>
       </div>
     </div>
@@ -266,18 +261,20 @@ function ThemeCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const l = useLocale();
+  const t = l.appearance.themes;
   const [confirming, setConfirming] = useState(false);
   return (
     <div className={`theme-card ${selected ? "on" : ""}`}>
-      <button className="theme-pick" aria-pressed={selected} aria-label={`Use ${theme.name}`} onClick={() => onPick()} />
+      <button className="theme-pick" aria-pressed={selected} aria-label={t.use(theme.name)} onClick={() => onPick()} />
       <div className="theme-orbs">
         {(["light", "dark"] as const).map((m) => (
           <button
             key={m}
             className={`theme-orb ${selected && mode === m ? "on" : ""}`}
             style={orb(theme[m], m)}
-            aria-label={`Use ${theme.name}, ${m}`}
-            title={`${theme.name}, ${m}`}
+            aria-label={t.useIn(theme.name, t.modes[m])}
+            title={t.inMode(theme.name, t.modes[m])}
             onClick={() => onPick(m)}
           >
             {selected && mode === m && <span className="theme-orb-mode">{m === "light" ? <Sun size={11} /> : <Moon size={11} />}</span>}
@@ -287,31 +284,33 @@ function ThemeCard({
       <div className="theme-foot">
         {confirming ? (
           <>
-            <span className="theme-name-label small">Delete {theme.name}?</span>
+            <span className="theme-name-label small">{t.confirmDelete(theme.name)}</span>
             <button className="row-confirm" onClick={() => setConfirming(false)}>
-              Cancel
+              {l.common.cancel}
             </button>
             <button className="row-confirm danger" onClick={onDelete}>
-              Delete
+              {t.confirm}
             </button>
           </>
         ) : (
           <>
-            <span className="theme-name-label">{theme.name}</span>
+            <span className="theme-name-label" translate="no">
+              {theme.name}
+            </span>
             {custom && (
               <>
-                <button className="icon-btn small-icon" aria-label={`Edit ${theme.name}`} title="Edit" onClick={onEdit}>
+                <button className="icon-btn small-icon" aria-label={t.edit(theme.name)} title={t.editTitle} onClick={onEdit}>
                   <Pencil size={13} />
                 </button>
-                <button className="icon-btn small-icon" aria-label={`Delete ${theme.name}`} title="Delete" onClick={() => setConfirming(true)}>
+                <button className="icon-btn small-icon" aria-label={t.delete(theme.name)} title={t.deleteTitle} onClick={() => setConfirming(true)}>
                   <Trash2 size={13} />
                 </button>
               </>
             )}
             <button
               className="icon-btn small-icon"
-              aria-label={`Duplicate ${theme.name}`}
-              title={canDuplicate ? "Duplicate and edit" : `You have ${MAX_CUSTOM_THEMES} themes of your own`}
+              aria-label={t.duplicate(theme.name)}
+              title={canDuplicate ? t.duplicateTitle : t.duplicateFull(MAX_CUSTOM_THEMES)}
               disabled={!canDuplicate}
               onClick={onDuplicate}
             >
@@ -325,37 +324,38 @@ function ThemeCard({
 }
 
 function Themes({ a, mode, set }: { a: Appearance; mode: Mode; set: (c: Partial<Appearance>) => void }) {
+  const t = useLocale().appearance.themes;
   const [editing, setEditing] = useState<Draft | "import">();
   const sessions = useRef(0);
   const all = [...BUILTIN_THEMES, ...a.customThemes];
-  const names = (except?: string) => all.filter((t) => t.id !== except).map((t) => t.name);
+  const names = (except?: string) => all.filter((o) => o.id !== except).map((o) => o.name);
   // Past the limit, loading drops the extra themes, so none is offered.
   const full = a.customThemes.length >= MAX_CUSTOM_THEMES;
-  const fullNote = full ? `You have ${MAX_CUSTOM_THEMES} themes of your own. Delete one to add another.` : undefined;
+  const fullNote = full ? t.full(MAX_CUSTOM_THEMES) : undefined;
   const edit = (d: Omit<Draft, "session">) => setEditing({ ...d, session: ++sessions.current });
-  const startFrom = (t: Theme, name: string) => edit({ name: freeName(name, names()), light: { ...t.light }, dark: { ...t.dark } });
+  const startFrom = (from: Theme, name: string) => edit({ name: freeName(name, names()), light: { ...from.light }, dark: { ...from.dark } });
 
   const save = (d: Omit<Draft, "session">) => {
     // A theme deleted while it was being edited comes back as a new one.
-    const replaces = d.id && a.customThemes.some((t) => t.id === d.id) ? d.id : undefined;
+    const replaces = d.id && a.customThemes.some((o) => o.id === d.id) ? d.id : undefined;
     if (!replaces && full) return;
     const theme: Theme = { id: replaces ?? newThemeId(), name: d.name, light: d.light, dark: d.dark };
-    const customThemes = replaces ? a.customThemes.map((t) => (t.id === replaces ? theme : t)) : [...a.customThemes, theme];
+    const customThemes = replaces ? a.customThemes.map((o) => (o.id === replaces ? theme : o)) : [...a.customThemes, theme];
     set({ customThemes, themeId: theme.id });
     setEditing(undefined);
   };
-  const pick = (t: Theme, m?: Mode) => set(m ? { themeId: t.id, scheme: m } : { themeId: t.id });
+  const pick = (theme: Theme, m?: Mode) => set(m ? { themeId: theme.id, scheme: m } : { themeId: theme.id });
 
   return (
     <SettingsSection
-      title="Themes"
+      title={t.title}
       action={
         <>
-          <button className="btn" disabled={full} title={fullNote} onClick={() => startFrom(themeOf(a), "My theme")}>
-            <Paintbrush size={14} /> Create theme
+          <button className="btn" disabled={full} title={fullNote} onClick={() => startFrom(themeOf(a), t.mine)}>
+            <Paintbrush size={14} /> {t.create}
           </button>
           <button className="btn" disabled={full} title={fullNote} onClick={() => setEditing("import")}>
-            <Plus size={14} /> Add theme
+            <Plus size={14} /> {t.add}
           </button>
         </>
       }
@@ -365,7 +365,7 @@ function Themes({ a, mode, set }: { a: Appearance; mode: Mode; set: (c: Partial<
           {editing === "import" ? (
             <ImportTheme
               onCancel={() => setEditing(undefined)}
-              onImport={(t) => save({ name: freeName(t.name, names()), light: t.light, dark: t.dark })}
+              onImport={(theme) => save({ name: freeName(theme.name, names()), light: theme.light, dark: theme.dark })}
             />
           ) : (
             <ThemeEditor
@@ -380,24 +380,24 @@ function Themes({ a, mode, set }: { a: Appearance; mode: Mode; set: (c: Partial<
         </div>
       )}
       <div className="set-block theme-grid">
-        {all.map((t) => {
-          const custom = !BUILTIN_THEMES.includes(t);
+        {all.map((theme) => {
+          const custom = !BUILTIN_THEMES.includes(theme);
           return (
             <ThemeCard
-              key={t.id}
-              theme={t}
-              selected={t.id === a.themeId}
+              key={theme.id}
+              theme={theme}
+              selected={theme.id === a.themeId}
               mode={mode}
               custom={custom}
-              onPick={(m) => pick(t, m)}
+              onPick={(m) => pick(theme, m)}
               canDuplicate={!full}
-              onDuplicate={() => startFrom(t, `${t.name} copy`)}
-              onEdit={() => edit({ id: t.id, name: t.name, light: { ...t.light }, dark: { ...t.dark } })}
+              onDuplicate={() => startFrom(theme, t.copyOf(theme.name))}
+              onEdit={() => edit({ id: theme.id, name: theme.name, light: { ...theme.light }, dark: { ...theme.dark } })}
               onDelete={() => {
-                if (editing !== "import" && editing?.id === t.id) setEditing(undefined);
+                if (editing !== "import" && editing?.id === theme.id) setEditing(undefined);
                 set({
-                  customThemes: a.customThemes.filter((o) => o.id !== t.id),
-                  ...(a.themeId === t.id ? { themeId: DEFAULT_APPEARANCE.themeId } : {}),
+                  customThemes: a.customThemes.filter((o) => o.id !== theme.id),
+                  ...(a.themeId === theme.id ? { themeId: DEFAULT_APPEARANCE.themeId } : {}),
                 });
               }}
             />
@@ -412,6 +412,7 @@ function Themes({ a, mode, set }: { a: Appearance; mode: Mode; set: (c: Partial<
 function SliderRow({
   title,
   hint,
+  reset,
   value,
   min,
   max,
@@ -425,6 +426,8 @@ function SliderRow({
 }: {
   title: string;
   hint: string;
+  /** The reset button's name. */
+  reset: string;
   value: number;
   min: number;
   max: number;
@@ -436,6 +439,7 @@ function SliderRow({
   onChange: (n: number) => void;
   onReset: () => void;
 }) {
+  const l = useLocale();
   return (
     <SettingRow
       name={title}
@@ -443,7 +447,7 @@ function SliderRow({
       control={
         <>
           {!isDefault && (
-            <button className="icon-btn small-icon" aria-label={`Reset ${title.toLowerCase()}`} title="Back to the default" onClick={onReset}>
+            <button className="icon-btn small-icon" aria-label={reset} title={l.common.backToDefault} onClick={onReset}>
               <RotateCcw size={13} />
             </button>
           )}
@@ -470,9 +474,9 @@ function SliderRow({
   );
 }
 
-const widthLabel = (w: number) => (w ? `${w} px` : "Full width");
-
 export function ThemeSettings({ store }: { store: AppearanceStore }) {
+  const l = useLocale();
+  const t = l.appearance.layout;
   const a = useSyncExternalStore(store.subscribe, store.get);
   const mode = useSyncExternalStore(store.subscribe, store.mode);
   const set = (change: Partial<Appearance>) => store.set(change);
@@ -480,36 +484,38 @@ export function ThemeSettings({ store }: { store: AppearanceStore }) {
   const widthAt = Math.max(0, CHAT_WIDTHS.indexOf(a.chatWidth));
   return (
     <>
-      <SettingsSection title="Color scheme" intro="System follows your desktop's light or dark setting.">
+      <SettingsSection title={l.appearance.scheme.title} intro={l.appearance.scheme.intro}>
         <div className="set-block">
           <SchemePicker a={a} set={set} />
         </div>
       </SettingsSection>
       <Themes a={a} mode={mode} set={set} />
-      <SettingsSection title="Layout and contrast">
+      <SettingsSection title={t.title}>
         <SliderRow
-          title="Contrast"
-          hint="How far text, borders and panels stand out from the background."
+          title={t.contrast}
+          hint={t.contrastHint}
+          reset={t.resetContrast}
           value={a.contrast}
           min={0}
           max={100}
           step={5}
-          label={a.contrast === d.contrast ? "Default" : `${a.contrast > d.contrast ? "+" : ""}${a.contrast - d.contrast}`}
-          low="Softer"
-          high="Sharper"
+          label={a.contrast === d.contrast ? l.common.default : t.contrastOffset(a.contrast - d.contrast)}
+          low={t.softer}
+          high={t.sharper}
           isDefault={a.contrast === d.contrast}
           onChange={(contrast) => set({ contrast })}
           onReset={() => set({ contrast: d.contrast })}
         />
         <SliderRow
-          title="Chat width"
-          hint="How wide messages and the composer grow in a wide window."
+          title={t.width}
+          hint={t.widthHint}
+          reset={t.resetWidth}
           value={widthAt}
           min={0}
           max={CHAT_WIDTHS.length - 1}
-          label={widthLabel(a.chatWidth)}
-          low="Narrow"
-          high="Full"
+          label={a.chatWidth ? l.common.px(a.chatWidth) : t.fullWidth}
+          low={t.narrow}
+          high={t.full}
           isDefault={a.chatWidth === d.chatWidth}
           onChange={(i) => set({ chatWidth: CHAT_WIDTHS[i] })}
           onReset={() => set({ chatWidth: d.chatWidth })}

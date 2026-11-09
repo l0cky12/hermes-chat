@@ -6,7 +6,8 @@ import { ListFilter, Search, Tag as TagIcon, X } from "lucide-react";
 import { STATE_LABEL, isEmptyFilter, tidyFilter, type ChatFilter, type ChatState, type FilterOutcome } from "../hermes/chatFilter";
 import { SOURCE_LABEL, type Found, type Source } from "../hermes/model";
 import { previewBulk, type BulkPreview, type ScopeTags } from "../hermes/tags";
-import { SourceIcon, Spinner, composing, highlight, relTime, useReturnFocus } from "./bits";
+import { SourceIcon, Spinner, composing, highlight, useReturnFocus } from "./bits";
+import { useLocale } from "../i18n/locale";
 import { isTextEdit } from "./editKeys";
 import { trapTab } from "./modal";
 
@@ -72,6 +73,7 @@ export function SearchPalette({
   /** The app's shortcuts that still work over the palette, such as Ctrl+K, which closes it. */
   passKey?: (e: KeyboardEvent) => boolean;
 }) {
+  const l = useLocale();
   const [filter, setFilter] = useState<ChatFilter>(initial ?? {});
   const [filtersOpen, setFiltersOpen] = useState(!!initial && Object.keys(tidyFilter({ ...initial, text: undefined })).length > 0);
   const tidy = tidyFilter(filter);
@@ -256,7 +258,7 @@ export function SearchPalette({
                 <SourceIcon source={f.source} />
                 <span className="hit-name">{highlight(f.title, results.text ?? "", "hl")}</span>
                 {f.archived ? <span className="badge">Archived</span> : f.settled && <span className="badge">Settled</span>}
-                <span className="hit-time">{relTime(f.updatedAt)}</span>
+                <span className="hit-time">{l.fmt.age(f.updatedAt)}</span>
               </div>
               <HitTags tags={tags} chatId={f.chatId} model={tidy.model || tidy.text ? f.model : undefined} />
               {f.snippet.length > 0 && (

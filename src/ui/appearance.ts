@@ -1,5 +1,5 @@
 // How the app looks on this computer: the color scheme and theme (themes.ts), contrast, how wide chats grow, the
-// interface and code fonts and their sizes, and whether code blocks wrap long lines. Kept in localStorage and applied to the root element as CSS variables (styles.css), so it holds from launch,
+// interface and code fonts and their sizes, whether code blocks wrap long lines, and the interface language. Kept in localStorage and applied to the root element as CSS variables (styles.css), so it holds from launch,
 // sign-in screen included. Nothing here goes to Hermes.
 
 import {
@@ -14,6 +14,7 @@ import {
   type Scheme,
   type Theme,
 } from "./themes";
+import { htmlLang, localeFor, parseLanguageChoice, systemLanguages, type LanguageChoice, type Locale, type SystemLanguages } from "../i18n/locale";
 
 /**
  * An empty font is the app's own default. Sizes are in CSS pixels. `themeId` is a built-in theme's or one of
@@ -30,6 +31,7 @@ export type Appearance = {
   monoFont: string;
   monoSize: number;
   wordWrap: boolean;
+  language: LanguageChoice;
 };
 
 export const DEFAULT_APPEARANCE: Appearance = {
@@ -43,6 +45,7 @@ export const DEFAULT_APPEARANCE: Appearance = {
   monoFont: "",
   monoSize: 13,
   wordWrap: false,
+  language: "system",
 };
 export const CHAT_WIDTHS = [600, 680, 740, 820, 900, 1000, 1100, 1200, 0];
 /** More than anyone needs; the editor stops offering new themes here. */
@@ -88,6 +91,7 @@ export function loadAppearance(storage: AppearanceStorage): Appearance {
     monoFont: cleanFont(saved.monoFont),
     monoSize: pickSize(saved.monoSize, MONO_SIZES, d.monoSize),
     wordWrap: typeof saved.wordWrap === "boolean" ? saved.wordWrap : d.wordWrap,
+    language: parseLanguageChoice(saved.language),
   };
 }
 
@@ -99,10 +103,10 @@ export const themeOf = (a: Appearance): Theme =>
   [...BUILTIN_THEMES, ...a.customThemes].find((t) => t.id === a.themeId) ?? BUILTIN_THEMES[0];
 
 /**
- * Sets the CSS variables styles.css reads, for the mode showing. The app's default fonts stay as fallbacks behind a
- * chosen one.
+ * Sets the CSS variables styles.css reads, for the mode showing, and the root's lang for the locale. The app's default
+ * fonts stay as fallbacks behind a chosen one.
  */
-export function applyAppearance(a: Appearance, root: HTMLElement, mode: Mode = resolveMode(a.scheme, true)) {
+export function applyAppearance(a: Appearance, root: HTMLElement, mode: Mode = resolveMode(a.scheme, true), locale: Locale = localeFor(a.language, [])) {
   const theme = themeOf(a);
   for (const [name, value] of Object.entries(themeVars(theme[mode], mode, a.contrast))) root.style.setProperty(name, value);
   root.dataset.mode = mode;
@@ -113,6 +117,7 @@ export function applyAppearance(a: Appearance, root: HTMLElement, mode: Mode = r
   root.style.fontSize = `${a.uiSize}px`;
   root.style.setProperty("--mono-size", `${a.monoSize}px`);
   root.classList.toggle("wrap-code", a.wordWrap);
+  root.lang = htmlLang(locale);
 }
 
 /** Whether the system prefers dark, and word when that changes. */
@@ -135,27 +140,41 @@ export type AppearanceStore = {
   get(): Appearance;
   /** The mode showing: the scheme's, or the system's for System. */
   mode(): Mode;
+  /** The interface's language: the one picked, or the desktop's for System. `choice` asks what another choice gives. */
+  locale(choice?: LanguageChoice): Locale;
   /** Applies the change at once and keeps it. */
   set(change: Partial<Appearance>): void;
   subscribe(fn: () => void): () => void;
 };
 
 /** The appearance kept in `storage`, applied to `root` now and on every change. */
-export function appearanceStore(storage: AppearanceStorage, root: HTMLElement, system: SystemDark = prefersDark()): AppearanceStore {
+export function appearanceStore(
+  storage: AppearanceStorage,
+  root: HTMLElement,
+  system: SystemDark = prefersDark(),
+  languages: SystemLanguages = systemLanguages(),
+): AppearanceStore {
   let current = loadAppearance(storage);
   const listeners = new Set<() => void>();
   const mode = () => resolveMode(current.scheme, system.matches());
-  const apply = () => applyAppearance(current, root, mode());
+  const locale = (choice = current.language) => localeFor(choice, languages.tags());
+  const apply = () => applyAppearance(current, root, mode(), locale());
   apply();
-  // Follows the desktop's switch while System is picked. Lives as long as the app.
+  // Follows the desktop's dark switch while System is picked, and its languages, which a picked language takes its
+  // date format from too. Lives as long as the app.
   system.subscribe(() => {
     if (current.scheme !== "system") return;
+    apply();
+    listeners.forEach((fn) => fn());
+  });
+  languages.subscribe(() => {
     apply();
     listeners.forEach((fn) => fn());
   });
   return {
     get: () => current,
     mode,
+    locale,
     set(change) {
       current = { ...current, ...change };
       apply();

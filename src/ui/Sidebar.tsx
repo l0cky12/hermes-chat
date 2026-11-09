@@ -18,7 +18,8 @@ import { DeleteChatDialog } from "./DeleteChat";
 import { SettleAllDialog } from "./SettleAll";
 import { CloneProfileDialog } from "./CloneProfile";
 import type { ProfileCloneApi } from "../hermes/profileClone";
-import { ArchiveButton, STATUS_LABEL, SettleButton, SourceIcon, Spinner, composing, relTime, routeLabel, useReturnFocus } from "./bits";
+import { ArchiveButton, STATUS_LABEL, SettleButton, SourceIcon, Spinner, ago, composing, routeLabel, useReturnFocus } from "./bits";
+import { useLocale, type Locale } from "../i18n/locale";
 import { viaLabel } from "../hermes/routes";
 import { dragChat, dragChatEnd, rowDragged } from "./Tabs";
 
@@ -409,6 +410,7 @@ function ChatRow({
   /** In a collapsed section: kept, with its rename box or menu, but out of sight. */
   hidden?: boolean;
 }) {
+  const l = useLocale();
   const [renaming, setRenaming] = useState(false);
   const waiting = !chat.running && handoff?.kind === "waiting" ? waitingLabel(handoff) : undefined;
   const [retitling, setRetitling] = useState(false);
@@ -474,7 +476,7 @@ function ChatRow({
         draggable
         onDragStart={(e) => dragChat(e, chat.id)}
         onDragEnd={dragChatEnd}
-        title={`${retitling ? "Writing a new title…" : chat.source !== "app" ? `${chat.title} (from ${SOURCE_LABEL[chat.source]})` : chat.title}${pin?.pinned ? " (pinned)" : ""}${alsoShown ? " (in the other pane)" : ""}${sleepsUntil ? ` (snoozed until ${wakeFull(sleepsUntil)})` : ""}`}
+        title={`${retitling ? "Writing a new title…" : chat.source !== "app" ? `${chat.title} (from ${SOURCE_LABEL[chat.source]})` : chat.title}${pin?.pinned ? " (pinned)" : ""}${alsoShown ? " (in the other pane)" : ""}${sleepsUntil ? ` (snoozed until ${wakeFull(sleepsUntil, l.tag)})` : ""}`}
         onClick={() => {
           setRetitleError(undefined);
           onOpen();
@@ -494,7 +496,7 @@ function ChatRow({
           </span>
         )}
         <span className="row-meta">
-          {sleepsUntil && <span className="row-wake">{wakeLabel(sleepsUntil, now)}</span>}
+          {sleepsUntil && <span className="row-wake">{wakeLabel(sleepsUntil, now, l.tag)}</span>}
           {handoff?.kind === "needsOwner" && (
             <span className="row-owner" role="img" aria-label={handoff.reason} title={handoff.reason}>
               <CircleAlert size={12} />
@@ -509,7 +511,7 @@ function ChatRow({
           ) : chat.unread ? (
             <span className="dot" title="Unread" />
           ) : (
-            !sleepsUntil && relTime(chat.updatedAt)
+            !sleepsUntil && l.fmt.age(chat.updatedAt)
           )}
         </span>
       </button>
@@ -575,29 +577,28 @@ function ChatRow({
   );
 }
 
-const ago = (ts: number) => (relTime(ts) === "now" ? "just now" : `${relTime(ts)} ago`);
 const unreadCount = (p: OtherProfile) => `${p.unread}${p.more ? "+" : ""}`;
 const CHECKED_EVERY = `Other profiles are checked every ${CHECK_EVERY_MS / 60_000} minutes`;
 
 /** What the latest check of another profile found, and when; an earlier answer is kept through a failed check. */
-function otherTip(p?: OtherProfile): string {
+function otherTip(l: Locale, p?: OtherProfile): string {
   const found = (q: OtherProfile) =>
     q.checkedAt === undefined
       ? undefined
-      : `${q.unread ? `${unreadCount(q)} unread` : "No unread chats"}${q.more ? " in its most recent chats" : ""}, checked ${ago(q.checkedAt)}`;
+      : `${q.unread ? `${unreadCount(q)} unread` : "No unread chats"}${q.more ? " in its most recent chats" : ""}, checked ${ago(l, q.checkedAt)}`;
   if (p?.error) return [`Couldn't check: ${p.error}`, found(p) && `Earlier: ${found(p)}`].filter(Boolean).join(". ");
   return (p && found(p)) ?? "Not checked yet";
 }
 
 /** The switcher's tooltip: which other profiles have Unread chats, which couldn't be checked, and how fresh it is. */
-function switcherTip(others: OtherProfiles): string {
+function switcherTip(l: Locale, others: OtherProfiles): string {
   const { withUnread, failed } = totalUnread(others);
   return [
     "Switch profile",
     withUnread.length && `Unread chats in ${withUnread.map((n) => `${n} (${unreadCount(others.byName[n])})`).join(", ")}`,
     failed.length && `Couldn't check ${failed.join(", ")}`,
     others.error,
-    `${CHECKED_EVERY}${others.checkedAt ? `; last ${ago(others.checkedAt)}` : ""}`,
+    `${CHECKED_EVERY}${others.checkedAt ? `; last ${ago(l, others.checkedAt)}` : ""}`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -656,6 +657,7 @@ function ProfileSwitcher({
   onSwitch: (name: string) => void;
   clone?: ProfileCloneApi;
 }) {
+  const l = useLocale();
   const [cloning, setCloning] = useState(false);
   const [open, setOpen] = useState(false);
   // The profile the owner picked while something was left behind here, and what, until they say whether to go. Kept
@@ -706,7 +708,7 @@ function ProfileSwitcher({
 
   return (
     <div className="profile-switch" ref={box}>
-      <button ref={button} className="profile-btn" title={switcherTip(others)} aria-expanded={open} onClick={() => (open ? close() : setOpen(true))}>
+      <button ref={button} className="profile-btn" title={switcherTip(l, others)} aria-expanded={open} onClick={() => (open ? close() : setOpen(true))}>
         <span className="profile-name">{profile}</span>
         {elsewhere && <span className="dot" aria-label="Unread chats in other profiles" />}
         <ChevronDown size={14} className="profile-chev" />
@@ -834,6 +836,7 @@ function ProfileMenu({
   onClose: () => void;
   onClone?: () => void;
 }) {
+  const l = useLocale();
   const [filter, setFilter] = useState("");
   useReturnFocus();
 
@@ -861,7 +864,7 @@ function ProfileMenu({
             key={p}
             role="option"
             aria-selected={p === profile}
-            title={p === profile ? undefined : otherTip(others.byName[p])}
+            title={p === profile ? undefined : otherTip(l, others.byName[p])}
             className={`profile-option ${p === profile ? "on" : ""}`}
             onClick={() => onPick(p)}
           >
@@ -876,7 +879,7 @@ function ProfileMenu({
       {others.error && <div className="profile-hint err">{others.error}</div>}
       {profiles && profiles.length > 1 && (
         <div className="profile-hint">
-          Unread checked every {CHECK_EVERY_MS / 60_000} min{others.checkedAt ? `, last ${ago(others.checkedAt)}` : ""}
+          Unread checked every {CHECK_EVERY_MS / 60_000} min{others.checkedAt ? `, last ${ago(l, others.checkedAt)}` : ""}
         </div>
       )}
       {onClone && (
