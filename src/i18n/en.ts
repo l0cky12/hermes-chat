@@ -16,6 +16,10 @@ export const en = {
     now: "now",
   },
   settings: {
+    title: "Settings",
+    back: "Back to chat",
+    search: "Search settings",
+    clearSearch: "Clear search",
     tabs: {
       general: "General",
       appearance: "Appearance",

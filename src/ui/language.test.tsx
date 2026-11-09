@@ -60,6 +60,9 @@ it("turns the Appearance tab and the Settings tabs Spanish when Español is pick
 
   expect(root.lang).toBe("es");
   expect(JSON.parse(items.get("hermes-chat.appearance")!).language).toBe("es");
+  expect(screen.getByRole("heading", { name: "Ajustes", level: 1 })).toBeTruthy();
+  expect(screen.getByRole("searchbox", { name: "Buscar en los ajustes" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Volver al chat" })).toBeTruthy();
   expect(screen.getByRole("tab", { name: "Apariencia" }).getAttribute("aria-selected")).toBe("true");
   expect(screen.getByRole("heading", { name: "Fuentes", level: 2 })).toBeTruthy();
   expect(screen.getByRole("switch", { name: "Ajuste de línea" })).toBeTruthy();

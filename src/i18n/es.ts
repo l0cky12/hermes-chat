@@ -14,6 +14,10 @@ export const es: Catalogue = {
     now: "ahora",
   },
   settings: {
+    title: "Ajustes",
+    back: "Volver al chat",
+    search: "Buscar en los ajustes",
+    clearSearch: "Borrar la búsqueda",
     tabs: {
       general: "General",
       appearance: "Apariencia",

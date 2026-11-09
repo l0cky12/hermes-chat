@@ -309,7 +309,8 @@ export function SettingsScreen({
   /** Diagnostics → Logs (ADR 0033, 0087); without it Diagnostics has no Logs. */
   logs?: LogsWiring;
 }) {
-  const tabLabels = useLocale().settings.tabs;
+  const frame = useLocale().settings;
+  const tabLabels = frame.tabs;
   const [bytes, setBytes] = useState(cacheBytes);
   const [confirmClear, setConfirmClear] = useState(false);
   const [pulling, setPulling] = useState(false);
@@ -922,22 +923,22 @@ export function SettingsScreen({
     <div className="settings" ref={screenRef}>
       <div className="settings-inner">
         <button className="back" onClick={onClose}>
-          <ArrowLeft size={15} /> Back to chat
+          <ArrowLeft size={15} /> {frame.back}
         </button>
         <div className="settings-head">
-          <h1>Settings</h1>
+          <h1>{frame.title}</h1>
           <div className="settings-search" role="search">
             <Search size={14} aria-hidden />
             <input
               ref={searchBox}
               type="search"
-              aria-label="Search settings"
-              placeholder="Search settings"
+              aria-label={frame.search}
+              placeholder={frame.search}
               value={query}
               onChange={(e) => typed(e.target.value)}
             />
             {query && (
-              <button className="icon-btn" aria-label="Clear search" title="Clear search" onClick={() => (setQuery(""), searchBox.current?.focus())}>
+              <button className="icon-btn" aria-label={frame.clearSearch} title={frame.clearSearch} onClick={() => (setQuery(""), searchBox.current?.focus())}>
                 <X size={14} />
               </button>
             )}
@@ -946,7 +947,7 @@ export function SettingsScreen({
         <div
           className="settings-tabs"
           role="tablist"
-          aria-label="Settings"
+          aria-label={frame.title}
           // While searching no tab is selected, so the arrows move on from the tab that has the focus.
           onKeyDown={(e) => {
             const ids = tabs.map((t) => t.id);
