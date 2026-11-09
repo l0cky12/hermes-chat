@@ -778,10 +778,12 @@ pub async fn listening(program: &str, target: &str) -> Result<String, ServerPage
         return Err(ServerPageError::Spawn("ssh's output isn't readable".into()));
     };
     let (mut out, mut said) = (Vec::new(), Vec::new());
-    let (mut stdout, mut stderr) = (stdout.take(LISTENING_KEPT), stderr.take(STDERR_KEPT as u64));
     let run = async {
-        let (o, e) = tokio::join!(stdout.read_to_end(&mut out), stderr.read_to_end(&mut said));
-        o.and(e)?;
+        let (o, e) = tokio::join!(read_kept(stdout, LISTENING_KEPT, &mut out), read_kept(stderr, STDERR_KEPT as u64, &mut said));
+        if o? {
+            out.truncate(out.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1));
+        }
+        e?;
         child.wait().await
     };
     let status = match tokio::time::timeout(LISTENING_TIMEOUT, run).await {
@@ -793,6 +795,13 @@ pub async fn listening(program: &str, target: &str) -> Result<String, ServerPage
         return Err(ServerPageError::Ssh(if said.is_empty() { format!("ssh exited with {status}.") } else { said }));
     }
     Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// Reads `from` to its end into `into`, keeping only its first `kept` bytes and dropping the rest, so the writer never
+/// blocks on a full pipe. True if anything was dropped.
+async fn read_kept(mut from: impl tokio::io::AsyncRead + Unpin, kept: u64, into: &mut Vec<u8>) -> std::io::Result<bool> {
+    (&mut from).take(kept).read_to_end(into).await?;
+    Ok(tokio::io::copy(&mut from, &mut tokio::io::sink()).await? > 0)
 }
 
 /// Starts ssh for `page` through `target` and waits until it listens and the page's port answers. Everything made is
@@ -1575,6 +1584,24 @@ while True:
         assert!(other.join("notes.txt").exists());
         assert!(unrelated.join("s").exists());
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_listing_longer_than_kept_is_cut_at_a_whole_line() {
+        const LINE: &str = r#"LISTEN 0 511 127.0.0.1:5173 0.0.0.0:* users:(("node",pid=1,fd=1))"#;
+        let dir = std::env::temp_dir().join(format!("hermes-chat-long-ss-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let program = dir.join("ssh");
+        std::fs::write(&program, format!("#!/bin/sh\nyes '{LINE}' | head -c 300000\n")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let out = listening(program.to_str().unwrap(), "liam@hermes").await.expect("a long listing is cut, not failed");
+        assert!(out.len() as u64 <= LISTENING_KEPT);
+        assert!(out.lines().all(|l| l == LINE), "every line kept is whole");
+        assert_eq!(crate::dev_servers::parse_ss(&out).iter().map(|l| l.port).collect::<Vec<_>>(), [5173]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
