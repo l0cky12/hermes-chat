@@ -995,6 +995,42 @@ describe("The empty Preview (issue #376)", () => {
   });
 });
 
+describe("Hermes can't drive the Preview (issue #376)", () => {
+  afterEach(() => vi.restoreAllMocks());
+  /** Every action Hermes's `drive_preview` and `annotate_preview` send (tools/drive_preview_tool.py `ACTIONS`, `WIRE`). */
+  const ACTIONS = ["elements", "click", "hover", "type", "scroll", "press", "strobe", "back", "forward", "reload", "pin", "hold", "unpin"];
+
+  it("turns down every preview request, and nothing reaches the page, its tunnel or the history", async () => {
+    const { user, view, pages, server, hermes } = await withView();
+    await user.click(screen.getByRole("link", { name: "the dev server" }));
+    await waitFor(() => expect(view.asked).toHaveLength(1));
+    await act(async () => view.land(1));
+    await act(async () => view.say(1, at("http://127.0.0.1:41001/notes")));
+    const asked = [...view.asked];
+    const placed = view.placed.get(1);
+
+    const runtime = server.runtimeIdOf("fix")!;
+    const asks: [string, Record<string, unknown>][] = [
+      ["preview.read", { start: 0, count: 50 }],
+      ...ACTIONS.map((action): [string, Record<string, unknown>] => ["preview.act", { action, ref: "e1", selector: "a", text: "x", key: "Enter", url: "https://evil.example/" }]),
+    ];
+    for (const [method, params] of asks) {
+      const id = server.ask(runtime, method, params);
+      expect(id, method).toBeDefined();
+      await settle(hermes);
+      expect(server.responses.find((r) => r.id === id), `${method} ${params.action ?? ""}`).toMatchObject({ error: { code: -32601 } });
+    }
+
+    expect(view.asked).toEqual(asked);
+    expect(view.made).toBe(1);
+    expect(view.placed.get(1)).toEqual(placed);
+    expect(view.closed).toEqual([]);
+    expect(pages.opened).toEqual(["http://localhost:5173/"]);
+    expect(address().value).toBe("localhost:5173/notes");
+    expect([button("Back").disabled, button("Forward").disabled]).toEqual([false, true]);
+  });
+});
+
 describe("Closing and resizing", () => {
   it("closes with its button, the header toggle, or Escape", async () => {
     const { user } = await signedIn();
