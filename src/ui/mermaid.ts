@@ -24,7 +24,8 @@ function refused(source: string): string | undefined {
 }
 
 /** Elements that load something, or move an attribute to something that does. */
-const LOADS = "script, image, img, feImage, iframe, frame, object, embed, video, audio, source, track, link, picture, animate, set, animateMotion, animateTransform";
+const LOADS =
+  "script, image, img, feImage, iframe, frame, object, embed, video, audio, source, track, link, picture, form, animate, set, animateMotion, animateTransform";
 const URL_ATTRIBUTES = new Set(["href", "xlink:href", "src", "srcset", "poster", "data", "action", "formaction", "background", "ping"]);
 // Escapes could spell `url(` past the pattern; mermaid's own styles have none, so they all go.
 const inert = (css: string) => css.replace(/\\/g, "").replace(CSS_FETCH, "none");
@@ -54,11 +55,23 @@ const firstLine = (error: unknown) =>
     .find(Boolean)
     ?.replace(/:$/, "") ?? "unknown error";
 
+/**
+ * Settings that have no default, so `defaultConfig` doesn't list them, yet a diagram's `%%{init}%%` or frontmatter
+ * could set: `htmlLabels: true` would put a label's `<img>` into the page while mermaid draws. The test checks this list
+ * against every key mermaid's `MermaidConfig` type declares.
+ */
+export const UNDEFAULTED_SETTINGS = ["htmlLabels", "dompurifyConfig", "wrap", "altFontFamily"];
+
+/** How long one drawing may take; one that hangs then shows its source, and the diagrams after it still draw. */
+const DRAW_MS = 15_000;
+
 let drawnSoFar = 0;
 // One at a time: mermaid's config is global, and each drawing sets its theme.
 let queue: Promise<unknown> = Promise.resolve();
 
-async function draw(source: string, theme: "dark" | "default"): Promise<Drawing> {
+export type Theme = "dark" | "default";
+
+async function draw(source: string, theme: Theme): Promise<Drawing> {
   const why = refused(source);
   if (why) return { note: why };
   try {
@@ -72,9 +85,13 @@ async function draw(source: string, theme: "dark" | "default"): Promise<Drawing>
       htmlLabels: false,
       flowchart: { htmlLabels: false },
       // No `%%{init}%%` or frontmatter in the diagram can change any setting, such as themeCSS.
-      secure: Object.keys(mermaid.mermaidAPI.defaultConfig),
+      secure: [...Object.keys(mermaid.mermaidAPI.defaultConfig), ...UNDEFAULTED_SETTINGS],
     });
-    const { svg } = await mermaid.render(`mermaid-${++drawnSoFar}`, source);
+    let late: ReturnType<typeof setTimeout> | undefined;
+    const { svg } = await Promise.race([
+      mermaid.render(`mermaid-${++drawnSoFar}`, source),
+      new Promise<never>((_, fail) => (late = setTimeout(() => fail(new Error(`took longer than ${DRAW_MS / 1000} s`)), DRAW_MS))),
+    ]).finally(() => clearTimeout(late));
     return { svg: contained(svg) };
   } catch (error) {
     return { note: `Couldn't draw this diagram: ${firstLine(error)}` };
@@ -86,16 +103,23 @@ type Held = { drawing: Promise<Drawing>; done?: Drawing };
 /** Drawings by theme and source, the last 50. */
 const drawings = new Map<string, Held>();
 
-const themeNow = () => (document.documentElement.dataset.mode === "dark" ? "dark" : "default");
+/** The mermaid theme for the app's light or dark mode now. */
+export const themeNow = (): Theme => (document.documentElement.dataset.mode === "dark" ? "dark" : "default");
 
-/** `source` drawn in the app's theme now, if it has been already. */
-export function drawnAlready(source: string): Drawing | undefined {
-  return drawings.get(themeNow() + "\n" + source)?.done;
+/** Calls `fn` when the app switches between light and dark. */
+export function subscribeTheme(fn: () => void) {
+  const watch = new MutationObserver(fn);
+  watch.observe(document.documentElement, { attributes: true, attributeFilter: ["data-mode"] });
+  return () => watch.disconnect();
 }
 
-/** `source` drawn in the app's theme now. */
-export function drawDiagram(source: string): Promise<Drawing> {
-  const theme = themeNow();
+/** `source` drawn in `theme`, if it has been already. */
+export function drawnAlready(source: string, theme: Theme): Drawing | undefined {
+  return drawings.get(theme + "\n" + source)?.done;
+}
+
+/** `source` drawn in `theme`. */
+export function drawDiagram(source: string, theme: Theme): Promise<Drawing> {
   const key = theme + "\n" + source;
   const held = drawings.get(key);
   if (held) {

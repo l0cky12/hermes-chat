@@ -102,9 +102,9 @@ function formula(effects: Effects, ok: State, nok: State, close: Close): State {
 /** `$…$` (Pandoc's rule: no space just inside the opening `$`) and `$$…$$`, in text. */
 const dollarMath: Construct = {
   name: "mathText",
-  // Not from the middle of a run of dollars, unless the one before is escaped.
+  // Not from the middle of a run of dollars, unless the one before is escaped or ends a formula (`$a$$b$` is two).
   previous(code) {
-    return code !== DOLLAR || this.events[this.events.length - 1][1].type === "characterEscape";
+    return code !== DOLLAR || ["characterEscape", "mathText"].includes(this.events[this.events.length - 1][1].type);
   },
   tokenize(effects, ok, nok) {
     const second: State = (code) => {

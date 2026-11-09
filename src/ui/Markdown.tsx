@@ -1,14 +1,14 @@
 // Markdown with highlighted, copyable code blocks, typeset math, mermaid diagrams and find-in-chat marks. Ported from
 // the prototype. Single newlines are kept as line breaks, since replies often put one item per line. Links open in the
 // preview pane, never in the app's own window (previewContext.tsx).
-import { Children, Fragment, isValidElement, memo, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Children, Fragment, isValidElement, memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { Check, CodeXml, Copy, Image as ImageIcon, Workflow } from "lucide-react";
 import "katex/dist/katex.min.css";
 import { PreviewLink } from "./previewContext";
 import { splitBlocks, type Blocks } from "./markdownBlocks";
 import { rehypePlugins, remarkPlugins } from "./markdownPipeline";
-import { drawDiagram, drawnAlready, type Drawing } from "./mermaid";
+import { drawDiagram, drawnAlready, subscribeTheme, themeNow, type Drawing } from "./mermaid";
 
 /** Rendered Markdown's text: code as it reads, whatever highlighting and find marks it is wrapped in. */
 function textOf(node: ReactNode): string {
@@ -17,14 +17,18 @@ function textOf(node: ReactNode): string {
   return isValidElement<{ children?: ReactNode }>(node) ? textOf(node.props.children) : "";
 }
 
-/** `source` drawn as a diagram once `box` is in view, or undefined until then and while `wanted` is false. */
+/**
+ * `source` drawn as a diagram in the app's light or dark theme once `box` is in view, or undefined until then and while
+ * `wanted` is false.
+ */
 function useDrawing(source: string, wanted: boolean, box: RefObject<HTMLElement | null>): Drawing | undefined {
+  const theme = useSyncExternalStore(subscribeTheme, themeNow, themeNow);
   const [drawn, setDrawn] = useState<{ source: string; drawing: Drawing }>();
-  const already = wanted ? drawnAlready(source) : undefined;
+  const already = wanted ? drawnAlready(source, theme) : undefined;
   useEffect(() => {
     if (!wanted || already || !box.current) return;
     let live = true;
-    const draw = () => void drawDiagram(source).then((drawing) => live && setDrawn({ source, drawing }));
+    const draw = () => void drawDiagram(source, theme).then((drawing) => live && setDrawn({ source, drawing }));
     if (typeof IntersectionObserver === "undefined") {
       draw();
       return () => void (live = false);
@@ -39,7 +43,8 @@ function useDrawing(source: string, wanted: boolean, box: RefObject<HTMLElement 
       live = false;
       view.disconnect();
     };
-  }, [source, wanted, already, box]);
+  }, [source, theme, wanted, already, box]);
+  // After a switch between light and dark, the drawing in the old theme shows until the new one is done.
   return already ?? (wanted && drawn?.source === source ? drawn.drawing : undefined);
 }
 

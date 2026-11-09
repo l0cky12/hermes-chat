@@ -4,6 +4,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render as renderDom, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
+// @ts-expect-error The app has no Node types; the tests run in Node.
+import { readFileSync } from "node:fs";
 import { Markdown } from "./Markdown";
 import { replyMarkdown } from "./CopyMessage";
 import { LinksProvider } from "./previewContext";
@@ -88,6 +90,11 @@ describe("Math in a reply", () => {
       expect(tex(div.querySelector(".katex-display")!)).toBe(source);
       expect(div.textContent).not.toMatch(/\$|\\\[|\\\]/);
     }
+  });
+
+  it("reads two formulas with no space between them as two", () => {
+    const div = shown("$a$$b$");
+    expect([...div.querySelectorAll(".katex")].map(tex)).toEqual(["a", "b"]);
   });
 
   it("leaves dollar amounts as prose", () => {
@@ -261,6 +268,61 @@ describe("A mermaid diagram in a reply", () => {
       expect(diagram(block)).toBeNull();
       expect(block.querySelector("pre")!.textContent).toBe(sources[i] + "\n");
       expect(block.textContent).toMatch(/styles link outside the app/);
+    }
+  });
+
+  // Mermaid puts each drawing in the page while it lays it out, before `contained` cleans it; an `<img>` there loads.
+  // Each source that wrongly drew HTML labels would hang jsdom until mermaid.ts gives up on it, 15 s apiece.
+  it("never puts anything that loads into the page while it draws, whatever settings the diagram asks for", { timeout: 100_000 }, async () => {
+    const added: string[] = [];
+    const watch = new MutationObserver((records) =>
+      records.forEach((r) =>
+        r.addedNodes.forEach((n) => {
+          if (!(n instanceof Element)) return;
+          for (const el of [n, ...n.querySelectorAll("*")]) if (el.matches("img, image, foreignObject, form, iframe")) added.push(el.outerHTML.slice(0, 120));
+        }),
+      ),
+    );
+    watch.observe(document.documentElement, { subtree: true, childList: true });
+    try {
+      const sources = [
+        '%%{init: {"htmlLabels": true}}%%\nstateDiagram-v2\n  A: <img src=https://evil.test/st.png>\n  [*] --> A',
+        '%%{init: {"htmlLabels": true}}%%\nflowchart TD\n  A["<img src=https://evil.test/f.png>"]--"<img src=https://evil.test/e.png>"-->B',
+        "---\nconfig:\n  htmlLabels: true\n---\nclassDiagram\n  class A\n  A : <img src=https://evil.test/c.png>",
+        '%%{init: {"htmlLabels": true}}%%\nflowchart TD\n  A["<form action=https://evil.test/f><button>go</button></form>"]',
+      ];
+      const { container } = renderDom(<Markdown text={sources.map(fenced).join("\n\n")} />);
+      const blocks = [...container.querySelectorAll(".code")];
+      await waitFor(() => expect(blocks.filter((b) => diagram(b) || b.querySelector(".code-note"))).toHaveLength(sources.length), { timeout: 90_000 });
+      expect(added).toEqual([]);
+    } finally {
+      watch.disconnect();
+    }
+  });
+
+  it("locks every setting mermaid takes, so no diagram can change one", async () => {
+    const { UNDEFAULTED_SETTINGS } = await import("./mermaid");
+    const { default: mermaid } = await import("mermaid");
+    const types = readFileSync("node_modules/mermaid/dist/config.type.d.ts", "utf8") as string;
+    const declared = types.match(/export interface MermaidConfig \{([\s\S]*?)\n\}/)![1].match(/^ {4}(\w+)\??:/gm)!.map((k: string) => k.trim().replace(/\??:$/, ""));
+    expect(declared).toContain("htmlLabels");
+    const locked = new Set([...Object.keys(mermaid.mermaidAPI.defaultConfig), ...UNDEFAULTED_SETTINGS]);
+    expect(declared.filter((k: string) => !locked.has(k))).toEqual([]);
+  });
+
+  it("is drawn again in the other theme when the app switches between light and dark", { timeout: LONG }, async () => {
+    const mode = document.documentElement.dataset.mode;
+    document.documentElement.dataset.mode = "light";
+    try {
+      const { container } = renderDom(<Markdown text={fenced("flowchart TD\n  Day-->Night")} />);
+      await drawn(container);
+      const light = diagram(container)!.outerHTML;
+      act(() => void (document.documentElement.dataset.mode = "dark"));
+      await waitFor(() => expect(diagram(container)?.outerHTML ?? light).not.toBe(light), { timeout: LONG });
+      expect(diagram(container)!.textContent).toContain("Night");
+    } finally {
+      if (mode === undefined) delete document.documentElement.dataset.mode;
+      else document.documentElement.dataset.mode = mode;
     }
   });
 });
