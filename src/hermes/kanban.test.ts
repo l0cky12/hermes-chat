@@ -5,7 +5,7 @@ import { STALLED_MS, WAKE_GRACE_MS, handoffOf, handoffs, waitingLabel, type Hand
 import { FakeHermes, row } from "./fakeHermes";
 import { KanbanWatch, POLL_EVERY_MS, SCAN_EVERY_MS, type SeenTask } from "./kanban";
 import { chatSections } from "./snooze";
-import { connect, type Hermes } from "./transport";
+import { LIVE_MIN_GAP_MS, connect, type Hermes } from "./transport";
 
 const running: Hermes[] = [];
 afterEach(async () => {
@@ -255,6 +255,132 @@ describe("a reply that starts background subagents", () => {
     server.event(runtime, "message.complete", { text: "Both subagents are back.", status: "complete" });
     expect(handoff(id)).toBeUndefined();
     expect(section(id)).toBe("inbox");
+  });
+});
+
+describe("a chat this app hasn't resumed, with background subagents running (#311)", () => {
+  /** After a restart: `research`'s reply started two background subagents that still run; this app never resumed it. */
+  function restarted(server = new FakeHermes()) {
+    // Not settled (ADR 0090), so each is in the Inbox or Working.
+    server.sessions = [row("research", 0.01, { pinned: true }), row("compressed", 0.02, { pinned: true, _lineage_ids: ["first-segment", "compressed"] }), row("quiet", 0.03, { pinned: true })];
+    server.subagents.research = ["sa-1", "sa-2"].map((subagent_id) => ({ subagent_id, owner: "rt-before-restart", status: "running", depth: 0 }));
+    server.subagents["first-segment"] = [{ subagent_id: "sa-3", owner: "rt-older", status: "running", depth: 0 }];
+    server.backgroundProcesses.quiet = 1;
+    return server;
+  }
+  const rosterReads = (server: FakeHermes) => server.requests.filter((r) => r.method === "subagent.roster");
+
+  it("stays in Working while the roster counts them, matching any segment of its lineage", async () => {
+    const { server, hermes, chat, handoff, section } = await signedIn(restarted());
+    await hermes.checkLive();
+    expect(chat("research").runtimeId).toBeUndefined();
+    expect(chat("research").subagents).toBeUndefined();
+    expect(handoff("research")).toMatchObject({ kind: "waiting", subagents: 2 });
+    expect(section("research")).toBe("working");
+    expect(handoff("compressed")).toMatchObject({ kind: "waiting", subagents: 1 });
+    // A background process alone doesn't hold a chat: the roster counts those that never wake it too.
+    expect(handoff("quiet")).toBeUndefined();
+    expect(section("quiet")).toBe("inbox");
+    expect(rosterReads(server).map((r) => r.params)).toEqual([{ profile: "default" }]);
+  });
+
+  it("is found when the roster was read before the chat list loaded", async () => {
+    const server = restarted();
+    vi.useFakeTimers();
+    const hermes = await connect(server.openPipe);
+    running.push(hermes);
+    await hermes.checkLive();
+    expect(hermes.getSnapshot().chats).toEqual([]);
+    await hermes.sync();
+    expect(handoffOf(hermes.getSnapshot().chats.find((c) => c.id === "research")!, undefined, Date.now())).toMatchObject({ subagents: 2 });
+  });
+
+  it("goes to the Inbox once the subagents have ended and the wake turn that reports on them ends", async () => {
+    const { server, hermes, handoff, section } = await signedIn(restarted());
+    await hermes.checkLive();
+    server.subagents.research = [];
+    server.liveSessions = [{ id: "rt-wake", session_key: "research", status: "working", last_active: Math.floor(Date.now() / 1000) }];
+    await vi.advanceTimersByTimeAsync(LIVE_MIN_GAP_MS);
+    expect(handoff("research")).toMatchObject({ kind: "waiting", subagents: 2 });
+    // Long past the wake grace, the wake turn still runs.
+    await vi.advanceTimersByTimeAsync(LIVE_MIN_GAP_MS * 3);
+    expect(section("research")).toBe("working");
+    server.liveSessions = [];
+    await vi.advanceTimersByTimeAsync(LIVE_MIN_GAP_MS);
+    expect(handoff("research")).toBeUndefined();
+    expect(section("research")).toBe("inbox");
+  });
+
+  it("goes to the Inbox after the wake grace when no wake turn comes", async () => {
+    const { server, hermes, handoff, section } = await signedIn(restarted());
+    await hermes.checkLive();
+    server.subagents.research = [];
+    await vi.advanceTimersByTimeAsync(LIVE_MIN_GAP_MS);
+    expect(section("research")).toBe("working");
+    expect(handoff("research", Date.now() + WAKE_GRACE_MS)).toBeUndefined();
+    expect(section("research", Date.now() + WAKE_GRACE_MS)).toBe("inbox");
+  });
+
+  it("checks again 15 seconds after the last check started, however often the chat list is read meanwhile", async () => {
+    const { server, hermes } = await signedIn(restarted());
+    await hermes.checkLive();
+    const reads = rosterReads(server).length;
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(LIVE_MIN_GAP_MS / 4);
+      await hermes.sync();
+    }
+    await vi.advanceTimersByTimeAsync(LIVE_MIN_GAP_MS / 4);
+    expect(rosterReads(server).length).toBe(reads + 1);
+  });
+
+  it("reads the roster only on the app's own cadence once nothing waits on it", async () => {
+    const { server, hermes } = await signedIn(restarted());
+    await hermes.checkLive();
+    server.subagents = {};
+    await vi.advanceTimersByTimeAsync(LIVE_MIN_GAP_MS * 4);
+    const reads = rosterReads(server).length;
+    await vi.advanceTimersByTimeAsync(LIVE_MIN_GAP_MS * 10);
+    expect(rosterReads(server).length).toBe(reads);
+  });
+
+  it("leaves a chat resumed here to its own Subagents tree", async () => {
+    const { server, hermes, chat, handoff } = await signedIn(restarted());
+    await hermes.open("research");
+    await hermes.idle();
+    expect(chat("research").subagents?.subagents).toHaveLength(2);
+    server.subagents.research = server.subagents.research.map((r) => ({ ...r, status: "completed" }));
+    await hermes.checkLive();
+    expect(chat("research").roster).toBeUndefined();
+    expect(handoff("research")).toMatchObject({ subagents: 2 });
+  });
+
+  it("doesn't hold later checks when a roster read never answers", async () => {
+    const server = restarted();
+    server.handlers["subagent.roster"] = () => {};
+    const { hermes, chat } = await signedIn(server);
+    let done = false;
+    void hermes.checkLive().then(() => (done = true));
+    await vi.advanceTimersByTimeAsync(LIVE_MIN_GAP_MS);
+    expect(done).toBe(true);
+    expect(chat("research").roster).toBeUndefined();
+    const lives = () => server.requests.filter((r) => r.method === "session.active_list").length;
+    const before = lives();
+    void hermes.checkLive();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lives()).toBe(before + 1);
+  });
+
+  it("is unchanged on a Hermes without subagent.roster, which is asked once", async () => {
+    const server = restarted();
+    server.asOlderHermes();
+    const { hermes, handoff, section } = await signedIn(server);
+    await hermes.checkLive();
+    await vi.advanceTimersByTimeAsync(LIVE_MIN_GAP_MS);
+    await hermes.checkLive();
+    expect(handoff("research")).toBeUndefined();
+    expect(section("research")).toBe("inbox");
+    expect(rosterReads(server)).toHaveLength(1);
+    expect(hermes.getSnapshot().status).toBe("connected");
   });
 });
 

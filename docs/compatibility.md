@@ -121,6 +121,10 @@ Needs `profiles.list` on `/api/ws` with each profile's Bot Chat in its rows (`ca
 
 Needs the `subagent.*` events on a chat's session (`spawn_requested`, `start`, `progress`, `tool`, `thinking`, `complete`, with `subagent_id` and `parent_id`), and `subagent.list`, `subagent.tail`, `subagent.steer` and `subagent.interrupt` on `/api/ws`. Hermes `f0d94882` has all of them. These methods need a chat's live session, so diagnostics can't check them by reading. The capability is unknown until a chat opened on the connection lists its subagents. Without `subagent.list`, the Subagents panel still shows what the events say, says that it can't check what happened while the app was disconnected, and has no Steer or Stop. A Hermes whose events carry no `subagent_id` shows its subagents side by side, by their `delegate_task` call, without Steer or Stop.
 
+## Subagents in chats not opened
+
+Needs `subagent.roster` on `/api/ws`, which counts the background subagents and background processes running for each chat of a profile, with no chat open. Hermes `f0d94882` has it, and 0.16.0 doesn't. Checked with `subagent.roster`. The app reads it with `session.active_list`, so a chat not opened since launch stays in Working while its background subagents run (ADR 0096). Without it, only a chat opened on the connection stays in Working while they run. Any other chat goes to the Inbox when its reply ends, as before.
+
 ## Versions checked
 
 Checked live on 2026-11-04 with throwaway dashboards holding no real data (`src/hermes/capabilities.live.test.ts`):

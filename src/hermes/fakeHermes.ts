@@ -497,6 +497,11 @@ export class FakeHermes {
   subagents: Record<string, (Record<string, unknown> & { subagent_id: string; owner: string; tail?: string })[]> = {};
   /** Recently failed background delegations, by stored session, as `subagent.list` returns them in `delegations`. */
   failedDelegations: Record<string, Record<string, unknown>[]> = {};
+  /**
+   * Running background processes, by the stored session that started them, which `subagent.roster` counts as
+   * `background` (`process_registry`, any not exited, `notify_on_complete` or not). Tests fill it.
+   */
+  backgroundProcesses: Record<string, number> = {};
   /** What `subagent.steer` queued, by subagent id. */
   readonly steered: Record<string, string[]> = {};
   /** The subagents `subagent.interrupt` stopped. */
@@ -636,7 +641,7 @@ export class FakeHermes {
    */
   asOlderHermes() {
     const noMethod = (name: string) => (this.handlers[name] = (r) => this.fail(r.id, -32601, `unknown method: ${name}`));
-    for (const m of ["client.capabilities", "gateway.capabilities", "projects.list", "projects.create", "learning.frames", "learning.detail", "learning.edit", "learning.delete", "subagent.list", "subagent.tail", "subagent.interrupt"]) noMethod(m);
+    for (const m of ["client.capabilities", "gateway.capabilities", "projects.list", "projects.create", "learning.frames", "learning.detail", "learning.edit", "learning.delete", "subagent.list", "subagent.tail", "subagent.interrupt", "subagent.roster"]) noMethod(m);
     for (const r of ["GET /api/health", "GET /api/files", "GET /api/files/read", "GET /api/fs/list"]) delete this.rest[r];
     this.status = { version: "0.16.0", release_date: "2026.6.8", auth_required: true, auth_providers: ["basic"] };
     this.botMode = "none";
@@ -932,6 +937,21 @@ export class FakeHermes {
       const fields = ["subagent_id", "parent_id", "depth", "goal", "delegation_id", "model", "started_at", "status", "tool_count", "last_tool", "accepting_steer"];
       const rows = (this.subagents[stored] ?? []).map((row) => Object.fromEntries(fields.map((k) => [k, row[k] ?? null])));
       this.respond(r.id, { subagents: rows, delegations: structuredClone(this.failedDelegations[stored] ?? []) });
+    },
+    // `subagent.roster {profile?}` at the deployed `f0d94882` (`methods_subagents.py:114-138`): every stored session of
+    // the profile with top-level subagents live in the registry or background processes running, with no session open.
+    "subagent.roster": (r) => {
+      const store = this.store(r.params.profile as string | undefined);
+      if (!store) return this.respond(r.id, { sessions: [] });
+      const ours = (id: string) => store.some((row) => row.id === id || !!row._lineage_ids?.includes(id));
+      const counts = new Map<string, { subagents: number; background: number }>();
+      const count = (id: string) => counts.get(id) ?? counts.set(id, { subagents: 0, background: 0 }).get(id)!;
+      for (const [id, rows] of Object.entries(this.subagents)) {
+        const live = rows.filter((row) => !row.depth && (row.status === undefined || row.status === "running" || row.status === "queued")).length;
+        if (live && ours(id)) count(id).subagents += live;
+      }
+      for (const [id, n] of Object.entries(this.backgroundProcesses)) if (n > 0 && ours(id)) count(id).background += n;
+      this.respond(r.id, { sessions: [...counts].map(([session_id, c]) => ({ session_id, ...c })) });
     },
     "subagent.tail": (r) => {
       const id = String(r.params.subagent_id ?? "");

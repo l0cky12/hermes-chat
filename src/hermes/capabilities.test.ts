@@ -32,6 +32,7 @@ const NEW: Record<string, unknown> = {
   "RPC projects.list": { projects: [], active_id: null },
   "RPC commands.catalog": { pairs: [] },
   "RPC session.active_list": { sessions: [] },
+  "RPC subagent.roster": { sessions: [] },
   "RPC learning.detail": { ok: false, message: "skill '__hermes_chat_probe__' not found" },
   "RPC profiles.list": { profiles: [{ name: "default", is_default: true, canonical_session: null }], bot_mode_protocol: true },
   "GET api/tools/toolsets": [],
@@ -55,6 +56,7 @@ const OLD: Record<string, unknown> = {
   "RPC projects.list": noMethod("projects.list"),
   "RPC learning.detail": noMethod("learning.detail"),
   "RPC profiles.list": noMethod("profiles.list"),
+  "RPC subagent.roster": noMethod("subagent.roster"),
   "GET api/files": noRoute(),
   "GET api/fs/list": noRoute(),
 };
@@ -112,7 +114,7 @@ describe("the capability contract", () => {
   });
 
   it("checks only by reading: a GET, or a JSON-RPC method that only reads", () => {
-    const reads = new Set(["projects.list", "commands.catalog", "session.active_list", "learning.detail", "profiles.list"]);
+    const reads = new Set(["projects.list", "commands.catalog", "session.active_list", "learning.detail", "profiles.list", "subagent.roster"]);
     for (const c of CAPABILITIES) {
       if (!c.probe) continue;
       if (c.probe.kind === "rpc") expect(reads.has(c.probe.method), c.id).toBe(true);
@@ -146,6 +148,7 @@ describe("a check of a new Hermes (upstream 74b2ed6)", () => {
       botMode: "supported",
       // Only a chat's own subagent.list can learn this.
       subagents: "unknown",
+      subagentRoster: "supported",
     });
     expect(snap.facts).toEqual({
       version: "0.17.0",
@@ -167,7 +170,7 @@ describe("a check of a new Hermes (upstream 74b2ed6)", () => {
   it("sends nothing that writes", async () => {
     const t = store(NEW);
     await connectAndCheck(t);
-    expect(t.calls.every((c) => c.startsWith("GET ") || /^RPC (gateway\.capabilities|projects\.list|commands\.catalog|session\.active_list|learning\.detail|profiles\.list)$/.test(c))).toBe(true);
+    expect(t.calls.every((c) => c.startsWith("GET ") || /^RPC (gateway\.capabilities|projects\.list|commands\.catalog|session\.active_list|learning\.detail|profiles\.list|subagent\.roster)$/.test(c))).toBe(true);
   });
 });
 
@@ -188,6 +191,7 @@ describe("a check of an old Hermes (0.16.0)", () => {
       serverFiles: "unsupported",
       outputs: "unsupported",
       botMode: "unsupported",
+      subagentRoster: "unsupported",
       toolsets: "supported",
       scheduledJobs: "supported",
       persona: "supported",

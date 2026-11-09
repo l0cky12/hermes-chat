@@ -3,7 +3,8 @@
 // with a new turn once that work is done (`tui_gateway/session_notifications.py`), so the chat isn't finished when the
 // dispatching reply ends. Until the work is over and the wake turn has ended, the chat stays in Working, waiting, or
 // goes to the Inbox once a task needs the owner. Everything here is pure: the transport keeps `Chat.tasks` from
-// Hermes's board (kanban.ts), and the subagents are the chat's own tree (subagents.ts).
+// Hermes's board (kanban.ts), and the subagents are the chat's own tree (subagents.ts), or for a chat with no tree
+// here, `Chat.roster` from Hermes's `subagent.roster` counts (issue #311).
 import type { Chat } from "./model";
 import { hasEnded, tally, type Subagent } from "./subagents";
 
@@ -56,6 +57,30 @@ export type Handoff =
   | { kind: "waiting"; tasks: DispatchedTask[]; subagents: number; stalled: boolean }
   | { kind: "needsOwner"; task: DispatchedTask; reason: string };
 
+/**
+ * Background subagents Hermes's `subagent.roster` counts for a chat with no Subagents tree here, such as one not resumed
+ * since the app started (issue #311). The roster gives counts, not ids. `id`: names this run of work for Stop waiting,
+ * from when the app first saw it. `subagents`: how many run, or ran until `endedAt`, when the roster first counted none.
+ * `waking`: since then Hermes has reported the chat's session working, on the wake turn that reports on them.
+ */
+export type RosterWork = { id: string; subagents: number; endedAt?: number; waking?: boolean };
+
+/**
+ * The chat's roster work after a roster read that counts `count` subagents for it, while `working` says whether
+ * Hermes's live sessions show it on a turn. Work the app never saw running starts nothing: it ended unheard. Ended work
+ * holds the chat for the wake grace, or through the wake turn once one is seen, and is over when that turn ends.
+ */
+export function nextRoster(was: RosterWork | undefined, count: number, working: boolean, now: number): RosterWork | undefined {
+  if (count > 0) return was && was.endedAt === undefined ? (was.subagents === count ? was : { ...was, subagents: count }) : { id: `roster-${now}`, subagents: count };
+  if (!was) return undefined;
+  if (was.endedAt === undefined) return { ...was, endedAt: now, ...(working && { waking: true }) };
+  if (working) return was.waking ? was : { ...was, waking: true };
+  return was.waking || now - was.endedAt >= WAKE_GRACE_MS ? undefined : was;
+}
+
+/** Whether roster work keeps its chat waiting at `now`: running, through its wake turn, or inside the wake grace. */
+const rosterHolds = (r: RosterWork, now: number) => r.endedAt === undefined || !!r.waking || now - r.endedAt < WAKE_GRACE_MS;
+
 /** The ids of the work the owner stopped waiting on, per chat (snooze.ts `StopWaitingStore`). Newer work has new ids. */
 export type StopWaiting = Readonly<Record<string, readonly string[]>>;
 
@@ -85,7 +110,7 @@ function endedAt(s: Subagent): number | undefined {
 
 /** Subagents still queued or running, else those just ended with the wake turn to come, less those in `ignored`. */
 function subagentsLeft(c: Chat, ignored: ReadonlySet<string> | undefined, now: number): number {
-  if (!c.subagents) return 0;
+  if (!c.subagents) return c.roster && !ignored?.has(c.roster.id) && rosterHolds(c.roster, now) ? c.roster.subagents : 0;
   const counted = c.subagents.subagents.filter((s) => !ignored?.has(s.id));
   return tally({ ...c.subagents, subagents: counted }).running || counted.filter((s) => justEnded(s, c, now)).length;
 }
@@ -132,7 +157,7 @@ export function waitingLabel(h: Extract<Handoff, { kind: "waiting" }>): string {
  * still holds the chat for its wake grace.
  */
 export function outstandingIds(c: Chat): string[] {
-  return [...(c.tasks ?? []), ...(c.subagents?.subagents ?? [])].map((w) => w.id);
+  return [...(c.tasks ?? []), ...(c.subagents?.subagents ?? (c.roster ? [c.roster] : []))].map((w) => w.id);
 }
 
 /**
@@ -140,7 +165,7 @@ export function outstandingIds(c: Chat): string[] {
  * just ended, which would otherwise run unheard while the hold runs out.
  */
 export function followsSession(c: Chat, now: number): boolean {
-  return subagentsLeft(c, undefined, now) > 0 || (c.tasks ?? []).some((t) => TASK_MEANS[t.status] === "over" && holds(t, now));
+  return (!!c.subagents && subagentsLeft(c, undefined, now) > 0) || (c.tasks ?? []).some((t) => TASK_MEANS[t.status] === "over" && holds(t, now));
 }
 
 /**
@@ -155,6 +180,7 @@ export function nextHandoffChange(chats: readonly Chat[], stops: StopWaiting, no
   for (const c of chats) {
     const ignored = new Set(stops[c.id] ?? []);
     for (const s of c.subagents?.subagents ?? []) if (!ignored.has(s.id) && justEnded(s, c, now)) consider(endedAt(s)! + WAKE_GRACE_MS);
+    if (!c.subagents && c.roster?.endedAt !== undefined && !c.roster.waking && !ignored.has(c.roster.id)) consider(c.roster.endedAt + WAKE_GRACE_MS);
     for (const t of c.tasks ?? []) {
       if (ignored.has(t.id)) continue;
       if (TASK_MEANS[t.status] === "over" && t.overAt !== undefined) consider(t.overAt + WAKE_GRACE_MS);

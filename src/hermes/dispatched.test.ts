@@ -8,6 +8,7 @@ import {
   handoffOf,
   handoffs,
   nextHandoffChange,
+  nextRoster,
   outstandingIds,
   parseKanbanCreate,
   parseTask,
@@ -104,6 +105,60 @@ describe("a chat's handoff", () => {
     const chats = [chat("a", { tasks: [task("t1", "ready")] }), chat("b", { tasks: [task("t2", "ready")] }), chat("quiet")];
     const map = handoffs(chats, { a: ["t1"] }, NOW);
     expect([...map.keys()]).toEqual(["b"]);
+  });
+});
+
+describe("background subagents Hermes's roster counts, for a chat with no Subagents tree here", () => {
+  it("starts a run when the roster first counts some, and keeps it while the count changes", () => {
+    const run = nextRoster(undefined, 2, false, NOW)!;
+    expect(run).toEqual({ id: `roster-${NOW}`, subagents: 2 });
+    expect(nextRoster(run, 2, false, NOW + MINUTE)).toBe(run);
+    expect(nextRoster(run, 1, true, NOW + MINUTE)).toEqual({ id: run.id, subagents: 1 });
+  });
+
+  it("starts nothing for work the app never saw running", () => {
+    expect(nextRoster(undefined, 0, true, NOW)).toBeUndefined();
+  });
+
+  it("holds the chat through the wake grace once the roster counts none, and through the wake turn once one is seen", () => {
+    const run = nextRoster(undefined, 2, false, NOW)!;
+    const over = nextRoster(run, 0, false, NOW + MINUTE)!;
+    expect(over).toEqual({ ...run, endedAt: NOW + MINUTE });
+    expect(nextRoster(over, 0, false, NOW + MINUTE + WAKE_GRACE_MS - 1)).toBe(over);
+    expect(nextRoster(over, 0, false, NOW + MINUTE + WAKE_GRACE_MS)).toBeUndefined();
+    const waking = nextRoster(over, 0, true, NOW + MINUTE + 5_000)!;
+    expect(waking).toEqual({ ...over, waking: true });
+    expect(nextRoster(waking, 0, true, NOW + 10 * MINUTE)).toBe(waking);
+    expect(nextRoster(waking, 0, false, NOW + 10 * MINUTE)).toBeUndefined();
+    expect(nextRoster(run, 0, true, NOW + MINUTE)).toEqual({ ...run, endedAt: NOW + MINUTE, waking: true });
+  });
+
+  it("starts a new run when the wake turn dispatches more", () => {
+    const waking = { id: `roster-${NOW}`, subagents: 2, endedAt: NOW + MINUTE, waking: true };
+    expect(nextRoster(waking, 1, true, NOW + 2 * MINUTE)).toEqual({ id: `roster-${NOW + 2 * MINUTE}`, subagents: 1 });
+  });
+
+  it("keeps the chat waiting while it holds, and leaves it to the tree when the chat has one", () => {
+    const run = { id: "roster-1", subagents: 3 };
+    expect(handoffOf(chat("c", { roster: run }), undefined, NOW)).toEqual({ kind: "waiting", tasks: [], subagents: 3, stalled: false });
+    expect(handoffOf(chat("c", { roster: { ...run, endedAt: NOW - WAKE_GRACE_MS + 1 } }), undefined, NOW)).toMatchObject({ subagents: 3 });
+    expect(handoffOf(chat("c", { roster: { ...run, endedAt: NOW - WAKE_GRACE_MS } }), undefined, NOW)).toBeUndefined();
+    expect(handoffOf(chat("c", { roster: { ...run, endedAt: NOW - 10 * MINUTE, waking: true } }), undefined, NOW)).toMatchObject({ subagents: 3 });
+    expect(handoffOf(chat("c", { roster: run, running: true }), undefined, NOW)).toBeUndefined();
+    expect(handoffOf(chat("c", { roster: run, subagents: ended(started(undefined, "s1"), "s1") }), undefined, NOW + WAKE_GRACE_MS)).toBeUndefined();
+  });
+
+  it("is a run Stop waiting can ignore, and a newer run counts again", () => {
+    const c = chat("c", { roster: { id: "roster-1", subagents: 2 } });
+    expect(outstandingIds(c)).toEqual(["roster-1"]);
+    expect(handoffOf(c, new Set(outstandingIds(c)), NOW)).toBeUndefined();
+    expect(handoffOf(chat("c", { roster: { id: "roster-2", subagents: 1 } }), new Set(["roster-1"]), NOW)).toMatchObject({ subagents: 1 });
+  });
+
+  it("changes on its own when the wake grace runs out, not while the wake turn runs", () => {
+    const over = { id: "roster-1", subagents: 2, endedAt: NOW - 5_000 };
+    expect(nextHandoffChange([chat("c", { roster: over })], {}, NOW)).toBe(NOW - 5_000 + WAKE_GRACE_MS);
+    expect(nextHandoffChange([chat("c", { roster: { ...over, waking: true } })], {}, NOW)).toBeUndefined();
   });
 });
 

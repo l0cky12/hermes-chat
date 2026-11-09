@@ -2,7 +2,7 @@
 import type { ModelPick } from "./models";
 import type { ChatUsage, ReplyUsage } from "./usage";
 import type { SubagentTree } from "./subagents";
-import type { DispatchedTask } from "./dispatched";
+import type { DispatchedTask, RosterWork } from "./dispatched";
 
 /** `import`: a transcript file imported into Hermes (ADR 0031). Hermes Chat shows it read-only. */
 export type Source = "app" | "telegram" | "discord" | "cli" | "desktop" | "import" | "other";
@@ -188,6 +188,11 @@ export type Chat = {
   usageError?: string;
   /** The Subagents its replies started that this connection has heard of (subagents.ts, ADR 0072). Kept until the app closes. */
   subagents?: SubagentTree;
+  /**
+   * Its background subagents as Hermes's `subagent.roster` counts them, while it has no Subagents tree here, from when the
+   * app saw them running until their wake turn ends (dispatched.ts `RosterWork`, issue #311). Set by the transport only.
+   */
+  roster?: RosterWork;
   /**
    * The kanban tasks its replies created, in any of its lineage's segments, that are outstanding, need the owner, or
    * are over but inside the wake grace (dispatched.ts, kanban.ts). Set by the transport only.
