@@ -764,11 +764,15 @@ pub struct LocalFile {
     pub error: Option<String>,
 }
 
-pub async fn stat_files(paths: &[String]) -> Vec<LocalFile> {
+pub async fn stat_files(attachable: &Attachable, paths: &[String]) -> Vec<LocalFile> {
     let mut out = Vec::with_capacity(paths.len());
     for path in paths {
         let name = std::path::Path::new(path).file_name().map_or(path.clone(), |n| n.to_string_lossy().into_owned());
-        let (size, error) = match file_size(path).await {
+        let size = match attachable.check(path) {
+            Ok(()) => file_size(path).await,
+            Err(e) => Err(e),
+        };
+        let (size, error) = match size {
             Ok(size) => (Some(size), None),
             Err(e) => (None, Some(e.to_string())),
         };
@@ -782,7 +786,8 @@ pub const PREVIEW_MAX_BYTES: u64 = 25 * MIB;
 
 /// Reads a staged image for the composer's thumbnail. Only image files up to `PREVIEW_MAX_BYTES`, judged by both
 /// their extension and their first bytes, so the webview can't use it to read anything else.
-pub async fn read_preview(path: &str) -> Result<Vec<u8>, TransportError> {
+pub async fn read_preview(attachable: &Attachable, path: &str) -> Result<Vec<u8>, TransportError> {
+    attachable.check(path)?;
     let p = std::path::Path::new(path);
     let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     // The extensions Hermes looks at as images (`IMAGE_EXTENSIONS` in transport.ts).
@@ -905,6 +910,66 @@ impl PickedFiles {
         .await
         .map_err(|e| TransportError::File(e.to_string()))?
     }
+}
+
+const ATTACHABLE_KEPT: usize = 1000;
+
+/// The local files the owner chose to attach: dropped on the window, picked in the composer's Open dialog, pasted or
+/// captured as a screenshot. Only Rust adds to it, so a script in the webview can't send, stat or preview any other
+/// file (ADR 0100). It is kept on disk, because queued and unsent messages keep their attachments across restarts.
+#[derive(Default)]
+pub struct Attachable {
+    paths: Mutex<Vec<String>>,
+    file: Mutex<Option<std::path::PathBuf>>,
+}
+
+impl Attachable {
+    /// Reads the paths kept at `file`; later additions are written there.
+    pub fn load(&self, file: std::path::PathBuf) {
+        let kept = match std::fs::read(&file) {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+                eprintln!("hermes-chat: {} isn't readable, so earlier attachments can't be sent: {e}", file.display());
+                Vec::new()
+            }),
+            Err(_) => Vec::new(),
+        };
+        *self.paths.lock().unwrap() = kept;
+        *self.file.lock().unwrap() = Some(file);
+    }
+
+    pub fn add(&self, paths: impl IntoIterator<Item = String>) {
+        let mut kept = self.paths.lock().unwrap();
+        for path in paths {
+            kept.retain(|p| *p != path);
+            kept.push(path);
+        }
+        let over = kept.len().saturating_sub(ATTACHABLE_KEPT);
+        kept.drain(..over);
+        if let Some(file) = &*self.file.lock().unwrap() {
+            if let Err(e) = write_json(file, &*kept) {
+                eprintln!("hermes-chat: couldn't keep the attached files' paths, so they can't be sent after a restart: {e}");
+            }
+        }
+    }
+
+    pub fn check(&self, path: &str) -> Result<(), TransportError> {
+        if self.paths.lock().unwrap().iter().any(|p| p == path) {
+            Ok(())
+        } else {
+            Err(TransportError::File("it wasn't attached in this app".into()))
+        }
+    }
+}
+
+fn write_json(path: &std::path::Path, value: &impl Serialize) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, serde_json::to_vec(value)?)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 /// Writes a file pasted into the composer to a new temp file and returns its path, so it attaches like a dropped

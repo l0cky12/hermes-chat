@@ -1,0 +1,22 @@
+# The window stays on the app, runs only its own scripts, and sends only files the owner attached
+
+No script injection into the app's window is known. But one would have reached everything the app can do, with nothing in its way (#344). The window could be sent to any address, such as a copy of the Sign in screen. Inline script ran. Any app command could be called, and `hermes_send_file` read any local path and sent it to the server, such as `~/.ssh/id_ed25519`. This ADR adds three limits, each in Rust or in the page's own policy, where a script can't change it.
+
+## Decisions
+
+- **The window shows only the app.** Rust builds the main window (`main_window.rs`; `tauri.conf.json` has `create: false`) with a navigation handler. The handler allows the app's own page (`tauri://localhost`, `http(s)://tauri.localhost` on Windows only, both without a port, and the Vite address in a dev build), plus `about:blank` and `about:srcdoc`. Elsewhere `tauri.localhost` is this computer's loopback, where any local server would answer, the sign-in tunnel included. It refuses every other address, so `location.href = …` leaves the window where it is. WebKitGTK asks the handler about frames as well as the window, and the preview shows an HTML file in a `srcdoc` frame. Neither kind of `about:` document loads anything from elsewhere, and a running script could already put anything into the page itself. Requests for a new window are refused. Web pages in the preview are not affected: on Linux they are their own WebKit view (ADR 0081), and on Windows WebView2 asks only about the window.
+- **Only the app's own scripts run.** `index.html` sets `script-src 'self'`, so injected markup can't run inline script or load a script from elsewhere. It also sets `connect-src 'self' ipc: http://ipc.localhost https://api.github.com` (Tauri's IPC and the update check), `base-uri 'none'` and `form-action 'none'`, and keeps `frame-src http: https:` and `object-src 'none'` (ADR 0007). The policy is a meta tag, so Tauri's CSP stays off and doesn't rewrite the app's scripts. The dev server loosens `script-src` and `connect-src` in `vite.config.ts`, because React Refresh adds an inline script and Vite reloads over a WebSocket. A build is never loosened.
+- **Only attached files are read.** Rust keeps the list of files the owner attached, `Attachable` in `transport.rs`. Only Rust adds to it: a file dropped on the window (`WindowEvent::DragDrop`), picked in the composer's Open dialog (which Rust now runs, `attach_picked_files`), pasted (`stage_clipboard_file`), or captured as a screenshot (`screenshot_capture`). `hermes_send_file`, `hermes_stat_files` and `hermes_read_preview` refuse any other path with "it wasn't attached in this app". The webview no longer has the dialog plugin's `allow-open` permission.
+- **The list is kept on disk.** Queued and unsent messages keep their attachments across restarts, and an update's restart puts back drafts with theirs (ADR 0018, ADR 0060). So the list is kept in `attachable.json` in the app's data folder, which only Rust writes. It holds the newest 1000 paths. A message whose path has dropped off the list fails to attach, the same as one whose file was moved.
+
+## Considered options
+
+- **Retained handles, as the preview's local files have (`PickedFiles`, ADR 0007).** A handle doesn't outlive a restart, so a queued message would lose its files. And holding one open per attachment holds a file descriptor for each.
+- **Asking the owner before a local terminal opens.** `terminal_open_local` still opens a shell when the webview asks. The script policy is what stops an injected script from asking. A confirmation would add a step to every terminal the owner opens.
+- **`img-src 'self' data: blob:`.** It would also block remote images in replies, which ADR 0099 handles separately.
+
+## Consequences
+
+- **After this update, a message queued or left unsent before it can't send its files.** Their paths were never on the list. The message fails with "Couldn't attach …", as one whose file was moved does, and the owner attaches the files again.
+- **A drop now names its files to Rust.** The webview still gets the same paths in Tauri's drop event and checks them as before.
+- **Every other command stays callable from the app's page.** These limits narrow what an injected script could reach. They don't replace keeping untrusted content out of the page (ADR 0007).

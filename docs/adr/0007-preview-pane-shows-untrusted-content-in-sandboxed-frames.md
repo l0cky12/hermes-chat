@@ -14,9 +14,9 @@ Tauri 2.12 injects its IPC bootstrap (`__TAURI_INTERNALS__`) and the per-launch 
 ## Considered options
 
 - **A separate native child webview for web pages.** It would be the strongest isolation, and sites that refuse framing would still load. Rejected for now: it needs Tauri's `unstable` multi-webview feature, has to be kept positioned over the React layout by hand, and would draw over the app's menus and toasts. The pane is behind one component (`WebView` in `PreviewPane.tsx`), so it can be swapped later.
-- **Turning on Tauri's CSP for the whole app.** Rejected here: it rewrites the app's scripts with nonces and would affect every screen. The one directive the pane needs, `frame-src`, is set in `index.html` and restricts nothing else.
+- **Turning on Tauri's CSP for the whole app.** Rejected here: it rewrites the app's scripts with nonces and would affect every screen. The one directive the pane needs, `frame-src`, is set in `index.html`. ADR 0100 adds the app's other directives to the same tag.
 - **No `allow-same-origin` for web pages.** That would give each page an opaque origin, where `localStorage` throws and many sites break. Since a page's real origin is never the app's, keeping it gives the page nothing of the app's. (In the running app, a framed page's `localStorage` works. WebKitGTK keeps no third-party cookies for it either way.)
-- **Letting the webview read any local path, as `hermes_send_file` does.** Rejected: a preview only needs files the owner chose, and the Open dialog in Rust gives that without widening what the webview can ask Rust to read.
+- **Letting the webview read any local path, as `hermes_send_file` did until ADR 0100.** Rejected: a preview only needs files the owner chose, and the Open dialog in Rust gives that without widening what the webview can ask Rust to read.
 
 ## Consequences
 

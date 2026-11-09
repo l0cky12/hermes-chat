@@ -8,6 +8,7 @@ pub mod display;
 pub mod fonts;
 pub mod links;
 pub mod local_stt;
+pub mod main_window;
 pub mod mcp;
 pub mod media;
 pub mod notify;
@@ -34,7 +35,7 @@ use tauri::webview::{PermissionKind, PermissionResponse};
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::Mutex;
-use transport::{Credential, Dashboard, ExtraHeader, LocalFile, LocalText, PickedFiles, Pipe, PipeEvent, ProbeFailure, SavedKey, SignIn, Stage};
+use transport::{Attachable, Credential, Dashboard, ExtraHeader, LocalFile, LocalText, PickedFiles, Pipe, PipeEvent, ProbeFailure, SavedKey, SignIn, Stage};
 use tunnel::Tunnel;
 
 /// The owner's `hermes dashboard` port on the server's loopback (research doc, "SSH tunnel, Host header
@@ -429,8 +430,17 @@ async fn hermes_send(state: State<'_, AppState>, frame: String) -> Result<(), St
     }
 }
 
+/// Sends a frame with a file the owner attached (`Attachable`) in it.
 #[tauri::command]
-async fn hermes_send_file(state: State<'_, AppState>, head: String, path: String, tail: String, max_bytes: u64) -> Result<(), String> {
+async fn hermes_send_file(
+    state: State<'_, AppState>,
+    attachable: State<'_, Attachable>,
+    head: String,
+    path: String,
+    tail: String,
+    max_bytes: u64,
+) -> Result<(), String> {
+    attachable.check(&path).map_err(|e| e.to_string())?;
     // Reading a big file takes a while; don't hold the lock, so a Stop can still go out.
     let pipe = match &*state.0.lock().await {
         Some(conn) => conn.pipe.clone(),
@@ -440,21 +450,47 @@ async fn hermes_send_file(state: State<'_, AppState>, head: String, path: String
 }
 
 #[tauri::command]
-async fn hermes_stat_files(paths: Vec<String>) -> Vec<LocalFile> {
-    transport::stat_files(&paths).await
+async fn hermes_stat_files(attachable: State<'_, Attachable>, paths: Vec<String>) -> Result<Vec<LocalFile>, String> {
+    Ok(transport::stat_files(&attachable, &paths).await)
 }
 
 /// A staged image's bytes for its composer thumbnail, raw rather than as JSON.
 #[tauri::command]
-async fn hermes_read_preview(path: String) -> Result<tauri::ipc::Response, String> {
-    transport::read_preview(&path).await.map(tauri::ipc::Response::new).map_err(|e| e.to_string())
+async fn hermes_read_preview(attachable: State<'_, Attachable>, path: String) -> Result<tauri::ipc::Response, String> {
+    transport::read_preview(&attachable, &path).await.map(tauri::ipc::Response::new).map_err(|e| e.to_string())
+}
+
+/// Opens the native Open dialog for files to attach. `[]`: the owner cancelled.
+#[tauri::command]
+async fn attach_picked_files(app: tauri::AppHandle, attachable: State<'_, Attachable>) -> Result<Vec<String>, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let mut dialog = app.dialog().file();
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    dialog.pick_files(move |paths| {
+        let _ = tx.send(paths);
+    });
+    let Some(picked) = rx.await.map_err(|e| e.to_string())? else { return Ok(Vec::new()) };
+    let mut paths = Vec::with_capacity(picked.len());
+    for path in picked {
+        paths.push(path.into_path().map_err(|e| e.to_string())?.to_string_lossy().into_owned());
+    }
+    attachable.add(paths.clone());
+    Ok(paths)
 }
 
 /// Takes a screenshot of a region or window the owner picks, staged privately as `<name>.png` for the composer.
 #[tauri::command]
-async fn screenshot_capture(state: State<'_, Screenshots>, name: String) -> Result<screenshot::Capture, screenshot::CaptureError> {
+async fn screenshot_capture(
+    state: State<'_, Screenshots>,
+    attachable: State<'_, Attachable>,
+    name: String,
+) -> Result<screenshot::Capture, screenshot::CaptureError> {
     let captures = state.captures()?;
-    screenshot::capture(&captures, &name).await
+    let capture = screenshot::capture(&captures, &name).await?;
+    attachable.add([capture.path.clone()]);
+    Ok(capture)
 }
 
 /// Deletes a staged screenshot: removed from the composer, or its message sent. Paths that aren't one are ignored.
@@ -507,15 +543,16 @@ fn screenshot_show_window(app: tauri::AppHandle) {
 /// Saves a file pasted into the composer to a temp file and returns its path. Its bytes come as the raw body, not
 /// JSON, so a big screenshot isn't sent as a list of numbers; its name comes URI-encoded in the `x-name` header.
 #[tauri::command]
-async fn stage_clipboard_file(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+async fn stage_clipboard_file(attachable: State<'_, Attachable>, request: tauri::ipc::Request<'_>) -> Result<String, String> {
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err("The pasted file didn't arrive as bytes.".into());
     };
     let header = request.headers().get("x-name").and_then(|v| v.to_str().ok()).unwrap_or_default();
     // encodeURIComponent never writes `+`, `&` or `=` bare, so one form-decoded key is exactly the name.
     let name = url::form_urlencoded::parse(header.as_bytes()).next().map(|(k, _)| k.into_owned()).unwrap_or_default();
-    let path = transport::stage_clipboard_file(&name, bytes).map_err(|e| e.to_string())?;
-    Ok(path.to_string_lossy().into_owned())
+    let path = transport::stage_clipboard_file(&name, bytes).map_err(|e| e.to_string())?.to_string_lossy().into_owned();
+    attachable.add([path.clone()]);
+    Ok(path)
 }
 
 #[tauri::command]
@@ -1303,6 +1340,16 @@ async fn repo_git_stream(
     .await
 }
 
+/// Tauri tells the webview about the drop before this runs, but the webview's next IPC call is handled on this same
+/// main thread after it returns, so the paths are attachable before the webview can ask about them.
+fn attach_dropped(window: &tauri::Window, event: &tauri::WindowEvent) {
+    if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+        if window.label() == "main" {
+            window.state::<Attachable>().add(paths.iter().map(|p| p.to_string_lossy().into_owned()));
+        }
+    }
+}
+
 /// Starts the app. `screenshot`: it was started by `hermes-chat --screenshot`, with no other Hermes Chat to take it.
 /// `link`: it was started to open a chat link, with no other Hermes Chat to open it (links.rs).
 pub fn run(screenshot: bool, link: Option<String>) {
@@ -1324,9 +1371,12 @@ pub fn run(screenshot: bool, link: Option<String>) {
         .manage(update::Updates::default())
         .manage(tray::Tray::default())
         .on_window_event(tray::on_window_event)
+        .on_window_event(attach_dropped)
         .on_permission_request(|webview, kind| permission(&webview, kind))
         .setup(|app| {
             use tauri::Emitter;
+            app.state::<Attachable>().load(app.path().app_data_dir()?.join("attachable.json"));
+            main_window::build(app.handle())?;
             // WebKitGTK leaves `navigator.mediaDevices` out unless media capture is turned on. WebView2 has it, and asks
             // `permission` for the microphone.
             #[cfg(target_os = "linux")]
@@ -1369,6 +1419,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             Ok(())
         })
         .manage(PickedFiles::default())
+        .manage(Attachable::default())
         .manage(local_stt::Downloads::default())
         .manage(Transfers::default())
         .manage(UploadPicks::default())
@@ -1381,6 +1432,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             hermes_send_file,
             hermes_stat_files,
             hermes_read_preview,
+            attach_picked_files,
             stage_clipboard_file,
             hermes_request,
             hermes_transcribe,
@@ -1558,9 +1610,11 @@ mod tests {
     /// Each request a stub got, in order: its path and its `Authorization` header.
     type Heard = std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
 
-    /// A stub dashboard that answers a password or a token sign-in, notes each request in the order it came, and
-    /// counts the TCP connections it accepted.
-    async fn counting_dashboard() -> (url::Url, std::sync::Arc<std::sync::atomic::AtomicUsize>, Heard) {
+    type Frames = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+    /// A stub dashboard that answers a password or a token sign-in, notes each request in the order it came, counts
+    /// the TCP connections it accepted, and keeps the frames its WebSocket got.
+    async fn counting_dashboard() -> (url::Url, std::sync::Arc<std::sync::atomic::AtomicUsize>, Heard, Frames) {
         use axum::extract::ws::{Message, WebSocketUpgrade};
         use axum::response::IntoResponse;
         use axum::routing::{get, post};
@@ -1570,6 +1624,8 @@ mod tests {
         let paths = Heard::default();
         let ready = r#"{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{}}}"#;
         let note = paths.clone();
+        let frames = Frames::default();
+        let got = frames.clone();
         let app = axum::Router::new()
             .route(
                 "/api/status",
@@ -1586,7 +1642,11 @@ mod tests {
                 get(move |ws: WebSocketUpgrade| async move {
                     ws.on_upgrade(move |mut ws| async move {
                         let _ = ws.send(Message::text(ready)).await;
-                        while let Some(Ok(_)) = ws.recv().await {}
+                        while let Some(Ok(message)) = ws.recv().await {
+                            if let Message::Text(text) = message {
+                                got.lock().unwrap().push(text.to_string());
+                            }
+                        }
                     })
                     .into_response()
                 }),
@@ -1602,7 +1662,7 @@ mod tests {
         });
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        (url::Url::parse(&format!("http://{addr}/")).unwrap(), accepted, paths)
+        (url::Url::parse(&format!("http://{addr}/")).unwrap(), accepted, paths, frames)
     }
 
     async fn connect(base: &url::Url, credential: super::SignInWith) -> super::Connection {
@@ -1621,12 +1681,72 @@ mod tests {
         let token = super::SignInWith::Token { token: Some("GOOD".into()), connection: None };
         let bearer = Some("Bearer GOOD".to_owned());
         for (credential, sign_in, auth) in [(password, "/auth/password-login", None), (token, "/api/auth/me", bearer)] {
-            let (base, accepted, heard) = counting_dashboard().await;
+            let (base, accepted, heard, _) = counting_dashboard().await;
             let _connection = connect(&base, credential).await;
             let want = [("/api/status", None), (sign_in, auth.clone()), ("/api/auth/ws-ticket", auth), ("/api/ws", None)];
             // The shared client never carries the token: the status read and the socket go without it.
             assert_eq!(*heard.lock().unwrap(), want.map(|(p, a)| (p.to_owned(), a)));
             assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2, "one HTTP connection plus the WebSocket, for {sign_in}");
         }
+    }
+
+    fn send_through_ipc(webview: &tauri::WebviewWindow<tauri::test::MockRuntime>, path: &std::path::Path) -> Result<(), String> {
+        let request = tauri::webview::InvokeRequest {
+            cmd: "hermes_send_file".into(),
+            callback: tauri::ipc::CallbackFn(0),
+            error: tauri::ipc::CallbackFn(1),
+            // The app's own page, where Tauri's permissions let it call the app's commands.
+            url: if cfg!(windows) { "http://tauri.localhost" } else { "tauri://localhost" }.parse().unwrap(),
+            body: tauri::ipc::InvokeBody::Json(serde_json::json!({
+                "head": r#"{"jsonrpc":"2.0","id":1,"method":"prompt.submit","params":{"text":""#,
+                "path": path,
+                "tail": r#""}}"#,
+                "maxBytes": 1000,
+            })),
+            headers: Default::default(),
+            invoke_key: tauri::test::INVOKE_KEY.into(),
+        };
+        tauri::test::get_ipc_response(webview, request).map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn send_file_refuses_a_file_the_owner_never_attached() {
+        use base64::Engine;
+        use tauri::Manager;
+        let (base, _, _, frames) = counting_dashboard().await;
+        let app = tauri::test::mock_builder()
+            .manage(super::AppState::default())
+            .manage(super::Attachable::default())
+            .invoke_handler(tauri::generate_handler![super::hermes_send_file])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
+        let password = super::SignInWith::Password { username: "liam".into(), password: "hunter2".into(), provider: None };
+        *app.state::<super::AppState>().0.lock().await = Some(connect(&base, password).await);
+
+        let dir = std::env::temp_dir().join(format!("hermes-chat-344-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret = dir.join("id_ed25519");
+        std::fs::write(&secret, "PRIVATE KEY").unwrap();
+
+        let attached = dir.join("notes.txt");
+        std::fs::write(&attached, "MEETING NOTES").unwrap();
+        app.state::<super::Attachable>().add([attached.to_string_lossy().into_owned()]);
+        let heard = |bytes: &str| frames.lock().unwrap().iter().any(|f| f.contains(&base64::engine::general_purpose::STANDARD.encode(bytes)));
+
+        let sent = send_through_ipc(&webview, &secret);
+        send_through_ipc(&webview, &attached).expect("an attached file is sent");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !heard("MEETING NOTES") && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let delivered = heard("MEETING NOTES");
+        // One socket keeps the order, so the first file, had it gone, arrived before the second.
+        let leaked = heard("PRIVATE KEY");
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(!leaked, "the stub dashboard got the bytes of a file nobody attached");
+        let refused = sent.expect_err("hermes_send_file answered Ok for a file nobody attached");
+        assert!(refused.contains("wasn't attached in this app"), "refused for another reason: {refused}");
+        assert!(delivered, "the stub dashboard didn't get the attached file");
     }
 }
