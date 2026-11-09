@@ -47,4 +47,5 @@ Each feature file starts with an H1 and one paragraph describing the behaviour t
 - [Connections](connections.md): Settings → General → Connection, Test a saved connection, and Sign out.
 - [Approval mode](approval-mode.md): the composer's pill: Smart, Manual, YOLO with its warning, "YOLO · all chats", and the narrow face, against the real Hermes in `~/.cache/hermes-live-277`.
 - [Office](office.md): the building and List, three agents typing, the card, the frame counter, unfocused and at-rest frames, CPU, and the List a computer without WebGL gets.
+- [Preview](preview.md): the empty Preview's dev servers, a bare port, following a link in the page, Back, Forward and Reload in one view, the badge's switch, a second view under a menu and Escape, and Hermes's `preview.act` turned down through `/__ask`.
 - [Dispatched work](dispatched-work.md): a reply that dispatches a kanban task or background subagents keeps its chat in Working with the waiting icon, the wake turn, the Inbox hand-off, a blocked task, Stop waiting, the Rail inbox and Office states, and a relaunch rebuilt from the board.
