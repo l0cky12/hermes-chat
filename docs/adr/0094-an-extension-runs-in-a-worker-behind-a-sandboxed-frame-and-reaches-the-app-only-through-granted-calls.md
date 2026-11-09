@@ -101,7 +101,7 @@ With no permission, an extension has its command's argument and nothing else.
 ### 6. A view is a tree the app draws, never the extension's HTML
 
 - `view.update` sends a tree of a few node kinds: `heading`, `text`, `list`, `table`, `facts` (label and value pairs), `notice` and `button`. A `button` runs one of the extension's own commands, so a click is an owner's action and opens a call. The tree has caps on node count and depth.
-- `text` is Markdown drawn without raw HTML and without images. Replies render with `react-markdown`, and `Markdown.tsx` has no image rule, so a remote image in a reply loads (read in the code, not run). In an extension's view, that load would be a way to send data out. A link opens only after the owner's click, through the app's link menu and its address check (ADR 0079).
+- `text` is Markdown drawn without raw HTML and without images. Replies render with `react-markdown`, where a remote image loads only after the owner's click (ADR 0099). In an extension's view, a load would be a way to send data out. A link opens only after the owner's click, through the app's link menu and its address check (ADR 0079).
 - **A view opens in the Preview**, as one more kind of item beside web pages, files and tool output (ADR 0007, ADR 0039). The side panel keeps its four tabs, as ADR 0055 and ADR 0066 decided. App components draw the tree, so a view gets the app's keyboard handling, focus, accessible names and narrow layout without extra work from the extension.
 
 ### 7. Install, update and compatibility

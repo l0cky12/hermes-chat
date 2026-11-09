@@ -372,7 +372,7 @@ async fn hermes_probe(
 #[derive(Serialize)]
 struct Reached {
     route: Route,
-    status: Option<String>,
+    status: String,
     /// The sign-in methods it offers (ADR 0058), when asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     methods: Option<transport::Methods>,
@@ -387,7 +387,7 @@ async fn hermes_reach(target: Target, expect_server: Option<String>, quick: Opti
         .await
         .map_err(|e| ProbeFailure::new(Stage::Reach, e.to_string()))?;
     let methods = match methods {
-        Some(true) => Some(transport::read_methods(&base, &headers, seen.status.as_deref(), reach_within(quick)).await),
+        Some(true) => Some(transport::read_methods(&base, &headers, Some(&seen.status), reach_within(quick)).await),
         _ => None,
     };
     Ok(Reached { route: route.with_server(seen.server), status: seen.status, methods })

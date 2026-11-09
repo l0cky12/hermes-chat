@@ -1421,7 +1421,7 @@ async fn refuses_to_preview_a_missing_or_oversized_image() {
 #[tokio::test]
 async fn a_connection_test_reads_the_status_signs_in_and_waits_for_hermes() {
     let probed = transport::probe(&stub().await, &sign_in("hunter2"), "default").await.expect("test passes");
-    assert_eq!(serde_json::from_str::<Value>(&probed.status.unwrap()).unwrap()["auth_providers"], json!(["basic"]));
+    assert_eq!(serde_json::from_str::<Value>(&probed.status).unwrap()["auth_providers"], json!(["basic"]));
     assert_eq!(serde_json::from_str::<Value>(&probed.ready).unwrap()["params"]["type"], "gateway.ready");
 }
 
@@ -2538,16 +2538,14 @@ fn a_server_is_told_apart_by_its_hashed_install_id() {
     assert!(!id.contains("install"));
     assert_ne!(id, transport::server_id("install-2"));
     let status = r#"{"version":"0.17.0","install_id":"install-1","auth_required":true}"#;
-    assert_eq!(transport::identify(Some(status), None).unwrap(), Some(id.clone()));
-    assert_eq!(transport::identify(Some(status), Some(&id)).unwrap(), Some(id.clone()));
-    assert!(matches!(transport::identify(Some(status), Some(&transport::server_id("install-2"))), Err(TransportError::WrongServer)));
+    assert_eq!(transport::identify(status, None).unwrap(), Some(id.clone()));
+    assert_eq!(transport::identify(status, Some(&id)).unwrap(), Some(id.clone()));
+    assert!(matches!(transport::identify(status, Some(&transport::server_id("install-2"))), Err(TransportError::WrongServer)));
     // An older Hermes names no install: nothing to tell apart, so it passes.
-    assert_eq!(transport::identify(Some(r#"{"version":"0.16.0"}"#), Some(&id)).unwrap(), None);
-    // No status read at all (a 404 from a proxy): nothing known either way.
-    assert_eq!(transport::identify(None, Some(&id)).unwrap(), None);
+    assert_eq!(transport::identify(r#"{"version":"0.16.0"}"#, Some(&id)).unwrap(), None);
     // Anything that isn't a Hermes status is the wrong server.
     for other in ["<html>router login</html>", "[]", r#"{"ok":true}"#, r#"{"version":3}"#] {
-        assert!(matches!(transport::identify(Some(other), None), Err(TransportError::NotHermes)), "{other}");
+        assert!(matches!(transport::identify(other, None), Err(TransportError::NotHermes)), "{other}");
     }
 }
 
@@ -2556,7 +2554,7 @@ async fn reading_the_server_needs_no_sign_in_and_names_its_install() {
     let (base, logins) = installed("install-home").await;
     let seen = transport::read_server(&transport::client(&HeaderMap::new()).unwrap(), &base, &HeaderMap::new(), None, Duration::from_secs(5)).await.unwrap();
     assert_eq!(seen.server, Some(transport::server_id("install-home")));
-    assert!(seen.status.unwrap().contains("0.22.5"));
+    assert!(seen.status.contains("0.22.5"));
     assert_eq!(*logins.lock().unwrap(), 0);
     let wrong = transport::read_server(
         &transport::client(&HeaderMap::new()).unwrap(),
@@ -2585,6 +2583,52 @@ async fn a_route_that_reaches_another_server_never_gets_the_password() {
         transport::probe_expecting(&home, &sign_in("hunter2"), "default", Duration::from_secs(5), Duration::from_secs(5), Some(&expect)).await.unwrap();
     assert_eq!(probed.server, Some(expect));
     assert_eq!(*logins.lock().unwrap(), 1);
+}
+
+/// A dashboard-like server whose `/api/status` answers `status` (none: no such route, a 404), counting the sign-ins
+/// it got.
+async fn without_status(status: Option<StatusCode>) -> (Url, Arc<Mutex<u32>>) {
+    let logins = Arc::new(Mutex::new(0u32));
+    let counted = logins.clone();
+    let mut app = Router::new().route("/auth/password-login", post(login)).route("/api/auth/ws-ticket", post(ws_ticket)).route("/api/ws", get(api_ws));
+    if let Some(status) = status {
+        app = app.route("/api/status", get(move || async move { (status, "upstream trouble") }));
+    }
+    let app = app.layer(middleware::from_fn(move |req: Request, next: Next| {
+        let counted = counted.clone();
+        async move {
+            if req.uri().path() == "/auth/password-login" {
+                *counted.lock().unwrap() += 1;
+            }
+            next.run(req).await
+        }
+    }));
+    (serve(app).await, logins)
+}
+
+#[tokio::test]
+async fn a_route_whose_status_is_not_a_hermes_answer_never_gets_the_password() {
+    let wait = Duration::from_secs(5);
+    let home = transport::server_id("install-home");
+    for status in [None, Some(StatusCode::NOT_FOUND), Some(StatusCode::INTERNAL_SERVER_ERROR), Some(StatusCode::BAD_GATEWAY)] {
+        let (base, logins) = without_status(status).await;
+        for expect in [None, Some(home.as_str())] {
+            let opened = transport::open_route(&base, &sign_in("hunter2"), "default", expect, wait, None, &Steps::default(), |_| {}).await;
+            assert!(opened.is_err(), "{status:?}, {expect:?}: the route opened");
+            let failed = transport::probe_expecting(&base, &sign_in("hunter2"), "default", wait, wait, expect).await.unwrap_err();
+            assert_eq!(failed.stage, Stage::Reach, "{status:?}, {expect:?}: {}", failed.message);
+            let reached = transport::read_server(&transport::client(&HeaderMap::new()).unwrap(), &base, &HeaderMap::new(), expect, wait).await;
+            assert!(reached.is_err(), "{status:?}, {expect:?}: the route counted as reached");
+        }
+        assert_eq!(*logins.lock().unwrap(), 0, "{status:?}: the password went out");
+    }
+    // No status at all is the wrong server; a server error keeps its own words, as the dashboard may be failing.
+    let (base, _) = without_status(None).await;
+    let failed = transport::probe_expecting(&base, &sign_in("hunter2"), "default", wait, wait, None).await.unwrap_err();
+    assert!(failed.message.starts_with("Wrong server: something answered"), "{}", failed.message);
+    let (base, _) = without_status(Some(StatusCode::BAD_GATEWAY)).await;
+    let failed = transport::probe_expecting(&base, &sign_in("hunter2"), "default", wait, wait, None).await.unwrap_err();
+    assert_eq!(failed.message, "The dashboard answered 502: upstream trouble");
 }
 
 /// `serve`, counting the TCP connections the stub accepts.
@@ -2628,25 +2672,50 @@ async fn something_that_isnt_hermes_never_gets_the_password() {
 
 #[test]
 fn plain_http_goes_only_to_this_computer_a_lan_or_tailscale() {
-    for ip in [
-        "127.0.0.1",
-        "10.1.2.3",
-        "172.16.0.9",
-        "192.168.1.10",
-        "169.254.3.4",
-        "100.64.0.1",
-        "100.127.255.254",
-        "::1",
-        "fd7a:115c:a1e0::1",
-        "fc00::5",
-        "fe80::1",
-        "::ffff:192.168.1.10",
-    ] {
+    for ip in ["127.0.0.1", "10.1.2.3", "172.16.0.9", "192.168.1.10", "169.254.3.4", "::1", "fd7a:115c:a1e0::1", "fc00::5", "fe80::1", "::ffff:192.168.1.10"] {
         assert!(transport::is_local_or_private(ip.parse().unwrap()), "{ip}");
     }
-    for ip in ["8.8.8.8", "100.63.255.255", "100.128.0.1", "172.32.0.1", "2001:4860:4860::8888", "::ffff:8.8.8.8", "0.0.0.0"] {
+    // 100.64.0.0/10 is carrier-grade NAT as well as Tailscale, so it counts only when Tailscale carries it.
+    for ip in [
+        "8.8.8.8",
+        "100.64.0.1",
+        "100.127.255.254",
+        "::ffff:100.64.0.1",
+        "100.63.255.255",
+        "100.128.0.1",
+        "172.32.0.1",
+        "2001:4860:4860::8888",
+        "::ffff:8.8.8.8",
+        "0.0.0.0",
+    ] {
         assert!(!transport::is_local_or_private(ip.parse().unwrap()), "{ip}");
     }
+}
+
+#[test]
+fn plain_http_to_100_64_goes_only_over_tailscale() {
+    let direct = |url: &str, addresses: &[&str]| transport::DirectUrl {
+        base: Url::parse(url).unwrap(),
+        addresses: addresses.iter().map(|a| a.parse().unwrap()).collect(),
+    };
+    let tailnet = |_: IpAddr| Some("100.119.13.105".parse().unwrap());
+    let carrier = |_: IpAddr| Some("10.2.1.121".parse().unwrap());
+    let both = |ip: IpAddr| Some(if ip.to_string() == "100.100.64.121" { "100.119.13.105" } else { "10.2.1.121" }.parse().unwrap());
+    for url in ["http://100.100.64.121:9119/", "http://[::ffff:100.100.64.121]:9119/"] {
+        assert!(transport::check_plain_http_from(&direct(url, &[]), tailnet).is_ok(), "{url}");
+    }
+    assert!(transport::check_plain_http_from(&direct("http://hermes:9119/", &["100.100.64.121", "192.168.1.10"]), both).is_ok());
+    assert!(transport::check_plain_http_from(&direct("https://100.100.64.121/", &[]), carrier).is_ok());
+    for (url, addresses) in [("http://100.64.0.1:9119/", &[][..]), ("http://hermes:9119/", &["100.100.64.121", "100.64.0.1"][..])] {
+        let refused = transport::check_plain_http_from(&direct(url, addresses), both).unwrap_err();
+        assert!(matches!(refused, TransportError::PlainHttpNotTailscale(_)), "{url}: {refused:?}");
+        let said = refused.to_string();
+        assert!(said.starts_with("Plain http:// is only used") && said.contains("over Tailscale"), "{said}");
+    }
+    // 100.64.0.1 is no tailnet peer, so the routing table sends it out through the LAN's gateway.
+    let real = transport::check_plain_http(&direct("http://100.64.0.1:9119/", &[])).unwrap_err();
+    assert!(matches!(real, TransportError::PlainHttpNotTailscale(_)), "{real:?}");
+    assert!(transport::check_plain_http(&direct("http://127.0.0.1:9119/", &[])).is_ok());
 }
 
 #[tokio::test]
@@ -2657,7 +2726,6 @@ async fn a_plain_http_route_to_a_public_address_is_refused() {
     };
     assert!(transport::check_plain_http(&direct("http://192.168.1.10:9119/", &[])).is_ok());
     assert!(transport::check_plain_http(&direct("http://[fd7a:115c:a1e0::9]:9119/", &[])).is_ok());
-    assert!(transport::check_plain_http(&direct("http://hermes:9119/", &["100.100.64.121"])).is_ok());
     assert!(transport::check_plain_http(&direct("https://hermes.example.com/", &["203.0.113.7"])).is_ok());
     let refused = transport::check_plain_http(&direct("http://203.0.113.7:9119/", &[])).unwrap_err().to_string();
     assert!(refused.contains("203.0.113.7 is a public address"), "{refused}");
@@ -2882,7 +2950,7 @@ async fn live_token_sign_in() {
     let base = Url::parse(&url).unwrap();
     let wait = Duration::from_secs(20);
     let seen = transport::read_server(&transport::client(&HeaderMap::new()).unwrap(), &base, &HeaderMap::new(), None, wait).await.expect("status read");
-    let methods = transport::read_methods(&base, &Default::default(), seen.status.as_deref(), wait).await;
+    let methods = transport::read_methods(&base, &Default::default(), Some(&seen.status), wait).await;
     assert!(methods.methods.contains(&transport::SignInMethod::Token), "{methods:?}");
     let probed = transport::probe_with(&base, &token(&secret), "default", wait).await.expect("the right token signs in");
     assert!(probed.ready.contains("gateway.ready"), "{}", probed.ready);
@@ -3025,4 +3093,46 @@ async fn a_connection_with_several_routes_limits_each_step_and_one_with_a_single
     // A single route waits on a slow sign-in as long as the whole attempt allows (ADR 0056).
     let slow = stalling_at("/auth/password-login").await;
     assert!(tokio::time::timeout(Duration::from_secs(1), open_route(&slow, None, |_| {})).await.is_err(), "a single route gave up early");
+}
+
+/// FastAPI's 422 for a body that failed validation, which echoes the request it was sent as `input`.
+async fn echo_422(Json(body): Json<Value>) -> Response {
+    (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"detail": [{"type": "missing", "loc": ["body", "totp"], "msg": "Field required", "input": body}]})))
+        .into_response()
+}
+
+#[tokio::test]
+async fn a_failed_password_sign_in_never_shows_the_password() {
+    let echo_text = |Json(body): Json<Value>| async move { (StatusCode::BAD_GATEWAY, format!("upstream refused {body}")).into_response() };
+    // As Python's json.dumps writes it, non-ASCII as \uXXXX, inside a page that isn't JSON.
+    let echo_ascii = |Json(body): Json<Value>| async move {
+        let ascii: String = body.to_string().chars().map(|c| if c.is_ascii() { c.to_string() } else { format!("\\u{:04x}", c as u32) }).collect();
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("<pre>{ascii}</pre>")).into_response()
+    };
+    let base_422 = serve(Router::new().route("/auth/password-login", post(echo_422))).await;
+    let base_text = serve(Router::new().route("/auth/password-login", post(echo_text))).await;
+    let base_ascii = serve(Router::new().route("/auth/password-login", post(echo_ascii))).await;
+    for (base, status) in [(&base_422, 422), (&base_text, 502), (&base_ascii, 500)] {
+        for password in ["hunter2", "pässwörd-ünïcode", "Q", "bell\u{7}"] {
+            for headers in [sign_in(password).headers, access_sign_in().headers] {
+                let signing_in = SignIn { headers, ..sign_in(password) };
+                let err = sign_in_at(base, &signing_in).await.err().unwrap();
+                let shown = err.to_string();
+                assert!(matches!(&err, TransportError::Unexpected { status: s, .. } if *s == status), "{err:?}");
+                assert!(!shown.contains(password), "{password:?} shown: {shown}");
+                assert!(shown.contains("(not shown, as it may repeat your password or a request header)"), "{password:?} shown: {shown}");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_failed_password_sign_in_shows_a_body_that_doesnt_repeat_the_password() {
+    let gateway = || async { (StatusCode::BAD_GATEWAY, "Bad Gateway: upstream hermes is down").into_response() };
+    let disabled = || async { (StatusCode::FORBIDDEN, Json(json!({"detail": "This account is disabled"}))).into_response() };
+    for (route, status, said) in [(post(gateway), 502, "upstream hermes is down"), (post(disabled), 403, "This account is disabled")] {
+        let base = serve(Router::new().route("/auth/password-login", route)).await;
+        let err = sign_in_at(&base, &sign_in("hunter2")).await.err().unwrap();
+        assert!(matches!(&err, TransportError::Unexpected { status: s, body } if *s == status && body.contains(said)), "{err:?}");
+    }
 }

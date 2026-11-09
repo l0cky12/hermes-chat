@@ -481,6 +481,12 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 }
 .code-copy { display: flex; align-items: center; gap: 5px; font-size: calc(11.5rem / 14); color: var(--muted); padding: 3px 7px; border-radius: 6px; font-family: inherit; }
 .code-copy:hover { background: var(--raised-2); color: var(--text); }
+/* A remote image in Markdown, not loaded until clicked (ADR 0099). */
+.md-image {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 9px; border: 1px dashed var(--line-3); border-radius: 8px;
+  color: var(--muted); font: inherit; font-size: calc(12.5rem / 14); overflow-wrap: anywhere; text-align: left; vertical-align: middle;
+}
+.md-image:hover { background: var(--raised-2); color: var(--text); }
 .code pre { margin: 0; padding: 4px 16px 16px; overflow-x: auto; font-size: var(--mono-size); line-height: 1.6; }
 .code pre code.hljs { background: transparent; padding: 0; }
 /* Word wrap (Settings, Appearance): long lines wrap instead of scrolling sideways. */

