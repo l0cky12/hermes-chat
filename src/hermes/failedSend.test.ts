@@ -127,6 +127,32 @@ describe("Case 1: the send fails before Hermes accepts it", () => {
       "On it.",
     ]);
   });
+
+  it("after failed messages are dismissed, the next reply still gets an id no other item in the chat has", async () => {
+    const { server, hermes, chat } = await ready();
+    server.rejectPrompt = { code: 4009, message: "session busy" };
+    await hermes().send("c1", "First try");
+    await hermes().send("c1", "Second try");
+    server.rejectPrompt = undefined;
+    await hermes().send("c1", "Something else");
+    server.event(chat().runtimeId!, "message.complete", { text: "On it.", status: "complete" });
+    for (const failed of chat().items.filter(isOutgoing)) hermes().dismiss("c1", failed.id);
+
+    await hermes().send("c1", "And then?");
+    server.event(chat().runtimeId!, "message.delta", { text: "Done." });
+    server.event(chat().runtimeId!, "message.complete", { status: "complete" });
+
+    const ids = chat().items.map((i) => i.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(chat().items.map((i) => (i.kind === "user" || i.kind === "assistant" ? i.text : i.kind))).toEqual([
+      "How full is the NAS?",
+      "82% used.",
+      "Something else",
+      "On it.",
+      "And then?",
+      "Done.",
+    ]);
+  });
 });
 
 describe("Case 2: Stop mid-stream", () => {
