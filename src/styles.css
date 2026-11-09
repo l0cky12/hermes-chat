@@ -3442,3 +3442,12 @@ p.logs-status { margin: 0 0 8px; line-height: 1.5; }
 .gw-line.warn { color: var(--warn); }
 .gw-line.bad, .pk-line.bad, .gw-problem { color: var(--bad); }
 .gw-problem.missing-dependency, .gw-problem.permission { color: var(--warn); }
+
+/* Settings → Providers, sign-ins and custom endpoints (ADR 0106). */
+.si-code { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; overflow-wrap: anywhere; }
+.si-user-code {
+  align-self: flex-start; font-family: var(--mono); font-size: calc(20rem / 14); letter-spacing: 0.08em; padding: 6px 12px;
+  background: var(--raised); border: 1px solid var(--line-2); border-radius: 9px; user-select: all;
+}
+.si-badge { margin-left: 8px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--muted); font-size: calc(11rem / 14); }
+.si-add { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
