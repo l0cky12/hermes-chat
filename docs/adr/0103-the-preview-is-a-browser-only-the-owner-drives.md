@@ -50,6 +50,7 @@ The verify stand-in's `POST /__ask` control asks the real app the same requests;
 - **Back after another tab or a file in between is a load**, since the view that had the page cache ended.
 - **A Server page's tunnel stays open while the owner browses other web pages in the Preview**, by design, until a non-web entry shows or the Preview hides.
 - **On Windows the frame can't report its moves.** Back, Forward and Reload go through the app's history and reload the frame; a link followed inside the frame doesn't move the address, and the ⋯ menu says so.
+- **A link inside a Server page to another loopback address loads that address on this computer**, not through a tunnel, as it did before this change. The address box then shows it as a This computer page.
 - **A page view per run of web entries means a web process per run.** Only one runs at a time, and none while the Preview shows something else.
 - **History isn't kept across restarts.**
 - **The dev server list can be stale** until it is shown again or refreshed.
