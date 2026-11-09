@@ -3043,8 +3043,8 @@ export class FakeKanban {
   missing = false;
   /** How long after a task moves the poller wakes its chat. */
   wakeDelayMs = 0;
-  /** How the wake turn is sent: at once in one go unless set, as the stand-in streams it (bridge.ts). */
-  wakeWith?: (runtimeId: string, stored: string, text: string) => void;
+  /** How the wake turn is sent: at once in one go unless set, as the stand-in streams it (bridge.ts). `userRowId`: the stored notice that began it. */
+  wakeWith?: (runtimeId: string, stored: string, text: string, userRowId: number) => void;
   private seq = 0;
   private runSeq = 0;
 
@@ -3081,15 +3081,20 @@ export class FakeKanban {
     const runtime = t.session_id ? this.server.runtimeIdOf(t.session_id) : undefined;
     if (!notice || !runtime) return true;
     const [glyph, said] = notice;
-    this.server.event(runtime, "status.update", { kind: "process", text: `${glyph} [${t.board}] ${t.assignee ? `@${t.assignee} ` : ""}Kanban ${t.id} ${said}` });
+    const noticeText = `${glyph} [${t.board}] ${t.assignee ? `@${t.assignee} ` : ""}Kanban ${t.id} ${said}`;
+    this.server.event(runtime, "status.update", { kind: "process", text: noticeText });
+    // The wake turn's prompt is the notice itself, stored as a user row as its turn starts; its `message.start` carries
+    // only the turn's id (`_notif_poll_kanban_scoped` → `_run_prompt_submit`).
     const wake = () => {
       if (!t.subscribed || this.server.turns.has(runtime) || this.server.stopped.has(runtime) || !t.session_id) return;
+      this.server.storeMessage(t.session_id, { role: "user", text: noticeText });
+      const user_row_id = this.server.transcripts[t.session_id].at(-1)!.row_id!;
       const text = `Results are in for ${t.id} (${status}): ${t.title}. Here is the synthesis.`;
-      if (this.wakeWith) return this.wakeWith(runtime, t.session_id, text);
-      this.server.event(runtime, "message.start");
+      if (this.wakeWith) return this.wakeWith(runtime, t.session_id, text, user_row_id);
+      this.server.event(runtime, "message.start", { turn_id: `wake-${t.id}` });
       this.server.event(runtime, "message.delta", { text });
       this.server.storeMessage(t.session_id, { role: "assistant", text });
-      this.server.event(runtime, "message.complete", { text, status: "complete" });
+      this.server.event(runtime, "message.complete", { text, status: "complete", persisted_turn: { user_row_id } });
     };
     setTimeout(wake, this.wakeDelayMs);
     return true;
