@@ -1558,9 +1558,12 @@ mod tests {
     /// Each request a stub got, in order: its path and its `Authorization` header.
     type Heard = std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
 
-    /// A stub dashboard that answers a password or a token sign-in, notes each request in the order it came, and
-    /// counts the TCP connections it accepted.
-    async fn counting_dashboard() -> (url::Url, std::sync::Arc<std::sync::atomic::AtomicUsize>, Heard) {
+    /// The text frames a stub's WebSocket got, in order.
+    type Frames = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+    /// A stub dashboard that answers a password or a token sign-in, notes each request in the order it came, counts
+    /// the TCP connections it accepted, and keeps the frames its WebSocket got.
+    async fn counting_dashboard() -> (url::Url, std::sync::Arc<std::sync::atomic::AtomicUsize>, Heard, Frames) {
         use axum::extract::ws::{Message, WebSocketUpgrade};
         use axum::response::IntoResponse;
         use axum::routing::{get, post};
@@ -1570,6 +1573,8 @@ mod tests {
         let paths = Heard::default();
         let ready = r#"{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{}}}"#;
         let note = paths.clone();
+        let frames = Frames::default();
+        let got = frames.clone();
         let app = axum::Router::new()
             .route(
                 "/api/status",
@@ -1586,7 +1591,11 @@ mod tests {
                 get(move |ws: WebSocketUpgrade| async move {
                     ws.on_upgrade(move |mut ws| async move {
                         let _ = ws.send(Message::text(ready)).await;
-                        while let Some(Ok(_)) = ws.recv().await {}
+                        while let Some(Ok(message)) = ws.recv().await {
+                            if let Message::Text(text) = message {
+                                got.lock().unwrap().push(text.to_string());
+                            }
+                        }
                     })
                     .into_response()
                 }),
@@ -1602,7 +1611,7 @@ mod tests {
         });
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        (url::Url::parse(&format!("http://{addr}/")).unwrap(), accepted, paths)
+        (url::Url::parse(&format!("http://{addr}/")).unwrap(), accepted, paths, frames)
     }
 
     async fn connect(base: &url::Url, credential: super::SignInWith) -> super::Connection {
@@ -1621,12 +1630,60 @@ mod tests {
         let token = super::SignInWith::Token { token: Some("GOOD".into()), connection: None };
         let bearer = Some("Bearer GOOD".to_owned());
         for (credential, sign_in, auth) in [(password, "/auth/password-login", None), (token, "/api/auth/me", bearer)] {
-            let (base, accepted, heard) = counting_dashboard().await;
+            let (base, accepted, heard, _) = counting_dashboard().await;
             let _connection = connect(&base, credential).await;
             let want = [("/api/status", None), (sign_in, auth.clone()), ("/api/auth/ws-ticket", auth), ("/api/ws", None)];
             // The shared client never carries the token: the status read and the socket go without it.
             assert_eq!(*heard.lock().unwrap(), want.map(|(p, a)| (p.to_owned(), a)));
             assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2, "one HTTP connection plus the WebSocket, for {sign_in}");
         }
+    }
+
+    /// Calls `hermes_send_file` through the window's IPC, the way a script in the webview would.
+    fn send_through_ipc(webview: &tauri::WebviewWindow<tauri::test::MockRuntime>, path: &std::path::Path) -> Result<(), String> {
+        let request = tauri::webview::InvokeRequest {
+            cmd: "hermes_send_file".into(),
+            callback: tauri::ipc::CallbackFn(0),
+            error: tauri::ipc::CallbackFn(1),
+            url: "tauri://localhost".parse().unwrap(),
+            body: tauri::ipc::InvokeBody::Json(serde_json::json!({
+                "head": r#"{"jsonrpc":"2.0","id":1,"method":"prompt.submit","params":{"text":""#,
+                "path": path,
+                "tail": r#""}}"#,
+                "maxBytes": 1000,
+            })),
+            headers: Default::default(),
+            invoke_key: tauri::test::INVOKE_KEY.into(),
+        };
+        tauri::test::get_ipc_response(webview, request).map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    /// Issue #344: a script running in the window can't send the server a local file the owner never attached.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn send_file_refuses_a_file_the_owner_never_attached() {
+        use base64::Engine;
+        use tauri::Manager;
+        let (base, _, _, frames) = counting_dashboard().await;
+        let app = tauri::test::mock_builder()
+            .manage(super::AppState::default())
+            .invoke_handler(tauri::generate_handler![super::hermes_send_file])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
+        let password = super::SignInWith::Password { username: "liam".into(), password: "hunter2".into(), provider: None };
+        *app.state::<super::AppState>().0.lock().await = Some(connect(&base, password).await);
+
+        let dir = std::env::temp_dir().join(format!("hermes-chat-344-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret = dir.join("id_ed25519");
+        std::fs::write(&secret, "PRIVATE KEY").unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode("PRIVATE KEY");
+
+        let sent = send_through_ipc(&webview, &secret);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let leaked = frames.lock().unwrap().iter().any(|f| f.contains(&encoded));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(!leaked, "the stub dashboard got the bytes of a file nobody attached");
+        assert!(sent.is_err(), "hermes_send_file answered Ok for a file nobody attached");
     }
 }
