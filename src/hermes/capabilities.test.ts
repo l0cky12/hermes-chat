@@ -670,6 +670,11 @@ describe("the copied report", () => {
     expect(redact("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig")).not.toContain("eyJzdWIiOiIxIn0");
   });
 
+  it("redacts a token in a URL's user name, with or without a password, and an auth= query value", () => {
+    expect(redact("Server: https://sk_abcdef123456@hermes.example/")).toBe("Server: https://[redacted]@hermes.example/");
+    expect(redact("GET https://hermes.example/api?auth=abc123&profile=x")).toBe("GET https://hermes.example/api?auth=[redacted]&profile=x");
+  });
+
   it("keeps secrets out of the why it shows, too", async () => {
     const t = store({ ...NEW, "GET api/files": answered(502, "token=abcd1234secret") });
     await connectAndCheck(t);

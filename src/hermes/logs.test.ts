@@ -50,6 +50,8 @@ describe("redact", () => {
     ["slack xoxb-1234567890-abcdefghij", "xoxb-1234567890-abcdefghij"],
     ["hf hf_abcdefghijklmnopqrstuvwxyz", "hf_abcdefghijklmnopqrstuvwxyz"],
     ["GET https://user:hunter2@example.com/x", "hunter2"],
+    ["GET https://sk_abcdef123456@example.com/x", "sk_abcdef123456"],
+    ["GET https://example.com/x?auth=abc123&y=1", "abc123"],
     ['{"api_key": "plain-value-123", "model": "x"}', "plain-value-123"],
     ["password=hunter2 user=bob", "hunter2"],
     ["DISCORD_BOT_TOKEN: 'abc.def.ghi'", "abc.def.ghi"],
