@@ -478,15 +478,16 @@ export function approvalsFrom(result: unknown): Pick<Capability, "state" | "why"
 }
 
 /**
- * The first release that keeps every client that opens a chat attached to it (`de25545dce`) and counts a 4404 as one
- * client declining (`e33f1a0faf`). Builds before it report 0.21.5 or lower, the calendar-tagged ones included.
+ * The first release (`v2026.9.14`) that sends server requests as JSON-RPC (`ebe8cda8ea`) to every client attached to a
+ * chat (`de25545dce`). Before it, Hermes asked through notifications this app doesn't read. `declines_not_shown`
+ * (`e33f1a0faf`) came later, in 0.21.6.
  */
-const SHARED_CHATS_SINCE = [0, 21, 6];
+const SHARED_CHATS_SINCE = [0, 21, 3];
 
 /**
  * Whether Hermes shares a chat between the clients that have it open: each gets every server request, and the first
- * answer settles it, an error included (ADR 0094). `declines_not_shown` came in the same release, so it says so before
- * the version is read.
+ * answer settles it, an error included (ADR 0094). `declines_not_shown` came later, so it says so before the version
+ * is read.
  */
 export function sharesChats(f: ServerFacts): boolean {
   if (f.declinesNotShown) return true;

@@ -269,16 +269,17 @@ describe("partial and malformed answers", () => {
     expect(approvalsFailed(new Error("Connection closed: x")).state).toBe("unreachable");
   });
 
-  it("knows a Hermes that shares chats by declines_not_shown or by a version from 0.21.6", () => {
+  it("knows a Hermes that shares chats by declines_not_shown or by a version from 0.21.3", () => {
     expect(sharesChats({ declinesNotShown: true })).toBe(true);
     expect(sharesChats({})).toBe(false);
-    expect(sharesChats({ declinesNotShown: false, version: "0.21.5" })).toBe(false);
-    expect(sharesChats({ version: "0.21.6" })).toBe(true);
+    expect(sharesChats({ declinesNotShown: false, version: "0.21.2" })).toBe(false);
+    expect(sharesChats({ version: "0.21.3" })).toBe(true);
+    expect(sharesChats({ version: "0.21.5" })).toBe(true);
     expect(sharesChats({ version: "0.22.5" })).toBe(true);
     expect(sharesChats({ version: "1.0.0" })).toBe(true);
     expect(sharesChats({ version: "0.20.9" })).toBe(false);
     expect(sharesChats({ build: "0.21.6+12.gbf0203a" })).toBe(true);
-    expect(sharesChats({ version: "v0.21.5+canary.20261008T070449Z" })).toBe(false);
+    expect(sharesChats({ version: "v0.21.2+canary.20260912T070000Z" })).toBe(false);
     expect(sharesChats({ build: "abc1234" })).toBe(false);
   });
 

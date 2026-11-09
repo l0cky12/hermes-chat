@@ -603,8 +603,8 @@ describe("Approvals on a chat another Hermes app also has open", () => {
 });
 
 /**
- * Questions this app can't show (#313). Hermes 0.21.6 and later share a chat between the clients that have it open and
- * settle a question on the first answer, an error included, so a refusal from here would end it in the official app too.
+ * Questions this app can't show (#313). Hermes 0.21.3 and later send a question to every client that has its chat open
+ * and settle it on the first answer, an error included, so a refusal from here would end it in the official app too.
  */
 describe("Questions this app doesn't show", () => {
   /** A reply under way on a server reporting `version`, with what it checks of itself already read. */
@@ -621,7 +621,7 @@ describe("Questions this app doesn't show", () => {
   }
 
   it("turns them down on a Hermes before shared chats, so the agent doesn't wait out the timeout", async () => {
-    const { ask, answerTo, chat } = await on("0.21.5", false);
+    const { ask, answerTo, chat } = await on("0.21.2", false);
     for (const method of ["clarify", "sudo", "secret", "preview.read"]) {
       const id = ask(method);
       expect(answerTo(id)).toEqual({ jsonrpc: "2.0", id, error: { code: -32601, message: `Hermes Chat can't answer ${method} requests yet.` } });
@@ -653,7 +653,7 @@ describe("Questions this app doesn't show", () => {
   });
 
   it("answers none of them on a Hermes that shares chats but doesn't count a 4404 as a decline", async () => {
-    const { server, ask, answerTo } = await on("0.21.6", false);
+    const { server, ask, answerTo } = await on("0.21.3", false);
     const open = ["clarify", "sudo", "preview.read", "tour"].map(ask);
     for (const id of open) expect(answerTo(id)).toBeUndefined();
     expect([...server.openRequests.keys()]).toEqual(open);
