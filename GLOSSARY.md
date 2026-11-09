@@ -492,6 +492,12 @@ chat list, Search and keyboard shortcuts target. This focus does not change whet
 Two panes of one chat share its Draft, Queued messages and running reply; each has its own scroll, Find and pending
 Attachments.
 
+**Compare**:
+Two panes whose sends go to both: one message typed in either pane goes to the chat in each, so two models answer it side
+by side. It starts from the model picker, which opens a new chat on the second model in the other pane. Each is an
+ordinary chat. While either has a reply running or messages queued, sending is refused rather than queued. It ends when
+the owner stops it, or when either pane shows another chat or closes (ADR 0101).
+
 **Update**:
 A newer version of Hermes Chat itself. For the packaged app, the owner installs it with pacman, and the app never replaces pacman's files. For a standalone build made with an update key, the app installs it, after checking its signature. Either way the new version runs only after the owner restarts the app. Drafts, unsent and uncertain messages, and queues are kept across the restart, for every connection, profile and chat. Files attached in a composer and a second pane aren't. A saved copy that can't be put back is set aside in a file of its own and never put back automatically (ADR 0060).
 _Avoid_: upgrade (pacman's word, for the package step only)
