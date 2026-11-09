@@ -183,7 +183,7 @@ describe("Outputs", () => {
     await openOutputs(user);
     const rows = [...document.querySelectorAll(".out-table tbody tr")];
     await user.click(within(rows[1] as HTMLElement).getByRole("button", { name: "Preview report.md" }));
-    await waitFor(() => expect(document.querySelector(".preview-pane, aside.preview")?.textContent).toContain("report.md"));
+    await waitFor(() => expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Address" }).value).toMatch(/\/report\.md$/));
     expect(screen.getByRole("heading", { name: "Outputs" })).toBeTruthy();
   });
 

@@ -8,12 +8,11 @@ import { SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, SESSION_GONE, type RemotePre
 import type { ArtifactRef } from "./artifacts";
 
 /**
- * What the pane shows. `start`: the pane is open with nothing in it yet. `server`: a path on the Hermes server.
+ * What the Preview shows (nothing open is no target: previewHistory.ts). `server`: a path on the Hermes server.
  * `local`: a file on this computer the owner picked. `web`: an http(s) page. `tool`: a tool call's output, as Hermes
  * sent it.
  */
 export type PreviewTarget =
-  | { kind: "start" }
   /**
    * `on`: for a page on a loopback address (`loopbackOf`), whose loopback it is: the Hermes server's, through an SSH
    * tunnel (the default, since that is where Hermes runs what it starts), or this computer's (ADR 0052).
@@ -64,11 +63,9 @@ const IMAGE_DATA_URL = /^data:image\/(png|jpeg|gif|webp|bmp|svg\+xml|x-icon|vnd\
  */
 export const withoutBidi = (text: string) => text.replace(/[\u202a-\u202e\u2066-\u2069]/g, "\uFFFD");
 
-/** The last part of a path or URL, for the pane's title. */
+/** The last part of a path or URL, for a tool call's chip. */
 export function previewName(t: PreviewTarget): string {
   switch (t.kind) {
-    case "start":
-      return "Preview";
     case "tool":
       return `${t.name} output`;
     case "local":
@@ -189,8 +186,6 @@ export function fromView(url: ViewUrl, tunnel: Tunnel | undefined): WebTarget {
 /** What the address box shows: a loopback page as a dev server prints it (`localhost:5173/a`), a path, or a name. */
 export function addressOf(t: PreviewTarget): string {
   switch (t.kind) {
-    case "start":
-      return "";
     case "web": {
       const u = new URL(t.url);
       if (!loopbackOf(t.url) || u.protocol !== "http:") return t.url;
