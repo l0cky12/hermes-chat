@@ -136,7 +136,7 @@ pub enum TransportError {
     /// Plain http:// to an address in 100.64.0.0/10 that this computer doesn't reach over Tailscale (ADR 0004).
     #[error("Plain http:// is only used on this computer, a LAN or Tailscale, and this computer doesn't reach {0} over Tailscale. Turn Tailscale on here, or use https:// or SSH to reach it.")]
     PlainHttpNotTailscale(String),
-    #[error("The dashboard sent Hermes Chat on to another site, whose address isn't shown, as it may repeat your password, token or extra request headers. Hermes Chat doesn't follow it there, so nothing is sent to it. If a gateway such as Cloudflare Access is in front of the dashboard, check the headers it needs.")]
+    #[error("The dashboard sent Hermes Chat on to another site, whose address isn't shown, as it may repeat your password or a request header. Hermes Chat doesn't follow it there, so nothing is sent to it. If a gateway such as Cloudflare Access is in front of the dashboard, check the headers it needs.")]
     RedirectedHidden,
 }
 
@@ -2311,7 +2311,7 @@ pub fn profile_create_allowed(body: Option<&str>) -> bool {
 }
 
 /// Said in place of an error body that can't be shown.
-const HIDDEN: &str = "(not shown, as it may repeat your password, token or extra request headers)";
+const HIDDEN: &str = "(not shown, as it may repeat your password or a request header)";
 
 /// How much of a header value `repeats_header` counts as repeating it.
 const HEADER_PIECE: usize = 8;
