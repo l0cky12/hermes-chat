@@ -1383,7 +1383,7 @@ async fn refuses_to_preview_a_missing_or_oversized_image() {
 #[tokio::test]
 async fn a_connection_test_reads_the_status_signs_in_and_waits_for_hermes() {
     let probed = transport::probe(&stub().await, &sign_in("hunter2"), "default").await.expect("test passes");
-    assert_eq!(serde_json::from_str::<Value>(&probed.status.unwrap()).unwrap()["auth_providers"], json!(["basic"]));
+    assert_eq!(serde_json::from_str::<Value>(&probed.status).unwrap()["auth_providers"], json!(["basic"]));
     assert_eq!(serde_json::from_str::<Value>(&probed.ready).unwrap()["params"]["type"], "gateway.ready");
 }
 
@@ -2499,16 +2499,14 @@ fn a_server_is_told_apart_by_its_hashed_install_id() {
     assert!(!id.contains("install"));
     assert_ne!(id, transport::server_id("install-2"));
     let status = r#"{"version":"0.17.0","install_id":"install-1","auth_required":true}"#;
-    assert_eq!(transport::identify(Some(status), None).unwrap(), Some(id.clone()));
-    assert_eq!(transport::identify(Some(status), Some(&id)).unwrap(), Some(id.clone()));
-    assert!(matches!(transport::identify(Some(status), Some(&transport::server_id("install-2"))), Err(TransportError::WrongServer)));
+    assert_eq!(transport::identify(status, None).unwrap(), Some(id.clone()));
+    assert_eq!(transport::identify(status, Some(&id)).unwrap(), Some(id.clone()));
+    assert!(matches!(transport::identify(status, Some(&transport::server_id("install-2"))), Err(TransportError::WrongServer)));
     // An older Hermes names no install: nothing to tell apart, so it passes.
-    assert_eq!(transport::identify(Some(r#"{"version":"0.16.0"}"#), Some(&id)).unwrap(), None);
-    // No status read at all (a 404 from a proxy): nothing known either way.
-    assert_eq!(transport::identify(None, Some(&id)).unwrap(), None);
+    assert_eq!(transport::identify(r#"{"version":"0.16.0"}"#, Some(&id)).unwrap(), None);
     // Anything that isn't a Hermes status is the wrong server.
     for other in ["<html>router login</html>", "[]", r#"{"ok":true}"#, r#"{"version":3}"#] {
-        assert!(matches!(transport::identify(Some(other), None), Err(TransportError::NotHermes)), "{other}");
+        assert!(matches!(transport::identify(other, None), Err(TransportError::NotHermes)), "{other}");
     }
 }
 
@@ -2517,7 +2515,7 @@ async fn reading_the_server_needs_no_sign_in_and_names_its_install() {
     let (base, logins) = installed("install-home").await;
     let seen = transport::read_server(&transport::client(&HeaderMap::new()).unwrap(), &base, &HeaderMap::new(), None, Duration::from_secs(5)).await.unwrap();
     assert_eq!(seen.server, Some(transport::server_id("install-home")));
-    assert!(seen.status.unwrap().contains("0.22.5"));
+    assert!(seen.status.contains("0.22.5"));
     assert_eq!(*logins.lock().unwrap(), 0);
     let wrong = transport::read_server(
         &transport::client(&HeaderMap::new()).unwrap(),
@@ -2546,6 +2544,52 @@ async fn a_route_that_reaches_another_server_never_gets_the_password() {
         transport::probe_expecting(&home, &sign_in("hunter2"), "default", Duration::from_secs(5), Duration::from_secs(5), Some(&expect)).await.unwrap();
     assert_eq!(probed.server, Some(expect));
     assert_eq!(*logins.lock().unwrap(), 1);
+}
+
+/// A dashboard-like server whose `/api/status` answers `status` (none: no such route, a 404), counting the sign-ins
+/// it got.
+async fn without_status(status: Option<StatusCode>) -> (Url, Arc<Mutex<u32>>) {
+    let logins = Arc::new(Mutex::new(0u32));
+    let counted = logins.clone();
+    let mut app = Router::new().route("/auth/password-login", post(login)).route("/api/auth/ws-ticket", post(ws_ticket)).route("/api/ws", get(api_ws));
+    if let Some(status) = status {
+        app = app.route("/api/status", get(move || async move { (status, "upstream trouble") }));
+    }
+    let app = app.layer(middleware::from_fn(move |req: Request, next: Next| {
+        let counted = counted.clone();
+        async move {
+            if req.uri().path() == "/auth/password-login" {
+                *counted.lock().unwrap() += 1;
+            }
+            next.run(req).await
+        }
+    }));
+    (serve(app).await, logins)
+}
+
+#[tokio::test]
+async fn a_route_whose_status_is_not_a_hermes_answer_never_gets_the_password() {
+    let wait = Duration::from_secs(5);
+    let home = transport::server_id("install-home");
+    for status in [None, Some(StatusCode::NOT_FOUND), Some(StatusCode::INTERNAL_SERVER_ERROR), Some(StatusCode::BAD_GATEWAY)] {
+        let (base, logins) = without_status(status).await;
+        for expect in [None, Some(home.as_str())] {
+            let opened = transport::open_route(&base, &sign_in("hunter2"), "default", expect, wait, None, &Steps::default(), |_| {}).await;
+            assert!(opened.is_err(), "{status:?}, {expect:?}: the route opened");
+            let failed = transport::probe_expecting(&base, &sign_in("hunter2"), "default", wait, wait, expect).await.unwrap_err();
+            assert_eq!(failed.stage, Stage::Reach, "{status:?}, {expect:?}: {}", failed.message);
+            let reached = transport::read_server(&transport::client(&HeaderMap::new()).unwrap(), &base, &HeaderMap::new(), expect, wait).await;
+            assert!(reached.is_err(), "{status:?}, {expect:?}: the route counted as reached");
+        }
+        assert_eq!(*logins.lock().unwrap(), 0, "{status:?}: the password went out");
+    }
+    // No status at all is the wrong server; a server error keeps its own words, as the dashboard may be failing.
+    let (base, _) = without_status(None).await;
+    let failed = transport::probe_expecting(&base, &sign_in("hunter2"), "default", wait, wait, None).await.unwrap_err();
+    assert!(failed.message.starts_with("Wrong server: something answered"), "{}", failed.message);
+    let (base, _) = without_status(Some(StatusCode::BAD_GATEWAY)).await;
+    let failed = transport::probe_expecting(&base, &sign_in("hunter2"), "default", wait, wait, None).await.unwrap_err();
+    assert_eq!(failed.message, "The dashboard answered 502: upstream trouble");
 }
 
 /// `serve`, counting the TCP connections the stub accepts.
@@ -2843,7 +2887,7 @@ async fn live_token_sign_in() {
     let base = Url::parse(&url).unwrap();
     let wait = Duration::from_secs(20);
     let seen = transport::read_server(&transport::client(&HeaderMap::new()).unwrap(), &base, &HeaderMap::new(), None, wait).await.expect("status read");
-    let methods = transport::read_methods(&base, &Default::default(), seen.status.as_deref(), wait).await;
+    let methods = transport::read_methods(&base, &Default::default(), Some(&seen.status), wait).await;
     assert!(methods.methods.contains(&transport::SignInMethod::Token), "{methods:?}");
     let probed = transport::probe_with(&base, &token(&secret), "default", wait).await.expect("the right token signs in");
     assert!(probed.ready.contains("gateway.ready"), "{}", probed.ready);

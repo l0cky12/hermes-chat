@@ -15,7 +15,7 @@ export type Stage = "address" | "reach" | "sign-in" | "chat" | "cancelled";
 export const STAGES = ["address", "reach", "sign-in", "chat"] as const satisfies readonly Stage[];
 
 /** A connection test that went through, as Rust reports it: the raw `GET /api/status` body and first `/api/ws` frame. */
-export type Probed = { route: Route; status?: string | null; ready: string };
+export type Probed = { route: Route; status: string; ready: string };
 
 /** A connection test that failed, as Rust reports it. */
 export type ProbeFailure = { stage: Stage; message: string; status?: string | null };
@@ -240,6 +240,13 @@ export function explain(f: ProbeFailure, d: SignInDetails): TestOutcome & { ok: 
           "Or connect over SSH, which goes straight to the dashboard.",
         ]);
       if (!ssh && has(/answered (401|403)/)) return turnedAway();
+      if (has(/^The dashboard answered 5\d\d/))
+        return out(`The dashboard at ${where} answered its status check with a server error. It wasn't sent the password.`, [
+          ssh
+            ? "Check that hermes dashboard is running on the server, and look at its log."
+            : "Check that hermes dashboard is running, and look at its log, or at the log of the proxy in front of it.",
+          "Then try again.",
+        ]);
       if (ssh)
         return out("The tunnel opened, but nothing answered on the server's port 9119.", [
           "Start the dashboard on the server: hermes dashboard",
@@ -269,10 +276,6 @@ export function explain(f: ProbeFailure, d: SignInDetails): TestOutcome & { ok: 
         return out("This dashboard doesn't offer username and password sign-in, which Hermes Chat uses.", [
           `It offers: ${status.authProviders.join(", ") || "nothing"}.`,
           "Set a dashboard username and password under dashboard.basic_auth in the server's Hermes config, then restart the dashboard.",
-        ]);
-      if (!status && has(/answered (404|405)/))
-        return out("Something answered at this address, but it isn't a Hermes dashboard.", [
-          ssh ? "Check that port 9119 on the server is the Hermes dashboard." : "Check the port: the dashboard listens on 9119 unless it was started with another.",
         ]);
       if (has(/answered 503/)) return out("The dashboard's sign-in isn't available right now.", ["Try again in a moment."]);
       if (has(/didn't answer within/)) return out("The dashboard didn't answer the sign-in in time.", ["Try again."]);

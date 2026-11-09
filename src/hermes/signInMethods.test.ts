@@ -18,7 +18,7 @@ describe("Sign-in methods", () => {
     const reach = async (one: SignInDetails): Promise<Reached> => {
       asked.push(one.url);
       if (one.url.includes("down")) throw { stage: "reach", message: "refused" };
-      return { route: { kind: "url", url: one.url, addresses: [] }, methods: { methods: [basic, token] } };
+      return { route: { kind: "url", url: one.url, addresses: [] }, status: '{"version":"0.22.5"}', methods: { methods: [basic, token] } };
     };
     expect(await readMethods(reach, { ...d, routes })).toEqual({ methods: [basic, token] });
     expect(asked).toEqual(["http://down:9119", "http://hermes.tail1.ts.net:9119"]);

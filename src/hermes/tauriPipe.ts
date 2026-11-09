@@ -84,7 +84,7 @@ export const tauriProbe: Probe = {
  * What `hermes_reach` found: how the route went, the dashboard's `/api/status` body, if it answered one, and the
  * sign-in methods it offers.
  */
-export type Reached = { route: Route; status?: string | null; methods?: Methods };
+export type Reached = { route: Route; status: string; methods?: Methods };
 
 /**
  * Reaches one route without signing in (src-tauri `hermes_reach`): the tunnel or address opens, and `/api/status`

@@ -38,7 +38,7 @@ describe("Testing a connection", () => {
     const route = { kind: "url" as const, url: url.url, addresses: ["203.0.113.5"] };
     expect(await testConnection(answering({ route, status: STATUS, ready: READY }), url)).toEqual({ ok: true, route, unsecure: true, version: "0.22.5" });
     const tailnet = { kind: "url" as const, url: "http://hermes:9119", addresses: ["100.100.64.121"] };
-    expect(await testConnection(answering({ route: tailnet, status: null, ready: READY }), url)).toMatchObject({ ok: true, unsecure: false, version: undefined });
+    expect(await testConnection(answering({ route: tailnet, status: '{"auth_required":true}', ready: READY }), url)).toMatchObject({ ok: true, unsecure: false, version: undefined });
   });
 
   it("fails on a server that speaks the canonical protocol", async () => {
@@ -110,6 +110,16 @@ describe("Explaining a failed test", () => {
     expect(why({ stage: "reach", message: "The dashboard didn't answer within 15s." }, url).problem).toBe("Nothing answered at hermes.example.com:9119 in time.");
   });
 
+  it("says a status check that failed with a server error got no password, and isn't the wrong server", () => {
+    const failing = { stage: "reach", message: "The dashboard answered 502: <html>Bad Gateway</html>" } as const;
+    expect(why(failing, url)).toMatchObject({
+      problem: "The dashboard at hermes.example.com:9119 answered its status check with a server error. It wasn't sent the password.",
+      detail: failing.message,
+      verdict: "unreachable",
+    });
+    expect(why(failing, ssh).fixes[0]).toBe("Check that hermes dashboard is running on the server, and look at its log.");
+  });
+
   it("points a gateway's refusal or redirect at the extra request headers", () => {
     const refused = { stage: "reach", message: "The dashboard answered 403: Forbidden. You don't have permission to view this." } as const;
     expect(why(refused, url)).toMatchObject({
@@ -143,9 +153,6 @@ describe("Explaining a failed test", () => {
       problem: "This dashboard doesn't offer username and password sign-in, which Hermes Chat uses.",
       fixes: expect.arrayContaining(["It offers: session-token."]),
     });
-    expect(why({ stage: "sign-in", message: "The dashboard answered 404: <html>Not Found</html>", status: null }, url).problem).toBe(
-      "Something answered at this address, but it isn't a Hermes dashboard.",
-    );
     expect(why({ stage: "sign-in", message: 'The dashboard answered 503: {"detail":"provider unreachable"}', status: STATUS }).problem).toBe(
       "The dashboard's sign-in isn't available right now.",
     );
