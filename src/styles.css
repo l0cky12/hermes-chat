@@ -854,6 +854,13 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 .model-caps { display: inline-flex; gap: 4px; margin-left: auto; color: var(--faint); flex: none; }
 .model-check { width: 14px; flex: none; color: var(--accent); display: grid; place-items: center; }
 .model-note { padding: 8px 12px; border-top: 1px solid var(--line); font-size: calc(11.5rem / 14); color: var(--warn); line-height: 1.4; }
+/* Compare (ADR 0101): the popover's footer action, and its title while it picks the second model. */
+.model-compare {
+  display: flex; align-items: center; gap: 7px; padding: 8px 12px; border-top: 1px solid var(--line); font-size: calc(12.5rem / 14);
+  color: var(--text-2); text-align: left; border-radius: 0 0 12px 12px;
+}
+.model-compare:hover, .model-compare:focus-visible { background: var(--raised-2); color: var(--text); outline: none; }
+.model-compare-title { padding: 10px 12px 0; font-size: calc(12rem / 14); font-weight: 600; color: var(--text); }
 .model-options {
   position: absolute; left: calc(100% + 6px); width: 190px; padding: 5px; background: var(--raised); border: 1px solid var(--line-2);
   border-radius: 10px; box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45); display: flex; flex-direction: column; animation: menu-in 0.08s ease-out;
@@ -1055,6 +1062,10 @@ div.route-result { display: flex; flex-direction: column; gap: 6px; }
 .cmd-confirm { display: flex; gap: 6px; align-items: center; padding: 6px 6px 6px 10px; }
 .cmd-confirm span { flex: 1; color: var(--text-2); }
 .platform-note { display: flex; align-items: center; gap: 6px; font-size: calc(12rem / 14); color: var(--muted); padding: 0 6px 8px; }
+/* Compare (ADR 0101): above the composer of each compared pane. */
+.compare-note { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; font-size: calc(12rem / 14); color: var(--muted); padding: 0 6px 8px; }
+.compare-note svg { flex: none; }
+.compare-note .link-btn { margin-left: auto; font-size: inherit; }
 .conn-btn { position: relative; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; }
 .conn-btn:hover { background: var(--raised-2); }
 .conn-lock { position: absolute; right: 1px; bottom: 1px; color: var(--warn); }

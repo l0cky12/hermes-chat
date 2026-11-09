@@ -2,7 +2,7 @@
 // Favorites; hovering a row (or moving to it with the arrow keys) shows its options beside the list: reasoning effort
 // and fast mode. The pill shows the effort in use and changes it directly; it hides for a model without reasoning.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Brain, Check, ChevronDown, Search, Star, Zap } from "lucide-react";
+import { Brain, Check, ChevronDown, Columns2, Search, Star, Zap } from "lucide-react";
 import {
   EFFORT_LABEL,
   capabilitiesOf,
@@ -34,7 +34,8 @@ const EFFORT_NAME: Record<Effort, string> = {
 /**
  * `catalog`: the models to list; undefined while it is read. `current`: the model in use, for the chat on screen or for
  * the next new chat. `defaultEffort`: the profile's effort, shown when `current` leaves effort as the profile has it.
- * `favorites`: starred models as `provider/model`.
+ * `favorites`: starred models as `provider/model`. `onCompare`: the popover also offers Compare (ADR 0101), which picks a
+ * second model to send the same messages to in the other pane.
  */
 export type ModelControlsProps = {
   catalog?: ModelCatalog;
@@ -43,6 +44,7 @@ export type ModelControlsProps = {
   favorites: string[];
   onPick: (pick: ModelPick) => void;
   onToggleFavorite: (key: string) => void;
+  onCompare?: (pick: ModelPick) => void;
   children?: ReactNode;
 };
 
@@ -56,6 +58,8 @@ export function ModelControls(props: ModelControlsProps) {
     </div>
   );
 }
+
+const COMPARE_TITLE = "Pick a model to compare with";
 
 /** One row of the list. `favorite`: it sits under Favorites. */
 type Row = { key: string; option: ModelOption; favorite: boolean };
@@ -87,7 +91,7 @@ export function pickerRows(catalog: ModelCatalog | undefined, favorites: string[
   return sections;
 }
 
-function ModelPicker({ catalog, current, defaultEffort, favorites, onPick, onToggleFavorite }: ModelControlsProps) {
+function ModelPicker({ catalog, current, defaultEffort, favorites, onPick, onToggleFavorite, onCompare }: ModelControlsProps) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
   const close = () => setOpen(false);
@@ -119,6 +123,13 @@ function ModelPicker({ catalog, current, defaultEffort, favorites, onPick, onTog
             onPick(p);
             if (!keepOpen) close();
           }}
+          onCompare={
+            onCompare &&
+            ((p) => {
+              close();
+              onCompare(p);
+            })
+          }
           onClose={close}
         />
       )}
@@ -133,9 +144,13 @@ function ModelPopover({
   favorites,
   onPick,
   onToggleFavorite,
+  onCompare,
   onClose,
 }: Omit<ModelControlsProps, "onPick"> & { onPick: (p: ModelPick, keepOpen?: boolean) => void; onClose: () => void }) {
   const [query, setQuery] = useState("");
+  // Compare turns the same list into a pick of the second model; the pane's own model stays as it is.
+  const [comparing, setComparing] = useState(false);
+  const search = useRef<HTMLInputElement>(null);
   const sections = pickerRows(catalog, favorites, query);
   const rows = sections.flatMap((s) => s.rows);
   const currentKey = current && modelKey(current);
@@ -164,7 +179,8 @@ function ModelPopover({
     if (!o.available) return;
     // The row in use keeps its own options; another row takes what of them it can.
     const base = modelKey(o) === currentKey && current ? current : carryOptions(o, current, catalog);
-    onPick({ ...base, ...change }, keepOpen);
+    if (comparing) onCompare?.({ ...base, ...change });
+    else onPick({ ...base, ...change }, keepOpen);
   };
 
   const onKey = (e: React.KeyboardEvent) => {
@@ -182,10 +198,12 @@ function ModelPopover({
 
   let n = -1;
   return (
-    <div className="model-popover" role="dialog" aria-label="Choose a model" ref={box} onKeyDown={onKey}>
+    <div className="model-popover" role="dialog" aria-label={comparing ? COMPARE_TITLE : "Choose a model"} ref={box} onKeyDown={onKey}>
+      {comparing && <div className="model-compare-title">{COMPARE_TITLE}</div>}
       <div className="model-search">
         <Search size={14} />
         <input
+          ref={search}
           autoFocus
           placeholder="Search models"
           aria-label="Search models"
@@ -254,7 +272,21 @@ function ModelPopover({
           Hermes didn't list its models, so these are common ones. A model the server isn't set up for is refused when the chat starts.
         </div>
       )}
-      {activeRow && activeRow.option.available && (
+      {onCompare && !comparing && (
+        <button
+          className="model-compare"
+          title="Send each message to this pane's model and another, side by side"
+          onClick={() => {
+            setComparing(true);
+            setQuery("");
+            setActive(0);
+            search.current?.focus();
+          }}
+        >
+          <Columns2 size={14} aria-hidden /> Compare with another model
+        </button>
+      )}
+      {activeRow && activeRow.option.available && !comparing && (
         <ModelOptions ref={fly} option={activeRow.option} pick={activeRow.key === currentKey ? current : carryOptions(activeRow.option, current, catalog)} defaultEffort={defaultEffort} top={flyTop} onPick={pick} />
       )}
     </div>

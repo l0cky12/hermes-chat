@@ -1,7 +1,7 @@
 // Transcript, thinking, tool-call groups, Approval cards, find bar, composer and the Settle button, ported from the prototype.
 // Dictation and Read aloud come from Voice.tsx.
 import { createContext, memo, type ReactNode, type RefObject, useCallback, useContext, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
-import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, CornerDownRight, EyeOff, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Square, Trash2, Wrench, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, Columns2, CornerDownRight, EyeOff, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Square, Trash2, Wrench, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { ApprovalChoice, AttachCheck, Attachment, Chat, ChatQueue, ConnectionStatus, Item, OutgoingItem, SideQuestion, Source } from "../hermes/model";
@@ -282,7 +282,8 @@ const savedWhen = (at: number) => new Date(at).toLocaleString(undefined, { dateS
  * says why none can be made now. `branchedFrom` is shown at the top of a branch, where it came from. `replay` offers
  * Edit under the owner's messages and Regenerate under each turn's last reply (ADR 0035); `blocked` says why neither
  * can be used now. `variants` are the versions of this chat's turns, shown under each turn's last reply. Copy is under
- * every sent message and finished reply with text, whatever else is offered.
+ * every sent message and finished reply with text, whatever else is offered. `compare`: the pane is one of two compared
+ * panes (ADR 0101), so a send goes to both chats and nothing queues or steers.
  */
 export function ChatPane({
   chat,
@@ -330,6 +331,7 @@ export function ChatPane({
   commands,
   onDismissSideQuestion,
   followUp,
+  compare,
   branch,
   branchedFrom,
   replay,
@@ -396,6 +398,7 @@ export function ChatPane({
   onDismissSideQuestion?: (id: string) => void;
   /** What sending does while the reply runs: queue or steer (ADR 0057). Without it, it queues. */
   followUp?: FollowUpHost;
+  compare?: Comparing;
   branch?: { blocked?: string; onBranch: (itemId: string) => void };
   branchedFrom?: ReactNode;
   replay?: { blocked?: string; onReplay: (itemId: string, kind: ReplayKind) => void };
@@ -625,7 +628,7 @@ export function ChatPane({
   const waiting = chat.items.some(isWaiting);
   // Enter queues while a reply runs, while Hermes isn't connected, and while messages are queued already, so a new one
   // never jumps the queue. The composer's hint says which Enter does.
-  const queueing = !!queueApi && (!!chat.running || status !== "connected" || !!queue?.items.length);
+  const queueing = !compare && !!queueApi && (!!chat.running || status !== "connected" || !!queue?.items.length);
 
   return (
     <div className="chat" ref={rootRef}>
@@ -828,7 +831,7 @@ export function ChatPane({
       <Composer
         offline={status !== "connected"}
         queueing={queueing}
-        onQueue={queueApi?.add}
+        onQueue={compare ? undefined : queueApi?.add}
         running={!!chat.running}
         stopping={!!chat.stopping}
         note={STATUS_NOTE[status]}
@@ -860,13 +863,17 @@ export function ChatPane({
         screenshots={screenshots}
         screenshotKeys={screenshotKeys}
         commands={commands}
-        followUp={followUp}
+        followUp={compare ? undefined : followUp}
+        compare={compare}
       />
       )}
       <ShowInChatContext.Provider value={showInChat}>{footer}</ShowInChatContext.Provider>
     </div>
   );
 }
+
+/** One of two compared panes (ADR 0101). `refuse`: why a send can't go to both chats now; it says nothing was sent. */
+export type Comparing = { refuse?: string; onStop: () => void };
 
 /** Read aloud for a reply: the chat's speaker, and why it can't be used now. */
 type Listen = { speaker: Speaker; blocked?: string };
@@ -1198,6 +1205,7 @@ function Composer({
   screenshotKeys,
   commands,
   followUp,
+  compare,
 }: {
   offline: boolean;
   /** Enter, and the Queue button, add the message to the chat's queue (`onQueue`, which says why it couldn't). */
@@ -1233,6 +1241,7 @@ function Composer({
   commands?: CommandHost;
   /** While a reply runs, Enter queues or steers by its `mode`, and Ctrl+Enter does the other. */
   followUp?: FollowUpHost;
+  compare?: Comparing;
 }) {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   // What an update's restart would drop, for Settings to name (unsaved.ts).
@@ -1483,6 +1492,7 @@ function Composer({
   const send = (other = false) => {
     if (slash.run()) return;
     if (!sendable || steering) return;
+    if (compare?.refuse) return setRefused([compare.refuse]);
     const skill = slash.skill;
     if (skill) {
       // Hermes builds a skill's message for the chat's session when it goes, so it can't wait in the queue or steer a
@@ -1535,6 +1545,14 @@ function Composer({
       {alsoPostsIn && (
         <div className="platform-note">
           <SourceIcon source={alsoPostsIn} /> Hermes also posts its replies in this {SOURCE_LABEL[alsoPostsIn]} chat.
+        </div>
+      )}
+      {compare && (
+        <div className="compare-note" role="note">
+          <Columns2 size={13} aria-hidden /> Comparing: each message goes to both panes.
+          <button className="link-btn" onClick={compare.onStop}>
+            Stop comparing
+          </button>
         </div>
       )}
       <DictationNoteView dictation={dictation} />

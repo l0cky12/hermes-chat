@@ -5,9 +5,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
+import { localChatCache, outboxAttachmentPaths, subscribeOutbox } from "../hermes/chatCache";
+import { savedDefaults } from "../hermes/projectDefaults";
+import { projectScope } from "../hermes/projectLinks";
 import { connect, type Hermes } from "../hermes/transport";
 import { UI_PREFS_KEY } from "../hermes/uiPrefs";
-import { Main } from "../App";
+import { Main, type Screenshots } from "../App";
+import type { Captured } from "../hermes/screenshots";
 
 const drops = vi.hoisted(() => new Set<(e: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({
@@ -355,5 +359,218 @@ describe("The divider", () => {
     fireEvent.doubleClick(divider);
     expect(divider.getAttribute("aria-valuenow")).toBe("50");
     expect(pane(0).style.flexGrow).toBe("0.5");
+  });
+});
+
+describe("Compare", () => {
+  const modelIn = (i: number) => within(pane(i)).getByRole("button", { name: /^Model:/ }).getAttribute("aria-label");
+  /** Each prompt that reached Hermes, as the model its chat runs on and its text. */
+  const promptsByModel = (s: { server: FakeHermes; hermes: Hermes }) =>
+    prompts(s.server)
+      .map((p) => [s.hermes.getSnapshot().chats.find((c) => c.runtimeId === p.params.session_id)?.model?.model, p.params.text])
+      .sort();
+  async function compareWith(s: { user: ReturnType<typeof userEvent.setup>; hermes: Hermes }, i: number, model: string) {
+    await act(() => s.hermes.loadModels());
+    await settle(s.hermes);
+    await s.user.click(within(pane(i)).getByRole("button", { name: /^Model:/ }));
+    await s.user.click(screen.getByRole("button", { name: "Compare with another model" }));
+    await s.user.click(within(screen.getByRole("dialog", { name: "Pick a model to compare with" })).getByRole("button", { name: new RegExp(`^${model}`) }));
+    await settle(s.hermes);
+  }
+
+  it("sends one message to two new chats on two models, one in each pane", async () => {
+    const s = await signedIn();
+    await compareWith(s, 0, "gpt-5");
+    expect(panes()).toHaveLength(2);
+    expect([modelIn(0), modelIn(1)]).toEqual(["Model: claude-sonnet-4-5", "Model: gpt-5"]);
+
+    await s.user.type(composerIn(0), "Which disk is failing?{Enter}");
+    await waitFor(() => expect(prompts(s.server)).toHaveLength(2));
+    expect(s.server.requests.filter((r) => r.method === "session.create").map((r) => r.params.model).sort()).toEqual(["claude-sonnet-4-5", "gpt-5"]);
+    expect(promptsByModel(s)).toEqual([
+      ["claude-sonnet-4-5", "Which disk is failing?"],
+      ["gpt-5", "Which disk is failing?"],
+    ]);
+    await settle(s.hermes);
+    expect([titleIn(0), titleIn(1)]).not.toContain("New chat");
+    expect(composerIn(0).value).toBe("");
+  });
+
+  it("refuses to send while either reply runs, then Stop comparing leaves two ordinary chats", async () => {
+    const s = await signedIn();
+    await compareWith(s, 0, "gpt-5");
+    await s.user.type(composerIn(0), "First{Enter}");
+    await waitFor(() => expect(prompts(s.server)).toHaveLength(2));
+    const right = prompts(s.server)[1].params.session_id as string;
+    const left = prompts(s.server)[0].params.session_id as string;
+    act(() => {
+      s.server.event(left, "message.complete", { text: "Disk 2.", status: "complete" });
+      s.server.event(right, "message.start");
+    });
+    await settle(s.hermes);
+
+    await s.user.type(composerIn(0), "Second{Enter}");
+    expect(within(pane(0)).getByText(/both replies have ended/)).toBeTruthy();
+    expect(prompts(s.server)).toHaveLength(2);
+    expect(s.hermes.getSnapshot().queues).toEqual({});
+    expect(composerIn(0).value).toBe("Second");
+
+    await s.user.click(within(pane(0)).getByRole("button", { name: "Stop comparing" }));
+    expect(within(pane(1)).queryByRole("button", { name: "Stop comparing" })).toBeNull();
+    await s.user.click(composerIn(0));
+    await s.user.keyboard("{Enter}");
+    await waitFor(() => expect(prompts(s.server)).toHaveLength(3));
+    expect(prompts(s.server)[2].params.session_id).not.toBe(right);
+    expect(panes()).toHaveLength(2);
+  });
+
+  it("sends from a chat already under way to it and to a new chat beside it", async () => {
+    const s = await signedIn();
+    await s.user.click(rowButton("Nightly backup"));
+    await settle(s.hermes);
+    await compareWith(s, 0, "gpt-5");
+    expect([titleIn(0), titleIn(1)]).toEqual(["Nightly backup", "New chat"]);
+    expect(activeIndex()).toBe(0);
+
+    await s.user.type(composerIn(0), "Is the repo unlocked now?{Enter}");
+    await waitFor(() => expect(prompts(s.server)).toHaveLength(2));
+    const backup = s.server.runtimeIdOf("backup");
+    expect(prompts(s.server).map((p) => p.params.text)).toEqual(["Is the repo unlocked now?", "Is the repo unlocked now?"]);
+    expect(prompts(s.server).filter((p) => p.params.session_id === backup)).toHaveLength(1);
+    expect(s.server.requests.filter((r) => r.method === "session.create").map((r) => r.params.model)).toEqual(["gpt-5"]);
+    await settle(s.hermes);
+    expect(titleIn(0)).toBe("Nightly backup");
+    expect(titleIn(1)).not.toBe("New chat");
+  });
+
+  it("starts both chats with the shown project's folder and instructions, and sends the attached file to both", async () => {
+    const server = new FakeHermes();
+    server.projects.default = [{
+      id: "p_lab", slug: "p_lab", name: "Home lab", primary_path: "/srv/lab", archived: false, created_at: 1,
+      folders: [{ path: "/srv/lab", label: null, is_primary: true, added_at: 1 }],
+    }];
+    server.serverDirs = new Set(["/srv", "/srv/lab"]);
+    server.files["/tmp/smart.txt"] = "sda reallocated 12";
+    const conn = { mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" } as const;
+    await savedDefaults.save(projectScope(conn, "default"), "p_lab", 0, { instructions: "Answer for the home lab.", folder: "/srv/lab" });
+    const hermes = await connect(server.openPipe);
+    running.push(hermes);
+    const user = userEvent.setup();
+    render(<Main hermes={hermes} connection={conn} onSignOut={async () => {}} />);
+    await waitFor(() => expect(hermes.hasListed()).toBe(true));
+    await settle(hermes);
+    await user.click(document.querySelector<HTMLElement>(".project-btn")!);
+    await user.click(await screen.findByRole("option", { name: /Home lab/ }));
+    await act(async () => {
+      for (const drop of drops) drop({ payload: { type: "drop", paths: ["/tmp/smart.txt"], position: { x: 10, y: 10 } } });
+    });
+    await waitFor(() => expect(pane(0).textContent).toContain("smart.txt"));
+
+    await compareWith({ user, hermes }, 0, "gpt-5");
+    await user.type(composerIn(0), "Is this disk failing?{Enter}");
+    await waitFor(() => expect(prompts(server)).toHaveLength(2));
+    const creates = server.requests.filter((r) => r.method === "session.create").map((r) => r.params);
+    expect(creates.map((c) => [c.model, c.cwd])).toEqual(expect.arrayContaining([["claude-sonnet-4-5", "/srv/lab"], ["gpt-5", "/srv/lab"]]));
+    for (const c of creates) expect(JSON.stringify(c.messages)).toContain("Answer for the home lab.");
+    const attached = server.requests.filter((r) => r.method === "file.attach");
+    expect(new Set(attached.map((r) => r.params.session_id)).size).toBe(2);
+    expect(prompts(server).map((p) => p.params.text)).toEqual([expect.stringContaining("smart.txt"), expect.stringContaining("smart.txt")]);
+  });
+
+  it("ends once the other pane goes to another chat, and a send then goes to one chat", async () => {
+    const s = await signedIn();
+    await s.user.click(rowButton("Nightly backup"));
+    await settle(s.hermes);
+    await compareWith(s, 0, "gpt-5");
+    expect(within(pane(1)).getByRole("button", { name: "Stop comparing" })).toBeTruthy();
+
+    await s.user.click(pane(1).querySelector(".transcript")!);
+    await s.user.click(rowButton("NAS disks"));
+    await settle(s.hermes);
+    expect([titleIn(0), titleIn(1)]).toEqual(["Nightly backup", "NAS disks"]);
+    expect(screen.queryByRole("button", { name: "Stop comparing" })).toBeNull();
+
+    await s.user.type(composerIn(0), "Only here{Enter}");
+    await waitFor(() => expect(prompts(s.server)).toHaveLength(1));
+    await settle(s.hermes);
+    expect(prompts(s.server).map((p) => p.params.session_id)).toEqual([s.server.runtimeIdOf("backup")]);
+    expect(s.server.requests.filter((r) => r.method === "session.create")).toEqual([]);
+  });
+
+  it("refuses a second message while the other chat is still starting, so both chats get the same messages", async () => {
+    const s = await signedIn();
+    await s.user.click(rowButton("Nightly backup"));
+    await settle(s.hermes);
+    await compareWith(s, 0, "gpt-5");
+    const create = s.server.handlers["session.create"];
+    let answer: (() => void) | undefined;
+    s.server.handlers["session.create"] = (r) => void (answer = () => create(r));
+    const backup = s.server.runtimeIdOf("backup")!;
+
+    await s.user.type(composerIn(0), "First{Enter}");
+    await waitFor(() => expect(answer).toBeTypeOf("function"));
+    await waitFor(() => expect(prompts(s.server)).toHaveLength(1));
+    act(() => s.server.event(backup, "message.complete", { text: "Disk 2.", status: "complete" }));
+    await waitFor(() => expect(pane(0).textContent).toContain("Disk 2."));
+
+    await s.user.type(composerIn(0), "Second{Enter}");
+    expect(within(pane(0)).getByText(/both replies have ended/)).toBeTruthy();
+    expect(composerIn(0).value).toBe("Second");
+
+    act(() => answer!());
+    await waitFor(() => expect(prompts(s.server)).toHaveLength(2));
+    await settle(s.hermes);
+    expect(s.server.requests.filter((r) => r.method === "session.create")).toHaveLength(1);
+    expect(prompts(s.server).map((p) => p.params.text)).toEqual(["First", "First"]);
+  });
+
+  it("says the message went only to the other chat when this one can't start, and keeps no screenshot the other chat took", async () => {
+    const server = new FakeHermes();
+    const conn = { mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" } as const;
+    const hermes = await connect(server.openPipe, undefined, localChatCache(conn));
+    running.push(hermes);
+    let retained = new Set<string>();
+    const syncOutbox = async () => {
+      const next = new Set(outboxAttachmentPaths());
+      for (const path of retained) if (!next.has(path)) delete server.files[path];
+      retained = next;
+    };
+    const stop = subscribeOutbox(() => queueMicrotask(() => void syncOutbox()));
+    let land!: (c: Captured) => void;
+    const capture = "/run/user/1000/hermes-chat/captures/4242/0/shot.png";
+    const wiring: Screenshots = {
+      api: {
+        capture: () => new Promise((resolve) => (land = resolve)),
+        discard: async (path) => void (retained.has(path) || delete server.files[path]),
+      },
+      syncOutbox,
+      onDesktopShortcut: () => () => {},
+      attached: vi.fn(),
+      support: async () => ({ ok: true, summary: "Screenshots use slurp and grim." }),
+    };
+    try {
+      const user = userEvent.setup();
+      render(<Main hermes={hermes} connection={conn} onSignOut={async () => {}} screenshots={wiring} />);
+      await waitFor(() => expect(hermes.hasListed()).toBe(true));
+      await compareWith({ user, hermes }, 0, "gpt-5");
+      composerIn(0).focus();
+      await user.click(within(pane(0)).getByRole("button", { name: "Attach a screenshot" }));
+      server.files[capture] = "\x89PNG\r\n\x1a\nscreen";
+      await act(async () => land({ path: capture }));
+      await waitFor(() => expect(pane(0).querySelectorAll(".chip")).toHaveLength(1));
+      const create = server.handlers["session.create"];
+      server.handlers["session.create"] = (r) => (r.params.model === "claude-sonnet-4-5" ? server.fail(r.id, -32000, "claude-sonnet-4-5 is down") : create(r));
+
+      await user.type(composerIn(0), "Look at this{Enter}");
+      await waitFor(() => expect(prompts(server)).toHaveLength(1));
+      await waitFor(() => expect(pane(0).textContent).toContain("Couldn't start a chat"));
+      await settle(hermes);
+      expect(server.requests.filter((r) => r.method === "image.attach_bytes").map((r) => r.params.session_id)).toEqual([prompts(server)[0].params.session_id]);
+      expect(composerIn(0).value).toBe("Look at this");
+      expect(screen.getByText(/went only to the other chat, with its files/)).toBeTruthy();
+      expect(pane(0).querySelectorAll(".chip")).toHaveLength(0);
+    } finally {
+      stop();
+    }
   });
 });
