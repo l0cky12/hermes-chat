@@ -219,41 +219,46 @@ pub fn tcp_ssh_args(target: &str, port: u16, page: &ServerPage) -> Result<Vec<Os
 
 fn forward_args(target: &str, listen: &str, page: &ServerPage) -> Vec<OsString> {
     let forward = format!("{listen}:{}:{}", page.host.forward_host(), page.port);
-    let mut args: Vec<OsString> = [
-        "-N",
-        "-T",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ConnectTimeout=15",
-        "-o",
-        "ServerAliveInterval=15",
-        "-o",
-        "ServerAliveCountMax=3",
-        "-o",
-        "ControlMaster=no",
-        "-o",
-        "ControlPath=none",
-        "-o",
-        "ForkAfterAuthentication=no",
-        "-o",
-        "PermitLocalCommand=no",
-        "-o",
-        "ExitOnForwardFailure=no",
-        "-o",
-        "StreamLocalBindMask=0177",
-        "-o",
-        "StreamLocalBindUnlink=yes",
-        "-L",
-    ]
-    .iter()
-    .map(OsString::from)
-    .collect();
+    let mut args: Vec<OsString> = ["-N"].iter().chain(SSH_OPTIONS).chain(&["-L"]).map(OsString::from).collect();
     args.push(forward.into());
     args.push("--".into());
     args.push(target.into());
     args
 }
+
+/// ssh's arguments for listing what listens on `target`'s server (`listening`): the tunnel's options, no forward, and
+/// a fixed `ss` command.
+pub fn listening_args(target: &str) -> Result<Vec<OsString>, ServerPageError> {
+    let target = checked_target(target).ok_or_else(|| ServerPageError::Ssh("The sign-in's SSH target isn't one ssh can take.".into()))?;
+    Ok(SSH_OPTIONS.iter().copied().chain(["--", target, "ss", "-ltnpH"]).map(OsString::from).collect())
+}
+
+/// What every ssh this module starts runs with (`ssh_args` says why for each).
+const SSH_OPTIONS: &[&str] = &[
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=15",
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=3",
+    "-o",
+    "ControlMaster=no",
+    "-o",
+    "ControlPath=none",
+    "-o",
+    "ForkAfterAuthentication=no",
+    "-o",
+    "PermitLocalCommand=no",
+    "-o",
+    "ExitOnForwardFailure=no",
+    "-o",
+    "StreamLocalBindMask=0177",
+    "-o",
+    "StreamLocalBindUnlink=yes",
+];
 
 /// ssh said it couldn't listen on `127.0.0.1:<port>`: `bind [127.0.0.1]:<port>: Address already in use`, or
 /// `channel_setup_fwd_listener_tcpip: cannot listen to port: <port>`. With `ExitOnForwardFailure=no` it runs on, and
@@ -453,12 +458,12 @@ fn spawner() -> std::sync::mpsc::Sender<Job> {
         .clone()
 }
 
-/// `ssh` with `args`: stdin closed, stdout dropped, stderr kept. It is killed when dropped, and, through
+/// `ssh` with `args`: stdin closed, stdout to `stdout`, stderr kept. It is killed when dropped, and, through
 /// `PR_SET_PDEATHSIG`, when the app ends, since it is started from `spawner`'s thread.
 #[cfg(unix)]
-async fn spawn_ssh(program: &str, args: &[OsString]) -> Result<Child, ServerPageError> {
+async fn spawn_ssh(program: &str, args: &[OsString], stdout: Stdio) -> Result<Child, ServerPageError> {
     let mut command = Command::new(program);
-    command.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
+    command.args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).kill_on_drop(true);
     let parent = std::process::id() as libc::pid_t;
     // SAFETY: only async-signal-safe calls between fork and exec.
     unsafe {
@@ -485,13 +490,13 @@ async fn spawn_ssh(program: &str, args: &[OsString]) -> Result<Child, ServerPage
     rx.await.map_err(|_| ServerPageError::Spawn("the ssh spawner thread is gone".into()))?.map_err(|e| ServerPageError::Spawn(e.to_string()))
 }
 
-/// `ssh` with `args`: stdin closed, stdout dropped, stderr kept, and no console window. It is killed when dropped, and,
-/// being in `job::ends_with_app`'s job, when the app ends, however it ends.
+/// `ssh` with `args`: stdin closed, stdout to `stdout`, stderr kept, and no console window. It is killed when dropped,
+/// and, being in `job::ends_with_app`'s job, when the app ends, however it ends.
 #[cfg(windows)]
-async fn spawn_ssh(program: &str, args: &[OsString]) -> Result<Child, ServerPageError> {
+async fn spawn_ssh(program: &str, args: &[OsString], stdout: Stdio) -> Result<Child, ServerPageError> {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let mut command = Command::new(program);
-    command.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true).creation_flags(CREATE_NO_WINDOW);
+    command.args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).kill_on_drop(true).creation_flags(CREATE_NO_WINDOW);
     let child = command.spawn().map_err(|e| ServerPageError::Spawn(e.to_string()))?;
     if let Some(handle) = child.raw_handle() {
         job::ends_with_app(handle).map_err(|e| ServerPageError::Spawn(format!("couldn't tie ssh to Hermes Chat: {e}")))?;
@@ -769,12 +774,42 @@ impl ServerPages {
     }
 }
 
+/// How long listing what listens on the server may take, signing in included.
+const LISTENING_TIMEOUT: Duration = Duration::from_secs(10);
+/// The most of `ss`'s list that is read: a server with more listeners than this is cut short.
+const LISTENING_KEPT: u64 = 64 * 1024;
+
+/// What listens on `target`'s server, as `ss -ltnpH` prints it there (dev_servers.rs reads it). The command is fixed
+/// here; nothing of it comes from the webview.
+pub async fn listening(program: &str, target: &str) -> Result<String, ServerPageError> {
+    let mut child = spawn_ssh(program, &listening_args(target)?, Stdio::piped()).await?;
+    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        return Err(ServerPageError::Spawn("ssh's output isn't readable".into()));
+    };
+    let (mut out, mut said) = (Vec::new(), Vec::new());
+    let (mut stdout, mut stderr) = (stdout.take(LISTENING_KEPT), stderr.take(STDERR_KEPT as u64));
+    let run = async {
+        let (o, e) = tokio::join!(stdout.read_to_end(&mut out), stderr.read_to_end(&mut said));
+        o.and(e)?;
+        child.wait().await
+    };
+    let status = match tokio::time::timeout(LISTENING_TIMEOUT, run).await {
+        Err(_) => return Err(ServerPageError::Ssh(format!("The server didn't answer within {}s.", LISTENING_TIMEOUT.as_secs()))),
+        Ok(r) => r.map_err(|e| ServerPageError::Io(e.to_string()))?,
+    };
+    if !status.success() {
+        let said = String::from_utf8_lossy(&said).trim().to_owned();
+        return Err(ServerPageError::Ssh(if said.is_empty() { format!("ssh exited with {status}.") } else { said }));
+    }
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
 /// Starts ssh for `page` through `target` and waits until it listens and the page's port answers. Everything made is
 /// dropped, ending ssh, if this fails or is dropped part-way.
 async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started, ServerPageError> {
     let end = LocalEnd::new().map_err(|e| ServerPageError::Io(format!("{}: {e}", LocalEnd::COULDNT)))?;
     let address = end.address();
-    let mut child = spawn_ssh(program, &end.ssh_args(target, page)?).await?;
+    let mut child = spawn_ssh(program, &end.ssh_args(target, page)?, Stdio::null()).await?;
     let stderr = Stderr::default();
     if let Some(e) = child.stderr.take() {
         stderr.drain(e);
@@ -1331,7 +1366,7 @@ while True:
         let pid = std::thread::spawn(|| {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             rt.block_on(async {
-                let child = spawn_ssh("sleep", &["1000".into()]).await.unwrap();
+                let child = spawn_ssh("sleep", &["1000".into()], Stdio::null()).await.unwrap();
                 let pid = child.id().unwrap() as i32;
                 std::mem::forget(child);
                 pid
