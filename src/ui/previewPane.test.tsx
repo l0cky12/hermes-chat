@@ -1059,7 +1059,8 @@ describe("Hermes can't drive the Preview (issue #376)", () => {
       const id = server.ask(runtime, method, params);
       expect(id, method).toBeDefined();
       await settle(hermes);
-      expect(server.responses.find((r) => r.id === id), `${method} ${params.action ?? ""}`).toMatchObject({ error: { code: -32601 } });
+      // A Hermes that shares chats gets "no window here shows this chat" (4404), so another app's window can still answer (#313).
+      expect(server.responses.find((r) => r.id === id), `${method} ${params.action ?? ""}`).toMatchObject({ error: { code: 4404 } });
     }
 
     expect(view.asked).toEqual(asked);
