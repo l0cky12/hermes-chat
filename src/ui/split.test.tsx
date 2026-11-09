@@ -357,3 +357,62 @@ describe("The divider", () => {
     expect(pane(0).style.flexGrow).toBe("0.5");
   });
 });
+
+describe("Compare", () => {
+  const modelIn = (i: number) => within(pane(i)).getByRole("button", { name: /^Model:/ }).getAttribute("aria-label");
+  /** Each prompt that reached Hermes, as the model its chat runs on and its text. */
+  const promptsByModel = (s: { server: FakeHermes; hermes: Hermes }) =>
+    prompts(s.server)
+      .map((p) => [s.hermes.getSnapshot().chats.find((c) => c.runtimeId === p.params.session_id)?.model?.model, p.params.text])
+      .sort();
+  async function compareWith(s: { user: ReturnType<typeof userEvent.setup>; hermes: Hermes }, i: number, model: string) {
+    await act(() => s.hermes.loadModels());
+    await settle(s.hermes);
+    await s.user.click(within(pane(i)).getByRole("button", { name: /^Model:/ }));
+    await s.user.click(screen.getByRole("button", { name: "Compare with another model" }));
+    await s.user.click(within(screen.getByRole("dialog", { name: "Pick a model to compare with" })).getByRole("button", { name: new RegExp(`^${model}`) }));
+    await settle(s.hermes);
+  }
+
+  it("sends one message to two new chats on two models, one in each pane", async () => {
+    const s = await signedIn();
+    await compareWith(s, 0, "gpt-5");
+    expect(panes()).toHaveLength(2);
+    expect([modelIn(0), modelIn(1)]).toEqual(["Model: claude-sonnet-4-5", "Model: gpt-5"]);
+
+    await s.user.type(composerIn(0), "Which disk is failing?{Enter}");
+    await waitFor(() => expect(prompts(s.server)).toHaveLength(2));
+    expect(s.server.requests.filter((r) => r.method === "session.create").map((r) => r.params.model).sort()).toEqual(["claude-sonnet-4-5", "gpt-5"]);
+    expect(promptsByModel(s)).toEqual([
+      ["claude-sonnet-4-5", "Which disk is failing?"],
+      ["gpt-5", "Which disk is failing?"],
+    ]);
+    await settle(s.hermes);
+    expect([titleIn(0), titleIn(1)]).not.toContain("New chat");
+    expect(composerIn(0).value).toBe("");
+  });
+
+  it("refuses to send while either reply runs, then Stop comparing leaves two ordinary chats", async () => {
+    const s = await signedIn();
+    await compareWith(s, 0, "gpt-5");
+    await s.user.type(composerIn(0), "First{Enter}");
+    await waitFor(() => expect(prompts(s.server)).toHaveLength(2));
+    const right = prompts(s.server)[1].params.session_id as string;
+    act(() => s.server.event(right, "message.start"));
+    await settle(s.hermes);
+
+    await s.user.type(composerIn(0), "Second{Enter}");
+    expect(within(pane(0)).getByText(/both replies have ended/)).toBeTruthy();
+    expect(prompts(s.server)).toHaveLength(2);
+    expect(s.hermes.getSnapshot().queues).toEqual({});
+    expect(composerIn(0).value).toBe("Second");
+
+    await s.user.click(within(pane(0)).getByRole("button", { name: "Stop comparing" }));
+    expect(within(pane(1)).queryByRole("button", { name: "Stop comparing" })).toBeNull();
+    await s.user.click(composerIn(0));
+    await s.user.keyboard("{Enter}");
+    await waitFor(() => expect(prompts(s.server)).toHaveLength(3));
+    expect(prompts(s.server)[2].params.session_id).not.toBe(right);
+    expect(panes()).toHaveLength(2);
+  });
+});
