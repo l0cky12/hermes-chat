@@ -457,8 +457,7 @@ async fn hermes_stat_files(attachable: State<'_, Attachable>, paths: Vec<String>
 /// A staged image's bytes for its composer thumbnail, raw rather than as JSON.
 #[tauri::command]
 async fn hermes_read_preview(attachable: State<'_, Attachable>, path: String) -> Result<tauri::ipc::Response, String> {
-    attachable.check(&path).map_err(|e| e.to_string())?;
-    transport::read_preview(&path).await.map(tauri::ipc::Response::new).map_err(|e| e.to_string())
+    transport::read_preview(&attachable, &path).await.map(tauri::ipc::Response::new).map_err(|e| e.to_string())
 }
 
 /// Opens the native Open dialog for files to attach. `[]`: the owner cancelled.
@@ -1735,11 +1734,14 @@ mod tests {
         let heard = |bytes: &str| frames.lock().unwrap().iter().any(|f| f.contains(&base64::engine::general_purpose::STANDARD.encode(bytes)));
 
         let sent = send_through_ipc(&webview, &secret);
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        let leaked = heard("PRIVATE KEY");
         send_through_ipc(&webview, &attached).expect("an attached file is sent");
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !heard("MEETING NOTES") && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         let delivered = heard("MEETING NOTES");
+        // One socket keeps the order, so the first file, had it gone, arrived before the second.
+        let leaked = heard("PRIVATE KEY");
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(!leaked, "the stub dashboard got the bytes of a file nobody attached");
         assert!(sent.is_err(), "hermes_send_file answered Ok for a file nobody attached");

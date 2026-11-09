@@ -15,14 +15,16 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Whether the window may show `url`: the app's own page (`tauri://localhost`, the `tauri.localhost` address Windows
-/// serves it at, or Vite's address in a dev build), or an empty or `srcdoc` document. WebKitGTK asks about frames too,
+/// Whether the window may show `url`: the app's own page (`tauri://localhost`, `http(s)://tauri.localhost` on Windows,
+/// or Vite's address in a dev build), or an empty or `srcdoc` document. WebKitGTK asks about frames too,
 /// and the preview shows an HTML file in a `srcdoc` frame; neither kind loads anything from elsewhere.
 fn may_show(url: &Url, dev: Option<&Url>) -> bool {
     match url.scheme() {
         "about" => matches!(url.path(), "blank" | "srcdoc"),
-        "tauri" => url.host_str() == Some("localhost"),
-        "http" | "https" => url.host_str() == Some("tauri.localhost") || dev.is_some_and(|dev| dev.origin() == url.origin()),
+        "tauri" => url.host_str() == Some("localhost") && url.port().is_none(),
+        "http" | "https" => {
+            (cfg!(windows) && url.host_str() == Some("tauri.localhost") && url.port().is_none()) || dev.is_some_and(|dev| dev.origin() == url.origin())
+        }
         _ => false,
     }
 }
@@ -36,10 +38,13 @@ mod tests {
     fn shows_only_the_app_and_empty_or_srcdoc_documents() {
         let url = |s: &str| Url::parse(s).unwrap();
         let dev = url("http://localhost:1420/");
-        for own in
-            ["tauri://localhost/", "tauri://localhost/index.html#chat", "http://tauri.localhost/", "https://tauri.localhost/", "about:blank", "about:srcdoc"]
-        {
+        for own in ["tauri://localhost/", "tauri://localhost/index.html#chat", "about:blank", "about:srcdoc"] {
             assert!(may_show(&url(own), None), "{own}");
+        }
+        // Only WebView2 serves the app at tauri.localhost. Elsewhere the name is this computer's loopback, where any
+        // local server, the sign-in tunnel's included, would answer.
+        for windows_own in ["http://tauri.localhost/", "https://tauri.localhost/"] {
+            assert_eq!(may_show(&url(windows_own), None), cfg!(windows), "{windows_own}");
         }
         assert!(may_show(&url("http://localhost:1420/src/main.tsx"), Some(&dev)));
         for other in [
@@ -52,6 +57,9 @@ mod tests {
             "data:text/html,<p>hi</p>",
             "javascript:alert(1)",
             "about:config",
+            "http://tauri.localhost:9119/api/status",
+            "https://tauri.localhost:8443/login",
+            "tauri://localhost:9119/",
         ] {
             assert!(!may_show(&url(other), None), "{other}");
         }

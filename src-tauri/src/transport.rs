@@ -765,7 +765,8 @@ pub const PREVIEW_MAX_BYTES: u64 = 25 * MIB;
 
 /// Reads a staged image for the composer's thumbnail. Only image files up to `PREVIEW_MAX_BYTES`, judged by both
 /// their extension and their first bytes, so the webview can't use it to read anything else.
-pub async fn read_preview(path: &str) -> Result<Vec<u8>, TransportError> {
+pub async fn read_preview(attachable: &Attachable, path: &str) -> Result<Vec<u8>, TransportError> {
+    attachable.check(path)?;
     let p = std::path::Path::new(path);
     let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     // The extensions Hermes looks at as images (`IMAGE_EXTENSIONS` in transport.ts).
