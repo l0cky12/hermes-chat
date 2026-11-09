@@ -17,8 +17,8 @@ export const IMPORT_FORMATS: Record<ImportFormat, { label: string; hint: string;
     extensions: ["md"],
   },
   jsonl: {
-    label: "Hermes session export (JSONL)",
-    hint: "From hermes sessions export on the command line: one session per line, with times, models and tool calls.",
+    label: "Hermes session export (JSON or JSONL)",
+    hint: "From hermes sessions export on the command line, or a .json file saved with Export in a chat's header: with times, models and tool calls.",
     extensions: ["jsonl", "json"],
   },
 };
@@ -353,6 +353,8 @@ function fromMarkdown(text: string, digest: string): { chats: PlannedChat[]; war
 }
 
 // ---- Hermes session export, JSONL (`hermes sessions export`, `render_sessions_export` at the deployed `bf0203a`) ----
+// Hermes Chat's JSON export (exportChat.ts `chatJson`) is one such session in a JSON array. Its `hermes_chat_export`
+// notes and its messages' `attachments` names have no place in Hermes and don't come in.
 
 /** A session id this app sends in a URL path: no slashes, dots-only names or spaces. */
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
@@ -410,6 +412,7 @@ function fromJsonl(text: string): { chats: PlannedChat[]; warnings: string[] } {
   let untimed = 0;
   let otherRoles = 0;
   let attachments = 0;
+  let attachmentNames = 0;
   let compacted = 0;
   const chats = jsonRecords(text).map(([raw, line]): PlannedChat => {
     const where = `Line ${line}`;
@@ -447,6 +450,7 @@ function fromJsonl(text: string): { chats: PlannedChat[]; warnings: string[] } {
       if ((m.role === "user" || m.role === "assistant") && textOf(m.content).trim()) messages++;
       if (Array.isArray(m.tool_calls)) toolCalls += m.tool_calls.length;
       if (Array.isArray(m.content)) chatAttachments += m.content.filter((p) => isObj(p) && ATTACHMENT_PARTS.has(String(p.type))).length;
+      if (Array.isArray(m.attachments)) attachmentNames += m.attachments.filter((a) => typeof a === "string").length;
       return row;
     });
     attachments += chatAttachments;
@@ -471,6 +475,7 @@ function fromJsonl(text: string): { chats: PlannedChat[]; warnings: string[] } {
     dropped.size > 0 && `Not imported: ${[...dropped].join(", ")}.`,
     untimed > 0 && `${plural(untimed, "message has", "messages have")} no time in the file; each is dated like the message before it, or the chat's start.`,
     attachments > 0 && `${plural(attachments, "attachment comes", "attachments come")} in only as far as the file holds ${attachments === 1 ? "it" : "them"}. No file it names is read.`,
+    attachmentNames > 0 && `Attachment names aren't imported: Hermes has no place for them in a chat's history (${plural(attachmentNames, "name")} in the file).`,
     compacted > 0 && `${plural(compacted, "message was", "messages were")} compacted away in the original chat and stay${compacted === 1 ? "s" : ""} that way.`,
     otherRoles > 0 && `${plural(otherRoles, "row has a role", "rows have roles")} Hermes Chat doesn't show; ${otherRoles === 1 ? "it comes" : "they come"} in as ${otherRoles === 1 ? "it is" : "they are"}.`,
   ].filter((w): w is string => typeof w === "string");
