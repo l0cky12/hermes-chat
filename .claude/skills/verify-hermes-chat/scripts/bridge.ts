@@ -10,6 +10,8 @@
 //   a prompt with "background" in it starts two background subagents and ends its turn while they run.
 //   a prompt with "approval" in it asks the owner to approve a command, and its reply waits for the answer.
 //   a prompt that starts with "fail" ends its reply with an error, as a provider failure does.
+//   a prompt that starts with "math" gets a reply with inline and display math and a Mermaid diagram (#350), and one
+//   that starts with "badmath" the same with a diagram Mermaid can't parse.
 //   with HV_LONG_REPLY=<n>, a prompt that starts with `long` gets n paragraphs of markdown (code, a list, a table),
 //   three words every 40 ms, so a reply keeps streaming for minutes.
 //   `subagent.interrupt` (Stop in the Subagents panel) ends that subagent as `interrupted`, as Hermes reports it.
@@ -113,9 +115,23 @@ const paragraph = (i: number) =>
   `\`\`\`sh\nrestic -r sftp:backup@nas:/srv/restic unlock\nrestic -r sftp:backup@nas:/srv/restic check --read-data-subset=${i}/100\n\`\`\`\n\n` +
   `- keep-daily 7\n- keep-weekly 4\n- keep-monthly ${i % 12}\n\n| host | size | when |\n|---|---|---|\n| nas | ${i * 3} GiB | 02:00 |\n| web | ${i} GiB | 03:00 |\n`;
 
+const mathReply = (broken: boolean) =>
+  "The backup window is the time to read the data plus the time to send it, so with $n$ snapshots of size $s$ over a link of " +
+  "bandwidth \\(b\\) it takes about $t = \\frac{n \\cdot s}{b}$. That holds while the link, not the disk, is the limit. It costs $5 and $10 a month on either plan.\n\n" +
+  "$$\n\\sigma = \\sqrt{\\frac{1}{N}\\sum_{i=1}^{N} (x_i - \\mu)^2}\n$$\n\n" +
+  "The prune runs after the check:\n\n" +
+  (broken ? "```mermaid\nsequenceDiagram\n  cron->>restic: unlock\n  restic-->>\n```\n" : "```mermaid\nsequenceDiagram\n  cron->>restic: unlock\n  restic-->>cron: ok\n  cron->>restic: check --read-data-subset=5%\n  restic-->>cron: no errors\n  cron->>restic: forget --prune\n```\n");
+
 function replyTo(sessionId: string, prompt: string, said?: string) {
   const long = longParagraphs > 0 && prompt.startsWith("long");
-  const text = said ?? (long ? Array.from({ length: longParagraphs }, (_, i) => paragraph(i)).join("\n") : `Stand-in reply to: ${prompt.slice(0, 80)}`);
+  const math = prompt.startsWith("math") || prompt.startsWith("badmath");
+  const text =
+    said ??
+    (long
+      ? Array.from({ length: longParagraphs }, (_, i) => paragraph(i)).join("\n")
+      : math
+        ? mathReply(prompt.startsWith("badmath"))
+        : `Stand-in reply to: ${prompt.slice(0, 80)}`);
   server.event(sessionId, "message.start");
   const words = text.split(" ");
   let at = 0;
