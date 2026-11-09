@@ -682,6 +682,31 @@ describe("Back, Forward and Reload (issue #376)", () => {
     expect(address().value).toBe("localhost:5173/app?v=3");
   });
 
+  it("shows the page again when Back returns to it after a typed address failed to load", async () => {
+    const GOOGLE = "https://www.google.com/";
+    const { view, user } = await withView();
+    await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.type(address(), `${GOOGLE}{Enter}`);
+    await act(async () => view.land(1));
+    await user.clear(address());
+    await user.type(address(), "https://down.example/{Enter}");
+    await act(async () => view.say(1, { kind: "failed", message: "Could not connect: Connection refused" }));
+    expect(within(pane()).getByRole("alert").textContent).toContain("Couldn't load down.example");
+    expect(view.placed.get(1)).toBeNull();
+
+    await user.click(button("Back"));
+    expect(address().value).toBe(GOOGLE);
+    expect(within(pane()).queryByRole("alert")).toBeNull();
+    expect(view.placed.get(1), "the view still holds www.google.com").toEqual({ rect: BOX, holes: [] });
+
+    await user.click(button("Forward"));
+    expect(view.asked.at(-1)).toEqual([1, "go https://down.example/"]);
+    await act(async () => view.say(1, { kind: "failed", message: "Could not connect: Connection refused" }));
+    await user.click(button("Back"));
+    expect(within(pane()).queryByRole("alert")).toBeNull();
+    expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [] });
+  });
+
   it("shows where the owner left it after another tab, with Back still there", async () => {
     const { user, view } = await devServer();
     await act(async () => view.say(1, at(`${TUNNEL}/notes`)));

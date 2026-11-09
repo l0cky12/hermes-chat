@@ -851,7 +851,8 @@ function PageView({
   }, [native]);
 
   useEffect(() => {
-    if (!page || !src || src === viewAt.current) return;
+    if (!page || !src) return;
+    if (src === viewAt.current) return setState((s) => (typeof s === "object" ? "shown" : s));
     setState("loading");
     sentThrough.current = latest.current.tunnel;
     page.go(src);
