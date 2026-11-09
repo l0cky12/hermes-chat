@@ -7,6 +7,8 @@ pub mod defaults_file;
 pub mod dev_servers;
 pub mod display;
 pub mod fonts;
+#[cfg(target_os = "linux")]
+pub mod gtk_clipboard;
 pub mod links;
 pub mod local_stt;
 pub mod main_window;
