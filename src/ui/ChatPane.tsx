@@ -1419,8 +1419,7 @@ function Composer({
 
   const pick = async () => {
     try {
-      // Rust runs the dialog and notes the picks, so they are the only files the webview can send (ADR 0100).
-      await add(await invoke<string[]>("composer_pick_files"));
+      await add(await invoke<string[]>("attach_picked_files"));
     } catch (e) {
       setRefused([`Couldn't open the file picker: ${e instanceof Error ? e.message : String(e)}`]);
     }

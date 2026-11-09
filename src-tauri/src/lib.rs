@@ -461,10 +461,9 @@ async fn hermes_read_preview(attachable: State<'_, Attachable>, path: String) ->
     transport::read_preview(&path).await.map(tauri::ipc::Response::new).map_err(|e| e.to_string())
 }
 
-/// Opens the native Open dialog for files to attach. Only Rust adds to `Attachable`, so the webview can send only
-/// files the owner picked here, dropped, pasted or captured. `[]`: the owner cancelled.
+/// Opens the native Open dialog for files to attach. `[]`: the owner cancelled.
 #[tauri::command]
-async fn composer_pick_files(app: tauri::AppHandle, attachable: State<'_, Attachable>) -> Result<Vec<String>, String> {
+async fn attach_picked_files(app: tauri::AppHandle, attachable: State<'_, Attachable>) -> Result<Vec<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let mut dialog = app.dialog().file();
     if let Some(window) = app.get_webview_window("main") {
@@ -1342,7 +1341,8 @@ async fn repo_git_stream(
     .await
 }
 
-/// Files dropped on the window can be attached: Tauri hands the webview their paths too, after this runs.
+/// Tauri tells the webview about the drop before this runs, but the webview's next IPC call is handled on this same
+/// main thread after it returns, so the paths are attachable before the webview can ask about them.
 fn attach_dropped(window: &tauri::Window, event: &tauri::WindowEvent) {
     if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
         if window.label() == "main" {
@@ -1433,7 +1433,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             hermes_send_file,
             hermes_stat_files,
             hermes_read_preview,
-            composer_pick_files,
+            attach_picked_files,
             stage_clipboard_file,
             hermes_request,
             hermes_transcribe,
@@ -1611,7 +1611,6 @@ mod tests {
     /// Each request a stub got, in order: its path and its `Authorization` header.
     type Heard = std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
 
-    /// The text frames a stub's WebSocket got, in order.
     type Frames = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
 
     /// A stub dashboard that answers a password or a token sign-in, notes each request in the order it came, counts
@@ -1692,7 +1691,6 @@ mod tests {
         }
     }
 
-    /// Calls `hermes_send_file` through the window's IPC, the way a script in the webview would.
     fn send_through_ipc(webview: &tauri::WebviewWindow<tauri::test::MockRuntime>, path: &std::path::Path) -> Result<(), String> {
         let request = tauri::webview::InvokeRequest {
             cmd: "hermes_send_file".into(),
@@ -1711,7 +1709,6 @@ mod tests {
         tauri::test::get_ipc_response(webview, request).map(|_| ()).map_err(|e| e.to_string())
     }
 
-    /// Issue #344: a script running in the window can't send the server a local file the owner never attached.
     #[tokio::test(flavor = "multi_thread")]
     async fn send_file_refuses_a_file_the_owner_never_attached() {
         use base64::Engine;
@@ -1740,7 +1737,6 @@ mod tests {
         let sent = send_through_ipc(&webview, &secret);
         tokio::time::sleep(Duration::from_millis(200)).await;
         let leaked = heard("PRIVATE KEY");
-        // The owner's own attachment still goes, so the refusal above is about the file, not the pipe.
         send_through_ipc(&webview, &attached).expect("an attached file is sent");
         tokio::time::sleep(Duration::from_millis(200)).await;
         let delivered = heard("MEETING NOTES");

@@ -890,8 +890,6 @@ impl PickedFiles {
     }
 }
 
-/// The most paths `Attachable` keeps. The oldest goes first: a message queued or left unsent that long ago fails to
-/// attach, as one whose file was moved does.
 const ATTACHABLE_KEPT: usize = 1000;
 
 /// The local files the owner chose to attach: dropped on the window, picked in the composer's Open dialog, pasted or

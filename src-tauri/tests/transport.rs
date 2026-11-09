@@ -1267,7 +1267,6 @@ async fn stats_files_to_attach() {
     );
 }
 
-/// A message queued or left unsent keeps its attachments across a restart, so the paths outlive the app.
 #[test]
 fn attached_files_stay_attachable_after_a_restart() {
     let dir = scratch("attachable");
@@ -1983,7 +1982,6 @@ fn stages_a_pasted_file_as_a_private_temp_file() {
     }
     // The same screenshot pasted twice is two files, so both attach.
     assert_ne!(a, b);
-    // Each staged file attaches like any other local file, once the paste notes it (`stage_clipboard_file` in lib.rs).
     let attachable = transport::Attachable::default();
     attachable.add([path_of(&a)]);
     let got = tokio::runtime::Runtime::new().unwrap().block_on(transport::stat_files(&attachable, &[path_of(&a)]));
