@@ -804,7 +804,7 @@ async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started
         match connect(&address).await {
             Ok(s) => break s,
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                return Err(ServerPageError::Io(format!("Another program on this computer took the tunnel's port, so the page didn't open through it: {e}")));
+                return Err(ServerPageError::Io(format!("The page didn't open through the SSH tunnel: {e}")));
             }
             Err(_) => {}
         }

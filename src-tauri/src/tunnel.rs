@@ -25,8 +25,8 @@ pub enum TunnelError {
     Ssh(String),
     #[error("SSH didn't open the tunnel within {0}s.")]
     Timeout(u64),
-    /// Another program holds the tunnel's port (Windows, ADR 0103): nothing, the password least of all, went to it.
-    #[error("Another program on this computer took the SSH tunnel's port, so Hermes Chat didn't sign in through it: {0}")]
+    /// The tunnel's port isn't known to be ssh's (Windows, ADR 0103): nothing, the password least of all, went to it.
+    #[error("Hermes Chat didn't sign in through the SSH tunnel: {0}")]
     NotSsh(String),
 }
 

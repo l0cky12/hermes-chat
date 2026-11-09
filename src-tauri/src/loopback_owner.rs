@@ -113,28 +113,29 @@ mod win {
     }
 
     /// Fails with `ErrorKind::PermissionDenied` unless the far end of `stream`, a connection to a loopback port, is
-    /// held by `ssh` or a process it started, or if Windows can't say who holds it.
+    /// held by `ssh` or a process it started. Not knowing who holds it fails too; the message says which it was.
     pub(crate) fn check(stream: &tokio::net::TcpStream, ssh: SshProcess) -> std::io::Result<()> {
         let denied = |why: String| Error::new(ErrorKind::PermissionDenied, why);
         let (SocketAddr::V4(ours), SocketAddr::V4(theirs)) = (stream.local_addr()?, stream.peer_addr()?) else {
             return Err(denied("the tunnel isn't on IPv4 loopback".into()));
         };
-        let rows = tcp_table().map_err(|e| denied(format!("couldn't find which program is listening on {theirs}: {e}")))?;
-        let pid = far_end(&rows, ours, theirs).ok_or_else(|| denied(format!("couldn't find which program is listening on {theirs}")))?;
+        let unknown = |e: String| denied(format!("Hermes Chat couldn't check which program is listening on {theirs}: {e}"));
+        let rows = tcp_table().map_err(|e| unknown(e.to_string()))?;
+        let pid = far_end(&rows, ours, theirs).ok_or_else(|| unknown("Windows lists no program for the connection".into()))?;
         if pid == ssh.pid {
             return Ok(());
         }
-        let parents = parents().map_err(|e| denied(format!("couldn't list the programs running: {e}")))?;
+        let parents = parents().map_err(|e| unknown(format!("couldn't list the programs running: {e}")))?;
         let process = |pid| Some(Process { parent: *parents.get(&pid)?, started: opened(pid).ok()? });
         if started_by(pid, ssh, process) {
             Ok(())
         } else {
-            Err(denied(format!("process {pid} is listening on {theirs}, not the ssh Hermes Chat started")))
+            Err(denied(format!("process {pid} is listening on {theirs}, and Hermes Chat couldn't confirm it is the ssh it started")))
         }
     }
 
     /// Every IPv4 TCP connection and listener, with the process that holds it.
-    fn tcp_table() -> std::io::Result<Vec<Row>> {
+    pub(super) fn tcp_table() -> std::io::Result<Vec<Row>> {
         let mut size = 0u32;
         let mut buf: Vec<u64> = Vec::new();
         loop {
@@ -241,6 +242,28 @@ mod tests {
     fn processes(list: &[(u32, u32, u64)]) -> impl Fn(u32) -> Option<Process> {
         let map: HashMap<u32, Process> = list.iter().map(|&(pid, parent, started)| (pid, Process { parent, started })).collect();
         move |pid| map.get(&pid).copied()
+    }
+
+    /// ssh's readiness check connects before ssh accepts, so the far end's row must already name the listener.
+    #[cfg(windows)]
+    #[test]
+    fn a_connection_not_yet_accepted_is_held_by_the_listeners_process() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let theirs = listener.local_addr().unwrap();
+        let stream = std::net::TcpStream::connect(theirs).unwrap();
+        let (std::net::SocketAddr::V4(ours), std::net::SocketAddr::V4(theirs)) = (stream.local_addr().unwrap(), theirs) else { unreachable!() };
+        assert_eq!(far_end(&win::tcp_table().unwrap(), ours, theirs), Some(std::process::id()));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn check_lets_through_only_a_connection_ssh_holds() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let stream = tokio::net::TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+        check(&stream, SshProcess { pid: std::process::id(), started: 0 }).expect("this process holds the listener");
+        let refused = check(&stream, SshProcess { pid: u32::MAX - 3, started: 0 }).expect_err("another process holds it");
+        assert_eq!(refused.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(refused.to_string().contains(&format!("process {}", std::process::id())), "{refused}");
     }
 
     #[test]
