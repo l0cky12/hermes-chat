@@ -135,9 +135,9 @@ function typeset(tex: string, display: boolean): ElementContent[] | undefined {
 /**
  * Rehype plugin: highlights each code block, guessing the language of untagged ones, and typesets math (mdast-util-
  * math's `<code class="language-math">`, a block's in a `<pre>`). `source`: the Markdown being rendered, when it ends
- * in code or math still coming in (markdownBlocks.ts says which); the code or math at its very end then stays plain
- * until it is finished, so a streaming reply isn't highlighted again, and its language guessed again, on every delta
- * (ADR 0068).
+ * in code or math still coming in (markdownBlocks.ts says which); the code or math at its very end then stays plain,
+ * with `data-growing` on its `<code>`, until it is finished, so a streaming reply isn't highlighted again, and its
+ * language guessed again, on every delta (ADR 0068).
  */
 function rehypeCode(source?: string) {
   const growing = (node: Element) => source !== undefined && !source.slice(node.position?.end.offset ?? 0).trim();
@@ -149,6 +149,7 @@ function rehypeCode(source?: string) {
       if (!math && code === node) return;
       if (growing(node)) {
         if (!math) plain(code);
+        code.properties.dataGrowing = true;
         return SKIP;
       }
       if (!math) {

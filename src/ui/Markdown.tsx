@@ -1,32 +1,76 @@
-// Markdown with highlighted, copyable code blocks, typeset math and find-in-chat marks. Ported from the prototype.
-// Single newlines are kept as line breaks, since replies often put one item per line. Links open in the preview pane,
-// never in the app's own window (previewContext.tsx).
-import { Children, Fragment, isValidElement, memo, useMemo, useRef, useState, type ReactNode } from "react";
+// Markdown with highlighted, copyable code blocks, typeset math, mermaid diagrams and find-in-chat marks. Ported from
+// the prototype. Single newlines are kept as line breaks, since replies often put one item per line. Links open in the
+// preview pane, never in the app's own window (previewContext.tsx).
+import { Children, Fragment, isValidElement, memo, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import { Check, Copy, Image as ImageIcon } from "lucide-react";
+import { Check, CodeXml, Copy, Image as ImageIcon, Workflow } from "lucide-react";
 import "katex/dist/katex.min.css";
 import { PreviewLink } from "./previewContext";
 import { splitBlocks, type Blocks } from "./markdownBlocks";
 import { rehypePlugins, remarkPlugins } from "./markdownPipeline";
+import { drawDiagram, drawnAlready, type Drawing } from "./mermaid";
 
-/** The language a highlighted `<code>` element names in its class, `language-ts`, or "" for none. */
-function codeLanguage(children: ReactNode): string {
-  const code = Children.toArray(children).find(isValidElement) as { props: { className?: unknown } } | undefined;
-  const className = code?.props.className;
-  return (typeof className === "string" && className.match(/language-(\S+)/)?.[1]) || "";
+/** Rendered Markdown's text: code as it reads, whatever highlighting and find marks it is wrapped in. */
+function textOf(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join("");
+  return isValidElement<{ children?: ReactNode }>(node) ? textOf(node.props.children) : "";
 }
 
+/** `source` drawn as a diagram once `box` is in view, or undefined until then and while `wanted` is false. */
+function useDrawing(source: string, wanted: boolean, box: RefObject<HTMLElement | null>): Drawing | undefined {
+  const [drawn, setDrawn] = useState<{ source: string; drawing: Drawing }>();
+  const already = wanted ? drawnAlready(source) : undefined;
+  useEffect(() => {
+    if (!wanted || already || !box.current) return;
+    let live = true;
+    const draw = () => void drawDiagram(source).then((drawing) => live && setDrawn({ source, drawing }));
+    if (typeof IntersectionObserver === "undefined") {
+      draw();
+      return () => void (live = false);
+    }
+    const view = new IntersectionObserver((entries) => {
+      if (!entries.some((e) => e.isIntersecting)) return;
+      view.disconnect();
+      draw();
+    });
+    view.observe(box.current);
+    return () => {
+      live = false;
+      view.disconnect();
+    };
+  }, [source, wanted, already, box]);
+  return already ?? (wanted && drawn?.source === source ? drawn.drawing : undefined);
+}
+
+/**
+ * A code block: its language, Copy, and the code. A finished ```mermaid block shows its diagram, with a switch back
+ * to its source; one still coming in (`data-growing`, markdownPipeline.ts) stays source.
+ */
 function CodeBlock({ children }: { children?: ReactNode }) {
-  const ref = useRef<HTMLPreElement>(null);
+  const code = (Children.toArray(children).find(isValidElement) as { props: { className?: unknown; "data-growing"?: unknown } } | undefined)?.props;
+  // The language its `<code>` element names in its class, `language-ts`, or "" for none.
+  const language = (typeof code?.className === "string" && code.className.match(/language-(\S+)/)?.[1]) || "";
+  const box = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
+  const [showSource, setShowSource] = useState(false);
+  const diagram = language === "mermaid" && code?.["data-growing"] === undefined;
+  const drawing = useDrawing(diagram ? textOf(children) : "", diagram, box);
+  const svg = drawing && "svg" in drawing ? drawing.svg : undefined;
   return (
-    <div className="code">
+    <div className="code" ref={box}>
       <div className="code-head">
-        <span>{codeLanguage(children)}</span>
+        <span>{language}</span>
+        {svg !== undefined && (
+          <button className="code-view" onClick={() => setShowSource(!showSource)}>
+            {showSource ? <Workflow size={13} /> : <CodeXml size={13} />}
+            {showSource ? "Diagram" : "Source"}
+          </button>
+        )}
         <button
           className="code-copy"
           onClick={() => {
-            void navigator.clipboard.writeText(ref.current?.innerText ?? "");
+            void navigator.clipboard.writeText(textOf(children));
             setCopied(true);
             setTimeout(() => setCopied(false), 1200);
           }}
@@ -35,7 +79,9 @@ function CodeBlock({ children }: { children?: ReactNode }) {
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <pre ref={ref}>{children}</pre>
+      {drawing && "note" in drawing && <div className="code-note">{drawing.note}</div>}
+      {/* The SVG went through mermaid's strict mode and then mermaid.ts's `contained`. */}
+      {svg !== undefined && !showSource ? <div className="code-diagram" dangerouslySetInnerHTML={{ __html: svg }} /> : <pre>{children}</pre>}
     </div>
   );
 }

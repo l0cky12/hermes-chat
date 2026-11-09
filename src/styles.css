@@ -479,8 +479,12 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
   display: flex; justify-content: space-between; align-items: center; padding: 6px 8px 6px 14px; font-size: calc(11.5rem / 14);
   color: var(--faint); font-family: var(--mono);
 }
-.code-copy { display: flex; align-items: center; gap: 5px; font-size: calc(11.5rem / 14); color: var(--muted); padding: 3px 7px; border-radius: 6px; font-family: inherit; }
-.code-copy:hover { background: var(--raised-2); color: var(--text); }
+.code-head > span { margin-right: auto; }
+.code-copy, .code-view { display: flex; align-items: center; gap: 5px; font-size: calc(11.5rem / 14); color: var(--muted); padding: 3px 7px; border-radius: 6px; font-family: inherit; }
+.code-copy:hover, .code-view:hover { background: var(--raised-2); color: var(--text); }
+/* A ```mermaid block's diagram, and the note on one that isn't drawn (#350). */
+.code-diagram { padding: 4px 16px 16px; overflow-x: auto; text-align: center; }
+.code-note { padding: 0 16px 6px; color: var(--muted); font-size: calc(12rem / 14); }
 /* Display math scrolls sideways rather than widening the reply. */
 .katex-display { overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
 /* A remote image in Markdown, not loaded until clicked (ADR 0099). */
