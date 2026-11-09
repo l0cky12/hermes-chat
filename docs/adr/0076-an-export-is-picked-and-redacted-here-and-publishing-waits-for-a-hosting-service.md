@@ -10,7 +10,7 @@ Read in the deployed Hermes source (`f0d94882`, `~/.cache/hermes-src-168`) on 20
 
 ## Decision
 
-**Export as Markdown… opens the Export dialog.** Everything happens on this computer, and the file goes where the owner picks in the native Save dialog, through the existing `chat_export` command. Nothing is uploaded.
+**Export… opens the Export dialog.** Everything happens on this computer, and the file goes where the owner picks in the native Save dialog, through the `chat_export` command. Nothing is uploaded.
 
 - **Messages are picked one by one.** The owner's messages, Hermes's replies and its thinking each have a tick box, all ticked at first.
 - **Tool calls and attachment names are left out at first.** Tool calls (with their arguments and output) and Approvals (with their commands) go in all or none, from one tick box. So do the names of attached files. Their contents were never in an export. The file's notes say what was left out.
@@ -20,7 +20,16 @@ Read in the deployed Hermes source (`f0d94882`, `~/.cache/hermes-src-168`) on 20
 - **The preview is the file.** It shows the exact text Save writes, and `[redacted]` stands in the text itself. A redacted text is gone from the bytes, not hidden by styling. Tests read the saved text back.
 - **The dialog works on the chat as it was when it opened.** A reply that arrives while the owner reads doesn't change the file.
 
-The file stays a Hermes Chat Markdown export, so Import transcripts still reads it.
+Both formats are files Import transcripts reads.
+
+## Formats
+
+The dialog's Format choice comes first, and Markdown is picked at first. The preview, the file name's extension and the Save dialog's filter follow the format. Picked messages, picked redactions and kept secrets stay the same when the format changes. `chat_export` takes the format as `markdown` or `json` and refuses any other.
+
+- **Markdown** is the file to read. It is a Hermes Chat Markdown export, version 1, as before this choice existed. It has no message times.
+- **JSON** is one session in Hermes's own session-export shape, the one `hermes sessions export` writes, in a JSON array. It has the chat's session id, its title and model, `started_at`, each message's `timestamp` where the app knows it, thinking as `reasoning`, tool calls as `tool_calls` rows with their `tool` output rows, attachment names when chosen, and the chat's token and cost totals under Hermes's names. A row whose time isn't known has no `timestamp`; none is made up. The file's notes are in `hermes_chat_export`, with its version and export time. Approvals aren't in it, since Hermes's history has no place for them, and a note says so.
+- **Why Hermes's shape.** Import's session-export parser already reads it with every message's time, so exporting then importing keeps the times, and no second parser is needed. Scripts that read `hermes sessions export` already know it. A new format of this app's own would need its own parser and its own documentation.
+- **Redaction is per format.** Each format passes its own free text through the same redaction: for JSON, the title, each message's words, reasoning, tool names, arguments and output, and attachment names. Ids, roles and times are never changed. Secrets are looked for in those same texts, so the preview's counts are places in the file being saved. In JSON, text the preview shows escaped, such as a quote or a line break, matches only as the chat has it.
 
 ## Left for the owner: where public snapshots live
 
