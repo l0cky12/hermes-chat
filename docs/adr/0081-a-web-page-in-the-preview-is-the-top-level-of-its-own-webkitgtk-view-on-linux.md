@@ -1,5 +1,7 @@
 # A web page in the Preview is the top level of its own WebKitGTK view on Linux
 
+> **Partly superseded by [ADR 0103](0103-the-preview-is-a-browser-only-the-owner-drives.md)** (#376). The Preview makes a view for each run of web pages and ends it, rather than loading `about:blank` into one view, and Reload reloads the same view. The view stays over a page while the next one the owner asked for loads. The address follows a link followed inside the page, and Back and Forward move through it. The decision "The page stops when the Preview hides it" holds with those changes, and the last consequence no longer holds. The rest of this ADR stands.
+
 Issue #254. **Open in the Preview** on `https://www.google.com` showed only a note: "www.google.com doesn't allow being shown inside other apps". The Preview loaded web pages in an `<iframe>` (ADR 0007), and a site that sends `X-Frame-Options` or CSP `frame-ancestors` refuses to be framed. ADR 0011 could only say so. A large share of the web refuses framing, Google included, so the owner wants such a page to render in the Preview.
 
 ## Decisions

@@ -428,6 +428,8 @@ Download `hermes-chat_<version>_x64-setup.exe` from the latest [release](https:/
 
 Signing in through SSH uses Windows OpenSSH, so `ssh` must work in PowerShell. Passwords and extra request headers are kept in Windows Credential Manager. To update, run a newer installer over the old one. The Windows build is compiled and unit-tested on GitHub's Windows runner (ADR 0069). Pushing a `v<version>` tag builds the installer and attaches it to that release (ADR 0080).
 
+When the touch keyboard docks over the window, the window keeps its size, so the app shortens its page to keep the composer above the keyboard. This works with the touch keyboard drawn by `TabTip`, which is the one measured, on Windows Server 2025 (ADR 0103).
+
 ## Updates
 
 Settings → General → **Updates** shows the installed version, what's newer, and what changed. It checks once at launch unless you turn that off. Nothing installs or restarts without you. Updating the app doesn't involve your Hermes server: any server version the app works with stays supported, and after a restart the app signs in to the same connection again.

@@ -1,27 +1,45 @@
-// The preview pane beside the chat: a web page, a Server file, a Local file or a tool call's output (GLOSSARY.md
-// "Preview pane"). Everything it shows is untrusted (ADR 0007): web pages load in a view of their own on Linux (ADR 0081)
-// or a sandboxed frame elsewhere, neither of which can reach the app, HTML files render with scripts and network off,
-// and Markdown renders without raw HTML, as replies do.
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { AlertTriangle, Check, Copy, ExternalLink, FileQuestion, Globe, Laptop, Plus, RotateCw, Server, Wrench } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
+  AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
+  Copy,
+  ExternalLink,
+  FileQuestion,
+  FileText,
+  Globe,
+  Laptop,
+  MoreHorizontal,
+  RotateCw,
+  Server,
+  Wrench,
+} from "lucide-react";
+import {
+  addressOf,
   fenced,
+  fromView,
   loopbackOf,
   pageOn,
   parseAddress,
-  previewName,
   sandboxedHtml,
+  tunnelNeeded,
   tunnelUrl,
+  viewUrlOf,
   withoutBidi,
   type FileView,
   type Framing,
   type PageOn,
   type PreviewTarget,
+  type Tunnel,
+  type ViewUrl,
+  type WebTarget,
 } from "../hermes/preview";
 import { Markdown } from "./Markdown";
 import { Spinner, fmtSize } from "./bits";
-import { ServerPageError, type LocalFiles, type NativePage, type NativePages, type PageEvent, type ServerPage, type ServerPages, type WebPages } from "./tauriPreview";
+import { Menu } from "./ChatMenu";
+import { ServerPageError, type DevServers, type Listening, type LocalFiles, type NativePage, type NativePages, type ServerPages, type WebPages } from "./tauriPreview";
 import { usePlacement } from "./pagePlacement";
+import { canGoBack, canGoForward, type HistoryStep, type PreviewHistory } from "./previewHistory";
 import type { ArtifactStore } from "../hermes/artifacts";
 import { ArtifactEditor } from "./ArtifactEditor";
 
@@ -56,185 +74,189 @@ const WEB_PERMISSIONS = [
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/**
- * The side panel's Preview tab (SidePanel.tsx). `serverLabel`: how the app reaches the Hermes server, e.g.
- * `liam@hermes`, so a Server file says where it is. `web`: asks whether a site refuses to be shown in the frame, and
- * opens a page in the owner's browser. `serverPages`: opens a page on the Hermes server's own loopback through SSH.
- */
 export function PreviewPane({
-  target,
+  history,
+  onStep,
   serverLabel,
   readServer,
   local,
   web,
   serverPages,
-  onOpen,
   artifacts,
   connected = true,
 }: {
-  target: PreviewTarget;
+  history: PreviewHistory;
+  onStep: (s: HistoryStep) => void;
   serverLabel: string;
   /** `host`: the file is on the dashboard's own machine (preview.ts `PreviewTarget`). */
   readServer: (path: string, host?: boolean, session?: string) => Promise<FileView>;
   local: LocalFiles;
   web: WebPages;
   serverPages: ServerPages;
-  onOpen: (t: PreviewTarget) => void;
   /** Where an artifact's draft lives (artifacts.ts): editing it in the pane, and away from it, share one store. */
   artifacts?: ArtifactStore;
   connected?: boolean;
 }) {
-  // Reload bumps this; each target starts again from 0 because the pane is keyed by it.
-  const [reloads, setReloads] = useState(0);
-  const [copied, setCopied] = useState(false);
-  const [opened, setOpened] = useState<{ text: string; failed: boolean }>();
-  // A server page's tunnel address while it is open: the only way the owner's browser can reach that page.
-  const [tunnel, setTunnel] = useState<string>();
-  const titleId = useId();
-  const on = target.kind === "web" ? pageOn(target) : undefined;
-  const browserUrl = target.kind !== "web" ? undefined : on === "server" ? tunnel : target.url;
-  const address = target.kind === "server" || target.kind === "local" ? target.path : target.kind === "artifact" ? target.ref.path : target.kind === "web" ? target.url : undefined;
+  const here = history?.here;
+  const [note, setNote] = useState<{ text: string; failed: boolean }>();
+  const [tunnel, setTunnel] = useState<Tunnel>();
+  const [busy, setBusy] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const browserUrl = here?.kind === "web" ? viewUrlOf(here, tunnel) : undefined;
 
+  const open = (target: PreviewTarget) => {
+    setNote(undefined);
+    onStep({ kind: "open", target });
+  };
+  const pick = async () => {
+    setNote(undefined);
+    setPicking(true);
+    try {
+      const file = await local.pick();
+      if (file) open({ kind: "local", ...file });
+    } catch (e) {
+      setNote({ text: `Couldn't open the file picker: ${messageOf(e)}`, failed: true });
+    } finally {
+      setPicking(false);
+    }
+  };
   const openInBrowser = (url: string) => {
-    setOpened(undefined);
+    setNote(undefined);
     web.openInBrowser(url).then(
-      (browser) => setOpened({ text: `Opened in ${browser ?? "your browser"}.`, failed: false }),
-      (e) => setOpened({ text: `Couldn't open it in your browser: ${messageOf(e)}`, failed: true }),
+      (browser) => setNote({ text: `Opened in ${browser ?? "your browser"}.`, failed: false }),
+      (e) => setNote({ text: `Couldn't open it in your browser: ${messageOf(e)}`, failed: true }),
+    );
+  };
+  const copy = (address: string) => {
+    if (!navigator.clipboard?.writeText) return setNote({ text: "Couldn't copy the address.", failed: true });
+    navigator.clipboard.writeText(address).then(
+      () => setNote({ text: "Address copied.", failed: false }),
+      (e) => setNote({ text: `Couldn't copy the address: ${messageOf(e)}`, failed: true }),
     );
   };
 
   return (
-    <section className="preview-content" aria-labelledby={titleId}>
-      <header className="preview-head">
-        <div className="preview-title">
-          <div className="preview-name">
-            <Where target={target} serverLabel={serverLabel} on={on} />
-            <span id={titleId}>{withoutBidi(previewName(target))}</span>
-          </div>
-          {address && (
-            <div className="preview-address" title={withoutBidi(address)}>
-              <bdi>{withoutBidi(address)}</bdi>
-            </div>
-          )}
-        </div>
-        <div className="preview-actions">
-          {address && (
-            <button
-              className="icon-btn"
-              title={target.kind === "web" ? "Copy the address" : "Copy the path"}
-              onClick={() => {
-                void navigator.clipboard?.writeText(address);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1200);
-              }}
-            >
-              {copied ? <Check size={15} /> : <Copy size={15} />}
-            </button>
-          )}
-          {target.kind === "web" && (
-            <button
-              className="icon-btn"
-              title={on === "server" ? "Open in your browser, through this page's SSH tunnel while it is open here" : "Open in your browser"}
-              disabled={!browserUrl}
-              onClick={() => browserUrl && openInBrowser(browserUrl)}
-            >
-              <ExternalLink size={15} />
-            </button>
-          )}
-          {target.kind !== "start" && target.kind !== "tool" && target.kind !== "artifact" && (
-            <button className="icon-btn" title="Reload" onClick={() => setReloads((n) => n + 1)}>
-              <RotateCw size={15} />
-            </button>
-          )}
-          {target.kind !== "start" && (
-            <button className="icon-btn" title="Open something else" onClick={() => onOpen({ kind: "start" })}>
-              <Plus size={16} />
-            </button>
-          )}
-        </div>
-      </header>
-      {opened && (
-        <div className={opened.failed ? "attach-note preview-opened failed" : "attach-note preview-opened"} role={opened.failed ? "alert" : "status"}>
-          {opened.text}
+    <section className="preview-content" aria-label="Preview">
+      <div className="preview-toolbar">
+        <button className="icon-btn" title="Back" disabled={!canGoBack(history)} onClick={() => onStep({ kind: "back" })}>
+          <ArrowLeft size={16} />
+        </button>
+        <button className="icon-btn" title="Forward" disabled={!canGoForward(history)} onClick={() => onStep({ kind: "forward" })}>
+          <ArrowRight size={16} />
+        </button>
+        <button
+          className={busy ? "icon-btn preview-busy" : "icon-btn"}
+          title="Reload"
+          disabled={!here || here.kind === "tool" || here.kind === "artifact"}
+          onClick={() => onStep({ kind: "reload" })}
+        >
+          <RotateCw size={15} />
+        </button>
+        <AddressBox
+          here={here}
+          serverLabel={serverLabel}
+          onOpen={open}
+          onError={(text) => setNote(text === undefined ? undefined : { text, failed: true })}
+          onSwitch={(on) => onStep({ kind: "switch", on })}
+        />
+        <button
+          className="icon-btn"
+          title={here?.kind === "web" && tunnelNeeded(here) ? "Open in your browser, through this page's SSH tunnel while it is open here" : "Open in your browser"}
+          disabled={!browserUrl}
+          onClick={() => browserUrl && openInBrowser(browserUrl)}
+        >
+          <ExternalLink size={15} />
+        </button>
+        <MoreMenu address={here && addressOf(here)} framed={!web.native} picking={picking} onCopy={copy} onPick={() => void pick()} />
+      </div>
+      {note && (
+        <div className={note.failed ? "attach-note preview-opened failed" : "attach-note preview-opened"} role={note.failed ? "alert" : "status"}>
+          {note.text}
         </div>
       )}
       <div className="preview-body">
-        {target.kind === "start" ? (
-          <StartView serverLabel={serverLabel} local={local} onOpen={onOpen} />
-        ) : target.kind === "web" && on ? (
-          <div className="preview-web">
-            <PageOnSwitch at={loopbackOf(target.url)!.at} on={on} serverLabel={serverLabel} onSwitch={(next) => onOpen({ ...target, on: next })} />
-            {on === "server" ? (
-              <ServerWebView
-                key={reloads}
-                url={target.url}
-                pages={serverPages}
-                serverLabel={serverLabel}
-                check={web.check}
-                native={web.native}
-                onTunnel={setTunnel}
-                onOpenInBrowser={openInBrowser}
-                onLocal={() => onOpen({ ...target, on: "local" })}
-              />
-            ) : (
-              <WebView key={reloads} url={target.url} check={web.check} native={web.native} onOpenInBrowser={() => openInBrowser(target.url)} />
-            )}
-          </div>
-        ) : target.kind === "web" ? (
-          <WebView key={reloads} url={target.url} check={web.check} native={web.native} onOpenInBrowser={() => openInBrowser(target.url)} />
-        ) : target.kind === "tool" ? (
-          <pre className="preview-pre">{target.text || "(empty)"}</pre>
-        ) : target.kind === "artifact" ? (
+        {!history || !here ? (
+          <EmptyState web={web} connected={connected} picking={picking} onOpen={open} onPick={() => void pick()} />
+        ) : here.kind === "web" ? (
+          <BrowserView
+            here={here}
+            reloadSeq={history.reloadSeq}
+            web={web}
+            serverPages={serverPages}
+            serverLabel={serverLabel}
+            onStep={onStep}
+            onTunnel={setTunnel}
+            onBusy={setBusy}
+            onOpenInBrowser={openInBrowser}
+          />
+        ) : here.kind === "tool" ? (
+          <pre className="preview-pre">{here.text || "(empty)"}</pre>
+        ) : here.kind === "artifact" ? (
           artifacts ? (
             <ArtifactEditor
               store={artifacts}
-              artifact={target.ref}
+              artifact={here.ref}
               connected={connected}
-              onDone={() => onOpen({ kind: "server", path: target.ref.path, ...(target.ref.host && { host: true }), ...(target.ref.session && { session: target.ref.session }) })}
+              onDone={() => open({ kind: "server", path: here.ref.path, ...(here.ref.host && { host: true }), ...(here.ref.session && { session: here.ref.session }) })}
             />
           ) : null
-        ) : target.kind === "server" ? (
-          <FileBody key={reloads} name={target.path} load={() => readServer(target.path, target.host, target.session)} />
+        ) : here.kind === "server" ? (
+          <FileBody
+            key={`server:${here.host ? "host" : ""}:${here.session ?? ""}:${here.path}:${history.reloadSeq}`}
+            name={here.path}
+            load={() => readServer(here.path, here.host, here.session)}
+          />
         ) : (
-          <FileBody key={reloads} name={target.name} load={() => local.read(target)} />
+          <FileBody key={`local:${here.path}:${history.reloadSeq}`} name={here.name} load={() => local.read(here)} />
         )}
       </div>
     </section>
   );
 }
 
-/** Where what's shown lives: on the Hermes server, on this computer, on the web, or in a tool call. */
-function Where({ target, serverLabel, on }: { target: PreviewTarget; serverLabel: string; on?: PageOn }) {
-  if (target.kind === "web" && on === "server")
+function Badge({ here, serverLabel, onSwitch }: { here: PreviewTarget | undefined; serverLabel: string; onSwitch: (on: PageOn) => void }) {
+  if (!here)
     return (
-      <span className="where where-server" title={`A page on the Hermes server's own ${loopbackOf(target.url)?.at}, through SSH to ${serverLabel}`}>
-        <Server size={12} /> Server · {serverLabel}
+      <span className="preview-address-icon">
+        <Globe size={14} />
       </span>
     );
-  if (target.kind === "web" && on === "local")
-    return (
-      <span className="where where-local" title={`A page on this computer's own ${loopbackOf(target.url)?.at}, kept apart from Hermes Chat`}>
+  const on = here.kind === "web" ? pageOn(here) : undefined;
+  if (here.kind === "web" && on) {
+    const at = loopbackOf(here.url)?.at;
+    return on === "server" ? (
+      <button
+        type="button"
+        className="where where-server"
+        title={`${at} on the Hermes server, through SSH to ${serverLabel}. Click to open ${at} on this computer instead.`}
+        onClick={() => onSwitch("local")}
+      >
+        <Server size={12} /> Server
+      </button>
+    ) : (
+      <button type="button" className="where where-local" title={`${at} on this computer. Click to open ${at} on the Hermes server instead.`} onClick={() => onSwitch("server")}>
         <Laptop size={12} /> This computer
-      </span>
+      </button>
     );
-  switch (target.kind) {
+  }
+  switch (here.kind) {
+    case "web":
+      return (
+        <span className="where where-web" title="A web page, loaded by this computer and kept apart from Hermes Chat">
+          <Globe size={12} /> Web
+        </span>
+      );
     case "server":
     case "artifact":
       return (
         <span className="where where-server" title={`A file on the Hermes server (${serverLabel}), read through the dashboard`}>
-          <Server size={12} /> Server · {serverLabel}
+          <Server size={12} /> Server
         </span>
       );
     case "local":
       return (
         <span className="where where-local" title="A file on this computer, read by Hermes Chat. It isn't sent to Hermes.">
           <Laptop size={12} /> This computer
-        </span>
-      );
-    case "web":
-      return (
-        <span className="where where-web" title="A web page, loaded by this computer and kept apart from Hermes Chat">
-          <Globe size={12} /> Web
         </span>
       );
     case "tool":
@@ -248,60 +270,206 @@ function Where({ target, serverLabel, on }: { target: PreviewTarget; serverLabel
   }
 }
 
-/** The empty pane: type a web address or a server path, or pick a file on this computer. */
-function StartView({ serverLabel, local, onOpen }: { serverLabel: string; local: LocalFiles; onOpen: (t: PreviewTarget) => void }) {
-  const [text, setText] = useState("");
-  const [error, setError] = useState<string>();
-  const [picking, setPicking] = useState(false);
+function AddressBox({
+  here,
+  serverLabel,
+  onOpen,
+  onError,
+  onSwitch,
+}: {
+  here: PreviewTarget | undefined;
+  serverLabel: string;
+  onOpen: (t: PreviewTarget) => void;
+  onError: (message: string | undefined) => void;
+  onSwitch: (on: PageOn) => void;
+}) {
+  const shown = here ? withoutBidi(addressOf(here)) : "";
+  const [draft, setDraft] = useState<string>();
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (document.activeElement !== input.current) setDraft(undefined);
+  }, [shown]);
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const got = parseAddress(text, location.origin);
-    if ("error" in got) setError(got.error);
-    else onOpen(got.target);
-  };
-  const pick = async () => {
-    setError(undefined);
-    setPicking(true);
-    try {
-      const file = await local.pick();
-      if (file) onOpen({ kind: "local", ...file });
-    } catch (e) {
-      setError(`Couldn't open the file picker: ${messageOf(e)}`);
-    } finally {
-      setPicking(false);
-    }
+    if (draft === undefined && here) return onOpen(here);
+    const got = parseAddress(draft ?? "", location.origin);
+    if ("error" in got) return onError(got.error);
+    setDraft(undefined);
+    input.current?.blur();
+    onOpen(sameSide(got.target, here));
   };
   return (
-    <div className="preview-start">
-      <form className="preview-open" onSubmit={submit}>
-        <input
-          autoFocus
-          aria-label="Web address or path on the Hermes server"
-          placeholder="https://… or /path/on/the/server"
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            setError(undefined);
-          }}
-        />
-        <button className="btn primary" type="submit" disabled={!text.trim()}>
-          Open
-        </button>
-      </form>
-      {error && (
-        <div className="attach-note" role="alert">
-          {error}
-        </div>
-      )}
-      <p className="preview-hint">
-        <Server size={13} /> A path like <code>/home/you/notes.md</code> or <code>~/notes.md</code> is read on the Hermes server, <b>{serverLabel}</b>.
-      </p>
-      <button className="btn preview-local-btn" onClick={() => void pick()} disabled={picking}>
-        <Laptop size={14} /> Open a file on this computer…
+    <form className="preview-address" onSubmit={submit}>
+      <Badge here={here} serverLabel={serverLabel} onSwitch={onSwitch} />
+      <input
+        ref={input}
+        aria-label="Address"
+        placeholder="Address, port, or /path on the server"
+        spellCheck={false}
+        title={shown}
+        value={draft ?? shown}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          onError(undefined);
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== "Escape" || draft === undefined) return;
+          e.preventDefault();
+          setDraft(undefined);
+          onError(undefined);
+        }}
+      />
+    </form>
+  );
+}
+
+function sameSide(typed: PreviewTarget, here: PreviewTarget | undefined): PreviewTarget {
+  if (typed.kind !== "web" || here?.kind !== "web" || !here.on || !loopbackOf(typed.url)) return typed;
+  return new URL(typed.url).origin === new URL(here.url).origin ? { ...typed, on: here.on } : typed;
+}
+
+function MoreMenu({
+  address,
+  framed,
+  picking,
+  onCopy,
+  onPick,
+}: {
+  address: string | undefined;
+  framed: boolean;
+  picking: boolean;
+  onCopy: (address: string) => void;
+  onPick: () => void;
+}) {
+  const [at, setAt] = useState<{ x: number; y: number }>();
+  const close = useCallback(() => setAt(undefined), []);
+  const item = (label: string, icon: ReactNode, act: () => void, disabled = false) => (
+    <button
+      className="menu-item"
+      role="menuitem"
+      aria-disabled={disabled}
+      onClick={() => {
+        if (disabled) return;
+        close();
+        act();
+      }}
+    >
+      <span className="menu-icon">{icon}</span>
+      <span className="menu-label">{label}</span>
+    </button>
+  );
+  return (
+    <>
+      <button
+        className="icon-btn"
+        title="More"
+        aria-haspopup="menu"
+        aria-expanded={!!at}
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setAt(at ? undefined : { x: r.right, y: r.bottom + 4 });
+        }}
+      >
+        <MoreHorizontal size={16} />
       </button>
-      <p className="preview-hint">
-        Links in replies open here too, and so do the files, pages and output of a tool call: open the call and pick one under Preview.
+      {at && (
+        <Menu label="More" x={at.x} y={at.y} onClose={close}>
+          {item("Copy address", <Copy size={14} />, () => address && onCopy(address), !address)}
+          {item("Open a file on this computer…", <Laptop size={14} />, onPick, picking)}
+          <div className="menu-sep" />
+          <div className="preview-menu-note">
+            Pages here run on their own, with no access to Hermes Chat or your sign-in, and only you can use them.
+            {framed && " Links you follow inside a page don't change the address here."}
+          </div>
+        </Menu>
+      )}
+    </>
+  );
+}
+
+function devServersNote(found: DevServers | { error: string }): string | undefined {
+  if (!("server" in found)) return `Couldn't look for dev servers: ${found.error}`;
+  switch (found.server.kind) {
+    case "noSshTarget":
+      return "Sign in through SSH to see the Hermes server's dev servers.";
+    case "notConnected":
+      return "Not connected to the Hermes server, so only this computer's are listed.";
+    case "failed":
+      return `Couldn't list the Hermes server's: ${found.server.message}`;
+    case "listed":
+      return undefined;
+  }
+}
+
+function EmptyState({
+  web,
+  connected,
+  picking,
+  onOpen,
+  onPick,
+}: {
+  web: WebPages;
+  connected: boolean;
+  picking: boolean;
+  onOpen: (t: PreviewTarget) => void;
+  onPick: () => void;
+}) {
+  const [found, setFound] = useState<DevServers | { error: string }>();
+  const [asks, setAsks] = useState(0);
+  useEffect(() => {
+    let live = true;
+    setFound(undefined);
+    web.devServers().then(
+      (d) => live && setFound(d),
+      (e) => live && setFound({ error: messageOf(e) }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [web, connected, asks]);
+  const rows: (Listening & { on: PageOn })[] =
+    found && "server" in found
+      ? [...(found.server.kind === "listed" ? found.server.ports : []).map((l) => ({ ...l, on: "server" as const })), ...found.local.map((l) => ({ ...l, on: "local" as const }))]
+      : [];
+  const why = found && devServersNote(found);
+  return (
+    <div className="preview-empty">
+      <div className="preview-empty-icon">
+        <Globe size={20} />
+      </div>
+      <h2>Nothing open</h2>
+      <p>
+        Type an address, a port like <kbd>5173</kbd>, or a path on the server above. Links in replies open here too.
       </p>
+      <section className="preview-devs" aria-label="Dev servers">
+        <div className="preview-devs-head">
+          <span>Dev servers</span>
+          <button className="icon-btn" title="Look for dev servers again" disabled={!found} onClick={() => setAsks((n) => n + 1)}>
+            <RotateCw size={13} />
+          </button>
+        </div>
+        {!found ? (
+          <div className="preview-devs-note" role="status">
+            <Spinner /> Looking for dev servers…
+          </div>
+        ) : (
+          <>
+            {rows.map((d) => (
+              <button key={`${d.on}:${d.port}`} className="preview-dev" onClick={() => onOpen({ kind: "web", url: `http://localhost:${d.port}/`, on: d.on })}>
+                <span className="preview-dev-dot" />
+                <b>localhost:{d.port}</b>
+                <span className={`preview-dev-on ${d.on}`}>{d.on === "server" ? "Server" : "This computer"}</span>
+                {d.process && <span className="preview-dev-what">{d.process}</span>}
+              </button>
+            ))}
+            {!rows.length && !why && <div className="preview-devs-note">None found. Start one, or type its port above.</div>}
+            {why && <div className="preview-devs-note">{why}</div>}
+          </>
+        )}
+      </section>
+      <button className="link-btn preview-local" disabled={picking} onClick={onPick}>
+        <FileText size={13} /> Open a file on this computer…
+      </button>
     </div>
   );
 }
@@ -426,79 +594,13 @@ function TextView({ view, name }: { view: Extract<FileView, { kind: "text" }>; n
   );
 }
 
-type WebViewProps = {
-  /** The page's address, as the owner sees it. */
-  url: string;
-  /** Where it loads from, if not `url`: a server page's tunnel. */
-  src?: string;
-  check: (url: string) => Promise<Framing>;
-  /** The Preview's own page view, where there is one: it takes the frame's place. */
-  native?: NativePages;
-  onOpenInBrowser: () => void;
-};
-
-function WebView({ native, ...props }: WebViewProps) {
-  return native ? <NativeWebView {...props} pages={native} /> : <FramedWebView {...props} />;
-}
-
-/**
- * A web page in the Preview's own WebKitGTK view, which Rust lays over this box (ADR 0081). The page is the top level of
- * its view, so a site that refuses framing shows. The box says what the view can't: that the page is loading, or why
- * it failed. The view shows once the page's first response comes, and hides again if a load fails.
- */
-function NativeWebView({ url, src = url, pages, onOpenInBrowser }: Omit<WebViewProps, "native" | "check"> & { pages: NativePages }) {
-  const box = useRef<HTMLDivElement>(null);
-  const [page, setPage] = useState<NativePage>();
-  const [state, setState] = useState<Exclude<PageEvent, { kind: "escaped" }>>();
-  const [slow, setSlow] = useState(false);
-  useEffect(() => {
-    const timer = setTimeout(() => setSlow(true), SLOW_PAGE_MS);
-    return () => clearTimeout(timer);
-  }, []);
-  useEffect(() => {
-    // Escape in the page gave the keyboard back to the app: it lands here, inside the Preview, for the next key.
-    const opened = pages.open(src, (e) => (e.kind === "escaped" ? box.current?.focus() : setState(e)));
-    setPage(opened);
-    return () => opened.close();
-  }, [pages, src]);
-  usePlacement(box, state?.kind === "shown" ? page : undefined);
-  return (
-    <div className="preview-web">
-      <div className="preview-web-note">
-        Runs on its own, with no access to Hermes Chat or your sign-in.{" "}
-        <button className="link-btn" onClick={onOpenInBrowser}>
-          Open it in your browser
-        </button>
-      </div>
-      <div ref={box} className="preview-web-frame" tabIndex={-1}>
-        {state?.kind === "failed" ? (
-          <div className="preview-state preview-error preview-loading" role="alert">
-            <AlertTriangle size={18} />
-            <div>
-              <div className="preview-state-title">Couldn't load {hostOf(url)}</div>
-              <div>{state.message}</div>
-              <div>Check the address, or Reload to try again.</div>
-            </div>
-          </div>
-        ) : (
-          state?.kind !== "shown" && (
-            <div className="preview-state preview-loading" role="status">
-              <Spinner /> {slow ? "Still loading the page…" : "Loading page…"}
-            </div>
-          )
-        )}
-      </div>
-    </div>
-  );
-}
-
 /**
  * A web page in a frame. WebKitGTK gives the frame no sign that a site refused to be framed: it fires `load` at once
  * and stays blank. So Rust asks the site the way the frame does (`check`, ADR 0011): a refusal replaces the frame with
  * a note and Open in your browser, and a site this computer can't reach says so instead of loading forever. Anything
  * else (a script that blanks the page, say) still can't be told apart, so a page slow to load says it may not show.
  */
-function FramedWebView({ url, src = url, check, onOpenInBrowser }: Omit<WebViewProps, "native">) {
+function FramedWebView({ url, src, check, onOpenInBrowser }: { url: string; src: string; check: (url: string) => Promise<Framing>; onOpenInBrowser: () => void }) {
   const [loaded, setLoaded] = useState(false);
   const [slow, setSlow] = useState(false);
   const [closed, setClosed] = useState(false);
@@ -577,14 +679,6 @@ function FramedWebView({ url, src = url, check, onOpenInBrowser }: Omit<WebViewP
     );
   return (
     <div className="preview-web">
-      <div className="preview-web-note">
-        Runs on its own, with no access to Hermes Chat or your sign-in. Some sites don't allow being shown inside other apps; if this one stays
-        blank,{" "}
-        <button className="link-btn" onClick={onOpenInBrowser}>
-          open it in your browser
-        </button>
-        .
-      </div>
       <div className="preview-web-frame">
         <iframe
           ref={frame}
@@ -616,42 +710,201 @@ function FramedWebView({ url, src = url, check, onOpenInBrowser }: Omit<WebViewP
   );
 }
 
-/**
- * For a page on a loopback address: whose loopback it comes from, and the switch between the Hermes server's (through
- * SSH) and this computer's.
- */
-function PageOnSwitch({ at, on, serverLabel, onSwitch }: { at: string; on: PageOn; serverLabel: string; onSwitch: (on: PageOn) => void }) {
+
+type TunnelState =
+  | { kind: "none" }
+  | { kind: "opening"; remote: string }
+  | { kind: "open"; tunnel: Tunnel }
+  | { kind: "failed"; remote: string; error: ServerPageError }
+  | { kind: "closed"; remote: string; message: string };
+
+function useStickyTunnel(need: string | undefined, pages: ServerPages): [TunnelState, () => void] {
+  const [kept, setKept] = useState(need);
+  if (need !== undefined && need !== kept) setKept(need);
+  const remote = need ?? kept;
+  const [state, setState] = useState<TunnelState>({ kind: "none" });
+  const [tries, setTries] = useState(0);
+  useEffect(() => {
+    if (!remote) return;
+    let live = true;
+    // Latched: a tunnel that closed before its open result arrived stays closed.
+    let ended = false;
+    const opening = pages.open(`${remote}/`, (message) => {
+      ended = true;
+      if (live) setState({ kind: "closed", remote, message });
+    });
+    setState({ kind: "opening", remote });
+    opening.page.then(
+      (page) => {
+        if (!live || ended) return;
+        const local = tunnelUrl(page.url, location.origin);
+        if (!local) {
+          opening.close();
+          return setState({ kind: "failed", remote, error: new ServerPageError("io", "The tunnel gave an address the preview doesn't load.") });
+        }
+        setState({ kind: "open", tunnel: { remote, local: new URL(local).origin } });
+      },
+      (e) => {
+        if (!live || ended) return;
+        const error = e instanceof ServerPageError ? e : new ServerPageError("io", messageOf(e));
+        setState(error.kind === "closed" ? { kind: "closed", remote, message: error.message } : { kind: "failed", remote, error });
+      },
+    );
+    return () => {
+      live = false;
+      // Ends the tunnel whether it opened or is still connecting.
+      opening.close();
+    };
+  }, [remote, tries, pages]);
+  return [state, useCallback(() => setTries((n) => n + 1), [])];
+}
+
+function BrowserView({
+  here,
+  reloadSeq,
+  web,
+  serverPages,
+  serverLabel,
+  onStep,
+  onTunnel,
+  onBusy,
+  onOpenInBrowser,
+}: {
+  here: WebTarget;
+  reloadSeq: number;
+  web: WebPages;
+  serverPages: ServerPages;
+  serverLabel: string;
+  onStep: (s: HistoryStep) => void;
+  onTunnel: (t: Tunnel | undefined) => void;
+  onBusy: (busy: boolean) => void;
+  onOpenInBrowser: (url: string) => void;
+}) {
+  const need = tunnelNeeded(here);
+  const [tunnel, retry] = useStickyTunnel(need, serverPages);
+  const open = tunnel.kind === "open" ? tunnel.tunnel : undefined;
+  const src = viewUrlOf(here, open);
+  useEffect(() => {
+    onTunnel(open);
+    return () => onTunnel(undefined);
+  }, [open, onTunnel]);
+
+  const tunnelState = need && tunnel.kind !== "open" && (
+    <TunnelNote state={tunnel} at={loopbackOf(here.url)?.at ?? here.url} serverLabel={serverLabel} onRetry={retry} onLocal={() => onStep({ kind: "switch", on: "local" })} />
+  );
+  const reloadSeqSeen = useRef(reloadSeq);
+  useEffect(() => {
+    if (reloadSeq === reloadSeqSeen.current) return;
+    reloadSeqSeen.current = reloadSeq;
+    if (need && tunnel.kind !== "open" && tunnel.kind !== "opening") retry();
+  }, [reloadSeq, need, tunnel.kind, retry]);
+
+  if (!web.native)
+    return tunnelState || (src ? <FramedWebView key={`${src}:${reloadSeq}`} url={here.url} src={src} check={web.check} onOpenInBrowser={() => onOpenInBrowser(src)} /> : null);
+  return <PageView here={here} src={src} tunnel={open} reloadSeq={reloadSeq} cover={tunnelState} native={web.native} onStep={onStep} onBusy={onBusy} />;
+}
+
+function PageView({
+  here,
+  src,
+  tunnel,
+  reloadSeq,
+  cover,
+  native,
+  onStep,
+  onBusy,
+}: {
+  here: WebTarget;
+  src: ViewUrl | undefined;
+  tunnel: Tunnel | undefined;
+  reloadSeq: number;
+  cover: ReactNode;
+  native: NativePages;
+  onStep: (s: HistoryStep) => void;
+  onBusy: (busy: boolean) => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const [page, setPage] = useState<NativePage>();
+  const [state, setState] = useState<"loading" | "shown" | { message: string }>("loading");
+  const [slow, setSlow] = useState(false);
+  const viewAt = useRef<ViewUrl>(undefined);
+  const sentThrough = useRef<Tunnel>(undefined);
+  const latest = useRef({ tunnel, onStep });
+  latest.current = { tunnel, onStep };
+
+  useEffect(() => {
+    let live = true;
+    const made = native.open((e) => {
+      if (!live) return;
+      if (e.kind === "at") {
+        viewAt.current = e.url;
+        setState("shown");
+        latest.current.onStep({ kind: "arrived", target: fromView(e.url, sentThrough.current), replace: e.replace });
+      } else if (e.kind === "failed") setState({ message: e.message });
+      else if (e.kind === "escaped") box.current?.focus();
+    });
+    setPage(made);
+    return () => {
+      live = false;
+      made.close();
+    };
+  }, [native]);
+
+  useEffect(() => {
+    if (!page || !src) return;
+    if (src === viewAt.current) return setState((s) => (typeof s === "object" ? "shown" : s));
+    setState("loading");
+    sentThrough.current = latest.current.tunnel;
+    page.go(src);
+  }, [page, src]);
+
+  const reloadSeqSeen = useRef(reloadSeq);
+  useEffect(() => {
+    if (reloadSeq === reloadSeqSeen.current) return;
+    reloadSeqSeen.current = reloadSeq;
+    if (!page || !src) return;
+    setState("loading");
+    if (src === viewAt.current) return page.reload();
+    sentThrough.current = latest.current.tunnel;
+    page.go(src);
+  }, [reloadSeq, page, src]);
+
+  useEffect(() => {
+    if (viewAt.current || state !== "loading") return setSlow(false);
+    const timer = setTimeout(() => setSlow(true), SLOW_PAGE_MS);
+    return () => clearTimeout(timer);
+  }, [state]);
+  const loading = state === "loading" && !!src;
+  useEffect(() => onBusy(loading), [loading, onBusy]);
+  useEffect(() => () => onBusy(false), [onBusy]);
+
+  const showing = !cover && !!src && (state === "shown" || (state === "loading" && !!viewAt.current));
+  usePlacement(box, showing ? page : undefined);
   return (
-    <div className="preview-on">
-      <span className="preview-on-text">
-        {on === "server" ? <Server size={13} /> : <Laptop size={13} />}
-        <span>
-          {on === "server" ? (
-            <>
-              From <b>{at}</b> on the Hermes server, through SSH to {serverLabel}
-            </>
+    <div className="preview-web">
+      <div ref={box} className="preview-web-frame" tabIndex={-1}>
+        {cover ||
+          (typeof state === "object" ? (
+            <div className="preview-state preview-error preview-loading" role="alert">
+              <AlertTriangle size={18} />
+              <div>
+                <div className="preview-state-title">Couldn't load {hostOf(here.url)}</div>
+                <div>{state.message}</div>
+                <div>Check the address, or Reload to try again.</div>
+              </div>
+            </div>
           ) : (
-            <>
-              From <b>{at}</b> on this computer
-            </>
-          )}
-        </span>
-      </span>
-      <div className="segmented" role="group" aria-label={`Open ${at} from`}>
-        <button aria-pressed={on === "server"} onClick={() => on !== "server" && onSwitch("server")} title={`${at} on the Hermes server, through SSH`}>
-          Hermes server
-        </button>
-        <button aria-pressed={on === "local"} onClick={() => on !== "local" && onSwitch("local")} title={`${at} on this computer`}>
-          This computer
-        </button>
+            !showing && (
+              <div className="preview-state preview-loading" role="status">
+                <Spinner /> {slow ? "Still loading the page…" : "Loading page…"}
+              </div>
+            )
+          ))}
       </div>
     </div>
   );
 }
 
-type Tunnel = { kind: "opening" } | { kind: "open"; page: ServerPage; src: string } | { kind: "failed"; error: ServerPageError } | { kind: "closed"; message: string };
-
-/** What a server page that didn't open is called, by why. */
 const FAILED_TITLE: Record<string, string> = {
   noSshTarget: "No SSH target for this server",
   notConnected: "Not connected to the Hermes server",
@@ -662,75 +915,9 @@ const FAILED_TITLE: Record<string, string> = {
   timeout: "SSH didn't connect",
 };
 
-/**
- * A page on the Hermes server's own loopback: Rust opens an SSH tunnel for it when it shows, and the frame loads it
- * through the tunnel's end on this computer. The tunnel closes when this goes: another page, the Preview closed or
- * hidden, or Reload (which opens a new one).
- */
-function ServerWebView({
-  url,
-  pages,
-  serverLabel,
-  check,
-  native,
-  onTunnel,
-  onOpenInBrowser,
-  onLocal,
-}: {
-  url: string;
-  pages: ServerPages;
-  serverLabel: string;
-  check: (url: string) => Promise<Framing>;
-  native?: NativePages;
-  onTunnel: (url: string | undefined) => void;
-  onOpenInBrowser: (url: string) => void;
-  onLocal: () => void;
-}) {
-  const [state, setState] = useState<Tunnel>({ kind: "opening" });
-  const [tries, setTries] = useState(0);
-  const at = loopbackOf(url)?.at ?? url;
-  const pagesRef = useRef(pages);
-  pagesRef.current = pages;
-  const onTunnelRef = useRef(onTunnel);
-  onTunnelRef.current = onTunnel;
-  useEffect(() => {
-    let live = true;
-    // Latched: a tunnel that closed before its open result arrived stays closed.
-    let ended = false;
-    const opening = pagesRef.current.open(url, (message) => {
-      ended = true;
-      if (!live) return;
-      setState({ kind: "closed", message });
-      onTunnelRef.current(undefined);
-    });
-    setState({ kind: "opening" });
-    opening.page.then(
-      (page) => {
-        if (!live || ended) return;
-        const src = tunnelUrl(page.url, location.origin);
-        if (!src) {
-          opening.close();
-          return setState({ kind: "failed", error: new ServerPageError("io", "The tunnel gave an address the preview doesn't load.") });
-        }
-        setState({ kind: "open", page, src });
-        onTunnelRef.current(src);
-      },
-      (e) => {
-        if (!live || ended) return;
-        const error = e instanceof ServerPageError ? e : new ServerPageError("io", messageOf(e));
-        setState(error.kind === "closed" ? { kind: "closed", message: error.message } : { kind: "failed", error });
-      },
-    );
-    return () => {
-      live = false;
-      // Ends the tunnel whether it opened or is still connecting.
-      opening.close();
-      onTunnelRef.current(undefined);
-    };
-  }, [url, tries]);
-
+function TunnelNote({ state, at, serverLabel, onRetry, onLocal }: { state: TunnelState; at: string; serverLabel: string; onRetry: () => void; onLocal: () => void }) {
   const again = (
-    <button className="btn primary" onClick={() => setTries((n) => n + 1)}>
+    <button className="btn primary" onClick={onRetry}>
       <RotateCw size={14} /> Try again
     </button>
   );
@@ -739,17 +926,11 @@ function ServerWebView({
       Open on this computer instead
     </button>
   );
-  if (state.kind === "opening")
-    return (
-      <div className="preview-state" role="status">
-        <Spinner /> Opening {at} on the Hermes server, through SSH to {serverLabel}…
-      </div>
-    );
   if (state.kind === "failed") {
     const { kind, message } = state.error;
     const title = kind === "portClosed" ? `Nothing answers at ${at} on the server` : (FAILED_TITLE[kind] ?? "Couldn't open an SSH tunnel to the server");
     return (
-      <div className="preview-state preview-error" role="alert">
+      <div className="preview-state preview-error preview-loading" role="alert">
         <AlertTriangle size={18} />
         <div>
           <div className="preview-state-title">{title}</div>
@@ -766,7 +947,7 @@ function ServerWebView({
   }
   if (state.kind === "closed")
     return (
-      <div className="preview-state preview-error" role="alert">
+      <div className="preview-state preview-error preview-loading" role="alert">
         <AlertTriangle size={18} />
         <div>
           <div className="preview-state-title">The SSH tunnel to this page closed</div>
@@ -778,7 +959,11 @@ function ServerWebView({
         </div>
       </div>
     );
-  return <WebView url={url} src={state.src} check={check} native={native} onOpenInBrowser={() => onOpenInBrowser(state.src)} />;
+  return (
+    <div className="preview-state preview-loading" role="status">
+      <Spinner /> Opening {at} on the Hermes server, through SSH to {serverLabel}…
+    </div>
+  );
 }
 
 /** The host a web address names, for messages about it. */

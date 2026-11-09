@@ -8,7 +8,7 @@
 //!   one `Command` argument: the host is one of three fixed strings, the port a number, the socket a path this module
 //!   made, and the target is the one Rust signed in with, checked as the sign-in tunnel checks it. No shell runs.
 //!   Windows' OpenSSH can't listen on a Unix socket, so there ssh listens on a loopback port instead (`LocalEnd`), and
-//!   each connection to it is used only if ssh holds its far end (ADR 0103).
+//!   each connection to it is used only if ssh holds its far end (ADR 0104).
 //! - A TCP listener Rust binds on `127.0.0.1:0` and keeps, so the port is ephemeral and never released for another
 //!   program to take before ssh binds it. Each connection the frame makes is copied to and from ssh's socket.
 //!
@@ -220,41 +220,43 @@ pub fn tcp_ssh_args(target: &str, port: u16, page: &ServerPage) -> Result<Vec<Os
 
 fn forward_args(target: &str, listen: &str, page: &ServerPage) -> Vec<OsString> {
     let forward = format!("{listen}:{}:{}", page.host.forward_host(), page.port);
-    let mut args: Vec<OsString> = [
-        "-N",
-        "-T",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ConnectTimeout=15",
-        "-o",
-        "ServerAliveInterval=15",
-        "-o",
-        "ServerAliveCountMax=3",
-        "-o",
-        "ControlMaster=no",
-        "-o",
-        "ControlPath=none",
-        "-o",
-        "ForkAfterAuthentication=no",
-        "-o",
-        "PermitLocalCommand=no",
-        "-o",
-        "ExitOnForwardFailure=no",
-        "-o",
-        "StreamLocalBindMask=0177",
-        "-o",
-        "StreamLocalBindUnlink=yes",
-        "-L",
-    ]
-    .iter()
-    .map(OsString::from)
-    .collect();
+    let mut args: Vec<OsString> = ["-N"].iter().chain(SSH_OPTIONS).chain(&["-L"]).map(OsString::from).collect();
     args.push(forward.into());
     args.push("--".into());
     args.push(target.into());
     args
 }
+
+pub fn listening_args(target: &str) -> Result<Vec<OsString>, ServerPageError> {
+    let target = checked_target(target).ok_or_else(|| ServerPageError::Ssh("The sign-in's SSH target isn't one ssh can take.".into()))?;
+    Ok(SSH_OPTIONS.iter().copied().chain(["--", target, "ss", "-ltnpH"]).map(OsString::from).collect())
+}
+
+const SSH_OPTIONS: &[&str] = &[
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=15",
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=3",
+    "-o",
+    "ControlMaster=no",
+    "-o",
+    "ControlPath=none",
+    "-o",
+    "ForkAfterAuthentication=no",
+    "-o",
+    "PermitLocalCommand=no",
+    "-o",
+    "ExitOnForwardFailure=no",
+    "-o",
+    "StreamLocalBindMask=0177",
+    "-o",
+    "StreamLocalBindUnlink=yes",
+];
 
 /// ssh said it couldn't listen on `127.0.0.1:<port>`: `bind [127.0.0.1]:<port>: Address already in use`, or
 /// `channel_setup_fwd_listener_tcpip: cannot listen to port: <port>`. With `ExitOnForwardFailure=no` it runs on, and
@@ -273,7 +275,7 @@ fn socket_path_ok(s: &str) -> bool {
 /// This computer's end of ssh's forward, for a server page and for the sign-in tunnel (tunnel.rs, ADR 0098). On Linux,
 /// a Unix socket in a private folder (`SocketDir`) that only the owner can connect to. On Windows, a loopback port
 /// picked just before ssh binds it: any program on this computer could connect to it, as to the relay's own port, and
-/// could take it before ssh binds it, so `connect` checks that ssh holds each connection's far end (ADR 0103).
+/// could take it before ssh binds it, so `connect` checks that ssh holds each connection's far end (ADR 0104).
 #[cfg(unix)]
 pub(crate) struct LocalEnd(SocketDir);
 #[cfg(windows)]
@@ -465,12 +467,12 @@ fn spawner() -> std::sync::mpsc::Sender<Job> {
         .clone()
 }
 
-/// `ssh` with `args`: stdin closed, stdout dropped, stderr kept. It is killed when dropped, and, through
+/// `ssh` with `args`: stdin closed, stdout to `stdout`, stderr kept. It is killed when dropped, and, through
 /// `PR_SET_PDEATHSIG`, when the app ends, since it is started from `spawner`'s thread.
 #[cfg(unix)]
-async fn spawn_ssh(program: &str, args: &[OsString]) -> Result<Child, ServerPageError> {
+async fn spawn_ssh(program: &str, args: &[OsString], stdout: Stdio) -> Result<Child, ServerPageError> {
     let mut command = Command::new(program);
-    command.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
+    command.args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).kill_on_drop(true);
     let parent = std::process::id() as libc::pid_t;
     // SAFETY: only async-signal-safe calls between fork and exec.
     unsafe {
@@ -497,13 +499,11 @@ async fn spawn_ssh(program: &str, args: &[OsString]) -> Result<Child, ServerPage
     rx.await.map_err(|_| ServerPageError::Spawn("the ssh spawner thread is gone".into()))?.map_err(|e| ServerPageError::Spawn(e.to_string()))
 }
 
-/// `ssh` with `args`: stdin closed, stdout dropped, stderr kept, and no console window. It is killed when dropped, and,
-/// being in `job::ends_with_app`'s job, when the app ends, however it ends.
 #[cfg(windows)]
-async fn spawn_ssh(program: &str, args: &[OsString]) -> Result<Child, ServerPageError> {
+async fn spawn_ssh(program: &str, args: &[OsString], stdout: Stdio) -> Result<Child, ServerPageError> {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let mut command = Command::new(program);
-    command.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true).creation_flags(CREATE_NO_WINDOW);
+    command.args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).kill_on_drop(true).creation_flags(CREATE_NO_WINDOW);
     let child = command.spawn().map_err(|e| ServerPageError::Spawn(e.to_string()))?;
     if let Some(handle) = child.raw_handle() {
         job::ends_with_app(handle).map_err(|e| ServerPageError::Spawn(format!("couldn't tie ssh to Hermes Chat: {e}")))?;
@@ -781,11 +781,46 @@ impl ServerPages {
     }
 }
 
+const LISTENING_TIMEOUT: Duration = Duration::from_secs(10);
+const LISTENING_KEPT: u64 = 64 * 1024;
+
+pub async fn listening(program: &str, target: &str) -> Result<String, ServerPageError> {
+    let mut child = spawn_ssh(program, &listening_args(target)?, Stdio::piped()).await?;
+    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        return Err(ServerPageError::Spawn("ssh's output isn't readable".into()));
+    };
+    let (mut out, mut said) = (Vec::new(), Vec::new());
+    let run = async {
+        let (o, e) = tokio::join!(read_kept(stdout, LISTENING_KEPT, &mut out), read_kept(stderr, STDERR_KEPT as u64, &mut said));
+        if o? {
+            out.truncate(out.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1));
+        }
+        e?;
+        child.wait().await
+    };
+    let status = match tokio::time::timeout(LISTENING_TIMEOUT, run).await {
+        Err(_) => return Err(ServerPageError::Ssh(format!("The server didn't answer within {}s.", LISTENING_TIMEOUT.as_secs()))),
+        Ok(r) => r.map_err(|e| ServerPageError::Io(e.to_string()))?,
+    };
+    if !status.success() {
+        let said = String::from_utf8_lossy(&said).trim().to_owned();
+        return Err(ServerPageError::Ssh(if said.is_empty() { format!("ssh exited with {status}.") } else { said }));
+    }
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// Reads `from` to its end into `into`, keeping only its first `kept` bytes and dropping the rest, so the writer never
+/// blocks on a full pipe. True if anything was dropped.
+async fn read_kept(mut from: impl tokio::io::AsyncRead + Unpin, kept: u64, into: &mut Vec<u8>) -> std::io::Result<bool> {
+    (&mut from).take(kept).read_to_end(into).await?;
+    Ok(tokio::io::copy(&mut from, &mut tokio::io::sink()).await? > 0)
+}
+
 /// Starts ssh for `page` through `target` and waits until it listens and the page's port answers. Everything made is
 /// dropped, ending ssh, if this fails or is dropped part-way.
 async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started, ServerPageError> {
     let end = LocalEnd::new().map_err(|e| ServerPageError::Io(format!("{}: {e}", LocalEnd::COULDNT)))?;
-    let mut child = spawn_ssh(program, &end.ssh_args(target, page)?).await?;
+    let mut child = spawn_ssh(program, &end.ssh_args(target, page)?, Stdio::null()).await?;
     let address = end.address(&child).map_err(|e| ServerPageError::Spawn(e.to_string()))?;
     let stderr = Stderr::default();
     if let Some(e) = child.stderr.take() {
@@ -989,6 +1024,17 @@ mod tests {
         assert_eq!(tcp[tcp.len() - 2..], ["--", "liam@hermes"]);
         assert!(tcp_ssh_args("-oProxyCommand=x", 51234, &p).is_err());
         assert!(tcp_ssh_args("hermes", 0, &p).is_err());
+    }
+
+    #[test]
+    fn lists_what_listens_on_the_server_with_the_tunnels_options_and_no_forward() {
+        let p = page("http://localhost:3000/");
+        let listing = listening_args(" liam@hermes ").unwrap();
+        let tunnel = ssh_args("liam@hermes", Path::new("/tmp/d/s"), &p).unwrap();
+        assert_eq!(listing[listing.len() - 4..], ["--", "liam@hermes", "ss", "-ltnpH"]);
+        assert!(!listing.iter().any(|a| a == "-L" || a == "-N"));
+        assert_eq!(listing[..listing.len() - 4], tunnel[1..tunnel.len() - 4]);
+        assert!(listening_args("-oProxyCommand=x").is_err());
     }
 
     #[test]
@@ -1347,7 +1393,7 @@ while True:
         let pid = std::thread::spawn(|| {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             rt.block_on(async {
-                let child = spawn_ssh("sleep", &["1000".into()]).await.unwrap();
+                let child = spawn_ssh("sleep", &["1000".into()], Stdio::null()).await.unwrap();
                 let pid = child.id().unwrap() as i32;
                 std::mem::forget(child);
                 pid
@@ -1554,6 +1600,24 @@ while True:
         assert!(other.join("notes.txt").exists());
         assert!(unrelated.join("s").exists());
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_listing_longer_than_kept_is_cut_at_a_whole_line() {
+        const LINE: &str = r#"LISTEN 0 511 127.0.0.1:5173 0.0.0.0:* users:(("node",pid=1,fd=1))"#;
+        let dir = std::env::temp_dir().join(format!("hermes-chat-long-ss-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let program = dir.join("ssh");
+        std::fs::write(&program, format!("#!/bin/sh\nyes '{LINE}' | head -c 300000\n")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let out = listening(program.to_str().unwrap(), "liam@hermes").await.expect("a long listing is cut, not failed");
+        assert!(out.len() as u64 <= LISTENING_KEPT);
+        assert!(out.lines().all(|l| l == LINE), "every line kept is whole");
+        assert_eq!(crate::dev_servers::parse_ss(&out).iter().map(|l| l.port).collect::<Vec<_>>(), [5173]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

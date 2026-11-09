@@ -1,4 +1,4 @@
-//! Which program is on the other end of a loopback connection, on Windows (ADR 0103, #354).
+//! Which program is on the other end of a loopback connection, on Windows (ADR 0104, #354).
 //!
 //! Windows' OpenSSH can't forward a Unix socket, so there a tunnel's local end is a loopback port ssh binds after it
 //! signs in, and another program can bind it first (ADR 0052, ADR 0098). Every connection to that port is checked

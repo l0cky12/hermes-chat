@@ -8,8 +8,19 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import { connect, type Hermes } from "../hermes/transport";
 import { getUIPrefs } from "../hermes/uiPrefs";
-import type { FileView, Framing } from "../hermes/preview";
-import { ServerPageError, type LocalFiles, type NativePages, type PageEvent, type Placement, type ServerPage, type ServerPages, type WebPages } from "./tauriPreview";
+import type { FileView, Framing, ViewUrl } from "../hermes/preview";
+import {
+  ServerPageError,
+  type DevServers,
+  type LocalFiles,
+  type NativePage,
+  type NativePages,
+  type PageEvent,
+  type Placement,
+  type ServerPage,
+  type ServerPages,
+  type WebPages,
+} from "./tauriPreview";
 import { Main } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
@@ -32,6 +43,8 @@ const pane = () => {
   return el;
 };
 const paneOpen = () => !!document.querySelector("aside.preview:not([hidden])");
+const address = () => within(pane()).getByRole<HTMLInputElement>("textbox", { name: "Address" });
+const button = (name: string) => within(pane()).getByRole<HTMLButtonElement>("button", { name });
 /** The preview's file reads. The Outputs capability probe's `GET /api/fs/list` at sign-in may land at any time. */
 const fsReads = (s: FakeHermes) => s.restRequests.filter((r) => r.path.startsWith("/api/fs/") && r.path !== "/api/fs/list");
 
@@ -50,14 +63,17 @@ function localDisk(files: Record<string, FileView | Error>) {
   return local;
 }
 
-/**
- * The web as Rust's framing check sees it (src-tauri/src/web_page.rs): each address answers as `answers` says, and any
- * other answers that nothing refused. `checked` and `opened` record what the pane asked for.
- */
 function theWeb(answers: Record<string, Framing | Error | Promise<Framing>> = {}, openFails?: string) {
-  const web: WebPages & { checked: string[]; opened: string[] } = {
+  const web: WebPages & { checked: string[]; opened: string[]; devs: DevServers | Error; looked: number } = {
     checked: [],
     opened: [],
+    devs: { server: { kind: "listed", ports: [] }, local: [] },
+    looked: 0,
+    devServers: async () => {
+      web.looked++;
+      if (web.devs instanceof Error) throw web.devs;
+      return web.devs;
+    },
     check: async (url) => {
       web.checked.push(url);
       const a = answers[url] ?? { kind: "notRefused" };
@@ -73,26 +89,40 @@ function theWeb(answers: Record<string, Framing | Error | Promise<Framing>> = {}
   return web;
 }
 
-/**
- * The Preview's own page view as Rust runs it on Linux (src-tauri/src/page_view.rs). `opened` lists each page's
- * address, `placed` where each was last put (`null`: hidden) and `closed` which closed, by number from 1. `say(n, e)`
- * is page n's view reporting an event.
- */
 function theView() {
-  const view: NativePages & { opened: string[]; placed: Map<number, Placement | null>; closed: number[]; say(n: number, e: PageEvent): void } = {
-    opened: [],
+  const view: NativePages & {
+    made: number;
+    asked: [number, string][];
+    placed: Map<number, Placement | null>;
+    closed: number[];
+    say(n: number, e: PageEvent): void;
+    land(n: number): void;
+  } = {
+    made: 0,
+    asked: [],
     placed: new Map(),
     closed: [],
     say: () => {},
-    open: (url, onEvent) => {
-      const n = view.opened.push(url);
+    land: (n) => {
+      const went = view.asked.filter(([m, a]) => m === n && a.startsWith("go ")).at(-1);
+      view.say(n, at(went![1].slice(3), true));
+    },
+    open: (onEvent) => {
+      const n = ++view.made;
       const said = view.say;
       view.say = (m, e) => (m === n ? onEvent(e) : said(m, e));
-      return { place: (p) => view.placed.set(n, p), close: () => view.closed.push(n) };
+      const page: NativePage = {
+        go: (url) => void view.asked.push([n, `go ${url}`]),
+        reload: () => void view.asked.push([n, "reload"]),
+        place: (p) => void view.placed.set(n, p),
+        close: () => void view.closed.push(n),
+      };
+      return page;
     },
   };
   return view;
 }
+const at = (url: string, replace = false): PageEvent => ({ kind: "at", url: url as ViewUrl, replace });
 
 /**
  * The Hermes server's loopback as Rust's SSH tunnels reach it (src-tauri/src/server_page.rs). Each `open` gets the
@@ -230,8 +260,8 @@ describe("Opening the preview pane", () => {
     act(() => answer());
     expect(await within(pane()).findByText(/missing\.txt/)).toBeTruthy();
     server.rest["GET /api/fs/read-text"] = readText;
-    expect(within(pane()).getByText("Server · liam@hermes")).toBeTruthy();
-    expect(within(pane()).getByText("/home/liam/app/main.py")).toBeTruthy();
+    expect(within(pane()).getByText("Server").title).toContain("(liam@hermes)");
+    expect(address().value).toBe("/home/liam/app/main.py");
     expect(fsReads(server).map((r) => [r.path, r.query.get("path"), r.query.get("profile")])).toEqual([
       ["/api/fs/read-text", "/home/liam/app/main.py", "default"],
     ]);
@@ -254,11 +284,12 @@ describe("Opening the preview pane", () => {
     expect(within(pane()).queryByTitle(/^Web page/)).toBeNull();
   });
 
-  it("opens from the chat header, where the owner types a server path or web address", async () => {
+  it("opens empty from the chat header, where the owner types a server path or web address", async () => {
     const { user } = await signedIn();
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
-    const box = within(pane()).getByRole("textbox", { name: "Web address or path on the Hermes server" });
-    expect(within(pane()).getByText("liam@hermes")).toBeTruthy();
+    expect(within(pane()).getByRole("heading", { name: "Nothing open" })).toBeTruthy();
+    expect([button("Back").disabled, button("Forward").disabled, button("Reload").disabled]).toEqual([true, true, true]);
+    const box = address();
 
     await user.type(box, "notes.md{Enter}");
     expect(within(pane()).getByRole("alert").textContent).toContain("starting with / or ~/");
@@ -279,7 +310,7 @@ describe("What the pane shows", () => {
   async function openPath(path: string) {
     const s = await signedIn();
     await s.user.click(screen.getByRole("button", { name: "Open the side panel" }));
-    await s.user.type(within(pane()).getByRole("textbox"), `${path}{Enter}`);
+    await s.user.type(address(), `${path}{Enter}`);
     return s;
   }
 
@@ -319,8 +350,8 @@ describe("What the pane shows", () => {
       ["/home/liam/app/gone.py", "There's no file at this path on the Hermes server."],
       ["/home/liam/app/.env", "Hermes doesn't show this file, since it may hold credentials."],
     ]) {
-      await user.click(within(pane()).getByRole("button", { name: "Open something else" }));
-      await user.type(within(pane()).getByRole("textbox"), `${path}{Enter}`);
+      await user.clear(address());
+      await user.type(address(), `${path}{Enter}`);
       expect((await within(pane()).findByRole("alert")).textContent).toBe(`Couldn't open this file${why}`);
     }
   });
@@ -334,20 +365,22 @@ describe("What the pane shows", () => {
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
 
     local.next = null;
-    await user.click(within(pane()).getByRole("button", { name: "Open a file on this computer…" }));
-    expect(within(pane()).getByRole("textbox")).toBeTruthy();
+    await user.click(button("Open a file on this computer…"));
+    expect(within(pane()).getByRole("heading", { name: "Nothing open" })).toBeTruthy();
 
     local.next = { path: "/home/me/todo.txt", name: "todo.txt" };
-    await user.click(within(pane()).getByRole("button", { name: "Open a file on this computer…" }));
+    await user.click(button("Open a file on this computer…"));
     expect(await within(pane()).findByText("buy milk")).toBeTruthy();
     expect(within(pane()).getByText("This computer")).toBeTruthy();
-    expect(within(pane()).queryByText(/Server ·/)).toBeNull();
+    expect(within(pane()).queryByText("Server")).toBeNull();
+    expect(address().value).toBe("/home/me/todo.txt");
     expect(fsReads(server)).toEqual([]);
 
-    await user.click(within(pane()).getByRole("button", { name: "Open something else" }));
     local.next = { path: "/home/me/locked.txt", name: "locked.txt" };
-    await user.click(within(pane()).getByRole("button", { name: "Open a file on this computer…" }));
+    await user.click(button("More"));
+    await user.click(within(pane()).getByRole("menuitem", { name: "Open a file on this computer…" }));
     expect((await within(pane()).findByRole("alert")).textContent).toContain("Permission denied (os error 13)");
+    expect(button("Back").disabled).toBe(false);
   });
 });
 
@@ -370,7 +403,7 @@ describe("Web pages a site won't let the pane show (issue #55)", () => {
   async function openWeb(url: string, web: ReturnType<typeof theWeb>) {
     const s = await signedIn({ web });
     await s.user.click(screen.getByRole("button", { name: "Open the side panel" }));
-    await s.user.type(within(pane()).getByRole("textbox"), `${url}{Enter}`);
+    await s.user.type(address(), `${url}{Enter}`);
     return s;
   }
 
@@ -389,7 +422,7 @@ describe("Web pages a site won't let the pane show (issue #55)", () => {
     expect(note.textContent).toContain("X-Frame-Options: SAMEORIGIN");
     expect(within(pane()).queryByTitle(/^Web page/)).toBeNull();
     // The address is still there to copy.
-    expect(within(pane()).getByText(GOOGLE)).toBeTruthy();
+    expect(address().value).toBe(GOOGLE);
 
     await user.click(within(note).getByRole("button", { name: "Open in your browser" }));
     expect(web.opened).toEqual([GOOGLE]);
@@ -413,9 +446,8 @@ describe("Web pages a site won't let the pane show (issue #55)", () => {
     expect(within(pane()).queryByRole("status")).toBeNull();
     expect(frame.isConnected).toBe(true);
 
-    await user.click(within(pane()).getByRole("button", { name: "open it in your browser" }));
-    await user.click(within(pane()).getByRole("button", { name: "Open in your browser" }));
-    expect(web.opened).toEqual(["https://example.com/", "https://example.com/"]);
+    await user.click(button("Open in your browser"));
+    expect(web.opened).toEqual(["https://example.com/"]);
 
     // Reload asks again.
     await user.click(within(pane()).getByRole("button", { name: "Reload" }));
@@ -427,7 +459,7 @@ describe("Web pages a site won't let the pane show (issue #55)", () => {
     const web = theWeb({ [url]: { kind: "unreachable", message: "Connection refused (os error 111)" } });
     const { user } = await openWeb(url, web);
     // On this computer's own loopback, not the server's.
-    await user.click(await within(pane()).findByRole("button", { name: "This computer" }));
+    await user.click(await within(pane()).findByRole("button", { name: "Server" }));
     const alert = await within(pane()).findByRole("alert");
     expect(alert.textContent).toContain("Couldn't reach 127.0.0.1:4599");
     expect(alert.textContent).toContain("Connection refused (os error 111)");
@@ -450,55 +482,58 @@ describe("Web pages a site won't let the pane show (issue #55)", () => {
   });
 });
 
+const BOX = { x: 800, y: 137, width: 480, height: 683 };
+const stubLayout = () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  const rect = Element.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("preview-web-frame") ? ({ ...BOX, top: BOX.y, left: BOX.x, right: 1280, bottom: 820 } as DOMRect) : rect.call(this);
+  });
+};
+async function withView(over: Parameters<typeof signedIn>[0] = {}) {
+  stubLayout();
+  const view = theView();
+  const web = Object.assign(over.web ?? theWeb(), { native: view });
+  return { ...(await signedIn({ ...over, web })), view, web };
+}
+
 describe("Web pages in the Preview's own view, on Linux (issue #254)", () => {
   const GOOGLE = "https://www.google.com/";
-  const BOX = { x: 800, y: 137, width: 480, height: 683 };
   afterEach(() => vi.restoreAllMocks());
-  const stubLayout = () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        disconnect() {}
-      },
-    );
-    const rect = Element.prototype.getBoundingClientRect;
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      return this.classList.contains("preview-web-frame") ? ({ ...BOX, top: BOX.y, left: BOX.x, right: 1280, bottom: 820 } as DOMRect) : rect.call(this);
-    });
-  };
   async function openWeb(url: string) {
-    stubLayout();
-    const view = theView();
-    const web = Object.assign(theWeb(), { native: view });
-    const s = await signedIn({ web });
+    const s = await withView();
     await s.user.click(screen.getByRole("button", { name: "Open the side panel" }));
-    await s.user.type(within(pane()).getByRole("textbox"), `${url}{Enter}`);
-    return { ...s, view, web };
+    await s.user.type(address(), `${url}{Enter}`);
+    return s;
   }
 
   it("shows a site that refuses framing, such as www.google.com, in its view and never in a frame", async () => {
     const { view, web, user } = await openWeb(GOOGLE);
-    expect(view.opened).toEqual([GOOGLE]);
+    expect(view.asked).toEqual([[1, `go ${GOOGLE}`]]);
     expect(document.querySelector("iframe")).toBeNull();
     // Nothing asks whether the site refuses framing: the view is no frame.
     expect(web.checked).toEqual([]);
-    // Hidden until its first response comes, while the pane says it is loading.
     expect(view.placed.get(1)).toBeUndefined();
     expect(within(pane()).getByRole("status").textContent).toContain("Loading page");
 
-    await act(async () => view.say(1, { kind: "shown" }));
+    await act(async () => view.land(1));
     expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [] });
     expect(within(pane()).queryByRole("status")).toBeNull();
     expect(within(pane()).queryByRole("alert")).toBeNull();
 
-    await user.click(within(pane()).getByRole("button", { name: "Open it in your browser" }));
+    await user.click(button("Open in your browser"));
     expect(web.opened).toEqual([GOOGLE]);
   });
 
   it("says why a page couldn't load, and hides it", async () => {
     const { view } = await openWeb(GOOGLE);
-    await act(async () => view.say(1, { kind: "shown" }));
+    await act(async () => view.land(1));
     await act(async () => view.say(1, { kind: "failed", message: "Error resolving “www.google.com”: Name or service not known" }));
     expect(view.placed.get(1)).toBeNull();
     const alert = within(pane()).getByRole("alert");
@@ -506,22 +541,28 @@ describe("Web pages in the Preview's own view, on Linux (issue #254)", () => {
     expect(alert.textContent).toContain("Name or service not known");
   });
 
-  it("reloads by opening the page again, and closes it when the Preview goes out of sight", async () => {
+  it("reloads the page in the same view, keeping it shown, and ends the view when the Preview goes out of sight", async () => {
     const { view, user } = await openWeb(GOOGLE);
-    await act(async () => view.say(1, { kind: "shown" }));
-    await user.click(within(pane()).getByRole("button", { name: "Reload" }));
-    expect(view.closed).toEqual([1]);
-    expect(view.opened).toEqual([GOOGLE, GOOGLE]);
+    await act(async () => view.land(1));
+    await user.click(button("Reload"));
+    expect(view.asked).toEqual([
+      [1, `go ${GOOGLE}`],
+      [1, "reload"],
+    ]);
+    expect(view.made).toBe(1);
+    expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [] });
+    expect(button("Reload").className).toContain("preview-busy");
+    await act(async () => view.say(1, at(GOOGLE, true)));
+    expect(button("Reload").className).not.toContain("preview-busy");
 
-    await act(async () => view.say(2, { kind: "shown" }));
     await user.click(within(pane()).getByRole("tab", { name: /Files/ }));
-    expect(view.placed.get(2)).toBeNull();
-    expect(view.closed).toEqual([1, 2]);
+    expect(view.placed.get(1)).toBeNull();
+    expect(view.closed).toEqual([1]);
   });
 
   it("takes the keyboard back when the owner presses Escape in the page, so the next Escape closes the Preview", async () => {
     const { view, user } = await openWeb(GOOGLE);
-    await act(async () => view.say(1, { kind: "shown" }));
+    await act(async () => view.land(1));
     // The owner clicked into the page: the app's webview has no focus.
     (document.activeElement as HTMLElement | null)?.blur();
     await act(async () => view.say(1, { kind: "escaped" }));
@@ -532,17 +573,197 @@ describe("Web pages in the Preview's own view, on Linux (issue #254)", () => {
   });
 
   it("loads a page on the Hermes server through its SSH tunnel, and closes both with the Preview", async () => {
-    stubLayout();
-    const view = theView();
-    const { user, pages } = await signedIn({ web: Object.assign(theWeb(), { native: view }) });
+    const { view, user, pages } = await withView();
     await user.click(screen.getByRole("link", { name: "the dev server" }));
-    await waitFor(() => expect(view.opened).toEqual(["http://127.0.0.1:41001/app?v=2"]));
-    expect(pages.opened).toEqual(["http://localhost:5173/app?v=2"]);
-    expect(within(pane()).getByText("http://localhost:5173/app?v=2")).toBeTruthy();
+    await waitFor(() => expect(view.asked).toEqual([[1, "go http://127.0.0.1:41001/app?v=2"]]));
+    expect(pages.opened).toEqual(["http://localhost:5173/"]);
+    expect(address().value).toBe("localhost:5173/app?v=2");
 
-    await user.click(within(pane()).getByRole("button", { name: "Close the side panel" }));
+    await user.click(button("Close the side panel"));
     expect(view.closed).toEqual([1]);
     expect(pages.closed).toEqual(["1"]);
+  });
+});
+
+describe("Back, Forward and Reload (issue #376)", () => {
+  const TUNNEL = "http://127.0.0.1:41001";
+  afterEach(() => vi.restoreAllMocks());
+  async function devServer() {
+    const s = await withView();
+    await s.user.click(screen.getByRole("link", { name: "the dev server" }));
+    await waitFor(() => expect(s.view.asked).toHaveLength(1));
+    await act(async () => s.view.land(1));
+    return s;
+  }
+
+  it("follows a link clicked in the page, then goes back and forward in the same view", async () => {
+    const { user, view, pages } = await devServer();
+    expect(button("Back").disabled).toBe(true);
+    await act(async () => view.say(1, at(`${TUNNEL}/notes`)));
+    expect(address().value).toBe("localhost:5173/notes");
+    expect(button("Back").disabled).toBe(false);
+    expect(view.asked, "a link the page followed asks nothing of the view").toHaveLength(1);
+
+    await user.click(button("Back"));
+    expect(view.asked.at(-1)).toEqual([1, `go ${TUNNEL}/app?v=2`]);
+    expect(address().value).toBe("localhost:5173/app?v=2");
+    await act(async () => view.land(1));
+    expect([button("Back").disabled, button("Forward").disabled]).toEqual([true, false]);
+
+    await user.click(button("Forward"));
+    expect(view.asked.at(-1)).toEqual([1, `go ${TUNNEL}/notes`]);
+    await act(async () => view.land(1));
+    expect(address().value).toBe("localhost:5173/notes");
+    expect([button("Back").disabled, button("Forward").disabled]).toEqual([false, true]);
+
+    await user.click(button("Reload"));
+    expect(view.asked.at(-1)).toEqual([1, "reload"]);
+    expect(view.made).toBe(1);
+    expect(pages.opened).toHaveLength(1);
+  });
+
+  it("follows the page's own moves: pushState, replaceState and its own history.back()", async () => {
+    const { view } = await devServer();
+    await act(async () => view.say(1, at(`${TUNNEL}/a`)));
+    await act(async () => view.say(1, at(`${TUNNEL}/b`, true)));
+    expect(address().value).toBe("localhost:5173/b");
+    expect(button("Back").disabled).toBe(false);
+    await act(async () => view.say(1, at(`${TUNNEL}/app?v=2`)));
+    expect(address().value).toBe("localhost:5173/app?v=2");
+    expect([button("Back").disabled, button("Forward").disabled]).toEqual([true, false]);
+    expect(view.asked).toHaveLength(1);
+  });
+
+  it("goes back from a reply link to the dev server in the same view, through the same tunnel", async () => {
+    const { user, view, pages } = await devServer();
+    await user.click(screen.getByRole("link", { name: "the docs" }));
+    expect(view.asked.at(-1)).toEqual([1, "go https://docs.example.com/crash"]);
+    await act(async () => view.land(1));
+    expect(within(pane()).getByText("Web")).toBeTruthy();
+    expect(address().value).toBe("https://docs.example.com/crash");
+
+    await user.click(button("Back"));
+    expect(view.asked.at(-1)).toEqual([1, `go ${TUNNEL}/app?v=2`]);
+    expect(view.made).toBe(1);
+    expect(pages.opened).toHaveLength(1);
+    expect(pages.closed).toEqual([]);
+  });
+
+  it("goes back from a server file to the page, which loads again in a new view through a new tunnel", async () => {
+    const { user, view, pages } = await devServer();
+    await user.clear(address());
+    await user.type(address(), "/home/liam/app/main.py{Enter}");
+    await within(pane()).findByText(/missing\.txt/);
+    expect(view.closed).toEqual([1]);
+    expect(pages.closed).toEqual(["1"]);
+
+    await user.click(button("Back"));
+    await waitFor(() => expect(view.asked.at(-1)).toEqual([2, "go http://127.0.0.1:41002/app?v=2"]));
+    expect(button("Forward").disabled).toBe(false);
+    await user.click(button("Forward"));
+    expect(await within(pane()).findByText(/missing\.txt/)).toBeTruthy();
+  });
+
+  it("keeps a page on the server when it moves after its tunnel closed, and Try again reopens it there", async () => {
+    const { user, view, pages } = await devServer();
+    act(() => pages.drop("1", "ssh ended: Connection to hermes closed by remote host."));
+    expect((await within(pane()).findByRole("alert")).textContent).toContain("The SSH tunnel to this page closed");
+    await act(async () => view.say(1, at(`${TUNNEL}/app?v=3`, true)));
+    expect(address().value).toBe("localhost:5173/app?v=3");
+    await act(async () => view.say(1, at(`${TUNNEL}/other`)));
+    expect(address().value).toBe("localhost:5173/other");
+    expect(within(pane()).queryByRole("button", { name: "This computer" })).toBeNull();
+    expect(button("Server")).toBeTruthy();
+
+    await user.click(button("Try again"));
+    await waitFor(() => expect(view.asked.at(-1)).toEqual([1, "go http://127.0.0.1:41002/other"]));
+    expect(pages.opened).toHaveLength(2);
+    await user.click(button("Back"));
+    expect(address().value).toBe("localhost:5173/app?v=3");
+  });
+
+  it("shows the page again when Back returns to it after a typed address failed to load", async () => {
+    const GOOGLE = "https://www.google.com/";
+    const { view, user } = await withView();
+    await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.type(address(), `${GOOGLE}{Enter}`);
+    await act(async () => view.land(1));
+    await user.clear(address());
+    await user.type(address(), "https://down.example/{Enter}");
+    await act(async () => view.say(1, { kind: "failed", message: "Could not connect: Connection refused" }));
+    expect(within(pane()).getByRole("alert").textContent).toContain("Couldn't load down.example");
+    expect(view.placed.get(1)).toBeNull();
+
+    await user.click(button("Back"));
+    expect(address().value).toBe(GOOGLE);
+    expect(within(pane()).queryByRole("alert")).toBeNull();
+    expect(view.placed.get(1), "the view still holds www.google.com").toEqual({ rect: BOX, holes: [] });
+
+    await user.click(button("Forward"));
+    expect(view.asked.at(-1)).toEqual([1, "go https://down.example/"]);
+    await act(async () => view.say(1, { kind: "failed", message: "Could not connect: Connection refused" }));
+    await user.click(button("Back"));
+    expect(within(pane()).queryByRole("alert")).toBeNull();
+    expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [] });
+  });
+
+  it("goes back, forward and reloads in the frame where there is no view (Windows)", async () => {
+    const { user } = await signedIn();
+    const frame = (url: string) => within(pane()).findByTitle(`Web page: ${url}`);
+    await user.click(screen.getByRole("link", { name: "the docs" }));
+    await frame("https://docs.example.com/crash");
+    await user.clear(address());
+    await user.type(address(), "https://other.example/{Enter}");
+    expect((await frame("https://other.example/")).getAttribute("src")).toBe("https://other.example/");
+
+    await user.click(button("Back"));
+    expect((await frame("https://docs.example.com/crash")).getAttribute("src")).toBe("https://docs.example.com/crash");
+    expect(address().value).toBe("https://docs.example.com/crash");
+    await user.click(button("Forward"));
+    const before = await frame("https://other.example/");
+    expect(address().value).toBe("https://other.example/");
+
+    await user.click(button("Reload"));
+    const after = await frame("https://other.example/");
+    expect(after, "Reload loads the page again in a new frame").not.toBe(before);
+    expect(after.getAttribute("src")).toBe("https://other.example/");
+  });
+
+  it("shows where the owner left it after another tab, with Back still there", async () => {
+    const { user, view } = await devServer();
+    await act(async () => view.say(1, at(`${TUNNEL}/notes`)));
+    await user.click(within(pane()).getByRole("tab", { name: /Files/ }));
+    expect(view.closed).toEqual([1]);
+    await user.click(within(pane()).getByRole("tab", { name: /Preview/ }));
+    expect(address().value).toBe("localhost:5173/notes");
+    expect(button("Back").disabled).toBe(false);
+    await waitFor(() => expect(view.asked.at(-1)).toEqual([2, "go http://127.0.0.1:41002/notes"]));
+  });
+
+  it("keeps what the owner is typing while the page moves, and puts the address back on Escape", async () => {
+    const { user, view } = await devServer();
+    await user.clear(address());
+    await user.type(address(), "localhost:3000");
+    await act(async () => view.say(1, at(`${TUNNEL}/notes`)));
+    expect(address().value).toBe("localhost:3000");
+    await user.keyboard("{Escape}");
+    expect(address().value).toBe("localhost:5173/notes");
+    expect(paneOpen()).toBe(true);
+  });
+
+  it("switches a page between the server and this computer from its badge, keeping the tunnel for Back", async () => {
+    const { user, view, pages } = await devServer();
+    await user.click(button("Server"));
+    expect(view.asked.at(-1)).toEqual([1, "go http://localhost:5173/app?v=2"]);
+    await act(async () => view.land(1));
+    expect(button("This computer")).toBeTruthy();
+    expect(button("Back").disabled, "switching sides isn't a move").toBe(true);
+    await user.clear(address());
+    await user.type(address(), "localhost:5173/other{Enter}");
+    expect(view.asked.at(-1), "a path typed on the same origin stays on this computer").toEqual([1, "go http://localhost:5173/other"]);
+    await user.click(button("This computer"));
+    expect(view.asked.at(-1)).toEqual([1, `go ${TUNNEL}/other`]);
+    expect(pages.opened).toHaveLength(1);
   });
 });
 
@@ -558,14 +779,11 @@ describe("Pages on the Hermes server's own loopback (issue #171)", () => {
 
     // The frame loads the tunnel's end on this computer; the owner still sees the page's own address.
     expect(await frameSrc()).toBe(TUNNEL);
-    expect(pages.opened).toEqual([APP_URL]);
-    expect(within(pane()).getByText("Server · liam@hermes")).toBeTruthy();
-    expect(within(pane()).getByText(APP_URL)).toBeTruthy();
-    expect(within(pane()).getByText(/on the Hermes server, through SSH to liam@hermes/).textContent).toBe(
-      "From localhost:5173 on the Hermes server, through SSH to liam@hermes",
+    expect(pages.opened).toEqual(["http://localhost:5173/"]);
+    expect(address().value).toBe("localhost:5173/app?v=2");
+    expect(button("Server").title).toBe(
+      "localhost:5173 on the Hermes server, through SSH to liam@hermes. Click to open localhost:5173 on this computer instead.",
     );
-    expect(within(pane()).getByRole("button", { name: "Hermes server", pressed: true })).toBeTruthy();
-    expect(within(pane()).getByRole("button", { name: "This computer", pressed: false })).toBeTruthy();
     // The same sandbox as any web page.
     const frame = within(pane()).getByTitle(`Web page: ${APP_URL}`);
     expect(frame.getAttribute("sandbox")!.split(" ").sort()).toEqual(["allow-forms", "allow-same-origin", "allow-scripts"]);
@@ -582,29 +800,26 @@ describe("Pages on the Hermes server's own loopback (issue #171)", () => {
     expect(pages.live.size).toBe(0);
   });
 
-  it("switches to this computer, closing the tunnel, and back to the server through a new one", async () => {
-    const { user, pages } = await signedIn();
+  it("switches to this computer from the badge and back to the server, through the tunnel it kept", async () => {
+    const { user, pages, web } = await signedIn();
     await user.click(screen.getByRole("link", { name: "the dev server" }));
     expect(await frameSrc()).toBe(TUNNEL);
 
-    await user.click(within(pane()).getByRole("button", { name: "This computer" }));
-    expect(pages.closed).toEqual(["1"]);
+    await user.click(button("Server"));
     expect(await frameSrc()).toBe(APP_URL);
     expect(pane().querySelector(".where")!.textContent).toBe(" This computer");
-    expect(within(pane()).getByText(/on this computer$/).textContent).toBe("From localhost:5173 on this computer");
-    expect(within(pane()).getByRole("button", { name: "This computer", pressed: true })).toBeTruthy();
     // Opening it in the browser is this computer's own address now.
-    expect(within(pane()).getByTitle("Open in your browser")).toBeTruthy();
+    await user.click(button("Open in your browser"));
+    expect(web.opened).toEqual([APP_URL]);
 
-    await user.click(within(pane()).getByRole("button", { name: "Hermes server" }));
-    expect(await frameSrc()).toBe("http://127.0.0.1:41002/app?v=2");
-    expect(pages.opened).toEqual([APP_URL, APP_URL]);
+    await user.click(button("This computer"));
+    expect(await frameSrc()).toBe(TUNNEL);
+    expect(pages.opened).toEqual(["http://localhost:5173/"]);
+    expect(pages.closed).toEqual([]);
 
-    // Reload opens a new tunnel and closes the one before.
-    await user.click(within(pane()).getByRole("button", { name: "Reload" }));
-    expect(await frameSrc()).toBe("http://127.0.0.1:41003/app?v=2");
-    expect(pages.closed).toEqual(["1", "2"]);
-    expect([...pages.live.keys()]).toEqual(["3"]);
+    await user.click(button("Reload"));
+    expect(await frameSrc()).toBe(TUNNEL);
+    expect([...pages.live.keys()], "Reload keeps the tunnel").toEqual(["1"]);
   });
 
   it("says when the sign-in has no SSH target, and offers this computer instead", async () => {
@@ -624,6 +839,10 @@ describe("Pages on the Hermes server's own loopback (issue #171)", () => {
     await user.click(within(alert).getByRole("button", { name: "Open on this computer instead" }));
     expect(await frameSrc()).toBe(APP_URL);
     expect(pages.opened).toHaveLength(1);
+    await user.click(button("This computer"));
+    expect((await within(pane()).findByRole("alert")).textContent).toContain("No SSH target for this server");
+    await user.click(button("Reload"));
+    expect(pages.opened, "Reload tries a failed tunnel again").toHaveLength(2);
   });
 
   it("says when nothing answers at the port on the server, and tries again", async () => {
@@ -717,7 +936,7 @@ describe("Pages on the Hermes server's own loopback (issue #171)", () => {
   it("opens a typed localhost address on the server, and refuses what isn't a web address, saying why", async () => {
     const { user, pages } = await signedIn();
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
-    const box = within(pane()).getByRole("textbox");
+    const box = address();
     await user.type(box, "ftp://localhost:21/{Enter}");
     expect(within(pane()).getByRole("alert").textContent).toBe("Only http:// and https:// pages open in the preview, and ftp: isn't a web address.");
     await user.clear(box);
@@ -735,8 +954,121 @@ describe("Pages on the Hermes server's own loopback (issue #171)", () => {
     const { user, pages } = await signedIn();
     await user.click(screen.getByRole("link", { name: "the docs" }));
     expect(within(pane()).getByText("Web")).toBeTruthy();
-    expect(within(pane()).queryByRole("button", { name: "Hermes server" })).toBeNull();
+    expect(within(pane()).queryByRole("button", { name: "Web" })).toBeNull();
     expect(pages.opened).toEqual([]);
+  });
+});
+
+describe("The empty Preview (issue #376)", () => {
+  const devServers = () => within(pane()).getByRole("region", { name: "Dev servers" });
+
+  it("lists the dev servers on the server and on this computer, and opens one where it runs", async () => {
+    const web = theWeb();
+    web.devs = { server: { kind: "listed", ports: [{ port: 5173, process: "node" }, { port: 8000 }] }, local: [{ port: 3000, process: "next-server" }] };
+    const { user, pages } = await signedIn({ web });
+    await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await within(devServers()).findByRole("button", { name: /localhost:5173/ });
+    expect(within(devServers()).getAllByRole("button", { name: /^localhost:/ }).map((b) => b.textContent)).toEqual([
+      "localhost:5173Servernode",
+      "localhost:8000Server",
+      "localhost:3000This computernext-server",
+    ]);
+
+    await user.click(within(devServers()).getByRole("button", { name: /localhost:3000/ }));
+    expect((await within(pane()).findByTitle("Web page: http://localhost:3000/")).getAttribute("src")).toBe("http://localhost:3000/");
+    expect(button("This computer")).toBeTruthy();
+    expect(pages.opened).toEqual([]);
+  });
+
+  it("opens a dev server on the Hermes server through SSH", async () => {
+    const web = theWeb();
+    web.devs = { server: { kind: "listed", ports: [{ port: 5173, process: "node" }] }, local: [] };
+    const { user, pages } = await signedIn({ web });
+    await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.click(await within(devServers()).findByRole("button", { name: /localhost:5173/ }));
+    expect((await within(pane()).findByTitle("Web page: http://localhost:5173/")).getAttribute("src")).toBe("http://127.0.0.1:41001/");
+    expect(pages.opened).toEqual(["http://localhost:5173/"]);
+    expect(button("Server")).toBeTruthy();
+  });
+
+  it("says why the server's side has none, and looks again on its button and when the connection comes back", async () => {
+    const web = theWeb();
+    web.devs = { server: { kind: "noSshTarget" }, local: [] };
+    const { user, server } = await signedIn({ web });
+    await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    expect(await within(devServers()).findByText("Sign in through SSH to see the Hermes server's dev servers.")).toBeTruthy();
+
+    web.devs = { server: { kind: "failed", message: "bash: line 1: ss: command not found" }, local: [] };
+    await user.click(within(devServers()).getByRole("button", { name: "Look for dev servers again" }));
+    expect(await within(devServers()).findByText("Couldn't list the Hermes server's: bash: line 1: ss: command not found")).toBeTruthy();
+
+    web.devs = new Error("not running in Tauri");
+    await user.click(within(devServers()).getByRole("button", { name: "Look for dev servers again" }));
+    expect(await within(devServers()).findByText("Couldn't look for dev servers: not running in Tauri")).toBeTruthy();
+
+    web.devs = { server: { kind: "listed", ports: [] }, local: [] };
+    const looked = web.looked;
+    await act(async () => server.drop());
+    await waitFor(() => expect(web.looked).toBeGreaterThan(looked));
+    expect(await within(devServers()).findByText("None found. Start one, or type its port above.")).toBeTruthy();
+  });
+
+  it("takes a dev server's bare port in the address box, as a page on the server", async () => {
+    const { user, pages } = await signedIn();
+    await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.type(address(), "5173{Enter}");
+    expect((await within(pane()).findByTitle("Web page: http://localhost:5173/")).getAttribute("src")).toBe("http://127.0.0.1:41001/");
+    expect(pages.opened).toEqual(["http://localhost:5173/"]);
+    expect(address().value).toBe("localhost:5173");
+  });
+
+  it("keeps the note about what a page can reach, and copying the address, in the ⋯ menu", async () => {
+    const { user } = await signedIn();
+    const writes: string[] = [];
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (t: string) => void writes.push(t) } });
+    await user.click(screen.getByRole("link", { name: "the docs" }));
+    await user.click(button("More"));
+    const menu = within(pane()).getByRole("menu", { name: "More" });
+    expect(menu.textContent).toContain("Pages here run on their own, with no access to Hermes Chat or your sign-in, and only you can use them.");
+    expect(menu.textContent, "a frame can't report a link followed inside it").toContain("Links you follow inside a page don't change the address here.");
+    await user.click(within(menu).getByRole("menuitem", { name: "Copy address" }));
+    expect(writes).toEqual(["https://docs.example.com/crash"]);
+    expect(await within(pane()).findByText("Address copied.")).toBeTruthy();
+  });
+});
+
+describe("Hermes can't drive the Preview (issue #376)", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const ACTIONS = ["elements", "click", "hover", "type", "scroll", "press", "strobe", "back", "forward", "reload", "pin", "hold", "unpin"];
+
+  it("turns down every preview request, and nothing reaches the page, its tunnel or the history", async () => {
+    const { user, view, pages, server, hermes } = await withView();
+    await user.click(screen.getByRole("link", { name: "the dev server" }));
+    await waitFor(() => expect(view.asked).toHaveLength(1));
+    await act(async () => view.land(1));
+    await act(async () => view.say(1, at("http://127.0.0.1:41001/notes")));
+    const asked = [...view.asked];
+    const placed = view.placed.get(1);
+
+    const runtime = server.runtimeIdOf("fix")!;
+    const asks: [string, Record<string, unknown>][] = [
+      ["preview.read", { start: 0, count: 50 }],
+      ...ACTIONS.map((action): [string, Record<string, unknown>] => ["preview.act", { action, ref: "e1", selector: "a", text: "x", key: "Enter", url: "https://evil.example/" }]),
+    ];
+    for (const [method, params] of asks) {
+      const id = server.ask(runtime, method, params);
+      expect(id, method).toBeDefined();
+      await settle(hermes);
+      expect(server.responses.find((r) => r.id === id), `${method} ${params.action ?? ""}`).toMatchObject({ error: { code: -32601 } });
+    }
+
+    expect(view.asked).toEqual(asked);
+    expect(view.made).toBe(1);
+    expect(view.placed.get(1)).toEqual(placed);
+    expect(view.closed).toEqual([]);
+    expect(pages.opened).toEqual(["http://localhost:5173/"]);
+    expect(address().value).toBe("localhost:5173/notes");
+    expect([button("Back").disabled, button("Forward").disabled]).toEqual([false, true]);
   });
 });
 
@@ -902,7 +1234,9 @@ describe("Closing and resizing", () => {
     expect(paneOpen()).toBe(false);
 
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
-    await user.type(within(pane()).getByRole("textbox"), "/home/liam/app/main.py{Enter}");
+    expect(within(pane()).getByRole("heading", { name: "Nothing open" })).toBeTruthy();
+    expect(button("Back").disabled).toBe(true);
+    await user.type(address(), "/home/liam/app/main.py{Enter}");
     await within(pane()).findByText(/missing\.txt/);
     expect(fsReads(server).at(-1)!.query.get("profile")).toBe("work");
   });
@@ -989,7 +1323,7 @@ describe("The link menu (issue #240)", () => {
 
     rightClick(screen.getByRole("link", { name: "the dev server" }));
     await user.click(item("Open in the Preview"));
-    await waitFor(() => expect(pages.opened).toEqual(["http://localhost:5173/app?v=2"]));
+    await waitFor(() => expect(pages.opened).toEqual(["http://localhost:5173/"]));
     expect(web.opened).toEqual([]);
   });
 

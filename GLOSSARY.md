@@ -362,12 +362,16 @@ The resizable panel beside the chat, with four tabs: Preview, Terminal, Files an
 _Avoid_: drawer, sidebar (that is the chat list), inspector
 
 **Preview**:
-The Side panel's tab that shows a web page, a Server page, a Server file, a Local file or a tool call's output. It opens from a link in a reply or from an opened tool call. What it shows can't reach the app, the sign-in or this computer's other files (ADR 0007). On Linux a web page is the top level of a view of its own, so a site that refuses to be shown inside other apps still shows (ADR 0081). On Windows such a site gets a note and Open in your browser instead (ADR 0011).
-_Avoid_: preview pane (its name before the Side panel), viewer, artifact (the official desktop app's word)
+The Side panel's tab that shows a web page, a Server page, a Server file, a Local file or a tool call's output. It works like a small browser that only the owner drives: Back, Forward, Reload, and an address box that follows a link clicked inside the page and takes a bare port such as `5173`. Back and Forward cross from a page to a file and back, and the Preview is where the owner left it after another tab. With nothing open, it lists Dev servers. It opens from a link in a reply, an opened tool call, Outputs or its address box, never on Hermes's own: Hermes's requests to read or drive it are turned down (ADR 0103). What it shows can't reach the app, the sign-in or this computer's other files (ADR 0007). On Linux a web page is the top level of a view of its own, so a site that refuses to be shown inside other apps still shows (ADR 0081). On Windows such a site gets a note and Open in your browser instead (ADR 0011).
+_Avoid_: preview pane (its name before the Side panel), viewer, artifact (the official desktop app's word), browser panel (T3 Code's)
 
 **Server page**:
-A web page on the Hermes server's own loopback (`localhost`, `127.0.0.1`, `[::1]` or `0.0.0.0`), such as a dev server Hermes started there. The Preview opens a loopback address as a Server page unless the owner switches it to **This computer**. It loads through an SSH tunnel to the sign-in's SSH target, opened while the page shows and closed when it goes. A URL sign-in has no SSH target, so its Server pages don't open (ADR 0052).
+A web page on the Hermes server's own loopback (`localhost`, `127.0.0.1`, `[::1]` or `0.0.0.0`), such as a dev server Hermes started there. The Preview opens a loopback address as a Server page unless the owner clicks its **Server** badge to open it from **This computer**. It loads through an SSH tunnel to the sign-in's SSH target, opened when it shows. The tunnel stays open while web pages follow one another in the Preview, so Back to the Server page needs no new one, and closes when a file shows or the Preview hides. A URL sign-in has no SSH target, so its Server pages don't open (ADR 0052, ADR 0103).
 _Avoid_: remote page, tunnelled page, port forward (the mechanism)
+
+**Dev server**:
+A program listening on a port the Preview could open: on the Hermes server's loopback, found over the sign-in's SSH target, or on this computer's. The empty Preview lists them, each tagged Server or This computer, with the program's name when it can be read, and a click opens one. Only loopback or every-address listeners from port 1024 to 32767 count, less databases, brokers, ssh and the dashboard (ADR 0103).
+_Avoid_: listener, open port, running app
 
 **Link menu**:
 The menu a right click, the Menu key or Shift+F10 opens on a link in a reply, a Side question, a Markdown file in the Preview or the Artifact editor, or on a tool call's web page chip: Open in the Preview, Open in your browser and Copy link. A Server page's Open in your browser does nothing and says why: it reaches the browser only through the Preview. A link the Preview won't load, such as `mailto:`, can only be copied. A same-page link has none (ADR 0079).
