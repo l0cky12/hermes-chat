@@ -10,6 +10,7 @@ import {
   approvalsFailed,
   approvalsFrom,
   failureOf,
+  sharesChats,
   flagsFrom,
   healthFacts,
   redact,
@@ -162,6 +163,7 @@ describe("a check of a new Hermes (upstream 74b2ed6)", () => {
       authProviders: ["basic"],
       authFlows: ["cookie"],
       flags: ["per_session_exclusive_submit"],
+      declinesNotShown: false,
     });
     expect(snap.stale).toBe(false);
     expect(snap.checking).toBe(false);
@@ -265,6 +267,19 @@ describe("partial and malformed answers", () => {
     expect(approvalsFrom(null).state).toBe("unknown");
     expect(approvalsFailed(new RpcError(4000, "bad params")).state).toBe("unknown");
     expect(approvalsFailed(new Error("Connection closed: x")).state).toBe("unreachable");
+  });
+
+  it("knows a Hermes that shares chats by declines_not_shown or by a version from 0.21.6", () => {
+    expect(sharesChats({ declinesNotShown: true })).toBe(true);
+    expect(sharesChats({})).toBe(false);
+    expect(sharesChats({ declinesNotShown: false, version: "0.21.5" })).toBe(false);
+    expect(sharesChats({ version: "0.21.6" })).toBe(true);
+    expect(sharesChats({ version: "0.22.5" })).toBe(true);
+    expect(sharesChats({ version: "1.0.0" })).toBe(true);
+    expect(sharesChats({ version: "0.20.9" })).toBe(false);
+    expect(sharesChats({ build: "0.21.6+12.gbf0203a" })).toBe(true);
+    expect(sharesChats({ version: "v0.21.5+canary.20261008T070449Z" })).toBe(false);
+    expect(sharesChats({ build: "abc1234" })).toBe(false);
   });
 
   it("reads each kind of failure as Hermes and the Rust relay word it", () => {

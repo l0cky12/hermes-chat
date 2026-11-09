@@ -335,6 +335,8 @@ export type ServerFacts = {
   authProviders?: string[];
   authFlows?: string[];
   flags?: string[];
+  /** Hermes counts a 4404 answer to a window-owned request as one client declining (`client.capabilities` `declines_not_shown`). */
+  declinesNotShown?: boolean;
   /** Why the version couldn't be read, if it couldn't. */
   versionWhy?: string;
   /** Why the feature flags couldn't be read, if they couldn't. */
@@ -473,6 +475,28 @@ export function approvalsFrom(result: unknown): Pick<Capability, "state" | "why"
   return result.server_requests.includes("approval")
     ? { state: "supported", why: "Hermes lists approval among the requests it sends this app." }
     : { state: "unsupported", why: "Hermes doesn't list approval among the requests it sends this app." };
+}
+
+/**
+ * The first release that keeps every client that opens a chat attached to it (`de25545dce`) and counts a 4404 as one
+ * client declining (`e33f1a0faf`). Builds before it report 0.21.5 or lower, the calendar-tagged ones included.
+ */
+const SHARED_CHATS_SINCE = [0, 21, 6];
+
+/**
+ * Whether Hermes shares a chat between the clients that have it open: each gets every server request, and the first
+ * answer settles it, an error included (ADR 0094). `declines_not_shown` came in the same release, so it says so before
+ * the version is read.
+ */
+export function sharesChats(f: ServerFacts): boolean {
+  if (f.declinesNotShown) return true;
+  const v = /^v?(\d+)\.(\d+)\.(\d+)/.exec(f.version ?? f.build ?? "");
+  if (!v) return false;
+  for (let i = 0; i < 3; i++) {
+    const d = Number(v[i + 1]) - SHARED_CHATS_SINCE[i];
+    if (d) return d > 0;
+  }
+  return true;
 }
 
 /** What a failed `client.capabilities` means for Approvals. A Hermes without it is older than the requests this app reads. */
@@ -623,9 +647,14 @@ export class CapabilityStore {
     // The canonical protocol never gets this far (`ProtocolMismatchError`), so a connection that is up is legacy.
     this.set({ facts: { ...this.snap.facts, protocol: protocolOf(ready) }, stale: false });
     this.setCap("chat", { state: "supported", source: "advertised", why: "Hermes speaks the legacy session protocol on this connection." });
+    const learnt = (declinesNotShown: boolean, approvals: Pick<Capability, "state" | "why">) => {
+      if (!this.current(scope)) return;
+      this.set({ facts: { ...this.snap.facts, declinesNotShown } });
+      this.setCap("approvals", { source: "advertised", ...approvals });
+    };
     told.then(
-      (r) => this.current(scope) && this.setCap("approvals", { source: "advertised", ...approvalsFrom(r) }),
-      (e) => this.current(scope) && this.setCap("approvals", { source: "advertised", ...approvalsFailed(e) }),
+      (r) => learnt(isObj(r) && r.declines_not_shown === true, approvalsFrom(r)),
+      (e) => learnt(false, approvalsFailed(e)),
     );
     this.due = setTimeout(() => void this.check(scope, false), this.delayMs);
   }
@@ -741,7 +770,7 @@ export class CapabilityStore {
     // A build is known by its commit when Hermes names one, else by its version: a git checkout has no version.
     const key = facts.commit ?? facts.build ?? facts.version;
     const sameBuild = key !== undefined && key === this.checkedFor;
-    this.set({ facts: { ...facts, protocol: this.snap.facts.protocol } });
+    this.set({ facts: { ...facts, protocol: this.snap.facts.protocol, declinesNotShown: this.snap.facts.declinesNotShown } });
     // Another build may have other routes: only what this connection learnt stands.
     if (!sameBuild && this.checkedFor !== undefined) {
       const kept = Object.values(this.snap.caps).filter((c) => (c.checkedAt ?? 0) >= this.connectedAt);

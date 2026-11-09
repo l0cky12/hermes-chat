@@ -465,6 +465,8 @@ export class FakeHermes {
   );
   /** Whether this connection sent `client.capabilities {server_requests: true}`. */
   answersRequests = false;
+  /** False: `client.capabilities` leaves out `declines_not_shown`, as Hermes before 0.21.6 (`e33f1a0faf`) does. */
+  declinesNotShown = true;
   /** Server→client requests nobody has answered yet, by id. */
   readonly openRequests = new Map<string, OpenRequest>();
   /** The client's answers to server→client requests, in order. */
@@ -995,7 +997,7 @@ export class FakeHermes {
     // `tui_gateway/methods_voice.py` at the deployed `bf0203a`: lists the server→client request kinds it knows.
     "client.capabilities": (r) => {
       if ("server_requests" in r.params) this.answersRequests = !!r.params.server_requests;
-      this.respond(r.id, { server_requests: ["approval", "clarify", "secret", "sudo"], declines_not_shown: true });
+      this.respond(r.id, { server_requests: ["approval", "clarify", "secret", "sudo"], ...(this.declinesNotShown && { declines_not_shown: true }) });
     },
     // `tui_gateway/methods_prompt.py` at the deployed `bf0203a`: settles the Approval in Hermes's queue, whose settle
     // hook then withdraws the request from every client on the session, this one too (`request.cancel`, `resolved`).
