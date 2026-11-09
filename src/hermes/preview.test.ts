@@ -3,7 +3,25 @@
 import { describe, expect, it } from "vitest";
 import { FakeHermes } from "./fakeHermes";
 import { connect } from "./transport";
-import { checkWebUrl, fenced, linkTarget, loopbackOf, pageOn, parseAddress, readLocalFile, sandboxedHtml, toolTargets, tunnelUrl, withoutBidi, type LinkTarget, type LocalText } from "./preview";
+import {
+  addressOf,
+  checkWebUrl,
+  fenced,
+  fromView,
+  linkTarget,
+  loopbackOf,
+  pageOn,
+  parseAddress,
+  readLocalFile,
+  sandboxedHtml,
+  toolTargets,
+  tunnelUrl,
+  viewUrlOf,
+  withoutBidi,
+  type LinkTarget,
+  type LocalText,
+  type ViewUrl,
+} from "./preview";
 import type { Item } from "./model";
 
 const APP = "tauri://localhost";
@@ -97,6 +115,58 @@ describe("Pages on a loopback address (issue #171)", () => {
     expect(parseAddress("localhost:99999", APP)).toEqual({ error: "That isn't a web address." });
     expect(parseAddress("postgres://localhost:5432/db", APP)).toEqual({ error: "Only http:// and https:// pages open in the preview, and postgres: isn't a web address." });
     expect(parseAddress("localhostfoo:3000", APP)).toHaveProperty("error", expect.stringContaining("http://"));
+  });
+
+  it("takes a dev server's bare port as that port on localhost", () => {
+    expect(parseAddress(" 5173 ", APP)).toEqual({ target: { kind: "web", url: "http://localhost:5173/" } });
+    expect(parseAddress("65535", APP)).toEqual({ target: { kind: "web", url: "http://localhost:65535/" } });
+    for (const raw of ["0", "65536", "123456"]) expect(parseAddress(raw, APP), raw).toHaveProperty("error");
+  });
+});
+
+describe("A page's address in the view (issue #376)", () => {
+  const tunnel = { remote: "http://localhost:5173", local: "http://127.0.0.1:41234" };
+  const view = (url: string) => url as ViewUrl;
+
+  it("loads a Server page through its tunnel, and nothing until that tunnel is open", () => {
+    const page = { kind: "web", url: "http://localhost:5173/notes?tag=a#top" } as const;
+    expect(viewUrlOf(page, tunnel)).toBe("http://127.0.0.1:41234/notes?tag=a#top");
+    expect(viewUrlOf(page, undefined)).toBeUndefined();
+    expect(viewUrlOf({ kind: "web", url: "http://localhost:8000/" }, tunnel)).toBeUndefined();
+    expect(viewUrlOf({ ...page, on: "local" }, tunnel)).toBe(page.url);
+    expect(viewUrlOf({ kind: "web", url: "https://example.com/" }, tunnel)).toBe("https://example.com/");
+  });
+
+  it("maps what the view reports back to the owner's address, exactly", () => {
+    for (const url of ["http://127.0.0.1:41234/", "http://127.0.0.1:41234/a/b?c=1&d#e", "http://127.0.0.1:41234/%E2%9C%93"]) {
+      const target = fromView(view(url), tunnel);
+      expect(target.on).toBe("server");
+      expect(viewUrlOf(target, tunnel)).toBe(url);
+    }
+    expect(fromView(view("http://127.0.0.1:41234/a"), tunnel)).toEqual({ kind: "web", url: "http://localhost:5173/a", on: "server" });
+  });
+
+  it("says a page that left the tunnel for another loopback address is on this computer, and anything else is the web", () => {
+    expect(fromView(view("http://localhost:5173/a"), tunnel)).toEqual({ kind: "web", url: "http://localhost:5173/a", on: "local" });
+    expect(fromView(view("http://127.0.0.1:41235/"), tunnel)).toEqual({ kind: "web", url: "http://127.0.0.1:41235/", on: "local" });
+    expect(fromView(view("https://github.com/"), tunnel)).toEqual({ kind: "web", url: "https://github.com/" });
+    expect(fromView(view("http://localhost:3000/"), undefined)).toEqual({ kind: "web", url: "http://localhost:3000/", on: "local" });
+  });
+
+  it("keeps an https Server page's scheme on both sides", () => {
+    const https = { remote: "https://localhost:8443", local: "https://127.0.0.1:41234" };
+    expect(viewUrlOf({ kind: "web", url: "https://localhost:8443/x" }, https)).toBe("https://127.0.0.1:41234/x");
+    expect(fromView(view("https://127.0.0.1:41234/x"), https)).toEqual({ kind: "web", url: "https://localhost:8443/x", on: "server" });
+  });
+
+  it("shows a loopback page the way a dev server prints it, and anything else as it is", () => {
+    expect(addressOf({ kind: "web", url: "http://localhost:5173/" })).toBe("localhost:5173");
+    expect(addressOf({ kind: "web", url: "http://localhost:5173/a?b" })).toBe("localhost:5173/a?b");
+    expect(addressOf({ kind: "web", url: "https://localhost:8443/" })).toBe("https://localhost:8443/");
+    expect(addressOf({ kind: "web", url: "https://example.com/" })).toBe("https://example.com/");
+    expect(addressOf({ kind: "server", path: "/srv/a.md" })).toBe("/srv/a.md");
+    expect(addressOf({ kind: "tool", name: "terminal", text: "" })).toBe("terminal output");
+    for (const raw of ["localhost:5173", "localhost:5173/a?b"]) expect(parseAddress(raw, APP)).toHaveProperty("target.url", `http://${raw}${raw.includes("/") ? "" : "/"}`);
   });
 });
 

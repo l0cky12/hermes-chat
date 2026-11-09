@@ -331,7 +331,7 @@ describe("in the app", () => {
       <Main
         hermes={hermes}
         connection={{ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }}
-        webPages={{ check: async () => ({ kind: "allowed" }) as never, openInBrowser: opens }}
+        webPages={{ check: async () => ({ kind: "allowed" }) as never, openInBrowser: opens, devServers: async () => ({ server: { kind: "listed", ports: [] }, local: [] }) }}
         onSignOut={async () => {}}
       />,
     );

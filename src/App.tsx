@@ -1,4 +1,4 @@
-import { type ReactNode, type RefObject, Suspense, lazy, useCallback, useLayoutEffect, useMemo, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { type ReactNode, type RefObject, Suspense, lazy, useCallback, useLayoutEffect, useMemo, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { ArrowLeft, ArrowRight, Columns2, FolderCog, GitBranch, PanelBottom, PanelLeft, PanelRight, PanelTop, X } from "lucide-react";
 import { CONNECT_STOPPED, LIVE_MIN_GAP_MS, RenameConflict, connect, openSaved, readSaved, toSource, type Delivery, type Hermes } from "./hermes/transport";
@@ -108,6 +108,7 @@ import { SignIn } from "./ui/SignIn";
 import { Onboarding, type SetupMode } from "./ui/Onboarding";
 import { ModelControls } from "./ui/ModelPicker";
 import { PreviewPane } from "./ui/PreviewPane";
+import { stepHistory } from "./ui/previewHistory";
 import { PANE_MIN_WIDTH, SidePanel, type PanelTab } from "./ui/SidePanel";
 import { ScreenTab } from "./ui/Screen";
 import { LinksProvider } from "./ui/previewContext";
@@ -1133,10 +1134,7 @@ export function Main({
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelMounted, setPanelMounted] = useState(false);
   const [panelHidden, setPanelHidden] = useState(false);
-  // What the Preview tab shows; null for the page that asks what to open.
-  const [preview, setPreview] = useState<PreviewTarget | null>(null);
-  // Counts what has been opened, so opening the same file again loads it again.
-  const [previewSeq, setPreviewSeq] = useState(0);
+  const [previewHistory, stepPreview] = useReducer(stepHistory, null);
   // The width while the owner drags the panel's edge; it is kept in the display preferences once they let go.
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const openPanel = useCallback((tab: PanelTab) => {
@@ -1146,9 +1144,8 @@ export function Main({
     setPanelHidden(false);
   }, []);
   const openPreview = useCallback(
-    (t: PreviewTarget) => {
-      setPreview(t);
-      setPreviewSeq((n) => n + 1);
+    (target: PreviewTarget) => {
+      stepPreview({ kind: "open", target });
       openPanel("preview");
     },
     [openPanel],
@@ -1748,7 +1745,7 @@ export function Main({
     setProjectOpen(false);
     setToast(null);
     // What the Preview showed was the old profile's; the Screen tab starts again for the new one.
-    setPreview(null);
+    stepPreview({ kind: "clear" });
     if (panelTab === "preview") setPanelOpen(false);
     void hermes.switchProfile(name);
   };
@@ -3146,14 +3143,13 @@ export function Main({
                 preview: (shown) =>
                   shown && (
                   <PreviewPane
-                    key={previewSeq}
-                    target={preview ?? { kind: "start" }}
+                    history={previewHistory}
+                    onStep={stepPreview}
                     serverLabel={serverLabel(route)}
                     readServer={(path, host, session) => (host ? hermes.readHostFile(path) : hermes.readServerFile(path, session))}
                     local={localFiles}
                     web={webPages}
                     serverPages={serverPages}
-                    onOpen={openPreview}
                     artifacts={artifacts}
                     connected={status === "connected"}
                   />
