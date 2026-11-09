@@ -56,6 +56,7 @@ import { RemoteFilesError, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, SESSION_GO
 import { isUnsecure } from "./unsecure";
 import { TOKEN_REFUSED } from "./routes";
 import { WRONG_PASSWORD } from "./account";
+import { AccountsApi } from "./accounts";
 import { providerKeys, readyProviders, type ProviderSetup, type SavedKey } from "./setup";
 import { restartHold } from "./unsaved";
 import { hostFileView, readServerFile, type FileView } from "./preview";
@@ -924,6 +925,22 @@ export class Hermes {
     publish: (by) => this.placeTasks(by),
   });
 
+  /**
+   * Settings → Providers' subscription sign-ins and custom endpoints (accounts.ts, ADR 0106). Their changes queue with
+   * the key changes, and the model list is read again after each.
+   */
+  readonly accounts = new AccountsApi({
+    rest: (method, pathAndQuery, body) => this.rest(method, pathAndQuery, body),
+    pipe: () => {
+      if (!this.pipe || this.closing) throw new Error("Not connected to Hermes.");
+      return this.pipe;
+    },
+    change: (profile, run) => this.oneProviderChangeAtATime(profile, run),
+    settled: async (profile) => {
+      await this.keyChanges.get(profile);
+    },
+  });
+
   /** Settings → Model's reads and writes, for the profile shown (modelSettings.ts). */
   readonly modelSettings = new ModelSettingsApi(
     (method, pathAndQuery, body) => this.rest(method, pathAndQuery, body),
@@ -1198,7 +1215,7 @@ export class Hermes {
    */
   async saveProviderKey(envVar: string, key: string): Promise<SavedKey> {
     const profile = this.profile;
-    return this.oneKeyChangeAtATime(profile, (pipe) => pipe.saveProviderKey(profile, envVar, key));
+    return this.oneProviderChangeAtATime(profile, (pipe) => pipe.saveProviderKey(profile, envVar, key));
   }
 
   /**
@@ -1207,7 +1224,7 @@ export class Hermes {
    */
   async removeProviderKey(envVar: string): Promise<void> {
     const profile = this.profile;
-    return this.oneKeyChangeAtATime(profile, (pipe) => pipe.removeProviderKey(profile, envVar));
+    return this.oneProviderChangeAtATime(profile, (pipe) => pipe.removeProviderKey(profile, envVar));
   }
 
   /**
@@ -1218,14 +1235,14 @@ export class Hermes {
     await this.keyChanges.get(this.profile);
   }
 
-  /** Per profile, the last key change sent, settled or not. */
+  /** Per profile, the last provider change sent (a key, a sign-out, an endpoint), settled or not. */
   private readonly keyChanges = new Map<string, Promise<void>>();
 
   /**
-   * Runs `change` once every key change sent before it for `profile` has settled, so a save and a removal from two
+   * Runs `change` once every provider change sent before it for `profile` has settled, so a save and a removal from two
    * openings of the screen reach Hermes in the order they were made, never interleaved. Then the models are read again.
    */
-  private oneKeyChangeAtATime<T>(profile: string, change: (pipe: Pipe) => Promise<T>): Promise<T> {
+  private oneProviderChangeAtATime<T>(profile: string, change: (pipe: Pipe) => Promise<T>): Promise<T> {
     const run = async () => {
       if (!this.pipe) throw new Error("Not connected to Hermes.");
       try {
