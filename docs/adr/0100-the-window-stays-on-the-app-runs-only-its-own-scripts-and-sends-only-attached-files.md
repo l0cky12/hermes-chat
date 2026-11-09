@@ -13,7 +13,7 @@ No script injection into the app's window is known. But one would have reached e
 
 - **Retained handles, as the preview's local files have (`PickedFiles`, ADR 0007).** A handle doesn't outlive a restart, so a queued message would lose its files. And holding one open per attachment holds a file descriptor for each.
 - **Asking the owner before a local terminal opens.** `terminal_open_local` still opens a shell when the webview asks. The script policy is what stops an injected script from asking. A confirmation would add a step to every terminal the owner opens.
-- **`img-src 'self' data: blob:`.** It would also block remote images in replies, which issue #341 handles separately.
+- **`img-src 'self' data: blob:`.** It would also block remote images in replies, which ADR 0099 handles separately.
 
 ## Consequences
 
