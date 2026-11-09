@@ -88,9 +88,11 @@ const list = (): WorktreeList => ({
 
 function repoApi(refuse?: Partial<Record<RepoRequest["op"], RepoFailure>>, hold?: Partial<Record<RepoRequest["op"], Promise<void>>>) {
   const calls: RepoRequest[] = [];
+  const targets: string[] = [];
   const api: RepoApi = {
-    run: async (_target, request) => {
+    run: async (target, request) => {
       calls.push(request);
+      targets.push(target);
       await hold?.[request.op];
       const no = refuse?.[request.op];
       if (no) throw no;
@@ -110,7 +112,7 @@ function repoApi(refuse?: Partial<Record<RepoRequest["op"], RepoFailure>>, hold?
       }
     },
   };
-  return { api, calls };
+  return { api, calls, targets };
 }
 
 function server() {
@@ -199,6 +201,31 @@ describe("a chat started in a worktree", () => {
     expect((screen.getByPlaceholderText("Message Hermes") as HTMLTextAreaElement).value).toBe("Fix it");
   });
 
+  it("starts once and sends when this computer's storage is full, and says the worktree wasn't noted here", async () => {
+    const s = server();
+    const { api, calls } = repoApi();
+    const { user, hermes } = await launch(s, api);
+    await startHere(user);
+    // The app's drafts stay in memory from the tests before this one.
+    await user.clear(screen.getByPlaceholderText("Message Hermes"));
+    const full = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    });
+    try {
+      await send(user, "Fix the login page");
+      await waitFor(() => expect(calls.map((c) => c.op)).toContain("worktreeAttachConfirm"));
+      await act(async () => void (await hermes.idle()));
+      expect(screen.queryByText(/Couldn't start a chat/)).toBeNull();
+      expect(creates(s)).toHaveLength(1);
+      await waitFor(() => expect(onScreen()).not.toBe("New chat"));
+      expect(await screen.findByText(/couldn't note that it works in \/srv\/app-feature/)).toBeTruthy();
+      await waitFor(() => expect(s.requests.filter((r) => r.method === "prompt.submit").map((r) => r.params.text)).toEqual(["Fix the login page"]));
+      expect((screen.getByPlaceholderText("Message Hermes") as HTMLTextAreaElement).value).toBe("");
+    } finally {
+      full.mockRestore();
+    }
+  });
+
   it("can be started elsewhere instead, from the New chat pane", async () => {
     const s = server();
     const { api, calls } = repoApi();
@@ -248,5 +275,28 @@ describe("a chat started in a worktree", () => {
     await act(async () => void (await hermes.idle()));
     expect(s.requests.filter((r) => r.method === "prompt.submit")).toEqual([]);
     expect(Object.values(localStorage).some((v) => typeof v === "string" && v.includes("Fix the login page"))).toBe(true);
+  });
+});
+
+describe("with this computer's storage full", () => {
+  it("still reads the repository at a newly typed SSH target", async () => {
+    const s = server();
+    const { api, targets } = repoApi();
+    const { user } = await launch(s, api);
+    await user.click(screen.getByRole("button", { name: "Repository" }));
+    await waitFor(() => expect(targets).toContain("liam@hermes"));
+    const full = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    });
+    try {
+      await user.click(screen.getByRole("button", { name: "Change the SSH target" }));
+      const field = screen.getByLabelText("SSH target");
+      await user.clear(field);
+      await user.type(field, "root@other");
+      await user.click(screen.getByRole("button", { name: "Use this target" }));
+      await waitFor(() => expect(targets).toContain("root@other"));
+    } finally {
+      full.mockRestore();
+    }
   });
 });
