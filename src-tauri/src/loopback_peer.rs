@@ -1,4 +1,4 @@
-//! Which account a connection to a relay port on `127.0.0.1` comes from (ADR 0103, #355). The sign-in tunnel and
+//! Which account a connection to a relay port on `127.0.0.1` comes from (ADR 0105, #355). The sign-in tunnel and
 //! every server page relay through such a port (`server_page::serve`), and only the owner's own programs may use it.
 //!
 //! On Linux the peer's socket is looked up in `/proc/net/tcp` and `/proc/net/tcp6`, which name each socket's owner.

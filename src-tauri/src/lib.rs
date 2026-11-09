@@ -4,6 +4,7 @@ pub mod browser;
 pub mod connect_steps;
 pub mod connection_attempts;
 pub mod defaults_file;
+pub mod dev_servers;
 pub mod display;
 pub mod fonts;
 pub mod links;
@@ -21,6 +22,7 @@ pub mod screenshot;
 pub mod server_page;
 pub mod summon;
 pub mod terminal;
+pub mod touch_keyboard;
 pub mod transport;
 pub mod tray;
 pub mod tunnel;
@@ -694,6 +696,25 @@ async fn preview_server_open(
         .await
 }
 
+#[tauri::command]
+async fn preview_dev_servers(state: State<'_, AppState>) -> Result<dev_servers::DevServers, String> {
+    use dev_servers::{plausible, ServerSide};
+    let target = match &*state.0.lock().await {
+        None => Err(ServerSide::NotConnected),
+        Some(conn) => conn.ssh_target.clone().ok_or(ServerSide::NoSshTarget),
+    };
+    let local = tauri::async_runtime::spawn_blocking(dev_servers::local);
+    let server = match target {
+        Err(side) => side,
+        Ok(target) => match server_page::listening("ssh", &target).await {
+            Ok(out) => ServerSide::Listed { ports: dev_servers::parse_ss(&out).into_iter().filter(|l| plausible(l, &[DASHBOARD_PORT])).collect() },
+            Err(e) => ServerSide::Failed { message: e.to_string() },
+        },
+    };
+    let local = local.await.map_err(|e| e.to_string())?.into_iter().filter(|l| plausible(l, &[])).collect();
+    Ok(dev_servers::DevServers { server, local })
+}
+
 /// Closes the page `key` opened, or is opening; if Rust hasn't seen its `preview_server_open` yet, that is refused.
 #[tauri::command]
 fn preview_server_close(pages: State<'_, Arc<server_page::ServerPages>>, key: String) {
@@ -1223,10 +1244,22 @@ async fn preview_open_in_browser(app: tauri::AppHandle, url: String) -> Result<O
     web_page::open_in_browser(&app, &url).await
 }
 
-/// Shows a web page in the Preview's own WebKitGTK view (page_view.rs, ADR 0081). `key`: this page's name from now on.
+/// Makes the Preview's own WebKitGTK view for web pages (page_view.rs, ADR 0081), ending the one before it. `key`: its
+/// name from now on.
 #[tauri::command]
-fn preview_page_open(app: tauri::AppHandle, key: String, url: String, on_event: Channel<page_view::PageEvent>) -> Result<(), String> {
-    page_view::open(&app, key, &url, on_event)
+fn preview_page_open(app: tauri::AppHandle, key: String, on_event: Channel<page_view::PageEvent>) -> Result<(), String> {
+    page_view::open(&app, key, on_event)
+}
+
+/// Shows `url` in the Preview's view, going back or forward in the view's own list when that is where it is.
+#[tauri::command]
+fn preview_page_go(app: tauri::AppHandle, key: String, url: String) -> Result<(), String> {
+    page_view::go(&app, key, &url)
+}
+
+#[tauri::command]
+fn preview_page_reload(app: tauri::AppHandle, key: String) {
+    page_view::reload(&app, key)
 }
 
 /// Shows the Preview's page at `placement`, or hides it (`None`).
@@ -1235,7 +1268,6 @@ fn preview_page_place(app: tauri::AppHandle, key: String, placement: Option<page
     page_view::place(&app, key, placement)
 }
 
-/// Hides the Preview's page and stops it.
 #[tauri::command]
 fn preview_page_close(app: tauri::AppHandle, key: String) {
     page_view::close(&app, key)
@@ -1419,6 +1451,11 @@ pub fn run(screenshot: bool, link: Option<String>) {
             use tauri::Emitter;
             app.state::<Attachable>().load(app.path().app_data_dir()?.join("attachable.json"));
             main_window::build(app.handle())?;
+            // Lifts the page above the docked touch keyboard, which Windows lays over the window (ADR 0103).
+            #[cfg(windows)]
+            if let Some(window) = app.get_webview_window("main") {
+                touch_keyboard::start(window);
+            }
             // WebKitGTK leaves `navigator.mediaDevices` out unless media capture is turned on. WebView2 has it, and asks
             // `permission` for the microphone.
             #[cfg(target_os = "linux")]
@@ -1528,10 +1565,13 @@ pub fn run(screenshot: bool, link: Option<String>) {
             preview_check_web,
             preview_open_in_browser,
             preview_page_open,
+            preview_page_go,
+            preview_page_reload,
             preview_page_place,
             preview_page_close,
             preview_server_open,
             preview_server_close,
+            preview_dev_servers,
             notify_desktop,
             system_fonts,
             screenshot_capture,
@@ -1572,7 +1612,8 @@ pub fn run(screenshot: bool, link: Option<String>) {
             tray::tray_set_close_to_tray,
             tray::tray_inbox,
             tray::window_unsaved,
-            tray::window_hidden
+            tray::window_hidden,
+            touch_keyboard::touch_keyboard_covered
         ])
         .build(context)
         .expect("error while building tauri application")

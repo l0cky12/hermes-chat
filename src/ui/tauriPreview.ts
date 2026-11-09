@@ -1,9 +1,6 @@
-// The preview pane's Local files, through Rust: the Open dialog runs there, and only a file picked in it can be read
-// again (src-tauri/src/lib.rs `preview_pick_local`, `preview_read_local`, `preview_read_local_image`). And its web
-// pages' framing check and Open in your browser (src-tauri/src/web_page.rs, ADR 0011).
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { asError } from "../hermes/tauriPipe";
-import { readLocalFile, type FileView, type Framing, type LocalText } from "../hermes/preview";
+import { readLocalFile, type FileView, type Framing, type LocalText, type ViewUrl } from "../hermes/preview";
 
 export type LocalFiles = {
   /** Opens the Open dialog; null when the owner cancels. */
@@ -31,20 +28,22 @@ export type WebPages = {
   openInBrowser(url: string): Promise<string | null>;
   /** Where there is one (Linux), the Preview's own page view, which takes the frame's place (ADR 0081). */
   native?: NativePages;
+  devServers(): Promise<DevServers>;
+};
+
+export type Listening = { port: number; process?: string };
+export type DevServers = {
+  server: { kind: "listed"; ports: Listening[] } | { kind: "noSshTarget" } | { kind: "notConnected" } | { kind: "failed"; message: string };
+  local: Listening[];
 };
 
 /** A rectangle in the window's CSS pixels. */
 export type Rect = { x: number; y: number; width: number; height: number };
 /** Where a native page shows, and the parts of that the app's own layers cover, which the page leaves bare. */
 export type Placement = { rect: Rect; holes: Rect[] };
-/**
- * What a native page says: its first response came, so it has something to show; it couldn't load; or the owner
- * pressed Escape in it and the page didn't use it, which gives the keyboard back to the app.
- */
-export type PageEvent = { kind: "shown" } | { kind: "failed"; message: string } | { kind: "escaped" };
-/** A page open in the native view. Hidden until placed; `close` hides and stops it. */
-export type NativePage = { place(placement: Placement | null): void; close(): void };
-export type NativePages = { open(url: string, onEvent: (e: PageEvent) => void): NativePage };
+export type PageEvent = { kind: "at"; url: ViewUrl; replace: boolean } | { kind: "failed"; message: string } | { kind: "escaped" };
+export type NativePage = { go(url: ViewUrl): void; reload(): void; place(placement: Placement | null): void; close(): void };
+export type NativePages = { open(onEvent: (e: PageEvent) => void): NativePage };
 
 /**
  * The view's commands, each sent once the one before it has finished, so Rust gets them in the order the pane made
@@ -58,15 +57,17 @@ const inOrder = <T>(command: () => Promise<T>): Promise<T> => {
 };
 
 export const tauriNativePages: NativePages = {
-  open: (url, onEvent) => {
-    // The page's name in Rust, so a page that went away can't move or close the next one.
-    const key = crypto.randomUUID();
+  open: (onEvent) => {
+    const viewKey = crypto.randomUUID();
     const events = new Channel<PageEvent>();
     events.onmessage = onEvent;
-    inOrder(() => invoke("preview_page_open", { key, url, onEvent: events })).catch((e) => onEvent({ kind: "failed", message: String(e) }));
+    const failed = (e: unknown) => onEvent({ kind: "failed", message: String(e) });
+    inOrder(() => invoke("preview_page_open", { key: viewKey, onEvent: events })).catch(failed);
     return {
-      place: (placement) => void inOrder(() => invoke("preview_page_place", { key, placement })).catch(() => {}),
-      close: () => void inOrder(() => invoke("preview_page_close", { key })).catch(() => {}),
+      go: (url) => void inOrder(() => invoke("preview_page_go", { key: viewKey, url })).catch(failed),
+      reload: () => void inOrder(() => invoke("preview_page_reload", { key: viewKey })).catch(() => {}),
+      place: (placement) => void inOrder(() => invoke("preview_page_place", { key: viewKey, placement })).catch(() => {}),
+      close: () => void inOrder(() => invoke("preview_page_close", { key: viewKey })).catch(() => {}),
     };
   },
 };
@@ -75,6 +76,7 @@ export const tauriWebPages: WebPages = {
   check: (url) => invoke<Framing>("preview_check_web", { url, userAgent: navigator.userAgent }).catch(asError),
   openInBrowser: (url) => invoke<string | null>("preview_open_in_browser", { url }).catch(asError),
   ...(/\bLinux\b/.test(navigator.userAgent) && { native: tauriNativePages }),
+  devServers: () => invoke<DevServers>("preview_dev_servers").catch(asError),
 };
 
 /**
