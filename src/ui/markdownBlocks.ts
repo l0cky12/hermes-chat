@@ -5,11 +5,12 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfm } from "micromark-extension-gfm";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import type { Nodes } from "mdast";
+import { mathMdast, mathSyntax } from "./markdownMath";
 
 /**
  * One top-level block: its source, from the start of its first line to where the parser says it ends, so the blank
  * lines after a finished block don't change its text as the next one begins. `refs`: it defines a link reference or
- * footnote. `open`: it ends in code that may still be coming in.
+ * footnote. `open`: it ends in code, or a `$$` math block, that may still be coming in.
  */
 export type Block = { start: number; text: string; refs: boolean; open: boolean };
 
@@ -19,28 +20,29 @@ export type Block = { start: number; text: string; refs: boolean; open: boolean 
  */
 export type Blocks = { text: string; blocks: Block[]; whole: boolean };
 
-// How many fences (opening, then closing) the parser found for each fenced code node; indented code has none. Read
-// from micromark's own tokens, so a fence-like line that is really code content, or in another container, isn't one.
+// How many fences (opening, then closing) the parser found for each fenced code or `$$` math node; indented code has
+// none. Read from micromark's own tokens, so a fence-like line that is really code content, or in another container,
+// isn't one.
 const fences = new WeakMap<object, number>();
-const countFences = {
-  enter: {
-    codeFencedFence(this: { stack: { type: string }[] }) {
-      // The code node, under the fragment its content is gathered into by the time the closing fence comes.
-      const code = [...this.stack].reverse().find((n) => n.type === "code");
-      if (code) fences.set(code, (fences.get(code) ?? 0) + 1);
-    },
-  },
-};
+const countFence = (type: "code" | "math") =>
+  function (this: { stack: { type: string }[] }) {
+    // The node, under the fragment its content is gathered into by the time the closing fence comes.
+    const node = [...this.stack].reverse().find((n) => n.type === type);
+    if (node) fences.set(node, (fences.get(node) ?? 0) + 1);
+  };
+const countFences = { enter: { codeFencedFence: countFence("code"), mathFlowFence: countFence("math") } };
 
-const options = { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown(), countFences] };
+const options = { extensions: [gfm(), mathSyntax], mdastExtensions: [gfmFromMarkdown(), mathMdast, countFences] };
 
 /**
- * Whether `node`, parsed from `source`, ends in code that may still be coming in: code with nothing but blank space
- * after it, whose fence isn't closed yet, or that has no fence (indented code goes on while indented lines come).
+ * Whether `node`, parsed from `source`, ends in code that may still be coming in: code or a `$$` math block with
+ * nothing but blank space after it, whose fence isn't closed yet, or that has no fence (indented code goes on while
+ * indented lines come).
  */
 function endsInOpenCode(node: Nodes, source: string): boolean {
   for (;;) {
-    if (node.type === "code") return !source.slice(node.position?.end.offset ?? source.length).trim() && (fences.get(node) ?? 0) < 2;
+    if (node.type === "code" || node.type === "math")
+      return !source.slice(node.position?.end.offset ?? source.length).trim() && (fences.get(node) ?? 0) < 2;
     if (!("children" in node) || !node.children.length) return false;
     node = node.children[node.children.length - 1];
   }

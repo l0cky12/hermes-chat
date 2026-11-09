@@ -1,9 +1,10 @@
-// Markdown with highlighted, copyable code blocks and find-in-chat marks. Ported from the prototype. Single newlines
-// are kept as line breaks, since replies often put one item per line. Links open in the preview pane, never in the
-// app's own window (previewContext.tsx).
+// Markdown with highlighted, copyable code blocks, typeset math and find-in-chat marks. Ported from the prototype.
+// Single newlines are kept as line breaks, since replies often put one item per line. Links open in the preview pane,
+// never in the app's own window (previewContext.tsx).
 import { Children, Fragment, isValidElement, memo, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { Check, Copy, Image as ImageIcon } from "lucide-react";
+import "katex/dist/katex.min.css";
 import { PreviewLink } from "./previewContext";
 import { splitBlocks, type Blocks } from "./markdownBlocks";
 import { rehypePlugins, remarkPlugins } from "./markdownPipeline";
