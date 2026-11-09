@@ -3434,7 +3434,7 @@ export class Hermes {
     this.patchChat(
       chat.id,
       (c) => {
-        const next = applyEvent(c, type, payload);
+        const next = applyEvent(c, type, payload, from);
         return usage ? { ...next, items: withReplyUsage(next.items, usage, from) } : next;
       },
       delta,
@@ -3442,6 +3442,7 @@ export class Hermes {
     if (type === "message.complete") {
       const receipt = (payload.persisted_turn ?? {}) as PersistedTurn;
       this.noteRows(chat.id, [receipt.user_row_id, receipt.final_assistant_row_id, ...(Array.isArray(receipt.row_ids) ? receipt.row_ids : [])]);
+      if (!this.turns.has(chat.id)) this.track(this.showUnsentPrompt(chat.id, receipt, from));
       this.stampTurn(chat.id, receipt);
     }
     if (type === "message.complete") this.track(this.refreshUsage(chat.id));
@@ -3543,6 +3544,32 @@ export class Hermes {
         if (at.size) this.saveTranscript(chatId);
       })(),
     );
+  }
+
+  /**
+   * At the end of a turn not started from here, shows the message that began it where the history shows it after a
+   * reload: just before the turn. Hermes starts such a turn itself when work a chat dispatched comes back
+   * (`tui_gateway/session_notifications.py`), and its `message.start` carries no text, so the stored row the turn's
+   * `persisted_turn` names is read back. Rows the history leaves out stay out (`session_history._history_to_messages`).
+   */
+  private async showUnsentPrompt(chatId: string, receipt: PersistedTurn, from: string | null | undefined) {
+    const rowId = receipt.user_row_id;
+    if (typeof rowId !== "number" || from === undefined) return;
+    const query = new URLSearchParams({ profile: this.profile, order: "latest", limit: "100", inline_images: "false" });
+    const res = (await this.rest("GET", `${sessionPath(chatId)}/messages?${query}`)) as { messages?: (StoredRow & StoredMessage)[] };
+    const row = res.messages?.find((m) => m.id === rowId);
+    const text = storedText(row?.content);
+    if (row?.role !== "user" || row.display_kind === "hidden" || !text.trim() || text.trimStart().startsWith("[System:")) return;
+    const at = storedAt(row.timestamp);
+    // A message sent from here that Hermes held until this turn is in the chat already, without its stored row.
+    const shown = (i: Item) => (i.kind === "user" || i.kind === "assistant") && (i.rowId === rowId || (i.kind === "user" && i.rowId === undefined && i.text.trim() === text.trim()));
+    this.patchChat(chatId, (c) => {
+      const start = turnFrom(c.items, from);
+      if (start < 0 || c.items.some(shown)) return c;
+      const user: Item = { kind: "user", id: nextId(c.items, "w"), text, rowId, ...(at && { at }) };
+      return { ...c, items: [...c.items.slice(0, start), user, ...c.items.slice(start)] };
+    });
+    this.saveTranscript(chatId);
   }
 
   /**
@@ -4981,10 +5008,10 @@ const endRunningTools = (items: Item[], status: "done" | "stopped") =>
  * Marks the last reply interrupted and its running tool calls stopped. A reply stopped before it said anything gets
  * an empty one, so the transcript still shows the stop.
  */
-function markInterrupted(items: Item[]): Item[] {
+function markInterrupted(items: Item[], from?: string | null): Item[] {
   const out = endRunningTools(items, "stopped");
   const last = out[out.length - 1];
-  if (last?.kind === "assistant") out[out.length - 1] = { ...last, interrupted: true };
+  if (last?.kind === "assistant" && last.id !== from) out[out.length - 1] = { ...last, interrupted: true };
   else out.push({ kind: "assistant", id: nextId(out, "a"), text: "", interrupted: true });
   return out;
 }
@@ -4994,9 +5021,9 @@ function markInterrupted(items: Item[]): Item[] {
  * unless it has some already, which a repeated `message.complete` would find.
  */
 function withReplyUsage(items: Item[], usage: ReplyUsage, from?: string | null): Item[] {
-  const start = from === null ? 0 : from === undefined ? turnStart(items) : items.findIndex((i) => i.id === from) + 1;
+  const start = turnFrom(items, from);
   // If the boundary itself disappeared, there is no reliable turn to attach these counters to.
-  if (typeof from === "string" && start === 0) return items;
+  if (start < 0) return items;
   for (let n = items.length - 1; n >= start; n--) {
     const i = items[n];
     if (i.kind !== "assistant" && i.kind !== "error") continue;
@@ -5008,11 +5035,25 @@ function withReplyUsage(items: Item[], usage: ReplyUsage, from?: string | null):
   return items;
 }
 
+/**
+ * Where the running turn's items start: just after `from`, the last item before its `message.start` (`null`: the chat
+ * had none), else after the owner's last message (`turnStart`). -1 when `from` is no longer in the chat.
+ */
+function turnFrom(items: Item[], from?: string | null): number {
+  if (from === null) return 0;
+  if (from === undefined) return turnStart(items);
+  const at = items.findIndex((i) => i.id === from);
+  return at < 0 ? -1 : at + 1;
+}
+
 // Fold one session event into a chat. Text deltas extend the trailing assistant item, or start a new one
-// after a tool call; reasoning deltas do the same with thinking items.
-function applyEvent(c: Chat, type: string, p: Record<string, unknown>): Chat {
+// after a tool call; reasoning deltas do the same with thinking items. `from` is the last item before the running
+// turn's `message.start`: a turn Hermes starts by itself has no message from the owner before it, so the item it would
+// otherwise extend is the last turn's.
+function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: string | null): Chat {
   const items = [...c.items];
-  const last = items[items.length - 1];
+  const tail = items[items.length - 1];
+  const last = tail?.id === from ? undefined : tail;
   switch (type) {
     case "message.start":
       return { ...c, running: true, updatedAt: Date.now() };
@@ -5079,7 +5120,8 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>): Chat {
     case "message.complete": {
       // Providers that don't stream send the whole reply here; a streamed turn repeats text it already sent.
       // A steered message is part of the turn, so the turn starts at the last message that began one.
-      const lastUser = turnStart(items) - 1;
+      const begin = turnFrom(items, from);
+      const lastUser = (begin < 0 ? turnStart(items) : begin) - 1;
       const answered = items.slice(lastUser + 1).some((i) => i.kind === "assistant");
       // The last response's reasoning, for a turn that showed none: it goes before the reply.
       const reasoning = typeof p.reasoning === "string" ? p.reasoning.trim() : "";
@@ -5090,7 +5132,7 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>): Chat {
       if (!answered && typeof p.text === "string" && p.text) items.push({ kind: "assistant", id: nextId(items, "a"), text: p.text });
       const end = { ...c, live: withLive(c.live, undefined, p.usage), running: false, stopping: false, updatedAt: Date.now() };
       // Stopped here or from another Hermes client.
-      if (p.status === "interrupted") return { ...end, items: markInterrupted(endWaitingApprovals(items, "turn ended")) };
+      if (p.status === "interrupted") return { ...end, items: markInterrupted(endWaitingApprovals(items, "turn ended"), from) };
       const failure = p.error ?? (p.status === "error" ? p.failure_reason ?? "The turn failed." : undefined);
       if (failure) items.push(errorItem({ ...c, items }, String(failure)));
       return { ...end, items: endRunningTools(endWaitingApprovals(items, "turn ended"), "done") };

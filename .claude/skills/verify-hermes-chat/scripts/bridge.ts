@@ -129,7 +129,7 @@ const mathReply = (broken: boolean) =>
   "The prune runs after the check:\n\n" +
   (broken ? "```mermaid\nsequenceDiagram\n  cron->>restic: unlock\n  restic-->>\n```\n" : "```mermaid\nsequenceDiagram\n  cron->>restic: unlock\n  restic-->>cron: ok\n  cron->>restic: check --read-data-subset=5%\n  restic-->>cron: no errors\n  cron->>restic: forget --prune\n```\n");
 
-function replyTo(sessionId: string, prompt: string, said?: string) {
+function replyTo(sessionId: string, prompt: string, said?: string, persisted_turn?: Record<string, unknown>) {
   const long = longParagraphs > 0 && prompt.startsWith("long");
   const math = prompt.startsWith("math") || prompt.startsWith("badmath");
   const text =
@@ -150,7 +150,7 @@ function replyTo(sessionId: string, prompt: string, said?: string) {
     const stored = server.runtime.get(sessionId);
     if (stored) server.storeMessage(stored, { role: "assistant", text });
     setTimeout(() => {
-      server.event(sessionId, "message.complete", { text, status: "complete" });
+      server.event(sessionId, "message.complete", { text, status: "complete", ...(persisted_turn && { persisted_turn }) });
       save();
     }, 120);
   };
@@ -158,7 +158,7 @@ function replyTo(sessionId: string, prompt: string, said?: string) {
 }
 
 server.kanban.wakeDelayMs = 2_000;
-server.kanban.wakeWith = (sid, _stored, text) => replyTo(sid, "", text);
+server.kanban.wakeWith = (sid, _stored, text, user_row_id) => replyTo(sid, "", text, { user_row_id });
 
 // The subagents a "delegate" prompt started, as `subagent.start` / `subagent.complete` payloads carry them
 // (`tools/delegate_tool.py` at the deployed `f0d94882`). Each is also in Hermes's registry, for `subagent.list`.
