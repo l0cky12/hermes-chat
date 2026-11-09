@@ -1,6 +1,6 @@
-// A chat as a file, saved where the owner picks in the native Save dialog (`chat_export` in src-tauri/src/lib.rs): as
-// Markdown to read, or as JSON in Hermes's own session-export shape, which keeps each message's time and which Import
-// reads back. The Export dialog (ui/ExportChat.tsx) chooses the format, what goes in and what is redacted, and shows the
+// A chat as a file, saved where the owner picks in the native Save dialog (`chat_export` and `chat_export_image` in
+// src-tauri/src/lib.rs): as Markdown to read, as JSON in Hermes's own session-export shape, which keeps each message's
+// time and which Import reads back, or as a PNG picture to share (exportImage.ts). The Export dialog (ui/ExportChat.tsx) chooses the format, what goes in and what is redacted, and shows the
 // file before it is saved (ADR 0076). Never in it: connection details or attachment contents. Only JSON has the
 // chat's session id, so an import of it is skipped where Hermes already has the chat.
 import { invoke } from "@tauri-apps/api/core";
@@ -8,6 +8,7 @@ import type { ApprovalChoice, Chat, Item } from "./model";
 import { findSecrets } from "./secrets";
 import { asError } from "./tauriPipe";
 import { LOAD_ERROR_ID } from "./transport";
+import type { ImagePage } from "./exportImage";
 import type { ChatUsage } from "./usage";
 
 /** Shows the Save dialog for `format` and writes `text` where the owner picks. The path saved to, or `null` if cancelled. */
@@ -148,12 +149,17 @@ function exportNotes(chat: Chat, exportedAt: Date, choice: Omit<ExportChoice, "r
  */
 type Write = (chat: Chat, exportedAt: Date, choice: Omit<ExportChoice, "redact">, text: (s: string) => string, places: () => number) => string;
 
-export type ExportFormat = "markdown" | "json";
+export type ExportFormat = "markdown" | "json" | "image";
 
-export const EXPORT_FORMATS: Record<ExportFormat, { label: string; extension: string; write: Write; title: (file: string) => string }> = {
+/**
+ * Each format the Export dialog offers. A `text` format's file is what `write` returns. An `image` format's `write`
+ * returns its `ImagePage` as JSON, which `exportImage.ts` draws and Save writes as a PNG.
+ */
+export const EXPORT_FORMATS: Record<ExportFormat, { label: string; extension: string; kind: "text" | "image"; write: Write; title: (file: string) => string }> = {
   markdown: {
     label: "Markdown",
     extension: "md",
+    kind: "text",
     write: (chat, exportedAt, choice, text, places) => {
       const title = text(`# ${oneLine(chat.title) || "Untitled chat"}`);
       const body = text(
@@ -169,10 +175,50 @@ export const EXPORT_FORMATS: Record<ExportFormat, { label: string; extension: st
   json: {
     label: "JSON",
     extension: "json",
+    kind: "text",
     write: (chat, exportedAt, choice, text, places) => JSON.stringify([jsonSession(chat, exportedAt, choice, text, places)], null, 2) + "\n",
     title: (file) => (JSON.parse(file) as { title?: string }[])[0].title ?? "",
   },
+  image: {
+    label: "Image",
+    extension: "png",
+    kind: "image",
+    write: (chat, exportedAt, choice, text, places) => JSON.stringify(imagePage(chat, exportedAt, choice, text, places)),
+    title: (file) => (JSON.parse(file) as ImagePage).title,
+  },
 };
+
+/**
+ * The chosen items as a picture shows them: each message's words as written, a tool call's name, command and output
+ * (not its arguments), and an Approval's command and outcome. The caption says when it was exported and how much was redacted.
+ */
+function imagePage(chat: Chat, exportedAt: Date, choice: Omit<ExportChoice, "redact">, text: (s: string) => string, places: () => number): ImagePage {
+  const blocks = chosen(chat, choice).flatMap((i): ImagePage["blocks"] => {
+    switch (i.kind) {
+      case "user": {
+        const files = choice.attachments && i.attachments?.length ? `\n\nAttached: ${i.attachments.map(text).join(", ")}` : "";
+        return [{ who: "You", text: text(i.text) + files }];
+      }
+      case "assistant":
+        return [{ who: "Hermes", text: text(i.text) + (i.interrupted ? "\n\n(stopped before it finished)" : "") }];
+      case "thinking":
+        return [{ who: "Hermes, thinking", text: text(i.text) }];
+      case "tool":
+        return [{ who: "Tool", text: [[i.name, i.preview].filter(Boolean).map((t) => text(t!)).join(" "), i.result !== undefined && text(i.result)].filter(Boolean).join("\n") }];
+      case "approval": {
+        const outcome = i.answer ? ANSWER[i.answer] : i.ended ? `No answer from here (${i.ended})` : "Waiting for an answer";
+        return [{ who: "Approval", text: `${text(i.description)}\n${text(i.command)}\n${outcome}` }];
+      }
+      case "error":
+        return [];
+    }
+  });
+  const title = text(oneLine(chat.title) || "Untitled chat");
+  const iso = exportedAt.toISOString();
+  const n = places();
+  const caption = `Exported from Hermes Chat on ${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC · ${n === 1 ? "1 place" : `${n} places`} redacted`;
+  return { title, caption, blocks };
+}
 
 /** A chat's usage under Hermes's session field names, as `usage.ts` `chatUsageOf` reads them. */
 const USAGE_FIELDS: [Exclude<keyof ChatUsage, "cost" | "readAt">, string][] = [

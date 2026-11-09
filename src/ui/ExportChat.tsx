@@ -11,10 +11,13 @@ import {
   exportPreview,
   isMessage,
   saveExport,
+  saveImage,
   type ExportDraft,
   type ExportFormat,
   type SaveFile,
+  type SaveImage,
 } from "../hermes/exportChat";
+import { chatImage, type ImagePage } from "../hermes/exportImage";
 import { composing } from "./bits";
 import { useModal } from "./modal";
 
@@ -37,18 +40,26 @@ const places = (n: number) => (n === 1 ? "1 place" : `${n} places`);
 const ABOUT: Record<ExportFormat, string> = {
   markdown: "A Markdown file of the chat, to read.",
   json: "A JSON file of the chat in Hermes's own session format, with each message's time. Import transcripts reads it back.",
+  image: "A PNG picture of the chosen messages, to share. Tool calls show their command and output.",
 };
+
+/** The picture drawn for one preview, so a draw that finishes after the owner changed something is never shown or saved. */
+type Drawn = { of: string; png?: string; problem?: string };
 
 /** Escape, Cancel or a click outside closes it without saving. `onSaved` gets the notice to show once a file is saved. */
 export function ExportChatDialog({
   chat,
   save,
+  saveAsImage,
+  draw = chatImage,
   returnTo,
   onSaved,
   onClose,
 }: {
   chat: Chat;
   save?: SaveFile;
+  saveAsImage?: SaveImage;
+  draw?: (page: ImagePage) => Promise<string>;
   returnTo?: RefObject<HTMLElement | null>;
   onSaved: (notice: string) => void;
   onClose: () => void;
@@ -74,6 +85,22 @@ export function ExportChatDialog({
   const attached = shot.items.reduce((n, i) => n + (i.kind === "user" ? (i.attachments?.length ?? 0) : 0), 0);
   const chosen = messages.length - messages.filter((m) => draft.leftOut.has(m.id)).length;
   const empty = !chosen && !(draft.toolCalls && tools);
+  const isImage = EXPORT_FORMATS[format].kind === "image";
+  const [drawn, setDrawn] = useState<Drawn>();
+  const picture = isImage && drawn?.of === preview.text ? drawn : undefined;
+
+  useEffect(() => {
+    if (!isImage) return;
+    let live = true;
+    const of = preview.text;
+    draw(JSON.parse(of) as ImagePage).then(
+      (png) => live && setDrawn({ of, png }),
+      (e: unknown) => live && setDrawn({ of, problem: e instanceof Error ? e.message : String(e) }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [isImage, preview.text]);
 
   // Text selected in the preview goes in Text to redact, which can also be typed or pasted into from the keyboard.
   useEffect(() => {
@@ -106,7 +133,9 @@ export function ExportChatDialog({
     setSaving(true);
     setNote(undefined);
     try {
-      const notice = await saveExport(preview.text, preview.fileName, format, save);
+      const notice = isImage
+        ? picture?.png && (await saveImage(picture.png, preview.fileName, saveAsImage))
+        : await saveExport(preview.text, preview.fileName, format, save);
       if (notice) {
         onSaved(notice);
         onClose();
@@ -242,7 +271,9 @@ export function ExportChatDialog({
           <span id={pickHelpId} className={overlaps ? "small export-pick-problem" : "muted small"}>
             {overlaps
               ? `Leave ${REDACTED} out: pick text the chat has, on one side of it or the other.`
-              : "Select text in the file below, or type it, to replace it everywhere it appears."}
+              : isImage
+                ? "Type or paste text to replace it everywhere it appears in the picture."
+                : "Select text in the file below, or type it, to replace it everywhere it appears."}
           </span>
         </form>
         {preview.picked.length > 0 && (
@@ -261,14 +292,28 @@ export function ExportChatDialog({
             ))}
           </ul>
         )}
-        <pre ref={pre} className="export-preview" tabIndex={0} aria-label="The file, exactly as it will be saved">
-          {parts.map((t, n) => (
-            <span key={n}>
-              {n > 0 && <mark>{REDACTED}</mark>}
-              {t}
-            </span>
-          ))}
-        </pre>
+        {isImage ? (
+          <div className="export-preview export-image" tabIndex={0} aria-label="The picture, exactly as it will be saved" aria-busy={!picture}>
+            {picture?.png ? (
+              <img src={`data:image/png;base64,${picture.png}`} alt={`The chat “${shot.title}” as a picture`} />
+            ) : picture?.problem ? (
+              <p role="alert" className="logs-problem">
+                {picture.problem}
+              </p>
+            ) : (
+              <p className="muted small">Drawing the picture…</p>
+            )}
+          </div>
+        ) : (
+          <pre ref={pre} className="export-preview" tabIndex={0} aria-label="The file, exactly as it will be saved">
+            {parts.map((t, n) => (
+              <span key={n}>
+                {n > 0 && <mark>{REDACTED}</mark>}
+                {t}
+              </span>
+            ))}
+          </pre>
+        )}
         {note && (
           <p role="alert" className="logs-problem">
             {note}
@@ -278,7 +323,7 @@ export function ExportChatDialog({
           <button className="btn" onClick={onClose} disabled={saving}>
             Cancel
           </button>
-          <button className="btn primary" onClick={() => void doSave()} disabled={saving || empty}>
+          <button className="btn primary" onClick={() => void doSave()} disabled={saving || empty || (isImage && !picture?.png)}>
             <Download size={14} /> Save…
           </button>
         </div>

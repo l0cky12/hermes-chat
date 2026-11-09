@@ -8,6 +8,7 @@ import { FakeHermes, row } from "../hermes/fakeHermes";
 import type { Chat } from "../hermes/model";
 import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
+import type { ImagePage } from "../hermes/exportImage";
 import { ExportChatDialog } from "./ExportChat";
 
 const tauri = vi.hoisted(() => ({
@@ -95,9 +96,25 @@ function open(c = chat()) {
   const saves: [string, string, string][] = [];
   const onSaved = vi.fn();
   const onClose = vi.fn();
-  const props = { save: async (text: string, name: string, format: string) => (saves.push([text, name, format]), `/x/${name}`), onSaved, onClose };
+  const drawn: ImagePage[] = [];
+  const pictures: [string, string][] = [];
+  const props = {
+    save: async (text: string, name: string, format: string) => (saves.push([text, name, format]), `/x/${name}`),
+    draw: async (page: ImagePage) => (drawn.push(page), `PNG${drawn.length}`),
+    saveAsImage: async (png: string, name: string) => (pictures.push([png, name]), `/x/${name}`),
+    onSaved,
+    onClose,
+  };
   const view = render(<ExportChatDialog chat={c} {...props} />);
-  return { saves, onSaved, onClose, rerender: (next: Chat) => view.rerender(<ExportChatDialog chat={next} {...props} />), user: userEvent.setup() };
+  return {
+    saves,
+    drawn,
+    pictures,
+    onSaved,
+    onClose,
+    rerender: (next: Chat) => view.rerender(<ExportChatDialog chat={next} {...props} />),
+    user: userEvent.setup(),
+  };
 }
 
 /** Selects the first `text` in the preview, across its marked parts, as a drag would. */
@@ -213,6 +230,38 @@ describe("The Export dialog", () => {
     expect(call[0].function.name).toBe("web_search");
     expect(JSON.parse(call[0].function.arguments)).toEqual({ q: "pizza Duluth" });
     expect(rows.find((r) => r.role === "tool")).toMatchObject({ tool_call_id: call[0].id, tool_name: "web_search", content: "Sammy's Pizza" });
+  });
+
+  it("draws the chosen messages as a picture with redactions applied, and saves the picture it shows", async () => {
+    const { drawn, pictures, user } = open();
+    await user.click(screen.getByRole("radio", { name: "Image" }));
+    await user.click(screen.getByRole("checkbox", { name: /pizza place/ }));
+    await user.click(screen.getByRole("textbox", { name: "Text to redact" }));
+    await user.paste("Larch Lane");
+    await user.keyboard("{Enter}");
+    const picture = screen.getByLabelText("The picture, exactly as it will be saved");
+    await waitFor(() => expect(within(picture).getByRole("img").getAttribute("src")).toBe(`data:image/png;base64,PNG${drawn.length}`));
+
+    const page = drawn.at(-1)!;
+    expect(page.title).toBe("Moving house");
+    expect(page.caption).toMatch(/· 3 places redacted$/);
+    expect(page.blocks).toEqual([
+      { who: "You", text: "Ship the boxes to 14 [redacted], Duluth." },
+      { who: "Hermes", text: "Booked for 14 [redacted]. The movers' portal password: [redacted]" },
+    ]);
+    await user.click(screen.getByRole("button", { name: "Save…" }));
+    expect(pictures).toEqual([[`PNG${drawn.length}`, "Moving house.png"]]);
+  });
+
+  it("says why when the picture can't be drawn, and won't save one", async () => {
+    const user = userEvent.setup();
+    const draw = async () => {
+      throw new Error("This image would be 40000 px tall. Leave some messages out and try again.");
+    };
+    render(<ExportChatDialog chat={chat()} draw={draw} onSaved={vi.fn()} onClose={vi.fn()} />);
+    await user.click(screen.getByRole("radio", { name: "Image" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Leave some messages out");
+    expect((screen.getByRole("button", { name: "Save…" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("can't save an empty file", async () => {
