@@ -58,16 +58,16 @@ const inOrder = <T>(command: () => Promise<T>): Promise<T> => {
 
 export const tauriNativePages: NativePages = {
   open: (onEvent) => {
-    const key = crypto.randomUUID();
+    const viewKey = crypto.randomUUID();
     const events = new Channel<PageEvent>();
     events.onmessage = onEvent;
     const failed = (e: unknown) => onEvent({ kind: "failed", message: String(e) });
-    inOrder(() => invoke("preview_page_open", { key, onEvent: events })).catch(failed);
+    inOrder(() => invoke("preview_page_open", { key: viewKey, onEvent: events })).catch(failed);
     return {
-      go: (url) => void inOrder(() => invoke("preview_page_go", { key, url })).catch(failed),
-      reload: () => void inOrder(() => invoke("preview_page_reload", { key })).catch(() => {}),
-      place: (placement) => void inOrder(() => invoke("preview_page_place", { key, placement })).catch(() => {}),
-      close: () => void inOrder(() => invoke("preview_page_close", { key })).catch(() => {}),
+      go: (url) => void inOrder(() => invoke("preview_page_go", { key: viewKey, url })).catch(failed),
+      reload: () => void inOrder(() => invoke("preview_page_reload", { key: viewKey })).catch(() => {}),
+      place: (placement) => void inOrder(() => invoke("preview_page_place", { key: viewKey, placement })).catch(() => {}),
+      close: () => void inOrder(() => invoke("preview_page_close", { key: viewKey })).catch(() => {}),
     };
   },
 };

@@ -2,7 +2,7 @@ import { pageOn, type PageOn, type PreviewTarget, type WebTarget } from "../herm
 
 export const HISTORY_KEPT = 50;
 
-export type PreviewHistory = { back: PreviewTarget[]; here: PreviewTarget; forward: PreviewTarget[]; reloads: number } | null;
+export type PreviewHistory = { back: PreviewTarget[]; here: PreviewTarget; forward: PreviewTarget[]; reloadSeq: number } | null;
 
 export type HistoryStep =
   | { kind: "open"; target: PreviewTarget }
@@ -30,15 +30,15 @@ export function sameTarget(a: PreviewTarget, b: PreviewTarget): boolean {
 
 type Open = NonNullable<PreviewHistory>;
 
-const pushed = (h: Open, target: PreviewTarget): Open => ({ back: [...h.back, h.here].slice(-HISTORY_KEPT), here: target, forward: [], reloads: h.reloads });
-const wentBack = (h: Open): Open => ({ back: h.back.slice(0, -1), here: h.back[h.back.length - 1], forward: [h.here, ...h.forward], reloads: h.reloads });
-const wentForward = (h: Open): Open => ({ back: [...h.back, h.here], here: h.forward[0], forward: h.forward.slice(1), reloads: h.reloads });
+const pushed = (h: Open, target: PreviewTarget): Open => ({ back: [...h.back, h.here].slice(-HISTORY_KEPT), here: target, forward: [], reloadSeq: h.reloadSeq });
+const wentBack = (h: Open): Open => ({ back: h.back.slice(0, -1), here: h.back[h.back.length - 1], forward: [h.here, ...h.forward], reloadSeq: h.reloadSeq });
+const wentForward = (h: Open): Open => ({ back: [...h.back, h.here], here: h.forward[0], forward: h.forward.slice(1), reloadSeq: h.reloadSeq });
 
 export function stepHistory(h: PreviewHistory, s: HistoryStep): PreviewHistory {
   switch (s.kind) {
     case "open":
-      if (!h) return { back: [], here: s.target, forward: [], reloads: 0 };
-      return sameTarget(h.here, s.target) ? { ...h, reloads: h.reloads + 1 } : pushed(h, s.target);
+      if (!h) return { back: [], here: s.target, forward: [], reloadSeq: 0 };
+      return sameTarget(h.here, s.target) ? { ...h, reloadSeq: h.reloadSeq + 1 } : pushed(h, s.target);
     case "switch":
       return h?.here.kind === "web" && pageOn(h.here) && pageOn(h.here) !== s.on ? { ...h, here: { ...h.here, on: s.on } } : h;
     case "back":
@@ -46,7 +46,7 @@ export function stepHistory(h: PreviewHistory, s: HistoryStep): PreviewHistory {
     case "forward":
       return h?.forward.length ? wentForward(h) : h;
     case "reload":
-      return h && { ...h, reloads: h.reloads + 1 };
+      return h && { ...h, reloadSeq: h.reloadSeq + 1 };
     case "arrived":
       if (h?.here.kind !== "web" || sameTarget(h.here, s.target)) return h;
       if (s.replace) return { ...h, here: s.target };

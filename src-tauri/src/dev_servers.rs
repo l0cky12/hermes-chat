@@ -61,22 +61,33 @@ pub fn parse_ss(out: &str) -> Vec<Listening> {
     one_per_port(found)
 }
 
-pub fn parse_proc_net_tcp(text: &str) -> Vec<(u16, u64)> {
+const LOCAL_ADDRESS: usize = 1;
+const STATE: usize = 3;
+const INODE: usize = 9;
+const TCP_LISTEN: &str = "0A";
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Socket {
+    pub port: u16,
+    pub inode: u64,
+}
+
+pub fn parse_proc_net_tcp(text: &str) -> Vec<Socket> {
     text.lines()
         .skip(1)
         .filter_map(|line| {
             let fields: Vec<&str> = line.split_whitespace().collect();
-            let (address, port) = fields.get(1)?.split_once(':')?;
-            if *fields.get(3)? != "0A" || !reachable_hex(address) {
+            let (address, port) = fields.get(LOCAL_ADDRESS)?.split_once(':')?;
+            if *fields.get(STATE)? != TCP_LISTEN || !reachable_hex(address) {
                 return None;
             }
-            Some((u16::from_str_radix(port, 16).ok()?, fields.get(9)?.parse().ok()?))
+            Some(Socket { port: u16::from_str_radix(port, 16).ok()?, inode: fields.get(INODE)?.parse().ok()? })
         })
         .collect()
 }
 
 fn reachable_hex(address: &str) -> bool {
-    let words: Option<Vec<[u8; 4]>> = (0..address.len() / 8).map(|i| u32::from_str_radix(&address[i * 8..i * 8 + 8], 16).ok().map(u32::to_le_bytes)).collect();
+    let words: Option<Vec<[u8; 4]>> = (0..address.len() / 8).map(|i| u32::from_str_radix(&address[i * 8..i * 8 + 8], 16).ok().map(u32::to_ne_bytes)).collect();
     match words.as_deref() {
         Some([v4]) => v4[0] == 127 || *v4 == [0; 4],
         Some([a, b, c, d]) => {
@@ -90,7 +101,7 @@ fn reachable_hex(address: &str) -> bool {
 #[cfg(target_os = "linux")]
 pub fn local() -> Vec<Listening> {
     use std::collections::HashMap;
-    let listeners: Vec<(u16, u64)> =
+    let listeners: Vec<Socket> =
         ["/proc/net/tcp", "/proc/net/tcp6"].iter().filter_map(|p| std::fs::read_to_string(p).ok()).flat_map(|t| parse_proc_net_tcp(&t)).collect();
     let socket_inodes = |fd_dir: &std::path::Path| -> Vec<u64> {
         std::fs::read_dir(fd_dir)
@@ -115,7 +126,7 @@ pub fn local() -> Vec<Listening> {
         }
     }
     one_per_port(
-        listeners.into_iter().filter(|(_, inode)| !own.contains(inode)).map(|(port, inode)| Listening { port, process: owners.get(&inode).cloned() }).collect(),
+        listeners.into_iter().filter(|s| !own.contains(&s.inode)).map(|s| Listening { port: s.port, process: owners.get(&s.inode).cloned() }).collect(),
     )
 }
 
@@ -158,14 +169,14 @@ LISTEN 0      511 [fe80::1%eth0]:4001          [::]:*
    2: 0501A8C0:0FA0 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 103 1 0000000000000000 100 0 0 10 0
    3: 0100007F:1435 0100007F:C350 01 00000000:00000000 00:00000000 00000000  1000        0 104 1 0000000000000000 20 4 30 10 -1
 ";
-        assert_eq!(parse_proc_net_tcp(tcp), vec![(5173, 101), (8000, 102)]);
+        assert_eq!(parse_proc_net_tcp(tcp), vec![Socket { port: 5173, inode: 101 }, Socket { port: 8000, inode: 102 }]);
         let tcp6 = "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
    0: 00000000000000000000000001000000:0BB8 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 201 1 0000000000000000 100 0 0 10 0
    1: 00000000000000000000000000000000:2328 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 202 1 0000000000000000 100 0 0 10 0
    2: 0000000000000000FFFF00000100007F:0FA1 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 203 1 0000000000000000 100 0 0 10 0
    3: 000080FE00000000FF0F02A0EFBE0000:0FA2 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 204 1 0000000000000000 100 0 0 10 0
 ";
-        assert_eq!(parse_proc_net_tcp(tcp6), vec![(3000, 201), (9000, 202), (4001, 203)]);
+        assert_eq!(parse_proc_net_tcp(tcp6), vec![Socket { port: 3000, inode: 201 }, Socket { port: 9000, inode: 202 }, Socket { port: 4001, inode: 203 }]);
     }
 
     #[test]

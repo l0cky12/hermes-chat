@@ -64,9 +64,9 @@ describe("The Preview's history", () => {
   it("reloads what is shown when it is opened again, without a new entry", () => {
     const h = run(open(page("/")), open(page("/")));
     expect(where(h)).toEqual({ back: 0, here: page("/"), forward: 0 });
-    expect(h?.reloads).toBe(1);
-    expect(stepHistory(h, { kind: "reload" })?.reloads).toBe(2);
-    expect(stepHistory(stepHistory(h, open(github)), { kind: "back" })?.reloads).toBe(1);
+    expect(h?.reloadSeq).toBe(1);
+    expect(stepHistory(h, { kind: "reload" })?.reloadSeq).toBe(2);
+    expect(stepHistory(stepHistory(h, open(github)), { kind: "back" })?.reloadSeq).toBe(1);
   });
 
   it("switches a loopback page between the server and this computer in place", () => {

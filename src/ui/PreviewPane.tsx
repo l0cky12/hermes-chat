@@ -180,7 +180,7 @@ export function PreviewPane({
         ) : here.kind === "web" ? (
           <BrowserView
             here={here}
-            reloads={history.reloads}
+            reloadSeq={history.reloadSeq}
             web={web}
             serverPages={serverPages}
             serverLabel={serverLabel}
@@ -202,12 +202,12 @@ export function PreviewPane({
           ) : null
         ) : here.kind === "server" ? (
           <FileBody
-            key={`server:${here.host ? "host" : ""}:${here.session ?? ""}:${here.path}:${history.reloads}`}
+            key={`server:${here.host ? "host" : ""}:${here.session ?? ""}:${here.path}:${history.reloadSeq}`}
             name={here.path}
             load={() => readServer(here.path, here.host, here.session)}
           />
         ) : (
-          <FileBody key={`local:${here.path}:${history.reloads}`} name={here.name} load={() => local.read(here)} />
+          <FileBody key={`local:${here.path}:${history.reloadSeq}`} name={here.name} load={() => local.read(here)} />
         )}
       </div>
     </section>
@@ -761,7 +761,7 @@ function useStickyTunnel(need: string | undefined, pages: ServerPages): [TunnelS
 
 function BrowserView({
   here,
-  reloads,
+  reloadSeq,
   web,
   serverPages,
   serverLabel,
@@ -771,7 +771,7 @@ function BrowserView({
   onOpenInBrowser,
 }: {
   here: WebTarget;
-  reloads: number;
+  reloadSeq: number;
   web: WebPages;
   serverPages: ServerPages;
   serverLabel: string;
@@ -792,23 +792,23 @@ function BrowserView({
   const tunnelState = need && tunnel.kind !== "open" && (
     <TunnelNote state={tunnel} at={loopbackOf(here.url)?.at ?? here.url} serverLabel={serverLabel} onRetry={retry} onLocal={() => onStep({ kind: "switch", on: "local" })} />
   );
-  const reloadsSeen = useRef(reloads);
+  const reloadSeqSeen = useRef(reloadSeq);
   useEffect(() => {
-    if (reloads === reloadsSeen.current) return;
-    reloadsSeen.current = reloads;
+    if (reloadSeq === reloadSeqSeen.current) return;
+    reloadSeqSeen.current = reloadSeq;
     if (need && tunnel.kind !== "open" && tunnel.kind !== "opening") retry();
-  }, [reloads, need, tunnel.kind, retry]);
+  }, [reloadSeq, need, tunnel.kind, retry]);
 
   if (!web.native)
-    return tunnelState || (src ? <FramedWebView key={`${src}:${reloads}`} url={here.url} src={src} check={web.check} onOpenInBrowser={() => onOpenInBrowser(src)} /> : null);
-  return <PageView here={here} src={src} tunnel={open} reloads={reloads} cover={tunnelState} native={web.native} onStep={onStep} onBusy={onBusy} />;
+    return tunnelState || (src ? <FramedWebView key={`${src}:${reloadSeq}`} url={here.url} src={src} check={web.check} onOpenInBrowser={() => onOpenInBrowser(src)} /> : null);
+  return <PageView here={here} src={src} tunnel={open} reloadSeq={reloadSeq} cover={tunnelState} native={web.native} onStep={onStep} onBusy={onBusy} />;
 }
 
 function PageView({
   here,
   src,
   tunnel,
-  reloads,
+  reloadSeq,
   cover,
   native,
   onStep,
@@ -817,7 +817,7 @@ function PageView({
   here: WebTarget;
   src: ViewUrl | undefined;
   tunnel: Tunnel | undefined;
-  reloads: number;
+  reloadSeq: number;
   cover: ReactNode;
   native: NativePages;
   onStep: (s: HistoryStep) => void;
@@ -840,7 +840,7 @@ function PageView({
         setState("shown");
         latest.current.onStep({ kind: "arrived", target: fromView(e.url, latest.current.tunnel), replace: e.replace });
       } else if (e.kind === "failed") setState({ message: e.message });
-      else box.current?.focus();
+      else if (e.kind === "escaped") box.current?.focus();
     });
     setPage(made);
     return () => {
@@ -855,15 +855,15 @@ function PageView({
     page.go(src);
   }, [page, src]);
 
-  const reloadsSeen = useRef(reloads);
+  const reloadSeqSeen = useRef(reloadSeq);
   useEffect(() => {
-    if (reloads === reloadsSeen.current) return;
-    reloadsSeen.current = reloads;
+    if (reloadSeq === reloadSeqSeen.current) return;
+    reloadSeqSeen.current = reloadSeq;
     if (!page || !src) return;
     setState("loading");
     if (src === viewAt.current) page.reload();
     else page.go(src);
-  }, [reloads, page, src]);
+  }, [reloadSeq, page, src]);
 
   useEffect(() => {
     if (viewAt.current || state !== "loading") return setSlow(false);
