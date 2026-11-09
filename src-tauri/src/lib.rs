@@ -995,7 +995,13 @@ async fn token_delete(connection: Option<String>) -> Result<(), String> {
 
 /// Writes `contents` where the owner picks in the native Save dialog, which asks before replacing a file. The webview
 /// never names the path. `None`: the owner cancelled, and nothing was written.
-async fn save_with_dialog(app: &tauri::AppHandle, title: &str, file_name: String, filter: (&str, &[&str]), contents: impl AsRef<[u8]>) -> Result<Option<String>, String> {
+async fn save_with_dialog(
+    app: &tauri::AppHandle,
+    title: &str,
+    file_name: String,
+    filter: (&str, &[&str]),
+    contents: impl AsRef<[u8]>,
+) -> Result<Option<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let mut dialog = app.dialog().file().set_title(title).set_file_name(file_name).add_filter(filter.0, filter.1);
     if let Some(window) = app.get_webview_window("main") {
