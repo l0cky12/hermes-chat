@@ -828,6 +828,7 @@ function PageView({
   const [state, setState] = useState<"loading" | "shown" | { message: string }>("loading");
   const [slow, setSlow] = useState(false);
   const viewAt = useRef<ViewUrl>(undefined);
+  const sentThrough = useRef<Tunnel>(undefined);
   const latest = useRef({ tunnel, onStep });
   latest.current = { tunnel, onStep };
 
@@ -838,7 +839,7 @@ function PageView({
       if (e.kind === "at") {
         viewAt.current = e.url;
         setState("shown");
-        latest.current.onStep({ kind: "arrived", target: fromView(e.url, latest.current.tunnel), replace: e.replace });
+        latest.current.onStep({ kind: "arrived", target: fromView(e.url, sentThrough.current), replace: e.replace });
       } else if (e.kind === "failed") setState({ message: e.message });
       else if (e.kind === "escaped") box.current?.focus();
     });
@@ -852,6 +853,7 @@ function PageView({
   useEffect(() => {
     if (!page || !src || src === viewAt.current) return;
     setState("loading");
+    sentThrough.current = latest.current.tunnel;
     page.go(src);
   }, [page, src]);
 
@@ -861,8 +863,9 @@ function PageView({
     reloadSeqSeen.current = reloadSeq;
     if (!page || !src) return;
     setState("loading");
-    if (src === viewAt.current) page.reload();
-    else page.go(src);
+    if (src === viewAt.current) return page.reload();
+    sentThrough.current = latest.current.tunnel;
+    page.go(src);
   }, [reloadSeq, page, src]);
 
   useEffect(() => {

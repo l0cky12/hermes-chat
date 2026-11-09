@@ -664,6 +664,24 @@ describe("Back, Forward and Reload (issue #376)", () => {
     expect(await within(pane()).findByText(/missing\.txt/)).toBeTruthy();
   });
 
+  it("keeps a page on the server when it moves after its tunnel closed, and Try again reopens it there", async () => {
+    const { user, view, pages } = await devServer();
+    act(() => pages.drop("1", "ssh ended: Connection to hermes closed by remote host."));
+    expect((await within(pane()).findByRole("alert")).textContent).toContain("The SSH tunnel to this page closed");
+    await act(async () => view.say(1, at(`${TUNNEL}/app?v=3`, true)));
+    expect(address().value).toBe("localhost:5173/app?v=3");
+    await act(async () => view.say(1, at(`${TUNNEL}/other`)));
+    expect(address().value).toBe("localhost:5173/other");
+    expect(within(pane()).queryByRole("button", { name: "This computer" })).toBeNull();
+    expect(button("Server")).toBeTruthy();
+
+    await user.click(button("Try again"));
+    await waitFor(() => expect(view.asked.at(-1)).toEqual([1, "go http://127.0.0.1:41002/other"]));
+    expect(pages.opened).toHaveLength(2);
+    await user.click(button("Back"));
+    expect(address().value).toBe("localhost:5173/app?v=3");
+  });
+
   it("shows where the owner left it after another tab, with Back still there", async () => {
     const { user, view } = await devServer();
     await act(async () => view.say(1, at(`${TUNNEL}/notes`)));
