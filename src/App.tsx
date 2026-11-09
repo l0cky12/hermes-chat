@@ -1134,8 +1134,6 @@ export function Main({
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelMounted, setPanelMounted] = useState(false);
   const [panelHidden, setPanelHidden] = useState(false);
-  // What the Preview tab shows, and where its Back and Forward go. Kept here, so it outlasts the pane, which is
-  // mounted only while shown.
   const [previewHistory, stepPreview] = useReducer(stepHistory, null);
   // The width while the owner drags the panel's edge; it is kept in the display preferences once they let go.
   const [dragWidth, setDragWidth] = useState<number | null>(null);

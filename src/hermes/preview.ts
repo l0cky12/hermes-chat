@@ -7,11 +7,6 @@ import type { Item } from "./model";
 import { SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, SESSION_GONE, type RemotePreview } from "./remoteFiles";
 import type { ArtifactRef } from "./artifacts";
 
-/**
- * What the Preview shows (nothing open is no target: previewHistory.ts). `server`: a path on the Hermes server.
- * `local`: a file on this computer the owner picked. `web`: an http(s) page. `tool`: a tool call's output, as Hermes
- * sent it.
- */
 export type PreviewTarget =
   /**
    * `on`: for a page on a loopback address (`loopbackOf`), whose loopback it is: the Hermes server's, through an SSH
@@ -63,7 +58,6 @@ const IMAGE_DATA_URL = /^data:image\/(png|jpeg|gif|webp|bmp|svg\+xml|x-icon|vnd\
  */
 export const withoutBidi = (text: string) => text.replace(/[\u202a-\u202e\u2066-\u2069]/g, "\uFFFD");
 
-/** The last part of a path or URL, for a tool call's chip. */
 export function previewName(t: PreviewTarget): string {
   switch (t.kind) {
     case "tool":
@@ -146,44 +140,26 @@ export type WebTarget = Extract<PreviewTarget, { kind: "web" }>;
 /** Where a web target loads from: `server` or `local` for a loopback address, undefined for any other page. */
 export const pageOn = (t: WebTarget): PageOn | undefined => (loopbackOf(t.url) ? (t.on ?? "server") : undefined);
 
-/**
- * An address in the page view's own terms: what it loads and reports. For a Server page that is its tunnel's end on
- * this computer (`http://127.0.0.1:41234/a`); for any other page, the page's own address. Branded so the owner's
- * `localhost:5173` never reaches the view, where it would load this computer's port instead of the server's.
- */
 export type ViewUrl = string & { readonly __view: unique symbol };
 
-/** A Server page's tunnel: the page's origin on the server, and the origin its tunnel answers on here. */
 export type Tunnel = { remote: string; local: string };
 
-/** `url` from its origin on: path, query and fragment. */
 const afterOrigin = (url: URL) => url.href.slice(url.origin.length);
 
-/** The server origin a web target needs a tunnel to: a loopback page on the server. Undefined for any other page. */
 export const tunnelNeeded = (t: WebTarget): string | undefined => (pageOn(t) === "server" ? new URL(t.url).origin : undefined);
 
-/**
- * Where the view loads `t`: through `tunnel` when `t` needs one (undefined until that tunnel is open), else `t.url`.
- * The only way to make a `ViewUrl` from the owner's address. Only the origin is swapped, so a page `fromView` mapped
- * comes back as the exact address the view reported.
- */
 export function viewUrlOf(t: WebTarget, tunnel: Tunnel | undefined): ViewUrl | undefined {
   const need = tunnelNeeded(t);
   if (!need) return t.url as ViewUrl;
   return tunnel?.remote === need ? ((tunnel.local + afterOrigin(new URL(t.url))) as ViewUrl) : undefined;
 }
 
-/**
- * The page the view reports, as the owner's address. On the tunnel's origin: the server's page. Another loopback
- * address, which a page reaches only by its full address: this computer's (ADR 0052). Anything else: a web page.
- */
 export function fromView(url: ViewUrl, tunnel: Tunnel | undefined): WebTarget {
   const u = new URL(url);
   if (tunnel && u.origin === tunnel.local) return { kind: "web", url: tunnel.remote + afterOrigin(u), on: "server" };
   return loopbackOf(url) ? { kind: "web", url, on: "local" } : { kind: "web", url };
 }
 
-/** What the address box shows: a loopback page as a dev server prints it (`localhost:5173/a`), a path, or a name. */
 export function addressOf(t: PreviewTarget): string {
   switch (t.kind) {
     case "web": {
@@ -216,10 +192,6 @@ export function tunnelUrl(raw: string, appOrigin: string): string | undefined {
 /** A path the server can read: absolute, or under its home (`~/`). Relative paths would resolve in Hermes's own folder. */
 export const isServerPath = (raw: string) => /^(\/|~\/)/.test(raw) && !raw.includes("\0") && raw.length <= 4096;
 
-/**
- * What the owner typed in the pane's address box: a web page, a dev server's bare port (a Server page, `pageOn`), or a
- * Server file. Local files open only through the Open dialog, so a `file://` address says so.
- */
 export function parseAddress(raw: string, appOrigin: string): { target: PreviewTarget } | { error: string } {
   const text = raw.trim();
   if (!text) return { error: "Enter a web address or a path on the Hermes server." };

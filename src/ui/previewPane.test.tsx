@@ -63,11 +63,6 @@ function localDisk(files: Record<string, FileView | Error>) {
   return local;
 }
 
-/**
- * The web as Rust's framing check sees it (src-tauri/src/web_page.rs): each address answers as `answers` says, and any
- * other answers that nothing refused. `checked` and `opened` record what the pane asked for. `devs` is what Rust finds
- * listening (dev_servers.rs), and `looked` counts the times the pane asked.
- */
 function theWeb(answers: Record<string, Framing | Error | Promise<Framing>> = {}, openFails?: string) {
   const web: WebPages & { checked: string[]; opened: string[]; devs: DevServers | Error; looked: number } = {
     checked: [],
@@ -94,12 +89,6 @@ function theWeb(answers: Record<string, Framing | Error | Promise<Framing>> = {}
   return web;
 }
 
-/**
- * The Preview's own page view as Rust runs it on Linux (src-tauri/src/page_view.rs), each view numbered from 1 as it
- * is made. `asked` lists what was asked of each (`go <url>`, `reload`), `placed` where each was last put (`null`:
- * hidden) and `closed` which ended. `say(n, e)` is view n reporting an event; `land(n)` reports that view n is where it
- * was last asked to go, as Rust does when that load commits.
- */
 function theView() {
   const view: NativePages & {
     made: number;
@@ -133,7 +122,6 @@ function theView() {
   };
   return view;
 }
-/** A page view's report that it is at `url`, which `replace`s the entry shown or moved by itself. */
 const at = (url: string, replace = false): PageEvent => ({ kind: "at", url: url as ViewUrl, replace });
 
 /**
@@ -494,7 +482,6 @@ describe("Web pages a site won't let the pane show (issue #55)", () => {
   });
 });
 
-/** The page view's box in the pane, where Rust puts the view. */
 const BOX = { x: 800, y: 137, width: 480, height: 683 };
 const stubLayout = () => {
   vi.stubGlobal(
@@ -509,7 +496,6 @@ const stubLayout = () => {
     return this.classList.contains("preview-web-frame") ? ({ ...BOX, top: BOX.y, left: BOX.x, right: 1280, bottom: 820 } as DOMRect) : rect.call(this);
   });
 };
-/** Signed in on Linux, where web pages show in the page view. */
 async function withView(over: Parameters<typeof signedIn>[0] = {}) {
   stubLayout();
   const view = theView();
@@ -533,7 +519,6 @@ describe("Web pages in the Preview's own view, on Linux (issue #254)", () => {
     expect(document.querySelector("iframe")).toBeNull();
     // Nothing asks whether the site refuses framing: the view is no frame.
     expect(web.checked).toEqual([]);
-    // Hidden until its first page commits, while the pane says it is loading.
     expect(view.placed.get(1)).toBeUndefined();
     expect(within(pane()).getByRole("status").textContent).toContain("Loading page");
 
@@ -603,7 +588,6 @@ describe("Web pages in the Preview's own view, on Linux (issue #254)", () => {
 describe("Back, Forward and Reload (issue #376)", () => {
   const TUNNEL = "http://127.0.0.1:41001";
   afterEach(() => vi.restoreAllMocks());
-  /** The dev server from the reply, open on the server through its tunnel, and shown. */
   async function devServer() {
     const s = await withView();
     await s.user.click(screen.getByRole("link", { name: "the dev server" }));
@@ -990,7 +974,6 @@ describe("The empty Preview (issue #376)", () => {
 
 describe("Hermes can't drive the Preview (issue #376)", () => {
   afterEach(() => vi.restoreAllMocks());
-  /** Every action Hermes's `drive_preview` and `annotate_preview` send (tools/drive_preview_tool.py `ACTIONS`, `WIRE`). */
   const ACTIONS = ["elements", "click", "hover", "type", "scroll", "press", "strobe", "back", "forward", "reload", "pin", "hold", "unpin"];
 
   it("turns down every preview request, and nothing reaches the page, its tunnel or the history", async () => {

@@ -226,14 +226,11 @@ fn forward_args(target: &str, listen: &str, page: &ServerPage) -> Vec<OsString> 
     args
 }
 
-/// ssh's arguments for listing what listens on `target`'s server (`listening`): the tunnel's options, no forward, and
-/// a fixed `ss` command.
 pub fn listening_args(target: &str) -> Result<Vec<OsString>, ServerPageError> {
     let target = checked_target(target).ok_or_else(|| ServerPageError::Ssh("The sign-in's SSH target isn't one ssh can take.".into()))?;
     Ok(SSH_OPTIONS.iter().copied().chain(["--", target, "ss", "-ltnpH"]).map(OsString::from).collect())
 }
 
-/// What every ssh this module starts runs with (`ssh_args` says why for each).
 const SSH_OPTIONS: &[&str] = &[
     "-T",
     "-o",
@@ -490,8 +487,6 @@ async fn spawn_ssh(program: &str, args: &[OsString], stdout: Stdio) -> Result<Ch
     rx.await.map_err(|_| ServerPageError::Spawn("the ssh spawner thread is gone".into()))?.map_err(|e| ServerPageError::Spawn(e.to_string()))
 }
 
-/// `ssh` with `args`: stdin closed, stdout to `stdout`, stderr kept, and no console window. It is killed when dropped,
-/// and, being in `job::ends_with_app`'s job, when the app ends, however it ends.
 #[cfg(windows)]
 async fn spawn_ssh(program: &str, args: &[OsString], stdout: Stdio) -> Result<Child, ServerPageError> {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -774,13 +769,9 @@ impl ServerPages {
     }
 }
 
-/// How long listing what listens on the server may take, signing in included.
 const LISTENING_TIMEOUT: Duration = Duration::from_secs(10);
-/// The most of `ss`'s list that is read: a server with more listeners than this is cut short.
 const LISTENING_KEPT: u64 = 64 * 1024;
 
-/// What listens on `target`'s server, as `ss -ltnpH` prints it there (dev_servers.rs reads it). The command is fixed
-/// here; nothing of it comes from the webview.
 pub async fn listening(program: &str, target: &str) -> Result<String, ServerPageError> {
     let mut child = spawn_ssh(program, &listening_args(target)?, Stdio::piped()).await?;
     let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {

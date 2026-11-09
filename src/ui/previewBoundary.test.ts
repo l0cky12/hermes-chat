@@ -1,7 +1,3 @@
-// Only the owner drives the Preview (ADR 0103). Hermes reaches this app only through the transport, which answers its
-// `preview.read` and `preview.act` with "method not found" (previewPane.test.tsx shows that end to end). These fail the
-// build when a path from the transport to the Preview's page appears, or when anything but the one Tauri adapter names
-// the page view's commands, so a handler for those requests can't be wired in without one of them failing.
 import { describe, expect, it } from "vitest";
 
 const sources = new Map(
@@ -12,7 +8,6 @@ const sources = new Map(
 
 const IMPORTS = [/(?:import|export)\s+(?!type\s)[^;]*?from\s+["'](\.{1,2}\/[^"']+)["']/g, /import\s*\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g, /import\s+["'](\.{1,2}\/[^"']+)["']/g];
 
-/** `spec` imported from `importer`, as the module it names, or undefined for one outside `src`. */
 function resolve(importer: string, spec: string): string | undefined {
   const parts = importer.split("/").slice(0, -1);
   for (const part of spec.split("/")) {
@@ -23,7 +18,6 @@ function resolve(importer: string, spec: string): string | undefined {
   return [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`].find((p) => sources.has(p));
 }
 
-/** Every module `from` reaches by a static or dynamic import, transitively. Imports of types only are left out. */
 function reached(from: string): Set<string> {
   const seen = new Set([from]);
   const queue = [from];

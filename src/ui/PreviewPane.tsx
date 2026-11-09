@@ -1,8 +1,3 @@
-// The preview pane beside the chat: a small browser only the owner drives (ADR 0103). It shows a web page, a Server
-// file, a Local file or a tool call's output (GLOSSARY.md "Preview"), with Back, Forward and Reload over one history the
-// app keeps (previewHistory.ts). Everything it shows is untrusted (ADR 0007): web pages load in a view of their own on
-// Linux (ADR 0081) or a sandboxed frame elsewhere, neither of which can reach the app, HTML files render with scripts
-// and network off, and Markdown renders without raw HTML, as replies do.
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   AlertTriangle,
@@ -79,12 +74,6 @@ const WEB_PERMISSIONS = [
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/**
- * The side panel's Preview tab (SidePanel.tsx). `history` lives in App.tsx, so it outlasts this pane, which is mounted
- * only while shown (ADR 0039); `onStep` is the only way anything here changes it. `serverLabel`: how the app reaches the
- * Hermes server, e.g. `liam@hermes`. `web`: the page view, the framing check, Open in your browser and the dev servers.
- * `serverPages`: tunnels to pages on the Hermes server's own loopback.
- */
 export function PreviewPane({
   history,
   onStep,
@@ -110,7 +99,6 @@ export function PreviewPane({
 }) {
   const here = history?.here;
   const [note, setNote] = useState<{ text: string; failed: boolean }>();
-  // A Server page's tunnel while it is open: the only way the owner's browser can reach that page.
   const [tunnel, setTunnel] = useState<Tunnel>();
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -226,10 +214,6 @@ export function PreviewPane({
   );
 }
 
-/**
- * Where what's shown is, as a badge in the address box: on the Hermes server, on this computer, on the web, or in a
- * tool call. For a page on a loopback address it is a button that opens the same page from the other side.
- */
 function Badge({ here, serverLabel, onSwitch }: { here: PreviewTarget | undefined; serverLabel: string; onSwitch: (on: PageOn) => void }) {
   if (!here)
     return (
@@ -286,11 +270,6 @@ function Badge({ here, serverLabel, onSwitch }: { here: PreviewTarget | undefine
   }
 }
 
-/**
- * The address of what's shown, always there to edit. Enter opens what it holds (a web address, `localhost:3000`, a
- * port, a path on the server); the same address again reloads it. A move made elsewhere (a link in the page, Back)
- * replaces it, unless the owner is typing in it; Escape puts it back.
- */
 function AddressBox({
   here,
   serverLabel,
@@ -344,13 +323,11 @@ function AddressBox({
   );
 }
 
-/** A typed loopback page on the origin shown stays on the side it is shown from, as a browser stays on its host. */
 function sameSide(typed: PreviewTarget, here: PreviewTarget | undefined): PreviewTarget {
   if (typed.kind !== "web" || here?.kind !== "web" || !here.on || !loopbackOf(typed.url)) return typed;
   return new URL(typed.url).origin === new URL(here.url).origin ? { ...typed, on: here.on } : typed;
 }
 
-/** ⋯: copy the address, open a file on this computer, and what a page here can and can't do. */
 function MoreMenu({
   address,
   framed,
@@ -410,7 +387,6 @@ function MoreMenu({
   );
 }
 
-/** Why the list has no Hermes server side, or none at all. */
 function devServersNote(found: DevServers | { error: string }): string | undefined {
   if (!("server" in found)) return `Couldn't look for dev servers: ${found.error}`;
   switch (found.server.kind) {
@@ -425,11 +401,6 @@ function devServersNote(found: DevServers | { error: string }): string | undefin
   }
 }
 
-/**
- * Nothing open: what to do, the dev servers found on the Hermes server and on this computer, and Open a file on this
- * computer. The list is asked for when this shows, when the connection comes or goes, and on its refresh button; it
- * isn't polled.
- */
 function EmptyState({
   web,
   connected,
@@ -747,12 +718,6 @@ type TunnelState =
   | { kind: "failed"; remote: string; error: ServerPageError }
   | { kind: "closed"; remote: string; message: string };
 
-/**
- * The tunnel the entries shown need: to `need`, a page's origin on the Hermes server. `need` undefined (a web page
- * elsewhere, or this computer's loopback) keeps the tunnel there is, so Back to the server's page goes back in the same
- * view through the same port. A different `need` closes it and opens that one; unmounting closes it. `retry` opens a
- * closed or failed one again.
- */
 function useStickyTunnel(need: string | undefined, pages: ServerPages): [TunnelState, () => void] {
   const [kept, setKept] = useState(need);
   if (need !== undefined && need !== kept) setKept(need);
@@ -794,12 +759,6 @@ function useStickyTunnel(need: string | undefined, pages: ServerPages): [TunnelS
   return [state, useCallback(() => setTries((n) => n + 1), [])];
 }
 
-/**
- * Every web entry, for as long as the Preview shows web entries one after another: one page view and at most one
- * tunnel. Moving between entries (a link inside the page, Back, Forward, a reply link) asks the same view to `go`, and
- * a move the page makes itself comes back as `arrived`; nothing is torn down unless the next entry needs another
- * tunnel. Without a page view (Windows), the frame shows the entry and reloads with it.
- */
 function BrowserView({
   here,
   reloads,
@@ -845,11 +804,6 @@ function BrowserView({
   return <PageView here={here} src={src} tunnel={open} reloads={reloads} cover={tunnelState} native={web.native} onStep={onStep} onBusy={onBusy} />;
 }
 
-/**
- * The page view itself (ADR 0081), which Rust lays over this box. It shows once the first page commits and stays over
- * later loads, as a browser keeps the page it is leaving; the box says what the view can't: that the first page is
- * loading, why one failed, or the tunnel's state in `cover`.
- */
 function PageView({
   here,
   src,
@@ -873,7 +827,6 @@ function PageView({
   const [page, setPage] = useState<NativePage>();
   const [state, setState] = useState<"loading" | "shown" | { message: string }>("loading");
   const [slow, setSlow] = useState(false);
-  // Where the view last said it is: an entry the page reached by itself is there already, so it isn't asked for again.
   const viewAt = useRef<ViewUrl>(undefined);
   const latest = useRef({ tunnel, onStep });
   latest.current = { tunnel, onStep };
@@ -887,7 +840,6 @@ function PageView({
         setState("shown");
         latest.current.onStep({ kind: "arrived", target: fromView(e.url, latest.current.tunnel), replace: e.replace });
       } else if (e.kind === "failed") setState({ message: e.message });
-      // Escape in the page gave the keyboard back to the app: it lands here, inside the Preview, for the next key.
       else box.current?.focus();
     });
     setPage(made);
@@ -949,7 +901,6 @@ function PageView({
   );
 }
 
-/** What a server page that didn't open is called, by why. */
 const FAILED_TITLE: Record<string, string> = {
   noSshTarget: "No SSH target for this server",
   notConnected: "Not connected to the Hermes server",
@@ -960,10 +911,6 @@ const FAILED_TITLE: Record<string, string> = {
   timeout: "SSH didn't connect",
 };
 
-/**
- * A Server page whose tunnel isn't open: opening, failed (with what can be done), or closed under the page. Try again
- * opens a new tunnel; Open on this computer instead switches the page to this computer's loopback.
- */
 function TunnelNote({ state, at, serverLabel, onRetry, onLocal }: { state: TunnelState; at: string; serverLabel: string; onRetry: () => void; onLocal: () => void }) {
   const again = (
     <button className="btn primary" onClick={onRetry}>

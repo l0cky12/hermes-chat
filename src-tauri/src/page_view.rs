@@ -7,10 +7,6 @@
 //! handler and none of the app's URI schemes, and its web context is new and ephemeral: the page shares no storage
 //! with the app, and its cookies last only while the app runs.
 //!
-//! The Preview's Back and Forward are the app's own list (ADR 0103); a view only says where its page went, and is
-//! asked to go somewhere. One view lasts while the Preview shows web pages one after another, so a page's own
-//! back-forward list holds only those, and ends with them.
-//!
 //! The webview names the page and where it shows; Rust checks the address as the pane does (`web_page::web_url`).
 
 use serde::{Deserialize, Serialize};
@@ -75,23 +71,16 @@ pub fn holes_in_page(placement: &Placement) -> Vec<(i32, i32, i32, i32)> {
         .collect()
 }
 
-/// Makes a new, hidden, empty view for `key`, ending the one before it: its page, its web process and its back and
-/// forward lists go with it. `key` names this view from now on: a `go`, `place` or `close` for any other key is
-/// ignored, so a view that went away can't move or close the next one. Nothing loads until `go`.
 pub fn open(app: &tauri::AppHandle, key: String, on_event: Channel<PageEvent>) -> Result<(), String> {
     imp::open(app, key, on_event)
 }
 
-/// Shows `url` in `key`'s view: by going back or forward in WebKit's own list when that is where `url` is, so the page
-/// comes back as a browser brings it back, and by loading it otherwise. Rust checks the address as the pane does
-/// (`web_page::web_url`).
 pub fn go(app: &tauri::AppHandle, key: String, url: &str) -> Result<(), String> {
     let url = crate::web_page::web_url(url)?;
     imp::go(app, key, url);
     Ok(())
 }
 
-/// Loads `key`'s page again.
 pub fn reload(app: &tauri::AppHandle, key: String) {
     imp::reload(app, key)
 }
@@ -101,7 +90,6 @@ pub fn place(app: &tauri::AppHandle, key: String, placement: Option<Placement>) 
     imp::place(app, key, placement)
 }
 
-/// Ends `key`'s view, if it is the one shown (ADR 0039: a page runs only while it is on screen).
 pub fn close(app: &tauri::AppHandle, key: String) {
     imp::close(app, key)
 }
@@ -135,9 +123,7 @@ mod imp {
         /// The overlay that holds Tauri's webview and the page's view. Made on first use. The commands that touch it
         /// have no `async`, so Tauri runs them on the main thread, GTK's.
         static OVERLAY: RefCell<Option<gtk::Overlay>> = const { RefCell::new(None) };
-        /// The app run's one ephemeral web context. Every view shares it, so a site's sign-in lasts the run.
         static CONTEXT: RefCell<Option<webkit2gtk::WebContext>> = const { RefCell::new(None) };
-        /// The view shown, if any.
         static PAGE: RefCell<Option<Page>> = const { RefCell::new(None) };
         /// Where the overlay puts the view, in whole pixels.
         static AT: Cell<(i32, i32, i32, i32)> = const { Cell::new((0, 0, 1, 1)) };
@@ -149,11 +135,8 @@ mod imp {
         moves: Rc<Moves>,
     }
 
-    /// What a view reports about where it is, and what that takes. The view's signals hold it.
     pub(super) struct Moves {
-        /// Where events go, until the view ends; a late signal after that reaches nobody.
         events: RefCell<Option<Channel<PageEvent>>>,
-        /// The address of the load the app asked for (`go`, `reload`), until it lands: where it lands replaces.
         asked: RefCell<Option<url::Url>>,
         /// Between a load's start (or the app asking for one) and its commit, the view's `uri` is the request's, and
         /// changes again on each redirect, so nothing is reported.
@@ -162,7 +145,6 @@ mod imp {
         /// page replaced its entry; the address unchanged too means nothing moved (WebKit puts a stopped load's address
         /// back, and says so).
         last: RefCell<(Option<String>, (usize, usize))>,
-        /// Whether what the app last asked for has committed: a download after that leaves the page shown.
         answered: Cell<bool>,
     }
 
@@ -183,7 +165,6 @@ mod imp {
             }
         }
 
-        /// Where the view is now. `replace` when the app asked for it, or when the page kept its place in the lists.
         fn report(&self, view: &webkit2gtk::WebView, asked: bool) {
             let lengths = view.back_forward_list().map(|l| (l.back_list().len(), l.forward_list().len())).unwrap_or_default();
             let url = view.uri().map(String::from);
@@ -213,7 +194,6 @@ mod imp {
         a.and_then(|a| url::Url::parse(a.as_ref()).ok()).is_some_and(|a| a == *b)
     }
 
-    /// The view's signals, reported through `moves`.
     pub(super) fn watch(view: &webkit2gtk::WebView, moves: &Rc<Moves>) {
         let m = moves.clone();
         view.connect_load_changed(move |view, event| match event {
@@ -276,7 +256,6 @@ mod imp {
         });
     }
 
-    /// Asks `view` for `url`: back or forward in its own list when its neighbour there is `url`, else a load.
     pub(super) fn go_in(view: &webkit2gtk::WebView, moves: &Moves, url: url::Url) {
         moves.ask(url.clone());
         let list = view.back_forward_list();
@@ -296,8 +275,6 @@ mod imp {
         view.reload();
     }
 
-    /// The view and its reports, if `key` is the page shown. Cloned out, so no borrow is held while WebKit runs the
-    /// signals it fires at once.
     fn shown(key: &str) -> Option<(webkit2gtk::WebView, Rc<Moves>)> {
         PAGE.with(|p| p.borrow().as_ref().filter(|p| p.key == key).map(|p| (p.view.clone(), p.moves.clone())))
     }
@@ -312,7 +289,6 @@ mod imp {
         view.hide();
     }
 
-    /// Ends `page`: its channel first, then the view, which goes from the overlay and is dropped.
     fn end(overlay: &gtk::Overlay, page: Page) {
         drop(page.moves.events.take());
         hide(overlay, &page.view);
@@ -393,7 +369,6 @@ mod imp {
         OVERLAY.with(|o| o.borrow().clone())
     }
 
-    /// Moves Tauri's webview into an overlay, where the page's views go over it.
     fn make_overlay(main: &webkit2gtk::WebView) {
         let Some(parent) = main.parent().and_then(|p| p.downcast::<gtk::Box>().ok()) else { return };
         let overlay = gtk::Overlay::new();
@@ -426,8 +401,6 @@ mod imp {
         OVERLAY.with(|o| *o.borrow_mut() = Some(overlay));
     }
 
-    /// The run's web context for pages: ephemeral, so a page shares no storage with the app and its cookies last only
-    /// while the app runs. No `allow-downloads`: a download stops as soon as it starts.
     pub(super) fn page_context() -> webkit2gtk::WebContext {
         let context = webkit2gtk::WebContext::new_ephemeral();
         context.connect_download_started(|_, download| {
@@ -437,8 +410,6 @@ mod imp {
         context
     }
 
-    /// A view that lets the page do no more than ADR 0007's frame did (`sandbox="allow-scripts allow-forms
-    /// allow-same-origin"`, and every feature in its `allow` list `'none'`). ADR 0081 lists each.
     pub(super) fn page_webview(context: &webkit2gtk::WebContext) -> webkit2gtk::WebView {
         let view = webkit2gtk::WebView::with_context(context);
         // No fullscreen API, no window opened without a click, no script reads of the clipboard, no Web Inspector.
@@ -596,8 +567,6 @@ mod tests {
         );
     }
 
-    /// What a view reports as its page moves, against a stand-in server: one `at` per move, `replace` only where the
-    /// entry's place is taken, and a load the app asked for reported where it lands, not where it was sent.
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "WebKitGTK needs a display, and GTK one thread: DISPLAY=:N cargo test --lib page_view::tests::a_view_reports -- --ignored"]

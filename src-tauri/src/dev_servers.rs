@@ -1,11 +1,5 @@
-//! What might be a dev server, for the empty Preview (ADR 0103): TCP ports listening on the Hermes server's loopback
-//! (one `ss` over the sign-in's SSH target, `server_page::listening`) and on this computer's (`/proc/net/tcp{,6}`).
-//! Only ports the Preview could open are kept: bound to loopback or every address, from 1024 up to where the system
-//! hands out ports of its own, not a known database or broker port, not ssh's, and not this app's own.
-
 use serde::Serialize;
 
-/// A port something listens on. `process`: its program's name, where it could be read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Listening {
     pub port: u16,
@@ -13,7 +7,6 @@ pub struct Listening {
     pub process: Option<String>,
 }
 
-/// The Hermes server's side, or why there is none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ServerSide {
@@ -29,15 +22,12 @@ pub struct DevServers {
     pub local: Vec<Listening>,
 }
 
-/// Ports that listen but aren't web pages: PostgreSQL, MySQL, Redis, memcached, MongoDB, AMQP, Kafka, ZooKeeper.
 const NOT_WEB: &[u16] = &[5432, 3306, 6379, 11211, 27017, 5672, 9092, 2181];
-/// Programs whose listeners are tunnels, not pages.
 const NOT_DEV: &[&str] = &["ssh", "sshd"];
 /// Where Linux hands out a port to a program that asks for any free one (`ip_local_port_range`): a listener from here
 /// up is a tool's, such as a test driver or a tunnel's end, not a dev server someone started on its port.
 const ANY_FREE_PORT: u16 = 32768;
 
-/// Whether a listener is worth listing. `skip`: ports known not to be dev servers (the Hermes dashboard's).
 pub fn plausible(l: &Listening, skip: &[u16]) -> bool {
     (1024..ANY_FREE_PORT).contains(&l.port)
         && !NOT_WEB.contains(&l.port)
@@ -45,15 +35,12 @@ pub fn plausible(l: &Listening, skip: &[u16]) -> bool {
         && !l.process.as_deref().is_some_and(|p| NOT_DEV.contains(&p))
 }
 
-/// Each port once, the first that names its program kept, in port order.
 fn one_per_port(mut found: Vec<Listening>) -> Vec<Listening> {
     found.sort_by_key(|l| (l.port, l.process.is_none()));
     found.dedup_by_key(|l| l.port);
     found
 }
 
-/// `ss -ltnpH` output: `LISTEN 0 511 127.0.0.1:5173 0.0.0.0:* users:(("node",pid=1,fd=20))`, one listener a line.
-/// Loopback and wildcard binds are kept; anything bound only to another address is out of the Preview's reach.
 pub fn parse_ss(out: &str) -> Vec<Listening> {
     let found = out
         .lines()
@@ -74,7 +61,6 @@ pub fn parse_ss(out: &str) -> Vec<Listening> {
     one_per_port(found)
 }
 
-/// `/proc/net/tcp` or `tcp6`: the LISTEN rows bound to loopback or every address, as (port, socket inode).
 pub fn parse_proc_net_tcp(text: &str) -> Vec<(u16, u64)> {
     text.lines()
         .skip(1)
@@ -89,7 +75,6 @@ pub fn parse_proc_net_tcp(text: &str) -> Vec<(u16, u64)> {
         .collect()
 }
 
-/// A `/proc/net/tcp{,6}` address, each 32-bit word in the kernel's (little-endian) order: loopback, or every address.
 fn reachable_hex(address: &str) -> bool {
     let words: Option<Vec<[u8; 4]>> = (0..address.len() / 8).map(|i| u32::from_str_radix(&address[i * 8..i * 8 + 8], 16).ok().map(u32::to_le_bytes)).collect();
     match words.as_deref() {
@@ -102,9 +87,6 @@ fn reachable_hex(address: &str) -> bool {
     }
 }
 
-/// This computer's listeners, less this process's own sockets (its tunnels' ends). Other programs are named from
-/// `/proc/<pid>/comm` for the sockets their `fd`s hold; only this user's can be read, which are the ones a dev server
-/// of theirs would be. Empty off Linux.
 #[cfg(target_os = "linux")]
 pub fn local() -> Vec<Listening> {
     use std::collections::HashMap;

@@ -694,8 +694,6 @@ async fn preview_server_open(
         .await
 }
 
-/// The empty Preview's dev servers (dev_servers.rs): what listens on the Hermes server, through the sign-in's SSH target,
-/// and on this computer. The server's side says why it has none. The connection is only read, not held, while ssh runs.
 #[tauri::command]
 async fn preview_dev_servers(state: State<'_, AppState>) -> Result<dev_servers::DevServers, String> {
     use dev_servers::{plausible, ServerSide};
@@ -1257,7 +1255,6 @@ fn preview_page_go(app: tauri::AppHandle, key: String, url: String) -> Result<()
     page_view::go(&app, key, &url)
 }
 
-/// Loads the Preview's page again.
 #[tauri::command]
 fn preview_page_reload(app: tauri::AppHandle, key: String) {
     page_view::reload(&app, key)
@@ -1269,7 +1266,6 @@ fn preview_page_place(app: tauri::AppHandle, key: String, placement: Option<page
     page_view::place(&app, key, placement)
 }
 
-/// Ends the Preview's view, and the page in it.
 #[tauri::command]
 fn preview_page_close(app: tauri::AppHandle, key: String) {
     page_view::close(&app, key)

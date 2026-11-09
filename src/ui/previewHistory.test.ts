@@ -1,5 +1,3 @@
-// The Preview's Back and Forward: one list the app owns, fed by what the owner opens and by where the page's view says
-// it went (issue #376).
 import { describe, expect, it } from "vitest";
 import type { PreviewTarget, WebTarget } from "../hermes/preview";
 import { canGoBack, canGoForward, HISTORY_KEPT, stepHistory, type HistoryStep, type PreviewHistory } from "./previewHistory";
@@ -28,7 +26,6 @@ describe("The Preview's history", () => {
     const back = stepHistory(followed, { kind: "back" });
     expect(back?.here).toEqual(page("/"));
     expect(canGoForward(back)).toBe(true);
-    // Where the view's go_back landed: nothing moves again.
     expect(stepHistory(back, arrived(page("/", "server"), true))).toBe(back);
     expect(stepHistory(back, { kind: "forward" })?.here).toEqual(page("/a", "server"));
   });
@@ -69,7 +66,6 @@ describe("The Preview's history", () => {
     expect(where(h)).toEqual({ back: 0, here: page("/"), forward: 0 });
     expect(h?.reloads).toBe(1);
     expect(stepHistory(h, { kind: "reload" })?.reloads).toBe(2);
-    // Moving keeps the count, so a view that stays mounted doesn't reload.
     expect(stepHistory(stepHistory(h, open(github)), { kind: "back" })?.reloads).toBe(1);
   });
 

@@ -1,7 +1,3 @@
-// The preview pane's Local files, through Rust: the Open dialog runs there, and only a file picked in it can be read
-// again (src-tauri/src/lib.rs `preview_pick_local`, `preview_read_local`, `preview_read_local_image`). Its web pages'
-// framing check and Open in your browser (src-tauri/src/web_page.rs, ADR 0011), its page view (page_view.rs, ADR
-// 0081), and the dev servers its empty state lists (dev_servers.rs, ADR 0103).
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { asError } from "../hermes/tauriPipe";
 import { readLocalFile, type FileView, type Framing, type LocalText, type ViewUrl } from "../hermes/preview";
@@ -32,16 +28,10 @@ export type WebPages = {
   openInBrowser(url: string): Promise<string | null>;
   /** Where there is one (Linux), the Preview's own page view, which takes the frame's place (ADR 0081). */
   native?: NativePages;
-  /** What listens on the Hermes server and on this computer, that a dev server could be on. */
   devServers(): Promise<DevServers>;
 };
 
-/** A port something listens on. `process`: its program's name, where it could be read. */
 export type Listening = { port: number; process?: string };
-/**
- * What listens on the Hermes server's loopback (through the sign-in's SSH target) and on this computer's. `server`
- * says why it has no list: a URL sign-in has no SSH target, the app isn't connected, or ssh or `ss` failed.
- */
 export type DevServers = {
   server: { kind: "listed"; ports: Listening[] } | { kind: "noSshTarget" } | { kind: "notConnected" } | { kind: "failed"; message: string };
   local: Listening[];
@@ -51,21 +41,8 @@ export type DevServers = {
 export type Rect = { x: number; y: number; width: number; height: number };
 /** Where a native page shows, and the parts of that the app's own layers cover, which the page leaves bare. */
 export type Placement = { rect: Rect; holes: Rect[] };
-/**
- * What the page view says. `at`: it shows `url` now, because a load committed or the page changed its own address.
- * `replace`: that address takes the current entry's place (where a `go` or `reload` landed, a redirect, replaceState);
- * otherwise the page moved by itself. `failed`: it couldn't load, or its process ended. `escaped`: the owner pressed
- * Escape in it and the page didn't use it, which gives the keyboard back to the app.
- */
 export type PageEvent = { kind: "at"; url: ViewUrl; replace: boolean } | { kind: "failed"; message: string } | { kind: "escaped" };
-/**
- * The page view while the Preview shows web pages one after another, so a link inside the page, Back and Forward
- * never make a new one. `go`: show `url`, by going back or forward in the view's own list when that is where it is
- * (the page comes back as a browser brings it back), else by loading it. `reload`: load the page again. Hidden until
- * placed; `close` ends the view and its page.
- */
 export type NativePage = { go(url: ViewUrl): void; reload(): void; place(placement: Placement | null): void; close(): void };
-/** Makes an empty, hidden view. Its events go to `onEvent` until `close`. */
 export type NativePages = { open(onEvent: (e: PageEvent) => void): NativePage };
 
 /**
@@ -81,7 +58,6 @@ const inOrder = <T>(command: () => Promise<T>): Promise<T> => {
 
 export const tauriNativePages: NativePages = {
   open: (onEvent) => {
-    // The view's name in Rust, so a view that went away can't move or close the next one.
     const key = crypto.randomUUID();
     const events = new Channel<PageEvent>();
     events.onmessage = onEvent;
