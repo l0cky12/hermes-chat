@@ -484,7 +484,9 @@ describe("Approvals on a chat another Hermes app also has open", () => {
 
   it("says a card was answered in the other app when the owner answers it here after", async () => {
     const { server, hermes, id: chatId, runtime, chat, card } = await replying();
+    await hermes.open(chatId);
     const { id, requestId } = server.askApproval(runtime);
+    await hermes.idle();
     // An older app answers in reply to the request, so Hermes withdraws it from no other app.
     server.answerElsewhere(id!, "response");
     expect(card()).not.toHaveProperty("ended");
@@ -496,8 +498,10 @@ describe("Approvals on a chat another Hermes app also has open", () => {
   });
 
   it("closes a card the other app answered once Hermes lists the chat as not waiting", async () => {
-    const { server, hermes, runtime, card } = await replying();
+    const { server, hermes, id: chatId, runtime, card } = await replying();
+    await hermes.open(chatId);
     const { id } = server.askApproval(runtime);
+    await hermes.idle();
     server.answerElsewhere(id!, "response");
     await hermes.checkLive();
     expect(card()).toMatchObject({ ended: "not waiting" });
@@ -505,15 +509,18 @@ describe("Approvals on a chat another Hermes app also has open", () => {
   });
 
   it("keeps a card waiting while Hermes lists its chat as waiting", async () => {
-    const { server, hermes, runtime, card } = await replying();
+    const { server, hermes, id: chatId, runtime, card } = await replying();
+    await hermes.open(chatId);
     server.askApproval(runtime);
+    await hermes.idle();
     await hermes.checkLive();
     expect(server.requests.some((r) => r.method === "session.active_list")).toBe(true);
     expect(card()).not.toHaveProperty("ended");
   });
 
   it("keeps a card that arrives while Hermes is listing what waits", async () => {
-    const { server, hermes, runtime, card } = await replying();
+    const { server, hermes, id: chatId, runtime, card } = await replying();
+    await hermes.open(chatId);
     // Hermes lists the chat as working: the request opens after the list is made, before the app reads it.
     server.handlers["session.active_list"] = (r) => server.respond(r.id, { sessions: [{ id: runtime, session_key: "x", status: "working", last_active: 1 }] });
     const checked = hermes.checkLive();
@@ -552,6 +559,42 @@ describe("Approvals on a chat another Hermes app also has open", () => {
     expect(responded(server)).toEqual([]);
     expect(server.responses).toEqual([{ jsonrpc: "2.0", id, result: { choice: "once", all: false } }]);
     expect(card()).toMatchObject({ answer: "once" });
+  });
+
+  it("keeps a card on a turn-isolated Hermes, whose list never shows a chat waiting", async () => {
+    const server = new FakeHermes();
+    server.turnIsolation = true;
+    const { hermes, id: chatId, runtime, card } = await replying(server);
+    await hermes.open(chatId);
+    server.askApproval(runtime);
+    await hermes.idle();
+    await hermes.checkLive();
+    expect(card()).not.toHaveProperty("ended");
+  });
+
+  it("answers a turn-isolated Hermes in reply to its request too, where approval.respond settles nothing", async () => {
+    const server = new FakeHermes();
+    server.turnIsolation = true;
+    const { hermes, id: chatId, runtime, chat, card } = await replying(server);
+    await hermes.open(chatId);
+    const { id, requestId } = server.askApproval(runtime);
+    await hermes.idle();
+    await hermes.answerApproval(chatId, id!, "deny");
+    expect(responded(server)).toEqual([{ session_id: runtime, choice: "deny", request_id: requestId }]);
+    expect(server.responses).toEqual([{ jsonrpc: "2.0", id, result: { choice: "deny", all: false } }]);
+    expect(server.openRequests.size).toBe(0);
+    expect(card()).toMatchObject({ answer: "deny" });
+    expect(card()).not.toHaveProperty("ended");
+    expect(chat().items.some((i) => i.kind === "error")).toBe(false);
+  });
+
+  it("closes a card only by Hermes's list once Hermes said the card waits in its own queue", async () => {
+    const { server, hermes, runtime, card } = await replying();
+    // The chat isn't open, so Hermes was never asked whether the card is in its queue.
+    const { id } = server.askApproval(runtime);
+    server.answerElsewhere(id!, "response");
+    await hermes.checkLive();
+    expect(card()).not.toHaveProperty("ended");
   });
 
   it("says so when Hermes refuses the answer, keeps the card waiting, and doesn't answer another way", async () => {

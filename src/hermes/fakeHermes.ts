@@ -474,6 +474,12 @@ export class FakeHermes {
    * in a response frame to its request.
    */
   approvalRespond = true;
+  /**
+   * True: `dashboard.turn_isolation`. A turn's requests wait in a compute-host child that this process only mirrors
+   * (`tui_gateway/compute_host_bridge.py`): `approval.received` and `approval.respond` find nothing in its own queue,
+   * `session.active_list` lists the session as working, and only a response frame, relayed to the child, settles one.
+   */
+  turnIsolation = false;
   /** The Approvals this client answered, by either way: `approval.respond`, or a response frame to the request. */
   readonly approvalAnswers: { id: string; choice: unknown; via: "approval.respond" | "response" }[] = [];
   /**
@@ -978,7 +984,7 @@ export class FakeHermes {
       if (!this.approvalRespond) return this.fail(r.id, -32601, "unknown method: approval.respond");
       const sid = String(r.params.session_id ?? "");
       if (!this.runtime.has(sid)) return this.fail(r.id, 4001, "session not found");
-      const open = [...this.openRequests].filter(([, q]) => q.sid === sid && q.method === "approval");
+      const open = [...this.openRequests].filter(([, q]) => q.sid === sid && q.method === "approval" && !this.turnIsolation);
       const settled = r.params.request_id ? open.filter(([, q]) => q.params.request_id === r.params.request_id) : open.slice(0, 1);
       for (const [id] of settled) {
         this.approvalAnswers.push({ id, choice: r.params.choice, via: "approval.respond" });
@@ -988,7 +994,7 @@ export class FakeHermes {
     },
     // `tui_gateway/methods_prompt.py` at the deployed `bf0203a`: records that a client has the card on screen.
     "approval.received": (r) => {
-      const pending = [...this.openRequests.values()].some((q) => q.sid === r.params.session_id && q.params.request_id === r.params.request_id);
+      const pending = !this.turnIsolation && [...this.openRequests.values()].some((q) => q.sid === r.params.session_id && q.params.request_id === r.params.request_id);
       this.respond(r.id, { acknowledged: pending });
     },
     // `tui_gateway/methods_session.py` at the deployed `bf0203a`: a stateless model call (default task
@@ -2205,12 +2211,13 @@ export class FakeHermes {
 
   /**
    * `liveSessions`, with every session that has a server→client request open listed as `waiting`, as
-   * `_session_live_status` reports it, this connection's own sessions too.
+   * `_session_live_status` reports it, this connection's own sessions too; as `working` with `turnIsolation`.
    */
   private liveRows() {
     const asking = new Map([...this.openRequests.values()].map((q) => [q.sid, q.stored]));
-    const rows = this.liveSessions.map((l) => (asking.has(l.id) ? { ...l, status: "waiting" } : l));
-    for (const [sid, stored] of asking) if (!rows.some((l) => l.id === sid)) rows.push({ id: sid, session_key: stored, status: "waiting", last_active: Date.now() / 1000 });
+    const status = this.turnIsolation ? "working" : "waiting";
+    const rows = this.liveSessions.map((l) => (asking.has(l.id) ? { ...l, status } : l));
+    for (const [sid, stored] of asking) if (!rows.some((l) => l.id === sid)) rows.push({ id: sid, session_key: stored, status, last_active: Date.now() / 1000 });
     return rows;
   }
 

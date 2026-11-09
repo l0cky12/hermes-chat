@@ -2,6 +2,7 @@
 // the request too. A answers with `frame` (a response frame, as Hermes Chat did before the fix) or `respond`
 // (`approval.respond`, the fix). Prints whether B was told the request is gone (`request.cancel`), what
 // `session.active_list` says afterwards, and what Hermes answers when B then answers the card it still shows.
+// Also prints `approval.received` for both clients while the request waits and after.
 // Usage: node twoclients.mjs <base url> <frame|respond> <log file>
 import { appendFileSync } from "node:fs";
 
@@ -60,6 +61,8 @@ const resumed = await B.rpc("session.resume", { session_id: created.stored_sessi
 const bSid = resumed.result?.session_id;
 const bSees = (resumed.result?.open_requests ?? []).some((r) => r.id === asked.id) || !!(await B.until((f) => f.id === asked.id && f.method === "approval", 3_000));
 const requestId = asked.params.request_id;
+const ackA = (await A.rpc("approval.received", { session_id: created.session_id, request_id: requestId })).result;
+const ackB = (await B.rpc("approval.received", { session_id: bSid, request_id: requestId })).result;
 
 let aAnswer;
 if (mode === "respond") aAnswer = (await A.rpc("approval.respond", { session_id: created.session_id, choice: "deny", request_id: requestId })).result;
@@ -78,6 +81,8 @@ console.log(
       bGotRequestCancel: cancelled ? cancelled.params.payload : null,
       activeListStatus: live?.status ?? "(not listed)",
       bLateApprovalRespond: stale.result ?? stale.error,
+      approvalReceivedWhileWaiting: { A: ackA, B: ackB },
+      approvalReceivedAfter: (await B.rpc("approval.received", { session_id: bSid, request_id: requestId })).result,
     },
     null,
     2,

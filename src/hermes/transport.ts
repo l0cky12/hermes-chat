@@ -637,6 +637,13 @@ export class Hermes {
   /** Approvals Hermes has been told are on screen (`approval.received`), by request id. */
   private shownApprovals = new Set<string>();
   /**
+   * Of those, the ones Hermes said wait in its own approval queue (`acknowledged`). Only for these does
+   * `approval.respond` settle the request and `session.active_list` tell whether it still waits. With turn isolation
+   * (`dashboard.turn_isolation`) the request waits in a child process that neither sees, and only a response frame
+   * reaches it.
+   */
+  private queuedApprovals = new Set<string>();
+  /**
    * Approval mode picks run one at a time on the connection: each starts from what the one before settled, and Smart
    * and Manual write the profile every chat on it shares (`setApprovals`).
    */
@@ -1511,11 +1518,11 @@ export class Hermes {
     return done;
   }
 
-  /** The waiting Approval cards on screen, by their chat's runtime session. */
+  /** The waiting Approval cards in Hermes's own approval queue (`queuedApprovals`), by their chat's runtime session. */
   private waitingCards(): Map<string, Set<string>> {
     const shown = new Map<string, Set<string>>();
     for (const c of this.snapshot.chats) {
-      const ids = c.items.filter(isWaiting).map((i) => i.id);
+      const ids = c.items.filter((i) => isWaiting(i) && this.queuedApprovals.has(i.requestId)).map((i) => i.id);
       if (c.runtimeId && ids.length) shown.set(c.runtimeId, new Set(ids));
     }
     return shown;
@@ -3070,13 +3077,15 @@ export class Hermes {
    * Sends an Approval's answer: `approval.respond`, which settles it in Hermes's approval queue, so Hermes withdraws
    * the card from every other app with the chat open (`request.cancel`). A response frame to the request settles it
    * first, and no other app hears (#318). A Hermes without `approval.respond`, or a card without a request id, still
-   * gets one (research doc §6). Resolves false when Hermes had nothing waiting under that request id.
+   * gets one (research doc §6), and so does a card Hermes never said was in its own queue (`queuedApprovals`) when
+   * `approval.respond` settles nothing. Resolves false when Hermes had nothing waiting under that request id.
    */
   private async settleApproval(runtimeId: string, card: ApprovalItem, choice: ApprovalChoice): Promise<boolean> {
     if (card.requestId)
       try {
         const res = obj(await this.request("approval.respond", { session_id: runtimeId, choice, request_id: card.requestId }));
-        return res?.resolved !== 0;
+        if (res?.resolved !== 0) return true;
+        if (this.queuedApprovals.has(card.requestId)) return false;
       } catch (e) {
         if (!(e instanceof CapabilityUnsupportedError) && !(e instanceof RpcError && e.code === NO_SUCH_METHOD)) throw e;
       }
@@ -3644,10 +3653,13 @@ export class Hermes {
     for (const i of chat.items) {
       if (i.kind !== "approval" || !isWaiting(i) || this.shownApprovals.has(i.requestId)) continue;
       this.shownApprovals.add(i.requestId);
-      const told = this.request("approval.received", { session_id: chat.runtimeId, request_id: i.requestId }).catch((e) => {
-        this.shownApprovals.delete(i.requestId);
-        if (e instanceof RpcError && e.code === NO_SUCH_METHOD) this.noApprovalReceived = true;
-      });
+      const told = this.request("approval.received", { session_id: chat.runtimeId, request_id: i.requestId }).then(
+        (res) => void (obj(res)?.acknowledged === true && this.queuedApprovals.add(i.requestId)),
+        (e) => {
+          this.shownApprovals.delete(i.requestId);
+          if (e instanceof RpcError && e.code === NO_SUCH_METHOD) this.noApprovalReceived = true;
+        },
+      );
       this.track(told);
     }
   }
