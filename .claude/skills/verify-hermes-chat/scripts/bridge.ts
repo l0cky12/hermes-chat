@@ -20,7 +20,8 @@
 //   `POST /__subagent?id=<subagent id>&status=completed|failed` ends one as Hermes reports it (a test's control).
 //   `POST /__live?profile=<p>&id=<chat id>&status=working|waiting|end[&title=<t>]` runs a reply in another profile, as
 //   `session.active_list` reports one: the chat is stored in that profile, listed as working or waiting, and `end`
-//   takes it off the list and leaves it Unread there (a test's control).
+//   takes it off the list and leaves it Unread there (a test's control). With `profile=default` it runs one in an
+//   existing chat of the shown profile that this app hasn't resumed, such as a wake turn after a relaunch.
 //   `POST /__kanban?id=<task id>&status=<running|done|blocked|review|archived>` moves a task as a worker would (a test's
 //   control). `done`, `blocked` and `review` send the chat a `status.update` naming the task and, 2 s later,
 //   a streamed wake turn when the chat is live, subscribed, not stopped, and no turn runs, as Hermes's poller does.
@@ -278,9 +279,11 @@ const http = createServer(async (req, res) => {
   }
   if (url.pathname === "/__live" && req.method === "POST") {
     const [profile, id, status] = ["profile", "id", "status"].map((k) => url.searchParams.get(k) ?? "");
-    if (!(profile in server.otherProfiles) || !id || !["working", "waiting", "end"].includes(status)) return json(400, { detail: "Needs profile (another profile), id and status working|waiting|end" });
+    const shown = profile === "default";
+    if (!(shown || profile in server.otherProfiles) || !id || !["working", "waiting", "end"].includes(status)) return json(400, { detail: "Needs profile, id and status working|waiting|end" });
     const t = Date.now() / 1000;
-    const list = server.otherProfiles[profile];
+    const list = server.store(profile)!;
+    if (shown && !list.some((r) => r.id === id)) return json(404, { detail: `No chat ${id} in default` });
     const stored = list.find((r) => r.id === id) ?? (list.push(row(id, 0, { title: url.searchParams.get("title") ?? `Chat ${id}`, last_read_at: 0 })), list[list.length - 1]);
     stored.last_active = t;
     server.liveSessions = server.liveSessions.filter((l) => l.session_key !== id);
@@ -317,6 +320,7 @@ http.on("upgrade", async (req, sock: Socket) => {
   readFrames(sock, (t) => {
     try {
       const msg = JSON.parse(t) as { method?: string; params?: { session_id?: string; text?: string; subagent_id?: string } };
+      if (msg.method && msg.method !== "gateway.ping") console.log(new Date().toISOString(), "WS", msg.method, msg.params?.session_id ?? "");
       if (msg.method === "prompt.submit" && msg.params?.session_id) {
         const { session_id, text } = msg.params;
         const prompt = String(text ?? "");
