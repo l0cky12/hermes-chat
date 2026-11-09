@@ -38,7 +38,10 @@ const RULES: Rule[] = [
   { kind: "authorization header", re: /\b((?:proxy-)?authorization["']?\s*[:=]\s*)(?!\[redacted)(?:"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|[^\n]+)/gi, to: "$1[redacted]" },
   { kind: "cookie", re: /\b((?:set-)?cookie["']?\s*[:=]\s*)(?!\[redacted)(?:"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|[^\n]+)/gi, to: "$1[redacted]" },
   { kind: "bearer token", re: /\b(bearer\s+)(?!\[redacted)[A-Za-z0-9._~+/=-]{8,}/gi, to: "$1[redacted]" },
-  { kind: "URL credentials", re: /(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, to: "$1[redacted]@" },
+  // A token can be the user name alone (`https://sk_abc@host/`), so any user part counts, up to the last `@` before the
+  // path. An SSH login alone (`ssh://liam@hermes`, how a route is named) is no secret, and support needs to see it.
+  { kind: "URL credentials", re: /(\b(?!ssh:\/\/[^\s/:@]+@)[a-z][a-z0-9+.-]*:\/\/)[^\s/]+@/gi, to: "$1[redacted]@" },
+  { kind: "URL query secret", re: /([?&](?:[a-z0-9]+[_-])*(?:ticket|token|key|auth|sig)=)(?!\[redacted)[^&\s"'#]+/gi, to: "$1[redacted]" },
   { kind: "JSON web token", re: /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/g, to: "[redacted token]" },
   {
     kind: "provider key",

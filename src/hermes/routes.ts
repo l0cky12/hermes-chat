@@ -123,6 +123,7 @@ export function routeProblem(r: SavedRoute): string | undefined {
   const t = r.target.trim();
   if (!t) return r.kind === "ssh" ? "Enter an SSH target." : "Enter an address.";
   if (r.kind === "ssh") return t.startsWith("-") || /\s/.test(t) ? "An SSH target is a user and host, or an alias, with no spaces." : undefined;
+  if (/^(?:[a-z][a-z0-9+.-]*:\/\/)?[^/?#]*@/i.test(t)) return "An address can't hold a user name, password or token, since Hermes Chat saves and shows it. Take out the part before @.";
   let u: URL;
   try {
     u = new URL(normalizeTarget(r.kind, t));

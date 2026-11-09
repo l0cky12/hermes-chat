@@ -52,6 +52,9 @@ describe("redact", () => {
     ["GET https://user:hunter2@example.com/x", "hunter2"],
     ["GET https://sk_abcdef123456@example.com/x", "sk_abcdef123456"],
     ["GET https://example.com/x?auth=abc123&y=1", "abc123"],
+    ["GET https://example.com/api/display/ws?display_ticket=tkt456", "tkt456"],
+    ["GET https://user:p@ss@example.com/x", "ss@example"],
+    ["ssh://liam:hunter2@hermes", "hunter2"],
     ['{"api_key": "plain-value-123", "model": "x"}', "plain-value-123"],
     ["password=hunter2 user=bob", "hunter2"],
     ["DISCORD_BOT_TOKEN: 'abc.def.ghi'", "abc.def.ghi"],
@@ -71,6 +74,7 @@ describe("redact", () => {
 
   it("keeps what isn't a secret, and doesn't redact twice", () => {
     expect(redact("2026-11-04 10:00:00 INFO agent: 1200 tokens used, max_tokens reached").text).toBe("2026-11-04 10:00:00 INFO agent: 1200 tokens used, max_tokens reached");
+    expect(redact("Connection to ssh://liam@hermes is up").text).toBe("Connection to ssh://liam@hermes is up");
     expect(redact('h={"Authorization": "Basic dXNlcjpwYXNz", "Host": "x"}').text).toBe('h={"Authorization": [redacted], "Host": "x"}');
     const r = redact("Authorization: Bearer abcdefgh12345678");
     expect(r.text).toBe("Authorization: [redacted]");
