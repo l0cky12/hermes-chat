@@ -4,12 +4,14 @@
 // inside it can be seen. Each section stays a <section>, the unit Settings' search shows or hides (settingsSearch.ts).
 import { createContext, type ReactNode, useContext, useId, useState } from "react";
 import { Info } from "lucide-react";
+import { useLocale } from "../i18n/locale";
 
 /** True while Settings shows search results: every folded help text is open then. */
 export const SettingsSearching = createContext(false);
 
 /** The (i) button and the help it opens. `about` names what it's about, for assistive technology. */
-function useMore(about: string, more: ReactNode) {
+function useMore(about: string | undefined, more: ReactNode) {
+  const l = useLocale();
   const searching = useContext(SettingsSearching);
   const [open, setOpen] = useState(false);
   const id = useId();
@@ -20,7 +22,7 @@ function useMore(about: string, more: ReactNode) {
       <button
         type="button"
         className={`set-more-btn ${shown ? "on" : ""}`}
-        aria-label={`About ${about}`}
+        aria-label={l.common.about(about ?? l.common.thisSetting)}
         aria-expanded={shown}
         aria-controls={id}
         // While searching every help shows; a press then would only change what shows once the search ends.
@@ -108,7 +110,7 @@ export function SettingRow({
   className?: string;
   children?: ReactNode;
 }) {
-  const { button, panel } = useMore(about ?? (typeof name === "string" ? name : "this setting"), more);
+  const { button, panel } = useMore(about ?? (typeof name === "string" ? name : undefined), more);
   return (
     <div className={`set-row ${className}`}>
       <div className="set-text">

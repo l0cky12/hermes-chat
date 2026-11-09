@@ -10,7 +10,6 @@ export type Palette = { background: string; surface: string; text: string; accen
 export type Theme = { id: string; name: string; light: Palette; dark: Palette };
 
 export const PALETTE_KEYS = ["background", "surface", "text", "accent"] as const;
-export const PALETTE_LABELS: Record<keyof Palette, string> = { background: "Background", surface: "Surface", text: "Text", accent: "Accent" };
 
 /** Contrast runs 0 to 100; at the default the Hermes theme's dark mode is the stylesheet's original colors. */
 export const DEFAULT_CONTRAST = 50;
@@ -155,17 +154,14 @@ export function parseTheme(x: unknown, newId: () => string): Theme | undefined {
 export const themeJson = (t: Theme) => JSON.stringify({ name: t.name, light: t.light, dark: t.dark }, null, 2);
 
 /** What a pasted theme should be, or why it isn't one. */
-export function readThemeJson(text: string, newId: () => string): Theme | string {
+export function readThemeJson(text: string, newId: () => string): Theme | "notJson" | "notTheme" {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return "That isn't valid JSON.";
+    return "notJson";
   }
-  return (
-    parseTheme({ ...(parsed && typeof parsed === "object" ? parsed : {}), id: undefined }, newId) ??
-    'A theme needs a "name", and "light" and "dark" each with "background", "surface", "text" and "accent" as #rrggbb colors.'
-  );
+  return parseTheme({ ...(parsed && typeof parsed === "object" ? parsed : {}), id: undefined }, newId) ?? "notTheme";
 }
 
 export const newThemeId = () => `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;

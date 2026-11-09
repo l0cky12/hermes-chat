@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // The Appearance tab is a converted screen (#353): every word on it, in every state it can show, comes from the
 // catalogue. Rendered under a pseudo-locale that marks each catalogue string, so a literal left in a component stands out.
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it } from "vitest";
 import { LocaleContext } from "../i18n/locale";
@@ -53,12 +53,12 @@ it("shows only catalogue words on the Appearance tab, in each state it can show"
 
   await user.click(screen.getByRole("button", { name: p.appearance.themes.add }));
   await user.type(screen.getByRole("textbox", { name: p.appearance.import.json }), "not json");
-  await user.click(screen.getByRole("button", { name: p.appearance.import.add }));
+  await user.click(within(screen.getByRole("group", { name: p.appearance.import.group })).getByRole("button", { name: p.appearance.import.add }));
   expect((await screen.findByRole("alert")).textContent).toBe(p.appearance.import.notJson);
   expect(untranslated(document.body)).toEqual([]);
   await user.clear(screen.getByRole("textbox", { name: p.appearance.import.json }));
   await user.paste("{}");
-  await user.click(screen.getByRole("button", { name: p.appearance.import.add }));
+  await user.click(within(screen.getByRole("group", { name: p.appearance.import.group })).getByRole("button", { name: p.appearance.import.add }));
   expect((await screen.findByRole("alert")).textContent).toBe(p.appearance.import.notTheme);
   await user.click(screen.getByRole("button", { name: p.common.cancel }));
 
