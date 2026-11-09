@@ -1045,6 +1045,13 @@ export function Main({
   }, [compare, comparing]);
   /** Each pane's latest `deliver`, so a compared pane can send in its partner's chat as that pane would. */
   const delivers = useRef(new Map<string, RefObject<Deliver>>()).current;
+  // Compared sends still starting their chats or reaching Hermes. A chat being started has no id yet, so nothing else
+  // shows that its side is busy.
+  const [compareSends, setCompareSends] = useState(0);
+  const trackCompareSend = <T,>(sending: Promise<T>) => {
+    setCompareSends((n) => n + 1);
+    return sending.finally(() => setCompareSends((n) => n - 1));
+  };
   const [listOpen, setListOpen] = useState(true);
   const [toast, setToast] = useState<Toast | null>(notSaved ? { text: notSaved, at: Date.now() } : null);
   // This app's diagnostics for the Logs screen (ADR 0033): the connection's changes, and the failures the app showed.
@@ -2387,10 +2394,12 @@ export function Main({
     </>
   );
 
-  // A compared send goes to both chats, so it waits until neither has a reply running or messages waiting.
+  // A compared send goes to both chats, so it waits until neither has a send under way, a reply running or messages
+  // waiting.
   const compareBusy =
     comparing &&
     (status !== "connected" ||
+      compareSends > 0 ||
       comparing.some((side) => side.chatId !== null && (chats.find((c) => c.id === side.chatId)?.running || hermes.getSnapshot().queues[side.chatId]?.items.length)));
   const slots: PaneSlot[] = panes.map((p, i) => {
     const listed = p.chatId === null ? undefined : chats.find((c) => c.id === p.chatId);
@@ -2458,6 +2467,7 @@ export function Main({
               startModel: side.model,
               refuse: compareBusy ? "Compare sends to both chats, so it waits until both replies have ended. Nothing was sent." : undefined,
               onStop: () => setCompare(undefined),
+              track: trackCompareSend,
             }
           }
           onCompare={comparing ? undefined : (pick) => startCompare(p.key, pick)}
@@ -3406,7 +3416,7 @@ function ChatView({
   /** Where this pane keeps its `deliver`, by `paneKey`, for a compared pane to send through. */
   delivers: Map<string, RefObject<Deliver>>;
   /** One of two compared panes (ADR 0101): a send here goes to `partner` too. `startModel`: what this New chat pane starts on. */
-  compare?: Comparing & { partner: () => Deliver | undefined; startModel?: ModelPick };
+  compare?: Comparing & { partner: () => Deliver | undefined; startModel?: ModelPick; track: <T>(sending: Promise<T>) => Promise<T> };
   /** Starts Compare from this pane with a second model, from the model picker. */
   onCompare?: (pick: ModelPick) => void;
   /** Opens a page of the compatibility guide in the owner's browser. */
@@ -3546,8 +3556,12 @@ function ChatView({
     const paths = attachments.map((a) => a.path);
     screenshots?.hold(paths);
     const partner = compare?.partner();
-    const went = await Promise.all([deliver(text, attachments, skill, false), partner?.(text, attachments, skill, true)]);
-    if (!went.includes(true)) return screenshots?.sent(attachments, false);
+    const both = Promise.all([deliver(text, attachments, skill, false), partner?.(text, attachments, skill, true)]);
+    const [own, mirrored] = await (compare ? compare.track(both) : both);
+    if (!own && !mirrored) return screenshots?.sent(attachments, false);
+    // The other chat's message holds the files now, and a screenshot goes once that message no longer needs it, so
+    // none can come back to this composer with the words.
+    if (!own) onToast("This pane's chat couldn't start, so your message went only to the other chat, with its files.");
     try {
       await screenshotWiring.syncOutbox?.();
       screenshots?.finish(paths);

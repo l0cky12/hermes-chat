@@ -5,11 +5,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
+import { localChatCache, outboxAttachmentPaths, subscribeOutbox } from "../hermes/chatCache";
 import { savedDefaults } from "../hermes/projectDefaults";
 import { projectScope } from "../hermes/projectLinks";
 import { connect, type Hermes } from "../hermes/transport";
 import { UI_PREFS_KEY } from "../hermes/uiPrefs";
-import { Main } from "../App";
+import { Main, type Screenshots } from "../App";
+import type { Captured } from "../hermes/screenshots";
 
 const drops = vi.hoisted(() => new Set<(e: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({
@@ -493,5 +495,82 @@ describe("Compare", () => {
     await settle(s.hermes);
     expect(prompts(s.server).map((p) => p.params.session_id)).toEqual([s.server.runtimeIdOf("backup")]);
     expect(s.server.requests.filter((r) => r.method === "session.create")).toEqual([]);
+  });
+
+  it("refuses a second message while the other chat is still starting, so both chats get the same messages", async () => {
+    const s = await signedIn();
+    await s.user.click(rowButton("Nightly backup"));
+    await settle(s.hermes);
+    await compareWith(s, 0, "gpt-5");
+    const create = s.server.handlers["session.create"];
+    let answer: (() => void) | undefined;
+    s.server.handlers["session.create"] = (r) => void (answer = () => create(r));
+    const backup = s.server.runtimeIdOf("backup")!;
+
+    await s.user.type(composerIn(0), "First{Enter}");
+    await waitFor(() => expect(answer).toBeTypeOf("function"));
+    await waitFor(() => expect(prompts(s.server)).toHaveLength(1));
+    act(() => s.server.event(backup, "message.complete", { text: "Disk 2.", status: "complete" }));
+    await waitFor(() => expect(pane(0).textContent).toContain("Disk 2."));
+
+    await s.user.type(composerIn(0), "Second{Enter}");
+    expect(within(pane(0)).getByText(/both replies have ended/)).toBeTruthy();
+    expect(composerIn(0).value).toBe("Second");
+
+    act(() => answer!());
+    await waitFor(() => expect(prompts(s.server)).toHaveLength(2));
+    await settle(s.hermes);
+    expect(s.server.requests.filter((r) => r.method === "session.create")).toHaveLength(1);
+    expect(prompts(s.server).map((p) => p.params.text)).toEqual(["First", "First"]);
+  });
+
+  it("says the message went only to the other chat when this one can't start, and keeps no screenshot the other chat took", async () => {
+    const server = new FakeHermes();
+    const conn = { mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" } as const;
+    const hermes = await connect(server.openPipe, undefined, localChatCache(conn));
+    running.push(hermes);
+    let retained = new Set<string>();
+    const syncOutbox = async () => {
+      const next = new Set(outboxAttachmentPaths());
+      for (const path of retained) if (!next.has(path)) delete server.files[path];
+      retained = next;
+    };
+    const stop = subscribeOutbox(() => queueMicrotask(() => void syncOutbox()));
+    let land!: (c: Captured) => void;
+    const capture = "/run/user/1000/hermes-chat/captures/4242/0/shot.png";
+    const wiring: Screenshots = {
+      api: {
+        capture: () => new Promise((resolve) => (land = resolve)),
+        discard: async (path) => void (retained.has(path) || delete server.files[path]),
+      },
+      syncOutbox,
+      onDesktopShortcut: () => () => {},
+      attached: vi.fn(),
+      support: async () => ({ ok: true, summary: "Screenshots use slurp and grim." }),
+    };
+    try {
+      const user = userEvent.setup();
+      render(<Main hermes={hermes} connection={conn} onSignOut={async () => {}} screenshots={wiring} />);
+      await waitFor(() => expect(hermes.hasListed()).toBe(true));
+      await compareWith({ user, hermes }, 0, "gpt-5");
+      composerIn(0).focus();
+      await user.click(within(pane(0)).getByRole("button", { name: "Attach a screenshot" }));
+      server.files[capture] = "\x89PNG\r\n\x1a\nscreen";
+      await act(async () => land({ path: capture }));
+      await waitFor(() => expect(pane(0).querySelectorAll(".chip")).toHaveLength(1));
+      const create = server.handlers["session.create"];
+      server.handlers["session.create"] = (r) => (r.params.model === "claude-sonnet-4-5" ? server.fail(r.id, -32000, "claude-sonnet-4-5 is down") : create(r));
+
+      await user.type(composerIn(0), "Look at this{Enter}");
+      await waitFor(() => expect(prompts(server)).toHaveLength(1));
+      await waitFor(() => expect(pane(0).textContent).toContain("Couldn't start a chat"));
+      await settle(hermes);
+      expect(server.requests.filter((r) => r.method === "image.attach_bytes").map((r) => r.params.session_id)).toEqual([prompts(server)[0].params.session_id]);
+      expect(composerIn(0).value).toBe("Look at this");
+      expect(screen.getByText(/went only to the other chat, with its files/)).toBeTruthy();
+      expect(pane(0).querySelectorAll(".chip")).toHaveLength(0);
+    } finally {
+      stop();
+    }
   });
 });
