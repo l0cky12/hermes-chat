@@ -75,6 +75,11 @@ describe("Route addresses", () => {
     expect(routeProblem({ id: "a", kind: "web", target: "https://hermes.example.com" })).toBeUndefined();
     expect(routeProblem({ id: "a", kind: "ssh", target: "-oProxyCommand=x" })).toMatch(/no spaces/);
     expect(routeProblem({ id: "a", kind: "lan", target: "ftp://hermes" })).toMatch(/http/);
+    expect(routeProblem({ id: "a", kind: "web", target: "https://token@hermes.example.com/" })).toMatch(/can't hold a user name, password or token/);
+    expect(routeProblem({ id: "a", kind: "lan", target: "owner:pa55@192.168.1.10" })).toMatch(/can't hold a user name, password or token/);
+    expect(routeProblem({ id: "a", kind: "lan", target: "owner:pa55@192.168.1.10:9119" })).toMatch(/can't hold a user name, password or token/);
+    expect(routeProblem({ id: "a", kind: "tailscale", target: "wss://token@[fd7a:115c::1]:9119" })).toMatch(/can't hold a user name, password or token/);
+    expect(routeProblem({ id: "a", kind: "web", target: "https://hermes.example.com/u/@me?next=a@b" })).toBeUndefined();
   });
 
   it("guesses the kind of a connection made before routes from its host", () => {

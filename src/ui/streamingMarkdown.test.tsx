@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 // A reply streaming in through Markdown (#224): each delta must redo only what it changed, and the finished reply must
 // come out as it always has.
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Markdown } from "./Markdown";
 import { splitBlocks, type Blocks } from "./markdownBlocks";
 import { rehypePlugins, remarkPlugins } from "./markdownPipeline";
@@ -20,9 +20,13 @@ vi.mock("react-markdown", async (original) => {
 });
 
 beforeEach(() => void (parsed.length = 0));
+// jsdom has no layout; mermaid, drawing the replies' finished diagrams, measures boxes and text to place them.
+beforeAll(() => Object.assign(SVGElement.prototype, { getBBox: () => ({ x: 0, y: 0, width: 80, height: 20 }), getComputedTextLength: () => 40 }));
 afterEach(cleanup);
 
 const fence = (lang: string, code: string) => "```" + lang + "\n" + code + "\n```";
+// An svg in a code block other than its header's icons: a drawn diagram.
+const diagram = (container: HTMLElement) => [...container.querySelectorAll(".code svg")].find((svg) => !svg.closest(".code-head")) ?? null;
 
 /**
  * Finished replies of every shape a block split has to get right. The tests going over every prefix of all of them
@@ -52,7 +56,13 @@ const REPLIES: Record<string, string> = {
   "byte order mark first": "\uFEFF# Heading\n\nabc",
   "byte order mark later": "Intro.\n\n\uFEFF# Heading\n\n```\nx\n```",
   "starts indented": "   - indented list\n   - item\n\n  ```\n  fence indented two\n    four\n  ```",
+  "inline math": "Energy is $E = mc^2$, and \\(a^2 + b^2 = c^2\\) costs $5 and $10.\n\n- a list of $n$ items\n\n> quoted $q$ and $$y = 2$$\nSo \\[\nx = 1\n\\] holds.",
+  "math blocks": "Sum:\n\n$$\n\\int_0^1 x\\,dx\n\n= \\tfrac12\n$$\n\nThen $x$.\n\n1. Item\n\n   $$\n   a\n   $$\n\n$$\nnever closed\n\n",
+  mermaid: "Flow:\n\n```mermaid\nflowchart TD\n  Go-->Stop\n```\n\nDone.\n\n```mermaid\nnot a diagram\n```",
 };
+
+/** Replies with math, which highlighting alone leaves as code, and Markdown typesets. */
+const hasMath = (name: string) => name.includes("math");
 
 const whole = (text: string, query = "") => {
   const { container, unmount } = render(<Markdown text={text} query={query} />);
@@ -130,6 +140,8 @@ describe("Splitting a reply into blocks", () => {
     expect(open("> ```js\n> x")).toBe(true);
     expect(open("1. a\n\n   ```\n   x")).toBe(true);
     expect(open("    indented code")).toBe(true);
+    expect(open("$$\n\\sum_i x_i\n\n")).toBe(true);
+    expect(open("- a\n\n  $$\n  x")).toBe(true);
     // Finished: closed, closed inside a quote or a list, or followed by something else.
     expect(open("~~~js\nx\n   ~~~")).toBe(false);
     expect(open("```\nx\n```\n\n")).toBe(false);
@@ -137,6 +149,12 @@ describe("Splitting a reply into blocks", () => {
     expect(open("1. a\n\n   ```\n   x\n   ```")).toBe(false);
     expect(open("```\nx\n```\nAfter.")).toBe(false);
     expect(open("    code\n\npara")).toBe(false);
+    expect(open("$$\nx\n$$")).toBe(false);
+    expect(open("$$\nx\n$$\nAfter.")).toBe(false);
+  });
+
+  it("keeps a $$ block with blank lines inside it one block", () => {
+    expect(splitBlocks("$$\na\n\n\nb\n$$\n\nAfter.").blocks.map((b) => b.text)).toEqual(["$$\na\n\n\nb\n$$", "After."]);
   });
 
   it("renders a reply that defines link references or footnotes in one piece", () => {
@@ -156,7 +174,7 @@ describe("A streamed reply, once finished", () => {
   });
 
   it("matches the one-piece render at every delta too, apart from code still coming in", { timeout: 30_000 }, () => {
-    const text = REPLIES["lists, loose and tight"] + "\n\n" + REPLIES.table + "\n\n" + REPLIES.links;
+    const text = REPLIES["lists, loose and tight"] + "\n\n" + REPLIES.table + "\n\n" + REPLIES.links + "\n\n" + REPLIES["inline math"];
     const { seen } = streamed(text, 5);
     seen.forEach((html, i) => expect(html, `after ${(i + 1) * 5} characters`).toBe(whole(text.slice(0, (i + 1) * 5))));
   });
@@ -171,7 +189,7 @@ describe("Highlighting a block at a time, from the cache", () => {
       return strip(p.runSync(p.parse(text)));
     };
     const before = [() => rehypeHighlight({ detect: true })];
-    for (const [name, text] of Object.entries(REPLIES))
+    for (const [name, text] of Object.entries(REPLIES).filter(([name]) => !hasMath(name)))
       for (let i = 0; i < 2; i++) expect(tree(text, rehypePlugins("")), `${name}, ${i ? "from the cache" : "first time"}`).toEqual(tree(text, before));
   });
 });
@@ -278,5 +296,40 @@ describe("A streamed reply's code blocks", () => {
     const { container } = render(<Markdown text={"```\nrestart the gateway\nand the gate"} query="gate" streaming />);
     expect(container.querySelector("pre code span")).toBeNull();
     expect([...container.querySelectorAll("pre mark.hit")].map((m) => m.textContent)).toEqual(["gate", "gate"]);
+  });
+});
+
+describe("Math and diagrams still coming in", () => {
+  it("leave an unclosed $$ block at the end as its source, typeset once it closes", () => {
+    const text = "Sum:\n\n$x$ and\n\n$$\n\\sum_i x_i";
+    const { container, rerender } = render(<Markdown text={text} streaming />);
+    expect(container.querySelectorAll(".katex")).toHaveLength(1);
+    expect(container.querySelector(".katex-display")).toBeNull();
+    expect(container.querySelector("pre")!.textContent).toBe("\\sum_i x_i");
+    rerender(<Markdown text={text + "\n$$"} streaming />);
+    expect(container.querySelector(".katex-display")).not.toBeNull();
+    expect(container.querySelector("pre")).toBeNull();
+  });
+
+  it("typeset an unclosed $$ block once the reply ends", () => {
+    const text = "$$\n\\sum_i x_i\n";
+    const { container, rerender } = render(<Markdown text={text} streaming />);
+    expect(container.querySelector(".katex")).toBeNull();
+    rerender(<Markdown text={text} />);
+    expect(container.querySelector(".katex-display")).not.toBeNull();
+  });
+
+  it("draw an unclosed mermaid fence at the end only once it is finished", { timeout: 30_000 }, async () => {
+    const open = "Flow:\n\n```mermaid\nflowchart TD\n  Going-->Gone";
+    // Drawn once already, so a fence taken for finished would show it at once, from the cache.
+    const done = render(<Markdown text={open + "\n```"} />);
+    await waitFor(() => expect(diagram(done.container)).not.toBeNull(), { timeout: 30_000 });
+    done.unmount();
+    const { container, rerender } = render(<Markdown text={open} streaming />);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(diagram(container)).toBeNull();
+    expect(container.querySelector("pre")!.textContent).toBe("flowchart TD\n  Going-->Gone\n");
+    rerender(<Markdown text={open + "\n```"} streaming />);
+    await waitFor(() => expect(diagram(container)).not.toBeNull(), { timeout: 30_000 });
   });
 });

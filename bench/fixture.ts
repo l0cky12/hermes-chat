@@ -97,3 +97,20 @@ export function codeReply(blocks: number, tagged: boolean, salt = ""): string {
     "Here is the next part of the loader, with the retry kept as it was.\n\n```" + (tagged ? "ts" : "") + "\n" + code.replaceAll("load", `load_${salt}${k}`) + "\n```";
   return Array.from({ length: blocks }, (_, k) => one(k)).join("\n\n");
 }
+
+/**
+ * A reply heavy with math, `sections` times: a paragraph with three inline formulas (`$…$`, `\(…\)`), and with
+ * `blocks`, a `$$` block after it. Each formula names its section apart (`salt`, then its place), so none is typeset
+ * from the cache of one already seen.
+ */
+export function mathReply(sections: number, blocks: boolean, salt = ""): string {
+  const one = (k: number) => {
+    const i = `${salt}${k}`;
+    const para =
+      `For the step $x_{${i}} = \\frac{a_{${i}}}{b + 1}$ the error is $\\varepsilon_{${i}} \\le 2^{-n}$, ` +
+      `and the variance \\(\\sigma_{${i}}^2 = \\frac{1}{n} \\sum_{j=1}^{n} (x_j - \\mu)^2\\) stays bounded, as it costs $5 and $10 to check.`;
+    const block = `$$\n\\int_0^{${k + 1}} e^{-t^2} \\, dt_{${i}} = \\frac{\\sqrt{\\pi}}{2} \\operatorname{erf}(${k + 1})\n$$`;
+    return blocks ? para + "\n\n" + block : para;
+  };
+  return Array.from({ length: sections }, (_, k) => one(k)).join("\n\n");
+}
