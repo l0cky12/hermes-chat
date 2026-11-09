@@ -92,10 +92,10 @@ const chat = (more: Partial<Chat> = {}): Chat => ({
 });
 
 function open(c = chat()) {
-  const saves: [string, string][] = [];
+  const saves: [string, string, string][] = [];
   const onSaved = vi.fn();
   const onClose = vi.fn();
-  const props = { save: async (md: string, name: string) => (saves.push([md, name]), `/x/${name}`), onSaved, onClose };
+  const props = { save: async (text: string, name: string, format: string) => (saves.push([text, name, format]), `/x/${name}`), onSaved, onClose };
   const view = render(<ExportChatDialog chat={c} {...props} />);
   return { saves, onSaved, onClose, rerender: (next: Chat) => view.rerender(<ExportChatDialog chat={next} {...props} />), user: userEvent.setup() };
 }
@@ -180,6 +180,39 @@ describe("The Export dialog", () => {
     expect(bytes).not.toContain("pizza place");
     expect(bytes).toContain("Sammy's Pizza");
     expect(bytes).toContain("`lease.pdf`");
+  });
+
+  it("saves JSON with each message's time and the tool call whole, and nothing redacted is left in the bytes", async () => {
+    const timed = chat({
+      items: [
+        { kind: "user", id: "u1", text: `Ship the boxes to 14 Larch Lane. The movers' key is ${KEY}`, at: 1_762_075_800_000 },
+        { kind: "tool", id: "t1", callId: "call_9", name: "web_search", args: { q: "pizza Duluth" }, status: "done", result: "Sammy's Pizza" },
+        { kind: "assistant", id: "a1", text: "Booked for 14 Larch Lane.", at: 1_762_075_805_500 },
+      ],
+    });
+    const { saves, user } = open(timed);
+    await user.click(screen.getByRole("radio", { name: "JSON" }));
+    await user.click(screen.getByRole("checkbox", { name: /Tool calls and Approvals/ }));
+    await user.click(screen.getByRole("textbox", { name: "Text to redact" }));
+    await user.paste("Larch Lane");
+    await user.keyboard("{Enter}");
+    await user.click(screen.getByRole("button", { name: "Save…" }));
+
+    const [[bytes, name, format]] = saves;
+    expect(name).toBe("Moving house.json");
+    expect(format).toBe("json");
+    expect(bytes).toBe(preview().textContent);
+    expect(bytes).not.toContain(KEY);
+    expect(bytes).not.toContain("Larch Lane");
+    const [session] = JSON.parse(bytes) as { messages: Record<string, unknown>[] }[];
+    const rows = session.messages;
+    expect(rows.find((r) => r.role === "user")).toMatchObject({ content: "Ship the boxes to 14 [redacted]. The movers' key is [redacted]", timestamp: 1_762_075_800 });
+    expect(rows.find((r) => r.role === "assistant" && r.content)).toMatchObject({ content: "Booked for 14 [redacted].", timestamp: 1_762_075_805.5 });
+    const call = rows.find((r) => Array.isArray(r.tool_calls))!.tool_calls as { id: string; function: { name: string; arguments: string } }[];
+    expect(call).toHaveLength(1);
+    expect(call[0].function.name).toBe("web_search");
+    expect(JSON.parse(call[0].function.arguments)).toEqual({ q: "pizza Duluth" });
+    expect(rows.find((r) => r.role === "tool")).toMatchObject({ tool_call_id: call[0].id, tool_name: "web_search", content: "Sammy's Pizza" });
   });
 
   it("can't save an empty file", async () => {
