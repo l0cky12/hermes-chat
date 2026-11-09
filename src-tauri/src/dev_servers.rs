@@ -1,7 +1,7 @@
 //! What might be a dev server, for the empty Preview (ADR 0103): TCP ports listening on the Hermes server's loopback
 //! (one `ss` over the sign-in's SSH target, `server_page::listening`) and on this computer's (`/proc/net/tcp{,6}`).
-//! Only ports the Preview could open are kept: bound to loopback or every address, above 1023, not a known database or
-//! broker port, not ssh's, and not this app's own.
+//! Only ports the Preview could open are kept: bound to loopback or every address, from 1024 up to where the system
+//! hands out ports of its own, not a known database or broker port, not ssh's, and not this app's own.
 
 use serde::Serialize;
 
@@ -33,10 +33,16 @@ pub struct DevServers {
 const NOT_WEB: &[u16] = &[5432, 3306, 6379, 11211, 27017, 5672, 9092, 2181];
 /// Programs whose listeners are tunnels, not pages.
 const NOT_DEV: &[&str] = &["ssh", "sshd"];
+/// Where Linux hands out a port to a program that asks for any free one (`ip_local_port_range`): a listener from here
+/// up is a tool's, such as a test driver or a tunnel's end, not a dev server someone started on its port.
+const ANY_FREE_PORT: u16 = 32768;
 
 /// Whether a listener is worth listing. `skip`: ports known not to be dev servers (the Hermes dashboard's).
 pub fn plausible(l: &Listening, skip: &[u16]) -> bool {
-    l.port >= 1024 && !NOT_WEB.contains(&l.port) && !skip.contains(&l.port) && !l.process.as_deref().is_some_and(|p| NOT_DEV.contains(&p))
+    (1024..ANY_FREE_PORT).contains(&l.port)
+        && !NOT_WEB.contains(&l.port)
+        && !skip.contains(&l.port)
+        && !l.process.as_deref().is_some_and(|p| NOT_DEV.contains(&p))
 }
 
 /// Each port once, the first that names its program kept, in port order.
@@ -185,9 +191,17 @@ LISTEN 0      511 [fe80::1%eth0]:4001          [::]:*
         let dashboard = [9119];
         assert!(plausible(&at(5173, Some("node")), &dashboard));
         assert!(plausible(&at(8000, None), &dashboard));
-        for no in
-            [at(22, None), at(80, Some("nginx")), at(5432, Some("postgres")), at(6379, None), at(9119, None), at(2222, Some("sshd")), at(41234, Some("ssh"))]
-        {
+        assert!(plausible(&at(32767, Some("node")), &dashboard));
+        for no in [
+            at(22, None),
+            at(80, Some("nginx")),
+            at(5432, Some("postgres")),
+            at(6379, None),
+            at(9119, None),
+            at(2222, Some("sshd")),
+            at(32768, Some("node")),
+            at(56817, Some("WebKitWebDriver")),
+        ] {
             assert!(!plausible(&no, &dashboard), "{no:?}");
         }
     }
