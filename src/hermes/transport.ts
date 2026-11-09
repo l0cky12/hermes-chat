@@ -1462,10 +1462,12 @@ export class Hermes {
     const gen = this.generation;
     if (!this.connectedPipe() || this.snapshot.live?.unsupported) return Promise.resolve();
     if (this.liveCheck?.gen === gen && (this.liveCheck.done || Date.now() - this.liveCheck.at < LIVE_MIN_GAP_MS - LIVE_SLACK_MS)) return this.liveCheck.done ?? Promise.resolve();
+    const shown = this.waitingCards();
     const done = (async () => {
       try {
         const res = obj(await this.request("session.active_list", {}));
         if (gen !== this.generation) return;
+        this.closeUnwaited(shown, Array.isArray(res?.sessions) ? res.sessions : []);
         const sessions = (Array.isArray(res?.sessions) ? res.sessions : []).flatMap((r): (LiveSession & { key: string })[] => {
           const row = obj(r);
           const status = row?.status === "waiting" ? "waiting" : row?.status === "working" || row?.status === "starting" ? "working" : undefined;
@@ -1507,6 +1509,30 @@ export class Hermes {
     })();
     this.liveCheck = { gen, at: Date.now(), done };
     return done;
+  }
+
+  /** The waiting Approval cards on screen, by their chat's runtime session. */
+  private waitingCards(): Map<string, Set<string>> {
+    const shown = new Map<string, Set<string>>();
+    for (const c of this.snapshot.chats) {
+      const ids = c.items.filter(isWaiting).map((i) => i.id);
+      if (c.runtimeId && ids.length) shown.set(c.runtimeId, new Set(ids));
+    }
+    return shown;
+  }
+
+  /**
+   * Closes the cards in `shown` whose session `session.active_list` doesn't list as `waiting`: Hermes has no request
+   * open for it, so none of its Approvals waits. Hermes withdraws a card with `request.cancel`, but not one another
+   * Hermes app answered in a response frame (#318). `shown` is from before the list was asked for, so a card that
+   * arrived since stays.
+   */
+  private closeUnwaited(shown: Map<string, Set<string>>, rows: unknown[]) {
+    const waiting = new Set(rows.map(obj).flatMap((r) => (r?.status === "waiting" ? [r.id] : [])));
+    for (const [runtimeId, ids] of shown) {
+      const chat = this.snapshot.chats.find((c) => c.runtimeId === runtimeId);
+      if (chat && !waiting.has(runtimeId)) this.patchChat(chat.id, (c) => ({ ...c, items: endWaitingApprovals(c.items, "not waiting", (i) => ids.has(i.id)) }));
+    }
   }
 
   /**
@@ -3017,27 +3043,46 @@ export class Hermes {
   }
 
   /**
-   * Answers an Approval with the owner's choice, in a response frame to Hermes's request (research doc §6). One
-   * already answered, or that Hermes stopped waiting for, is left alone, and so is a choice Hermes didn't offer, or a
-   * broader grant (`isBroadGrant`) the owner hasn't `confirmed`. So is a card from before a drop until its chat is
-   * loaded again, which tells whether Hermes still waits on it. If the answer can't go, the chat says so and the card
-   * stays waiting.
+   * Answers an Approval with the owner's choice (`settleApproval`). One already answered, or that Hermes stopped
+   * waiting for, is left alone, and so is a choice Hermes didn't offer, or a broader grant (`isBroadGrant`) the owner
+   * hasn't `confirmed`. So is a card from before a drop until its chat is loaded again, which tells whether Hermes still
+   * waits on it. A card Hermes says nothing waits on any more was answered in another Hermes app, and says so. If the
+   * answer can't go, the chat says so and the card stays waiting.
    */
   async answerApproval(chatId: string, approvalId: string, choice: ApprovalChoice, confirmed = false): Promise<void> {
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
     const card = chat?.items.find((i) => i.id === approvalId);
     if (!card || !isWaiting(card) || !offeredChoices(card).includes(choice) || (isBroadGrant(choice) && !confirmed)) return;
     if (this.snapshot.status === "connected" && !chat?.runtimeId) return;
-    const answer = (a?: ApprovalChoice) =>
-      this.patchChat(chatId, (c) => ({ ...c, items: c.items.map((i) => (i.id === approvalId && i.kind === "approval" ? { ...i, answer: a } : i)) }));
-    answer(choice);
+    const close = (change: Partial<ApprovalItem>) =>
+      this.patchChat(chatId, (c) => ({ ...c, items: c.items.map((i) => (i.id === approvalId && i.kind === "approval" ? { ...i, ...change } : i)) }));
+    close({ answer: choice });
     try {
-      if (!this.pipe || this.snapshot.status !== "connected") throw new Error("Not connected to Hermes.");
-      await this.pipe.send(JSON.stringify({ jsonrpc: "2.0", id: approvalId, result: { choice, all: false } }));
+      if (!this.pipe || this.snapshot.status !== "connected" || !chat?.runtimeId) throw new Error("Not connected to Hermes.");
+      if (!(await this.settleApproval(chat.runtimeId, card, choice))) close({ answer: undefined, ended: "resolved" });
     } catch (e) {
-      answer(undefined);
+      close({ answer: undefined });
       this.patchChat(chatId, (c) => ({ ...c, items: [...c.items, errorItem(c, `Couldn't answer Hermes: ${(e as Error).message}`)] }));
     }
+  }
+
+  /**
+   * Sends an Approval's answer: `approval.respond`, which settles it in Hermes's approval queue, so Hermes withdraws
+   * the card from every other app with the chat open (`request.cancel`). A response frame to the request settles it
+   * first, and no other app hears (#318). A Hermes without `approval.respond`, or a card without a request id, still
+   * gets one (research doc §6). Resolves false when Hermes had nothing waiting under that request id.
+   */
+  private async settleApproval(runtimeId: string, card: ApprovalItem, choice: ApprovalChoice): Promise<boolean> {
+    if (card.requestId)
+      try {
+        const res = obj(await this.request("approval.respond", { session_id: runtimeId, choice, request_id: card.requestId }));
+        return res?.resolved !== 0;
+      } catch (e) {
+        if (!(e instanceof CapabilityUnsupportedError) && !(e instanceof RpcError && e.code === NO_SUCH_METHOD)) throw e;
+      }
+    if (!this.pipe) throw new Error("Not connected to Hermes.");
+    await this.pipe.send(JSON.stringify({ jsonrpc: "2.0", id: card.id, result: { choice, all: false } }));
+    return true;
   }
 
   /**

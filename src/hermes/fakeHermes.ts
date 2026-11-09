@@ -470,6 +470,13 @@ export class FakeHermes {
   /** The client's answers to server→client requests, in order. */
   readonly responses: Response[] = [];
   /**
+   * False: a Hermes without `approval.respond`, which answers "method not found", so an Approval can be answered only
+   * in a response frame to its request.
+   */
+  approvalRespond = true;
+  /** The Approvals this client answered, by either way: `approval.respond`, or a response frame to the request. */
+  readonly approvalAnswers: { id: string; choice: unknown; via: "approval.respond" | "response" }[] = [];
+  /**
    * What `model.options` answers. Undefined answers JSON-RPC "method not found", as a server without the method would.
    * `model` and `provider` in it are the profile's default.
    */
@@ -646,7 +653,7 @@ export class FakeHermes {
   readonly handlers: Record<string, Handler> = {
     // `tui_gateway/contracts/liveness.py` at upstream `74b2ed6`: what this build enforces, as flags.
     "gateway.capabilities": (r) => this.respond(r.id, { per_session_exclusive_submit: true }),
-    "session.active_list": (r) => this.respond(r.id, { sessions: this.liveSessions.map((l) => ({ current: false, message_count: 0, model: "", preview: "", title: "", started_at: l.last_active, ...l })) }),
+    "session.active_list": (r) => this.respond(r.id, { sessions: this.liveRows().map((l) => ({ current: false, message_count: 0, model: "", preview: "", title: "", started_at: l.last_active, ...l })) }),
     // Bot Mode at the deployed `f0d94882` (research doc "Bot Mode", probed live on 2026-11-04).
     "profiles.list": (r) => {
       if (this.botMode === "none") return this.fail(r.id, -32601, "unknown method: profiles.list");
@@ -963,6 +970,21 @@ export class FakeHermes {
     "client.capabilities": (r) => {
       if ("server_requests" in r.params) this.answersRequests = !!r.params.server_requests;
       this.respond(r.id, { server_requests: ["approval", "clarify", "secret", "sudo"], declines_not_shown: true });
+    },
+    // `tui_gateway/methods_prompt.py` at the deployed `bf0203a`: settles the Approval in Hermes's queue, whose settle
+    // hook then withdraws the request from every client on the session, this one too (`request.cancel`, `resolved`).
+    // Answers how many it settled: 0 when nothing waits under that request id, as once another client has answered.
+    "approval.respond": (r) => {
+      if (!this.approvalRespond) return this.fail(r.id, -32601, "unknown method: approval.respond");
+      const sid = String(r.params.session_id ?? "");
+      if (!this.runtime.has(sid)) return this.fail(r.id, 4001, "session not found");
+      const open = [...this.openRequests].filter(([, q]) => q.sid === sid && q.method === "approval");
+      const settled = r.params.request_id ? open.filter(([, q]) => q.params.request_id === r.params.request_id) : open.slice(0, 1);
+      for (const [id] of settled) {
+        this.approvalAnswers.push({ id, choice: r.params.choice, via: "approval.respond" });
+        this.cancelRequest(id, "resolved");
+      }
+      this.respond(r.id, { resolved: settled.length });
     },
     // `tui_gateway/methods_prompt.py` at the deployed `bf0203a`: records that a client has the card on screen.
     "approval.received": (r) => {
@@ -1537,6 +1559,7 @@ export class FakeHermes {
       const req = JSON.parse(text) as Request | Response;
       if (!("method" in req)) {
         this.responses.push(req);
+        if (this.openRequests.get(req.id)?.method === "approval" && req.result) this.approvalAnswers.push({ id: req.id, choice: req.result.choice, via: "response" });
         this.openRequests.delete(req.id);
         return;
       }
@@ -2178,6 +2201,27 @@ export class FakeHermes {
     if (!q) return;
     this.openRequests.delete(id);
     this.event(q.sid, "request.cancel", { id, method: q.method, reason });
+  }
+
+  /**
+   * `liveSessions`, with every session that has a server→client request open listed as `waiting`, as
+   * `_session_live_status` reports it, this connection's own sessions too.
+   */
+  private liveRows() {
+    const asking = new Map([...this.openRequests.values()].map((q) => [q.sid, q.stored]));
+    const rows = this.liveSessions.map((l) => (asking.has(l.id) ? { ...l, status: "waiting" } : l));
+    for (const [sid, stored] of asking) if (!rows.some((l) => l.id === sid)) rows.push({ id: sid, session_key: stored, status: "waiting", last_active: Date.now() / 1000 });
+    return rows;
+  }
+
+  /**
+   * Another Hermes client answers an open request. One that answers with `approval.respond` gets every client a
+   * `request.cancel`; one that answers in a response frame, as an older client does, removes the request first, so
+   * Hermes tells no other client (`server_requests.resolve_response`).
+   */
+  answerElsewhere(id: string, via: "approval.respond" | "response") {
+    if (via === "approval.respond") return this.cancelRequest(id, "resolved");
+    this.openRequests.delete(id);
   }
 
   drop(reason = "closed by the server (1006 )") {

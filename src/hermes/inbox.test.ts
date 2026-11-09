@@ -85,7 +85,7 @@ describe("The inbox", () => {
     // Reading the server for the inbox resumed, answered or marked nothing.
     expect(server.requests.map((r) => r.method).filter((m) => m !== "client.capabilities")).toEqual(["session.active_list"]);
     expect(server.restRequests.filter((r) => r.method !== "GET")).toEqual([]);
-    expect(server.responses).toEqual([]);
+    expect(server.approvalAnswers).toEqual([]);
   });
 
   it("lists every Approval waiting in one chat, and says when Hermes stops waiting on one", async () => {
@@ -328,7 +328,7 @@ describe("The inbox", () => {
     const card = () => inbox(hermes).entries.find((e) => e.kind === "approval" && e.chatId === "work-asks")!;
     expect(card()).toMatchObject({ key: "approval work work-asks apr-a", itemId: "srq-a" });
     expect(acks.isDismissed(card())).toBe(true);
-    expect(server.responses).toEqual([]);
+    expect(server.approvalAnswers).toEqual([]);
 
     // Active since the dismissal: what it waits on now may be new.
     server.liveSessions[0].last_active = nowS() + 5;

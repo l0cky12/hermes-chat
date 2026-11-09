@@ -14,6 +14,8 @@ async function replying(server = new FakeHermes()) {
 }
 
 const received = (server: FakeHermes) => server.requests.filter((r) => r.method === "approval.received");
+/** The answers sent through Hermes's approval queue, which Hermes withdraws from every other app. */
+const responded = (server: FakeHermes) => server.requests.filter((r) => r.method === "approval.respond").map((r) => r.params);
 
 describe("Approvals", () => {
   afterEach(() => void vi.useRealTimers());
@@ -73,50 +75,53 @@ describe("Approvals", () => {
 
   it("approves the command once", async () => {
     const { server, hermes, id: chatId, runtime, card } = await replying();
-    const { id } = server.askApproval(runtime);
+    const { id, requestId } = server.askApproval(runtime);
     await hermes.answerApproval(chatId, id!, "once");
 
-    expect(server.responses).toEqual([{ jsonrpc: "2.0", id, result: { choice: "once", all: false } }]);
+    expect(responded(server)).toEqual([{ session_id: runtime, choice: "once", request_id: requestId }]);
+    expect(server.responses).toEqual([]);
     expect(server.openRequests.size).toBe(0);
-    expect(card()).toMatchObject({ answer: "once" });
+    // Hermes withdraws the request from every app on the chat, this one too, but the card keeps the owner's answer.
+    expect(card()).toEqual(expect.objectContaining({ answer: "once" }));
+    expect(card()).not.toHaveProperty("ended");
   });
 
   it("denies the command", async () => {
     const { server, hermes, id: chatId, runtime, card } = await replying();
-    const { id } = server.askApproval(runtime);
+    const { id, requestId } = server.askApproval(runtime);
     await hermes.answerApproval(chatId, id!, "deny");
 
-    expect(server.responses).toEqual([{ jsonrpc: "2.0", id, result: { choice: "deny", all: false } }]);
+    expect(responded(server)).toEqual([{ session_id: runtime, choice: "deny", request_id: requestId }]);
     expect(card()).toMatchObject({ answer: "deny" });
   });
 
   it("sends only a choice Hermes offered and allows", async () => {
     const { server, hermes, id: chatId, runtime, card } = await replying();
     // Hermes lists every choice but rules out the broader grants.
-    const { id } = server.askApproval(runtime, { allow_session: false, allow_permanent: false });
+    const { id, requestId } = server.askApproval(runtime, { allow_session: false, allow_permanent: false });
     await hermes.answerApproval(chatId, id!, "session", true);
     await hermes.answerApproval(chatId, id!, "always", true);
-    expect(server.responses).toEqual([]);
+    expect(responded(server)).toEqual([]);
     expect(card()).not.toHaveProperty("answer");
 
     const second = server.askApproval(runtime, { choices: ["once", "deny"] });
     await hermes.answerApproval(chatId, second.id!, "always", true);
-    expect(server.responses).toEqual([]);
+    expect(responded(server)).toEqual([]);
 
     await hermes.answerApproval(chatId, id!, "once");
-    expect(server.responses).toEqual([{ jsonrpc: "2.0", id, result: { choice: "once", all: false } }]);
+    expect(responded(server)).toEqual([{ session_id: runtime, choice: "once", request_id: requestId }]);
   });
 
   it("allows the command for the chat, or always, only once the owner confirms it", async () => {
     const { server, hermes, id: chatId, runtime, card } = await replying();
-    const { id } = server.askApproval(runtime);
+    const { id, requestId } = server.askApproval(runtime);
     await hermes.answerApproval(chatId, id!, "session");
     await hermes.answerApproval(chatId, id!, "always");
-    expect(server.responses).toEqual([]);
+    expect(responded(server)).toEqual([]);
     expect(card()).not.toHaveProperty("answer");
 
     await hermes.answerApproval(chatId, id!, "always", true);
-    expect(server.responses).toEqual([{ jsonrpc: "2.0", id, result: { choice: "always", all: false } }]);
+    expect(responded(server)).toEqual([{ session_id: runtime, choice: "always", request_id: requestId }]);
     expect(card()).toMatchObject({ answer: "always" });
   });
 
@@ -125,7 +130,7 @@ describe("Approvals", () => {
     const { id } = server.askApproval(runtime);
     await hermes.answerApproval(chatId, id!, "once");
     await hermes.answerApproval(chatId, id!, "deny");
-    expect(server.responses.map((r) => r.result?.choice)).toEqual(["once"]);
+    expect(responded(server).map((p) => p.choice)).toEqual(["once"]);
   });
 
   it("tells Hermes the card is on screen when it arrives in the chat the owner has open", async () => {
@@ -183,14 +188,15 @@ describe("Approvals", () => {
 
     // Hermes isn't waiting any more, so a late click sends nothing.
     await hermes.answerApproval(chatId, id!, "once");
+    expect(responded(server)).toEqual([]);
     expect(server.responses).toEqual([]);
   });
 
   it("sends one answer when the owner clicks again before the first has gone", async () => {
     const { server, hermes, id: chatId, runtime } = await replying();
-    const { id } = server.askApproval(runtime);
+    const { id, requestId } = server.askApproval(runtime);
     await Promise.all([hermes.answerApproval(chatId, id!, "once"), hermes.answerApproval(chatId, id!, "once"), hermes.answerApproval(chatId, id!, "deny")]);
-    expect(server.responses).toEqual([{ jsonrpc: "2.0", id, result: { choice: "once", all: false } }]);
+    expect(responded(server)).toEqual([{ session_id: runtime, choice: "once", request_id: requestId }]);
   });
 
   it("never answers for the owner while Hermes waits, and closes the card when Hermes times out", async () => {
@@ -200,11 +206,13 @@ describe("Approvals", () => {
     // Longer than Hermes's own 300 s approval timeout.
     await vi.advanceTimersByTimeAsync(600_000);
     await hermes.idle();
+    expect(responded(server)).toEqual([]);
     expect(server.responses).toEqual([]);
     expect(card()).not.toHaveProperty("ended");
 
     server.cancelRequest(id!, "timeout");
     expect(card()).toMatchObject({ ended: "timeout" });
+    expect(responded(server)).toEqual([]);
     expect(server.responses).toEqual([]);
   });
 
@@ -233,9 +241,9 @@ describe("Approvals", () => {
     ]);
 
     await hermes.answerApproval(chatId, first.id!, "once");
-    expect(server.responses).toEqual([]);
+    expect(responded(server)).toEqual([]);
     await hermes.answerApproval(chatId, kept.id!, "once");
-    expect(server.responses).toHaveLength(1);
+    expect(responded(server)).toHaveLength(1);
   });
 
   it("closes the card when the owner stops the reply", async () => {
@@ -265,6 +273,7 @@ describe("Approvals", () => {
     const { id } = server.askApproval(runtime);
     server.drop();
     await hermes.answerApproval(chatId, id!, "once");
+    expect(responded(server)).toEqual([]);
     expect(server.responses).toEqual([]);
     expect(card()).toMatchObject({ answer: undefined });
     expect(chat().items.at(-1)).toMatchObject({ kind: "error", text: "Couldn't answer Hermes: Not connected to Hermes." });
@@ -291,7 +300,7 @@ describe("Approvals after a reconnect", () => {
     expect(chat()).toMatchObject({ runtimeId: runtime, running: true });
 
     await hermes.answerApproval(chatId, id!, "once");
-    expect(server.responses).toEqual([{ jsonrpc: "2.0", id, result: { choice: "once", all: false } }]);
+    expect(responded(server)).toEqual([{ session_id: runtime, choice: "once", request_id: requestId }]);
     expect(card()).toMatchObject({ answer: "once" });
   });
 
@@ -325,7 +334,7 @@ describe("Approvals after a reconnect", () => {
       text: "Your answer to “rm -rf /var/log/old” didn't reach Hermes before the connection dropped. Hermes stops waiting on its own.",
     });
     await hermes.answerApproval(chatId, id!, "once");
-    expect(server.responses.map((r) => r.result?.choice)).toEqual(["deny"]);
+    expect(responded(server).map((p) => p.choice)).toEqual(["deny"]);
   });
 
   it("doesn't bring back a card Hermes dropped with the session, though it lists it again", async () => {
@@ -339,6 +348,7 @@ describe("Approvals after a reconnect", () => {
 
     expect(chat().items.filter((i) => i.kind === "approval" && !i.ended)).toEqual([]);
     await hermes.answerApproval(chatId, id!, "once");
+    expect(responded(server)).toEqual([]);
     expect(server.responses).toEqual([]);
   });
 
@@ -355,13 +365,14 @@ describe("Approvals after a reconnect", () => {
 
     expect(chat().items.filter((i) => i.kind === "approval" && !i.ended)).toEqual([]);
     await hermes.answerApproval(chatId, id!, "once");
+    expect(responded(server)).toEqual([]);
     expect(server.responses).toEqual([]);
   });
 
   it("doesn't answer a card from before the drop until its chat is loaded again", async () => {
     vi.useFakeTimers();
     const { server, hermes, id: chatId, runtime, card } = await replying();
-    const { id } = server.askApproval(runtime);
+    const { id, requestId } = server.askApproval(runtime);
     const resume = server.handlers["session.resume"];
     let reload = () => {};
     server.handlers["session.resume"] = (r) => (reload = () => resume(r));
@@ -370,13 +381,13 @@ describe("Approvals after a reconnect", () => {
     expect(hermes.getSnapshot().status).toBe("connected");
 
     await hermes.answerApproval(chatId, id!, "once");
-    expect(server.responses).toEqual([]);
+    expect(responded(server)).toEqual([]);
     expect(card()).not.toHaveProperty("answer");
 
     reload();
     await hermes.idle();
     await hermes.answerApproval(chatId, id!, "once");
-    expect(server.responses).toEqual([{ jsonrpc: "2.0", id, result: { choice: "once", all: false } }]);
+    expect(responded(server)).toEqual([{ session_id: runtime, choice: "once", request_id: requestId }]);
   });
 
   it("tells Hermes again that a card is on screen only if it hadn't before", async () => {
@@ -456,5 +467,101 @@ describe("Approvals after a reconnect", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await hermes.idle();
     expect(chat().items.filter((i) => i.kind === "approval")).toHaveLength(1);
+  });
+});
+
+describe("Approvals on a chat another Hermes app also has open", () => {
+  it("closes the card when the other app answers it", async () => {
+    const { server, hermes, id: chatId, runtime, card } = await replying();
+    const { id } = server.askApproval(runtime);
+    server.answerElsewhere(id!, "approval.respond");
+    expect(card()).toMatchObject({ ended: "resolved" });
+
+    await hermes.answerApproval(chatId, id!, "once");
+    expect(responded(server)).toEqual([]);
+    expect(server.responses).toEqual([]);
+  });
+
+  it("says a card was answered in the other app when the owner answers it here after", async () => {
+    const { server, hermes, id: chatId, runtime, chat, card } = await replying();
+    const { id, requestId } = server.askApproval(runtime);
+    // An older app answers in reply to the request, so Hermes withdraws it from no other app.
+    server.answerElsewhere(id!, "response");
+    expect(card()).not.toHaveProperty("ended");
+
+    await hermes.answerApproval(chatId, id!, "deny");
+    expect(responded(server)).toEqual([{ session_id: runtime, choice: "deny", request_id: requestId }]);
+    expect(card()).toMatchObject({ answer: undefined, ended: "resolved" });
+    expect(chat().items.some((i) => i.kind === "error")).toBe(false);
+  });
+
+  it("closes a card the other app answered once Hermes lists the chat as not waiting", async () => {
+    const { server, hermes, runtime, card } = await replying();
+    const { id } = server.askApproval(runtime);
+    server.answerElsewhere(id!, "response");
+    await hermes.checkLive();
+    expect(card()).toMatchObject({ ended: "not waiting" });
+    expect(card()).not.toHaveProperty("answer");
+  });
+
+  it("keeps a card waiting while Hermes lists its chat as waiting", async () => {
+    const { server, hermes, runtime, card } = await replying();
+    server.askApproval(runtime);
+    await hermes.checkLive();
+    expect(server.requests.some((r) => r.method === "session.active_list")).toBe(true);
+    expect(card()).not.toHaveProperty("ended");
+  });
+
+  it("keeps a card that arrives while Hermes is listing what waits", async () => {
+    const { server, hermes, runtime, card } = await replying();
+    // Hermes lists the chat as working: the request opens after the list is made, before the app reads it.
+    server.handlers["session.active_list"] = (r) => server.respond(r.id, { sessions: [{ id: runtime, session_key: "x", status: "working", last_active: 1 }] });
+    const checked = hermes.checkLive();
+    server.askApproval(runtime);
+    await checked;
+    expect(card()).not.toHaveProperty("ended");
+  });
+
+  it("answers in reply to Hermes's request on a Hermes without approval.respond, and asks it no more", async () => {
+    const server = new FakeHermes();
+    server.approvalRespond = false;
+    const { hermes, id: chatId, runtime, chat } = await replying(server);
+    const first = server.askApproval(runtime);
+    const second = server.askApproval(runtime);
+
+    await hermes.answerApproval(chatId, first.id!, "once");
+    expect(responded(server)).toHaveLength(1);
+    expect(server.responses).toEqual([{ jsonrpc: "2.0", id: first.id, result: { choice: "once", all: false } }]);
+    expect(hermes.capabilities.get("approvalAnswers").state).toBe("unsupported");
+
+    await hermes.answerApproval(chatId, second.id!, "deny");
+    expect(responded(server)).toHaveLength(1);
+    expect(server.responses.map((r) => [r.id, r.result?.choice])).toEqual([
+      [first.id, "once"],
+      [second.id, "deny"],
+    ]);
+    expect(server.openRequests.size).toBe(0);
+    expect(chat().items.filter((i) => i.kind === "approval").map((i) => ("answer" in i ? i.answer : undefined))).toEqual(["once", "deny"]);
+    expect(chat().items.some((i) => i.kind === "error")).toBe(false);
+  });
+
+  it("answers in reply to Hermes's request when the card has no request id", async () => {
+    const { server, hermes, id: chatId, runtime, card } = await replying();
+    const { id } = server.askApproval(runtime, { request_id: "" });
+    await hermes.answerApproval(chatId, id!, "once");
+    expect(responded(server)).toEqual([]);
+    expect(server.responses).toEqual([{ jsonrpc: "2.0", id, result: { choice: "once", all: false } }]);
+    expect(card()).toMatchObject({ answer: "once" });
+  });
+
+  it("says so when Hermes refuses the answer, keeps the card waiting, and doesn't answer another way", async () => {
+    const { server, hermes, id: chatId, runtime, chat, card } = await replying();
+    const { id } = server.askApproval(runtime);
+    server.handlers["approval.respond"] = (r) => server.fail(r.id, 5004, "approval queue unavailable");
+    await hermes.answerApproval(chatId, id!, "once");
+    expect(server.responses).toEqual([]);
+    expect(card()).toMatchObject({ answer: undefined });
+    expect(card()).not.toHaveProperty("ended");
+    expect(chat().items.at(-1)).toMatchObject({ kind: "error", text: "Couldn't answer Hermes: approval queue unavailable" });
   });
 });
