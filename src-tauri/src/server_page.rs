@@ -9,7 +9,8 @@
 //!   made, and the target is the one Rust signed in with, checked as the sign-in tunnel checks it. No shell runs.
 //!   Windows' OpenSSH can't listen on a Unix socket, so there ssh listens on a loopback port instead (`LocalEnd`).
 //! - A TCP listener Rust binds on `127.0.0.1:0` and keeps, so the port is ephemeral and never released for another
-//!   program to take before ssh binds it. Each connection the frame makes is copied to and from ssh's socket.
+//!   program to take before ssh binds it. Each connection the frame makes is copied to and from ssh's socket. On
+//!   Linux, a connection from a program run by another account is closed unanswered (`loopback_peer`, ADR 0105).
 //!
 //! The webview names only the page's address. Rust parses it again and refuses anything that isn't an http(s) address
 //! on the server's loopback; it never takes an ssh host, option or socket path from the webview.
@@ -19,6 +20,7 @@
 //! app exits: ssh is started with `PR_SET_PDEATHSIG` from a thread that lives as long as the app (on Windows, in a job
 //! object that is closed with the app), so even an app that crashes takes it along.
 
+use crate::loopback_peer;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -878,8 +880,14 @@ async fn answers(mut s: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpi
 }
 
 /// Accepts the frame's connections on `listener` and copies each one to and from ssh's `socket`. Runs until dropped;
-/// returns only if accepting fails.
+/// returns only if accepting fails. A connection from a program run by another account on this computer is closed
+/// unanswered (ADR 0105).
 pub(crate) async fn serve(listener: TcpListener, socket: Address) {
+    serve_for(listener, socket, loopback_peer::this_account()).await
+}
+
+/// `serve`, for programs run by `account`.
+async fn serve_for(listener: TcpListener, socket: Address, account: loopback_peer::Account) {
     let mut conns = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
@@ -887,6 +895,9 @@ pub(crate) async fn serve(listener: TcpListener, socket: Address) {
                 let Ok((mut tcp, _)) = accepted else { return };
                 let socket = socket.clone();
                 conns.spawn(async move {
+                    if !loopback_peer::runs_as(&tcp, account) {
+                        return;
+                    }
                     if let Ok(mut unix) = connect(&socket).await {
                         let _ = tokio::io::copy_bidirectional(&mut tcp, &mut unix).await;
                     }
@@ -1584,6 +1595,42 @@ while True:
         assert!(other.join("notes.txt").exists());
         assert!(unrelated.join("s").exists());
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// The relay's port, in front of a Unix socket standing in for ssh's that answers every request with `body`,
+    /// serving programs run by `account`.
+    #[cfg(target_os = "linux")]
+    async fn relay_for(body: &'static str, account: loopback_peer::Account) -> (u16, SocketDir) {
+        let dir = SocketDir::new().unwrap();
+        let ssh = tokio::net::UnixListener::bind(dir.socket()).unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = ssh.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = s.read(&mut buf).await;
+                    let reply = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                    let _ = s.write_all(reply.as_bytes()).await;
+                });
+            }
+        });
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(serve_for(listener, dir.socket(), account));
+        (port, dir)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn the_relay_answers_this_accounts_programs_and_closes_on_any_other_accounts() {
+        let me = loopback_peer::this_account();
+        let (port, _dir) = relay_for("the dashboard", me).await;
+        let mine = get(&format!("http://127.0.0.1:{port}/")).await.unwrap();
+        assert!(mine.ends_with("the dashboard"), "this account's program is relayed: {mine:?}");
+
+        // A relay that serves another account: this program's real connection is then a stranger's.
+        let (port, _dir) = relay_for("the dashboard", me + 1).await;
+        let theirs = get(&format!("http://127.0.0.1:{port}/")).await.unwrap_or_default();
+        assert_eq!(theirs, "", "another account's program gets nothing");
     }
 
     #[cfg(unix)]

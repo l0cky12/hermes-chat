@@ -11,6 +11,7 @@ pub mod fonts;
 pub mod gtk_clipboard;
 pub mod links;
 pub mod local_stt;
+mod loopback_peer;
 pub mod main_window;
 pub mod mcp;
 pub mod media;
