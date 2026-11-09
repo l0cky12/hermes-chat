@@ -127,6 +127,15 @@ function rememberRepo(top: string) {
   }
 }
 
+/** Keeps a choice the owner made on this computer, such as an SSH target. */
+function rememberChoice(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // A full or unavailable localStorage only loses the memory of the choice; what it was for still goes ahead.
+  }
+}
+
 // xterm.js is loaded only once the Terminal is first opened.
 const TerminalTab = lazy(() => import("./ui/Terminal").then((m) => ({ default: m.TerminalTab })));
 
@@ -3024,7 +3033,7 @@ export function Main({
             recent={readRecent(localStorage.getItem(REPO_RECENT_KEY))}
             suggestions={(shownProject?.folders ?? []).map((f) => ({ label: shownProject!.name, path: f.path }))}
             onOpened={rememberRepo}
-            onTarget={(t) => localStorage.setItem(REPO_TARGET_KEY, t)}
+            onTarget={(t) => rememberChoice(REPO_TARGET_KEY, t)}
             suggest={
               status === "connected"
                 ? (instructions, input) => hermes.askForEdit({ profile, instructions, input, maxTokens: 400 }).then((r) => r.text)
@@ -3080,7 +3089,7 @@ export function Main({
                         api: tauriTerminal,
                         initialTarget: terminalTarget(sshAddressOf(connection), localStorage.getItem(terminalTargetKey(connection))),
                         guessed: terminalTargetGuessed(sshAddressOf(connection), localStorage.getItem(terminalTargetKey(connection))),
-                        onTarget: (t) => localStorage.setItem(terminalTargetKey(connection), t),
+                        onTarget: (t) => rememberChoice(terminalTargetKey(connection), t),
                       }}
                       local={{ api: tauriLocalTerminal }}
                       shown={shown}
@@ -3432,9 +3441,11 @@ function ChatView({
         };
         const started = await startInWorktree(repoApi, w, { profile, connection: connectionName }, begin);
         id = started.chatId;
-        worktreeChats.set(scope, id, { target: w.target, repo: w.repo, id: w.id, path: w.path, branch: w.branch, token: started.token });
+        const noted = worktreeChats.set(scope, id, { target: w.target, repo: w.repo, id: w.id, path: w.path, branch: w.branch, token: started.token });
         if (!stillIn())
           throw new Error(`The profile changed to ${hermes.profile} while the chat was starting in ${w.path}. It started empty in the ${profile} profile; your message wasn't sent.`);
+        if (!noted)
+          onToast(`The chat started, but this computer couldn't note that it works in ${w.path}: its storage is full or unavailable. The chat's header won't name the worktree; the Repository screen's Worktrees view still does.`);
         if (started.warning) onToast(started.warning);
       } else id = await hermes.newChat(s.model.value, { folder: s.folder.value, instructions });
       if (into && projects.getSnapshot().projects.some((p) => p.id === into)) projects.setChat(into, id, true);
