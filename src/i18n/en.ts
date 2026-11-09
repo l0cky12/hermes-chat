@@ -1,0 +1,139 @@
+// The interface's words in English, the schema every other language follows (locale.ts). Nested by screen, then
+// section. A leaf is a plain string, or a function for words that take a value; leaves hold no markup.
+
+export const en = {
+  common: {
+    cancel: "Cancel",
+    default: "Default",
+    backToDefault: "Back to the default",
+    /** The (i) button beside a setting's name or a section's heading. */
+    about: (what: string) => `About ${what}`,
+    thisSetting: "this setting",
+    px: (n: number) => `${n} px`,
+  },
+  time: {
+    /** Under a minute ago, where a short age shows ("5m"). */
+    now: "now",
+  },
+  settings: {
+    tabs: {
+      general: "General",
+      appearance: "Appearance",
+      model: "Model",
+      providers: "Providers",
+      voice: "Voice",
+      toolsets: "Toolsets",
+      mcp: "MCP servers",
+      gateways: "Gateways",
+      persona: "Persona",
+      memory: "Memory",
+      skills: "Skills",
+      diagnostics: "Diagnostics",
+    },
+  },
+  appearance: {
+    language: {
+      title: "Language",
+      name: "Interface language",
+      hint: "The words Hermes Chat uses, and how it writes dates and numbers. Screens not translated yet stay in English.",
+      /** `language` is the language System resolves to, in its own name. */
+      system: (language: string) => `System (${language})`,
+    },
+    scheme: {
+      title: "Color scheme",
+      intro: "System follows your desktop's light or dark setting.",
+      system: "System",
+      light: "Light",
+      dark: "Dark",
+    },
+    themes: {
+      title: "Themes",
+      create: "Create theme",
+      add: "Add theme",
+      /** A new theme's name before the owner names it. */
+      mine: "My theme",
+      copyOf: (name: string) => `${name} copy`,
+      full: (max: number) => `You have ${max} themes of your own. Delete one to add another.`,
+      use: (name: string) => `Use ${name}`,
+      /** `mode` is one of `modes`. */
+      useIn: (name: string, mode: string) => `Use ${name}, ${mode}`,
+      inMode: (name: string, mode: string) => `${name}, ${mode}`,
+      modes: { light: "light", dark: "dark" },
+      edit: (name: string) => `Edit ${name}`,
+      editTitle: "Edit",
+      delete: (name: string) => `Delete ${name}`,
+      deleteTitle: "Delete",
+      confirmDelete: (name: string) => `Delete ${name}?`,
+      confirm: "Delete",
+      duplicate: (name: string) => `Duplicate ${name}`,
+      duplicateTitle: "Duplicate and edit",
+      duplicateFull: (max: number) => `You have ${max} themes of your own`,
+    },
+    editor: {
+      new: "New theme",
+      name: "Theme name",
+      copyTitle: "Copy this theme as JSON, to keep or share",
+      copy: "Copy JSON",
+      copied: "Copied",
+      /** The name a theme copied without one gets. */
+      untitled: "Untitled",
+      colors: { background: "Background", surface: "Surface", text: "Text", accent: "Accent" },
+      color: (label: string) => `${label} color`,
+      hex: (label: string) => `${label} hex`,
+      hint: "Surface is for the composer, menus and cards. Borders, muted text, code blocks and the list panel are worked out from these four.",
+      taken: "Another theme is already called that.",
+      save: "Save theme",
+      create: "Create theme",
+    },
+    import: {
+      group: "Add a theme",
+      title: "Paste a theme's JSON, as Copy JSON gives it",
+      json: "Theme JSON",
+      /** JSON's own names stay English in every language: they are what a theme file holds. */
+      placeholder: '{\n  "name": "…",\n  "light": { "background": "#ffffff", "surface": "#ffffff", "text": "#111111", "accent": "#3366ff" },\n  "dark": { … }\n}',
+      notJson: "That isn't valid JSON.",
+      notTheme: 'A theme needs a "name", and "light" and "dark" each with "background", "surface", "text" and "accent" as #rrggbb colors.',
+      add: "Add theme",
+    },
+    layout: {
+      title: "Layout and contrast",
+      contrast: "Contrast",
+      contrastHint: "How far text, borders and panels stand out from the background.",
+      resetContrast: "Reset contrast",
+      /** How far contrast is from the default: "+10", "-5". */
+      contrastOffset: (n: number) => (n > 0 ? `+${n}` : `${n}`),
+      softer: "Softer",
+      sharper: "Sharper",
+      width: "Chat width",
+      widthHint: "How wide messages and the composer grow in a wide window.",
+      resetWidth: "Reset chat width",
+      fullWidth: "Full width",
+      narrow: "Narrow",
+      full: "Full",
+    },
+    fonts: {
+      title: "Fonts",
+      ui: "Interface font",
+      uiHint: "Everything outside code blocks and tool output.",
+      uiSize: "Interface font size",
+      resetUi: "Reset interface font",
+      uiSample: "Chats that need attention sit at the top; settled ones wait below. Press Ctrl+K to search every chat.",
+      code: "Code font",
+      codeHint: "Code blocks, tool output, and commands waiting for approval.",
+      codeSize: "Code font size",
+      resetCode: "Reset code font",
+      installed: "Installed fonts",
+      monospace: "Monospace",
+      other: "Other fonts",
+    },
+    wordWrap: {
+      name: "Word wrap",
+      hint: "Wrap long lines in code blocks instead of scrolling sideways.",
+    },
+    statusBar: {
+      name: "Status bar",
+      hint: "Context, model and connection under the chat.",
+      more: "Right-click the bar to pick what it shows, or to hide it. Turning it on here shows every item again.",
+    },
+  },
+};
