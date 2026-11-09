@@ -12,7 +12,10 @@ import { Main } from "../App";
 
 const dialog = vi.hoisted(() => ({ picked: null as string[] | null }));
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => dialog.picked }));
+vi.mock("@tauri-apps/api/core", async (actual) => {
+  const core = await actual<typeof import("@tauri-apps/api/core")>();
+  return { ...core, invoke: async (cmd: string, ...rest: never[]) => (cmd === "composer_pick_files" ? (dialog.picked ?? []) : core.invoke(cmd, ...rest)) };
+});
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};

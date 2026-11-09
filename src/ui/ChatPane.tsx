@@ -4,7 +4,6 @@ import { createContext, memo, type ReactNode, type RefObject, useCallback, useCo
 import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, CornerDownRight, EyeOff, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Square, Trash2, Wrench, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import type { ApprovalChoice, AttachCheck, Attachment, Chat, ChatQueue, ConnectionStatus, Item, OutgoingItem, SideQuestion, Source } from "../hermes/model";
 import { SOURCE_LABEL, isOutgoing, isWaiting } from "../hermes/model";
 import type { SkillCall } from "../hermes/skillCommands";
@@ -1420,8 +1419,8 @@ function Composer({
 
   const pick = async () => {
     try {
-      const paths = await openFileDialog({ multiple: true, directory: false });
-      if (paths) await add(paths);
+      // Rust runs the dialog and notes the picks, so they are the only files the webview can send (ADR 0100).
+      await add(await invoke<string[]>("composer_pick_files"));
     } catch (e) {
       setRefused([`Couldn't open the file picker: ${e instanceof Error ? e.message : String(e)}`]);
     }

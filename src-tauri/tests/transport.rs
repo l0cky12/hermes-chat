@@ -1245,7 +1245,11 @@ async fn stats_files_to_attach() {
     let dir = scratch("stat");
     let png = dir.join("rack.png");
     std::fs::write(&png, b"\x89PNG fake").unwrap();
-    let got = transport::stat_files(&[path_of(&png), path_of(&dir), path_of(&dir.join("gone.txt"))]).await;
+    let elsewhere = dir.join("id_ed25519");
+    std::fs::write(&elsewhere, b"PRIVATE KEY").unwrap();
+    let attachable = transport::Attachable::default();
+    attachable.add([path_of(&png), path_of(&dir), path_of(&dir.join("gone.txt"))]);
+    let got = transport::stat_files(&attachable, &[path_of(&png), path_of(&dir), path_of(&dir.join("gone.txt")), path_of(&elsewhere)]).await;
     let name = dir.file_name().unwrap().to_str().unwrap().to_owned();
     assert_eq!(
         got,
@@ -1258,8 +1262,24 @@ async fn stats_files_to_attach() {
                 size: None,
                 error: Some("No such file or directory (os error 2)".into()),
             },
+            LocalFile { path: path_of(&elsewhere), name: "id_ed25519".into(), size: None, error: Some("it wasn't attached in this app".into()) },
         ]
     );
+}
+
+/// A message queued or left unsent keeps its attachments across a restart, so the paths outlive the app.
+#[test]
+fn attached_files_stay_attachable_after_a_restart() {
+    let dir = scratch("attachable");
+    let kept = dir.join("data").join("attachable.json");
+    let before = transport::Attachable::default();
+    before.load(kept.clone());
+    before.add(["/home/me/report.pdf".to_owned()]);
+
+    let after = transport::Attachable::default();
+    after.load(kept);
+    assert!(after.check("/home/me/report.pdf").is_ok());
+    assert!(after.check("/home/me/.ssh/id_ed25519").is_err());
 }
 
 #[tokio::test]
@@ -1963,8 +1983,10 @@ fn stages_a_pasted_file_as_a_private_temp_file() {
     }
     // The same screenshot pasted twice is two files, so both attach.
     assert_ne!(a, b);
-    // Each staged file attaches like any other local file.
-    let got = tokio::runtime::Runtime::new().unwrap().block_on(transport::stat_files(&[path_of(&a)]));
+    // Each staged file attaches like any other local file, once the paste notes it (`stage_clipboard_file` in lib.rs).
+    let attachable = transport::Attachable::default();
+    attachable.add([path_of(&a)]);
+    let got = tokio::runtime::Runtime::new().unwrap().block_on(transport::stat_files(&attachable, &[path_of(&a)]));
     assert_eq!(got[0].size, Some(png.len() as u64));
     for p in [a, b] {
         std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
