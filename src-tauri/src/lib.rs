@@ -8,6 +8,7 @@ pub mod display;
 pub mod fonts;
 pub mod links;
 pub mod local_stt;
+mod loopback_owner;
 pub mod main_window;
 pub mod mcp;
 pub mod media;

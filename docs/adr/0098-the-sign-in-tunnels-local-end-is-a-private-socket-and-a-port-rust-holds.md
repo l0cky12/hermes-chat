@@ -17,6 +17,6 @@ An SSH sign-in (ADR 0003) sends the dashboard password through a tunnel. The tun
 
 ## Consequences
 
-- **On Windows the race remains.** Windows' OpenSSH can't listen on a Unix socket, so there `LocalEnd` still picks a loopback port and releases it for ssh to bind, as it does for pages (ADR 0052). A program that takes that port first gets the relay's connections.
+- **On Windows the port is still released, and each connection is checked.** Windows' OpenSSH can't listen on a Unix socket, so there `LocalEnd` still picks a loopback port and releases it for ssh to bind, as it does for pages (ADR 0052). A program that takes that port first used to get the relay's connections. Since ADR 0103, every connection to the port is used only if ssh holds its far end, so such a program stops the sign-in instead of receiving the password.
 - **Other local programs can still connect.** Any program on this computer, under any account, can connect to the relay's port while the app is signed in, and reach the dashboard through it, as with any `ssh -L` and with the page tunnels. A dashboard that needs no sign-in, because it listens only on the server's loopback, is open to them.
 - **The readiness check connects to the socket**, not to a TCP port. As before, it opens a channel to the dashboard and closes it.

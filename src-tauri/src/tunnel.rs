@@ -3,7 +3,8 @@
 //!
 //! The local end is made as a server page's is (ADR 0052, ADR 0098): ssh forwards a Unix socket in a private folder,
 //! and Rust binds `127.0.0.1:0`, keeps the listener and relays each connection to the socket. The port the sign-in
-//! sends the password to is never free for another program to take while ssh signs in.
+//! sends the password to is never free for another program to take while ssh signs in. On Windows ssh listens on a
+//! loopback port instead, and each connection to it is checked to reach ssh before anything is sent (ADR 0103).
 
 use crate::server_page::{self, LocalEnd};
 use std::process::Stdio;
@@ -24,6 +25,9 @@ pub enum TunnelError {
     Ssh(String),
     #[error("SSH didn't open the tunnel within {0}s.")]
     Timeout(u64),
+    /// Another program holds the tunnel's port (Windows, ADR 0103): nothing, the password least of all, went to it.
+    #[error("Another program on this computer took the SSH tunnel's port, so Hermes Chat didn't sign in through it: {0}")]
+    NotSsh(String),
 }
 
 /// A running `ssh -N -L` and the relay to it on `local_port`. Dropping it kills ssh and closes the relay.
@@ -91,6 +95,7 @@ async fn open_through(program: &str, target: &str, remote_port: u16, quick: Opti
         .spawn()
         .map_err(|e| TunnelError::Spawn(e.to_string()))?;
 
+    let address = end.address(&child).map_err(|e| TunnelError::Spawn(e.to_string()))?;
     let deadline = tokio::time::Instant::now() + ready_within;
     loop {
         if let Some(_status) = child.try_wait().map_err(|e| TunnelError::Spawn(e.to_string()))? {
@@ -100,8 +105,10 @@ async fn open_through(program: &str, target: &str, remote_port: u16, quick: Opti
             }
             return Err(TunnelError::Ssh(err.trim().to_owned()));
         }
-        if server_page::connect(&end.address()).await.is_ok() {
-            break;
+        match server_page::connect(&address).await {
+            Ok(_) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return Err(TunnelError::NotSsh(e.to_string())),
+            Err(_) => {}
         }
         if tokio::time::Instant::now() >= deadline {
             return Err(TunnelError::Timeout(ready_within.as_secs()));
@@ -110,7 +117,7 @@ async fn open_through(program: &str, target: &str, remote_port: u16, quick: Opti
     }
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| TunnelError::Spawn(e.to_string()))?;
     let local_port = listener.local_addr().map_err(|e| TunnelError::Spawn(e.to_string()))?.port();
-    let relay = tokio::spawn(server_page::serve(listener, end.address())).abort_handle();
+    let relay = tokio::spawn(server_page::serve(listener, address)).abort_handle();
     Ok(Tunnel { _child: child, _end: end, relay, local_port })
 }
 
@@ -399,6 +406,8 @@ fn main() {
         let ssh = FakeSsh::new("port-race");
         let signed = sign_in(&ssh, true).await;
         assert!(signed.stolen.iter().all(|r| !r.contains(PASSWORD)), "the password went to the program that took the port: {:?}", signed.stolen);
+        #[cfg(windows)]
+        assert!(matches!(signed.opened, Err(TunnelError::NotSsh(_))), "the sign-in says another program took the port: {:?}", signed.opened.err());
         #[cfg(unix)]
         {
             let tunnel = signed.opened.expect("the tunnel opens");
