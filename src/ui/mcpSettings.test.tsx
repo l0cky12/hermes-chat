@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Settings → MCP servers on screen (McpSettings.tsx, ADR 0068), against the fake dashboard's MCP routes and Rust's edit
+// Settings → MCP servers on screen (McpSettings.tsx, ADR 0121), against the fake dashboard's MCP routes and Rust's edit
 // (fakeMcp.ts): the list with transport, switch and plugin, adding and editing in a dialog with write-only secrets,
 // removing after asking, Test, OAuth sign-in followed to the end, the catalog, no_mcp, and answers for another profile
 // dropped. Every server here is synthetic.

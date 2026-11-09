@@ -1,4 +1,4 @@
-// The office as a 3D building (ADR 0089): the canvas three.js draws on, the agents' name tags over it, the tower of
+// The office as a 3D building (ADR 0122): the canvas three.js draws on, the agents' name tags over it, the tower of
 // the other profiles' floors, and the card of the one picked. three.js loads with the scene (office3d/scene.ts) the
 // first time this mounts, as its own chunk. Where everyone stands is officeFloors's to say; the scene only draws it.
 // The tags are real buttons named as List names its rows, so the building and List read the same to a screen reader

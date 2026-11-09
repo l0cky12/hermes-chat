@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Project membership kept by Hermes (ADR 0033), against FakeHermes's version of the proposed `projects.membership.*`
+// Project membership kept by Hermes (ADR 0109), against FakeHermes's version of the proposed `projects.membership.*`
 // contract. Two computers are two ProjectsStores, each with its own storage, over one server; one can be cut off.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "./fakeHermes";

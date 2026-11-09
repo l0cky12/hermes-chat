@@ -1,4 +1,4 @@
-// Tags and Saved filters (GLOSSARY.md, ADR 0026). Hermes has nowhere to keep either: a session edit takes only its
+// Tags and Saved filters (GLOSSARY.md, ADR 0106). Hermes has nowhere to keep either: a session edit takes only its
 // title and flags. So both are kept on this computer, in one versioned JSON document in the app's data folder that
 // every running Hermes Chat shares (`tags.json`, swapped under a lock like project defaults: defaults_file.rs),
 // separately for each connection and profile (the scope projectLinks.ts `projectScope` gives), and never sent to Hermes.
@@ -293,7 +293,7 @@ function parse(raw: string | null): UIPrefsDoc {
 }
 
 /**
- * Forgets every scope `match` picks, after the owner removed their connection (forgetConnection.ts, ADR 0049). Other
+ * Forgets every scope `match` picks, after the owner removed their connection (forgetConnection.ts, ADR 0112). Other
  * scopes, and fields a newer app wrote, are kept as stored.
  */
 export async function forgetTagScopes(file: TagsFile, match: (scope: string) => boolean): Promise<void> {

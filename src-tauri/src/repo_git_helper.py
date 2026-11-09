@@ -1,4 +1,4 @@
-# The Repository screen's helper on the Hermes server (ADR 0034). Rust sends this file, unchanged, as a constant
+# The Repository screen's helper on the Hermes server (ADR 0110). Rust sends this file, unchanged, as a constant
 # `python3 -I -c` program over the owner's own ssh (repo_git.rs). Nothing the owner or the webview supplies is ever
 # put in a command line for a shell: the request arrives on stdin as one JSON object, and this program runs `git`
 # with an argument list it builds itself, never through a shell. The answer is one JSON object on stdout.

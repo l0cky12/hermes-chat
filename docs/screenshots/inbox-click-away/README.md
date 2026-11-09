@@ -1,4 +1,4 @@
-# Inbox click-away, rail and tab strip screenshots (ADR 0055)
+# Inbox click-away, rail and tab strip screenshots (ADR 0116)
 
 Captured on 2026-11-05 from the running Tauri debug build (WebKitGTK) on an Xvfb display, 1280 × 820, signed in to the
 `FakeHermes` stand-in dashboard in `bridge.ts` on loopback. Chats, the `work` profile and its waiting Approval are

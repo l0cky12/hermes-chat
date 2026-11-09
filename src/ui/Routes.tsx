@@ -1,4 +1,4 @@
-// A connection's routes on screen (ADR 0056): Setup's list to add, remove, reorder, turn off and test them, and the
+// A connection's routes on screen (ADR 0120): Setup's list to add, remove, reorder, turn off and test them, and the
 // read-only list the sign-in screen shows. Each route is a LAN, Tailscale or web address, or an SSH target; the first
 // that works is used, in this order.
 import { useId, useRef, useState } from "react";
@@ -60,7 +60,7 @@ export function finishRoutes(d: SignInDetails): SignInDetails {
   const done = withRoutes(d, routes);
   const [only] = routes;
   if (routes.length === 1 && !only.off && routesOf({ ...done, routes: undefined })[0].kind === only.kind) {
-    // Nor is it held to one server: that is for a connection with several routes (ADR 0056).
+    // Nor is it held to one server: that is for a connection with several routes (ADR 0120).
     const { routes: _r, server: _s, ...single } = done;
     return single;
   }

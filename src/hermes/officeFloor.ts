@@ -1,4 +1,4 @@
-// The office's building (ADR 0089): where each agent `officeRooms` lists stands on the floor. Its room comes from its
+// The office's building (ADR 0122): where each agent `officeRooms` lists stands on the floor. Its room comes from its
 // state, its seat from the floor plan, its color from its chat's team. Worked out here, in plain data, so tests decide
 // it without WebGL; the 3D layer (ui/office3d) only draws what this returns, furniture included, from the same plan.
 import type { Desk, DeskState, Room } from "./office";
@@ -145,7 +145,7 @@ export const EMPTY_FLOOR_MEMORY: FloorMemory = { colors: new Map(), pods: new Ma
 /** `wakeAt`: when the next agent on the floor goes home (Unix ms), so the caller asks again then. */
 export type Floor = { characters: Character[]; more: number; memory: FloorMemory; wakeAt?: number };
 
-/** A finished agent goes home this long after its state last changed (ADR 0089). */
+/** A finished agent goes home this long after its state last changed (ADR 0122). */
 export const HOME_AFTER_MS = 30 * 60_000;
 
 /** Which agents are drawn when not all fit: those that need the owner first, then those at work, then the rest. */

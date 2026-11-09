@@ -99,7 +99,7 @@ const scenes = {
   "general-light": { query: "?mode=light", ...hd, steps: [openSettings, click(".subnav-item", "Storage")] },
   "general-min": { query: "", width: 760, height: 500, steps: [openSettings] },
   "general-min-launch": { query: "", width: 760, height: 500, steps: [openSettings, click(".subnav-item", "Launch")] },
-  // Settings → Persona (ADR 0056): the profile picker, another profile's SOUL.md picked, and the question before
+  // Settings → Persona (ADR 0117): the profile picker, another profile's SOUL.md picked, and the question before
   // picking another while an edit is unsaved.
   persona: { query: "?profiles=1", steps: [key(",", { ctrlKey: true }), click("[role=tab]", "Persona")] },
   "persona-work": { query: "?profiles=1", steps: [key(",", { ctrlKey: true }), click("[role=tab]", "Persona"), pickPersona("work")] },
@@ -114,7 +114,7 @@ const scenes = {
       pickPersona("research"),
     ],
   },
-  // Automations (ADR 0036). Tall pages: the screenshot covers the whole screen, scrolled to the part named.
+  // Automations (ADR 0108). Tall pages: the screenshot covers the whole screen, scrolled to the part named.
   automations: { query: "", steps: [click("button[aria-label='Automations']")] },
   "automation-editor": { query: "", height: 1700, steps: [click("button[aria-label='Automations']"), click("button", "New automation")] },
   "automation-preview": { query: "", height: 1100, steps: [click("button[aria-label='Automations']"), click("button", "New automation"), scrollTo(".automation-preview")] },

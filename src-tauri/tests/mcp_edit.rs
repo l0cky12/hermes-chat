@@ -1,4 +1,4 @@
-//! Settings → MCP servers' edit (`Dashboard::mcp_edit`, ADR 0068) and its relay, against a local stub of the
+//! Settings → MCP servers' edit (`Dashboard::mcp_edit`, ADR 0121) and its relay, against a local stub of the
 //! dashboard's raw config read, `.env` write and whole-map MCP replace, as `f0d94882` answers them.
 
 use axum::extract::{Query, State};

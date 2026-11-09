@@ -1,4 +1,4 @@
-// Settings → MCP servers (ADR 0068): the MCP servers Hermes connects a profile's agent to, read and changed through the
+// Settings → MCP servers (ADR 0121): the MCP servers Hermes connects a profile's agent to, read and changed through the
 // dashboard's routes at the deployed `f0d94882` (`hermes_cli/web_routers/mcp.py`). Every route takes `?profile=`:
 //
 // - `GET /api/mcp/servers` lists the profile's servers, plugin ones included (`plugin`), env values masked. Only the

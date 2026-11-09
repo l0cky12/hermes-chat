@@ -54,15 +54,15 @@ export type UIPrefs = {
    * or `steer` it into the running reply. Ctrl+Enter does the other.
    */
   followUp: FollowUp;
-  /** Idle compaction: compact a chat open on Hermes here once it has sat idle with its context window this full (ADR 0059). */
+  /** Idle compaction: compact a chat open on Hermes here once it has sat idle with its context window this full (ADR 0119). */
   idleCompact: IdleCompactPrefs;
   /** The chat list's sections that show, in their own order (ADR 0063). Never empty: at least one stays on. */
   chatSectionsShown: SectionKey[];
   /** The chat list's sections the owner collapsed, kept across restarts (ADR 0063). */
   chatSectionsCollapsed: SectionKey[];
-  /** How the agent office shows the agents at work: as a 3D building (ADR 0089), as a list, or not at all, with no rail button (ADR 0077). */
+  /** How the agent office shows the agents at work: as a 3D building (ADR 0122), as a list, or not at all, with no rail button (ADR 0077). */
   agentOffice: OfficeView;
-  /** How much the office's building may cost to draw (ADR 0089). */
+  /** How much the office's building may cost to draw (ADR 0122). */
   officeQuality: OfficeQuality;
   /** How many days a finished entry stays in the inbox before it is dismissed on its own, as if by hand; null: never. */
   inboxAutoDismissDays: number | null;
@@ -77,7 +77,7 @@ export const OFFICE_QUALITIES: readonly OfficeQuality[] = ["normal", "low"];
 export type FollowUp = "queue" | "steer";
 
 /**
- * Idle compaction (idleCompact.ts, ADR 0059). `enabled`: off until the owner turns it on, since a compaction is a model
+ * Idle compaction (idleCompact.ts, ADR 0119). `enabled`: off until the owner turns it on, since a compaction is a model
  * call. `percent`: how full the context window must be, as Hermes measured it. `idleMinutes`: how long the chat must
  * have had nothing happen in it.
  */
@@ -126,7 +126,7 @@ export const UI_PREFS_MIGRATIONS: UIPrefsMigrations = {
   0: (doc) => doc,
   // Pinned is new in version 2 (ADR 0085): a list of shown sections from before it shows Pinned too.
   1: (doc) => (toShown(doc.chatSectionsShown) ? { ...doc, chatSectionsShown: ["pinned", ...(doc.chatSectionsShown as unknown[])] } : doc),
-  // The building replaces the Desks and Scene views in version 3 (ADR 0089): whoever picked either sees the building.
+  // The building replaces the Desks and Scene views in version 3 (ADR 0122): whoever picked either sees the building.
   2: (doc) => (doc.agentOffice === "desks" || doc.agentOffice === "scene" ? { ...doc, agentOffice: "building" } : doc),
 };
 

@@ -15,7 +15,7 @@
 //   profile the dashboard process runs as. So over the socket this screen edits memory only when that profile, `GET
 //   /api/profiles/active` → `current`, is the profile shown, and checks it again before every write.
 //
-// The deployed `f0d94882` also has the same calls as profile-scoped dashboard REST (ADR 0057,
+// The deployed `f0d94882` also has the same calls as profile-scoped dashboard REST (ADR 0118,
 // `hermes_cli/web_routers/status.py`): `GET /api/learning/graph?profile=` lists the nodes, `GET /api/learning/node?id=`
 // reads one, and `PUT`/`DELETE /api/learning/node` `{id[, content]}` edit or remove it, each through the same
 // `agent.learning_mutations` under the memory tool's lock. With those, any profile's memory is read and edited, and the

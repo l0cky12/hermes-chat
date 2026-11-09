@@ -13,7 +13,7 @@ Issue #189. While Hermes replies, Enter queued the message for after the reply (
 - **A steered message shows in the chat** at the end of the transcript, when Hermes accepts it, marked "Steered into the reply" with a dashed outline. It is a user item with `steer: true`. Hermes stores the steer as a user row with `display_kind: "steer"` (`steer_user_row`, `STEER_DISPLAY_KIND`), and `session.resume` sends that `display_kind`, so a reloaded chat marks it too. The Saved copy keeps the mark.
 - **A steer doesn't start a turn.** The live turn (where a turn's reply, reasoning, usage and Approvals are looked for at its end) starts after the owner's last message that isn't a steer (`turnStart`). Without this, a provider that repeats the whole reply in `message.complete` would show it twice after a steer, and a voice conversation would stop following its reply.
 - **Kept with the display preferences** (`followUp` in `hermes-ui-prefs`), on this computer, for every connection and profile. Nothing goes to Hermes's `display.busy_input_mode`.
-- **A fifth General group, Chats.** ADR 0051 asks a new group to argue for itself. Follow-up behavior is about how chats behave, which none of Connection, Launch, Screenshots or Storage covers, and Appearance is about how things look. More chat behavior settings can join it.
+- **A fifth General group, Chats.** ADR 0113 asks a new group to argue for itself. Follow-up behavior is about how chats behave, which none of Connection, Launch, Screenshots or Storage covers, and Appearance is about how things look. More chat behavior settings can join it.
 
 ## Considered options
 

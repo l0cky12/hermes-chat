@@ -1,4 +1,4 @@
-// Which profile a Settings tab shows (ADR 0057): Skills, Memory and Persona each pick one of the server's profiles,
+// Which profile a Settings tab shows (ADR 0118): Skills, Memory and Persona each pick one of the server's profiles,
 // starting on the profile the app shows. The list is Hermes's own (`GET /api/profiles`); until it's read, or when it
 // can't be, only the profiles already known are offered. Picking one goes through Settings' question first, so an
 // unsaved edit is never dropped without asking.

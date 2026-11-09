@@ -1,4 +1,4 @@
-// What the office says about an agent, the same in the building and in List (ADR 0077, ADR 0089): its state in words
+// What the office says about an agent, the same in the building and in List (ADR 0077, ADR 0122): its state in words
 // and its accessible name.
 import type { Desk, DeskState, Room } from "../hermes/office";
 

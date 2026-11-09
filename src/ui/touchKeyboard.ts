@@ -1,4 +1,4 @@
-// The Windows touch keyboard over the bottom of the window (touch_keyboard.rs, ADR 0103). Windows lays the docked
+// The Windows touch keyboard over the bottom of the window (touch_keyboard.rs, ADR 0130). Windows lays the docked
 // keyboard over the window without resizing it, so the page's root gives up the height it covers (`--touch-keyboard`
 // in styles.css) and the composer sits just above it. Nothing else tells the page where the keyboard is (#375).
 import { invoke } from "@tauri-apps/api/core";

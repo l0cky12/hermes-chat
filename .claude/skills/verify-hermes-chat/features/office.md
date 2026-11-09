@@ -1,6 +1,6 @@
 # Office
 
-The rail's Office button opens the agent office in place of the chat panes. By default it is a 3D building (ADR 0089): the Workroom, Waiting room, Trouble room and Lounge, with each agent drawn in the room for its state, in its chat's team color, under a name tag. Clicking a tag or a character opens the agent's card, whose only action is Open chat. **List** shows the same agents as rows. Escape, or picking a chat, goes back. The building draws a frame only when something changes or moves, and none while the window is unfocused.
+The rail's Office button opens the agent office in place of the chat panes. By default it is a 3D building (ADR 0122): the Workroom, Waiting room, Trouble room and Lounge, with each agent drawn in the room for its state, in its chat's team color, under a name tag. Clicking a tag or a character opens the agent's card, whose only action is Open chat. **List** shows the same agents as rows. Escape, or picking a chat, goes back. The building draws a frame only when something changes or moves, and none while the window is unfocused.
 
 ## Sub-features
 

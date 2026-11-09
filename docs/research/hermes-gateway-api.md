@@ -249,7 +249,7 @@ All stage the attachment server-side for the next turn of a session (`tui_gatewa
 - `file.attach` quotes a `ref_path` that has whitespace, brackets or quotes, trying `` ` ``, then `"`, then `'` (`_format_ref_value`, `prompt_attachments.py:174-181`). The client puts `ref_text` in the prompt as-is.
 - The official desktop app, in remote mode, sends images with `image.attach_bytes` and other files with `file.attach {data_url, name}`. It prepends the `@file:` refs, one per line, then a blank line, then the text. An image sent with no text gets the prompt "What do you see in this image?" (`apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts:280-302`).
 
-Hermes Chat follows the desktop app (T12). Images go up to 25 MiB and other files, PDFs included, up to 256 MiB. Rust reads each file from its real path (from Tauri's native drop event or the file picker) and splices its base64 into the frame, so the bytes never pass through the webview. The exceptions are a pasted file and, on Windows, a dropped one (ADR 0094): the page has only its bytes, which Rust saves to a private temp file before it goes the same way.
+Hermes Chat follows the desktop app (T12). Images go up to 25 MiB and other files, PDFs included, up to 256 MiB. Rust reads each file from its real path (from Tauri's native drop event or the file picker) and splices its base64 into the frame, so the bytes never pass through the webview. The exceptions are a pasted file and, on Windows, a dropped one (ADR 0127): the page has only its bytes, which Rust saves to a private temp file before it goes the same way.
 
 ### Dashboard REST (browser path)
 
@@ -382,7 +382,7 @@ Read in `hermes_cli/web_routers/tools.py`, `hermes_cli/tools_config.py` (`TOOL_C
 - **Keys.** `PUT /api/tools/toolsets/{stt,tts}/env?profile=` `{env}` → `save_env_value` for each non-blank value. Names must be env vars of that toolset's visible providers, else 400 `Unknown env var(s) for toolset …`. Answer: `{ok, saved, skipped, is_set}`.
 - **Settings.** `stt.<provider>.{model, model_id, language, language_code}` and `tts.<provider>.{model, model_id, voice, voice_id, language}` in `config_defaults.py`. `PUT /api/config` deep-merges them. `GET /api/config/schema` gives `select` options for `stt.<provider>.model` (`STT_MODEL_CATALOG`), `stt.provider` and `tts.provider`.
 - **Not used.** `GET /api/audio/elevenlabs/voices` lists ElevenLabs voices with the server's key (a possible follow-up for a voice picker). `POST /api/tools/toolsets/{name}/post-setup` spawns installs. `GET /api/audio/voice-config` hands keys to the client.
-- What the app does: ADR 0055.
+- What the app does: ADR 0115.
 
 ### Projects (2026-11-02, deployed `bf0203a`, source read and probed with a throwaway `HERMES_HOME`)
 
@@ -394,7 +394,7 @@ Read in `hermes_cli/web_routers/tools.py`, `hermes_cli/tools_config.py` (`TOOL_C
 ### Project membership (2026-11-03, deployed `bf0203a` and upstream `9302ba9e`, source read)
 
 - No store. `projects.db` (`hermes_cli/projects_db.py`) has no table linking a project to a session, at the deployed `bf0203a` or at upstream `main` `9302ba9e` (cloned 2026-11-03). The official desktop's tree derives a project's sessions from each session's `cwd` (`projects.tree`, `projects.project_sessions` in `tui_gateway/methods_config.py`; `project_for_path`). `PATCH /api/sessions/{id}` takes only `title`, `archived`, `hidden`, `pinned`, `unread` (`hermes_cli/web_routers/sessions.py`). `tools/project_tools.py` scopes a session to a project by its registered `cwd` too.
-- An unknown legacy method is answered `-32601` ("unknown method: … the client and the Hermes backend are out of sync", `tui_gateway/rpc_dispatch.py`), which is how the app finds there is no store. ADR 0033 records the contract (`projects.membership.list` / `.apply`) Hermes would need.
+- An unknown legacy method is answered `-32601` ("unknown method: … the client and the Hermes backend are out of sync", `tui_gateway/rpc_dispatch.py`), which is how the app finds there is no store. ADR 0109 records the contract (`projects.membership.list` / `.apply`) Hermes would need.
 
 ### Preview pane: reading server files (2026-11-02, deployed `bf0203a`, probed over SSH)
 

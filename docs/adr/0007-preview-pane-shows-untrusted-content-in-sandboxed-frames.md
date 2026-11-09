@@ -14,14 +14,14 @@ Tauri 2.12 injects its IPC bootstrap (`__TAURI_INTERNALS__`) and the per-launch 
 ## Considered options
 
 - **A separate native child webview for web pages.** It would be the strongest isolation, and sites that refuse framing would still load. Rejected for now: it needs Tauri's `unstable` multi-webview feature, has to be kept positioned over the React layout by hand, and would draw over the app's menus and toasts. The pane is behind one component (`WebView` in `PreviewPane.tsx`), so it can be swapped later.
-- **Turning on Tauri's CSP for the whole app.** Rejected here: it rewrites the app's scripts with nonces and would affect every screen. The one directive the pane needs, `frame-src`, is set in `index.html`. ADR 0100 adds the app's other directives to the same tag.
+- **Turning on Tauri's CSP for the whole app.** Rejected here: it rewrites the app's scripts with nonces and would affect every screen. The one directive the pane needs, `frame-src`, is set in `index.html`. ADR 0129 adds the app's other directives to the same tag.
 - **No `allow-same-origin` for web pages.** That would give each page an opaque origin, where `localStorage` throws and many sites break. Since a page's real origin is never the app's, keeping it gives the page nothing of the app's. (In the running app, a framed page's `localStorage` works. WebKitGTK keeps no third-party cookies for it either way.)
-- **Letting the webview read any local path, as `hermes_send_file` did until ADR 0100.** Rejected: a preview only needs files the owner chose, and the Open dialog in Rust gives that without widening what the webview can ask Rust to read.
+- **Letting the webview read any local path, as `hermes_send_file` did until ADR 0129.** Rejected: a preview only needs files the owner chose, and the Open dialog in Rust gives that without widening what the webview can ask Rust to read.
 
 ## Consequences
 
 - Framed pages get no cookies (WebKitGTK blocks third-party cookies), so a site that needs a sign-in won't stay signed in.
 - Sites that send `X-Frame-Options` or `frame-ancestors` show blank in the frame. The frame can't tell this apart from a page that loaded, so the pane asks the site separately and offers the owner's browser (ADR 0011). A page slow to load still says, after 15 seconds, that it may not show.
-- Pages on the Hermes server's own loopback (an agent's dev server, say) aren't reachable from this computer, so they don't load. Since ADR 0052 they open through an SSH tunnel to the server.
+- Pages on the Hermes server's own loopback (an agent's dev server, say) aren't reachable from this computer, so they don't load. Since ADR 0114 they open through an SSH tunnel to the server.
 - Links in replies now open in the pane. Before, a click replaced the app's own window with the page.
 - HTML files show as static documents: their scripts don't run.

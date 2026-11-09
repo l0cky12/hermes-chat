@@ -15,7 +15,7 @@
 //
 // The default is the fresh profile: SOUL.md, the model and the description go in the create body, and the source's own
 // skills follow one at a time through Settings → Skills' copy (skills.ts), each read back. Memory can't be copied that
-// way (Hermes has no call that adds an entry, ADR 0057), so only the full copy has it.
+// way (Hermes has no call that adds an entry, ADR 0118), so only the full copy has it.
 import type { RestMethod } from "./pipe";
 import { answered, deadline, sameSoul, type PersonaApi, type Soul } from "./persona";
 import type { SkillRow, SkillsApi } from "./skills";

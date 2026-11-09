@@ -29,7 +29,7 @@ export type Desk = {
   doing?: { text: string; at: number };
   /** Why its state may not be current: shown as last heard. None when it is current. */
   stale?: string;
-  /** What the office's card says beyond its state (ADR 0089): its goal, its model, and how long it ran, when known. */
+  /** What the office's card says beyond its state (ADR 0122): its goal, its model, and how long it ran, when known. */
   detail?: { goal?: string; model?: string; startedAt?: number; durationS?: number };
 };
 

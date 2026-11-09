@@ -1,5 +1,5 @@
 // Chat filters: narrowing the profile's chats by words, Tag, Source, model, last activity and state (GLOSSARY.md
-// "Chat filter", ADR 0026). Words go to Hermes's own search; with none, the profile's chats are listed from Hermes,
+// "Chat filter", ADR 0106). Words go to Hermes's own search; with none, the profile's chats are listed from Hermes,
 // however old. Hermes can narrow either read by Source; Tags are kept on this computer (tags.ts), and Hermes's search
 // can't narrow by model, date or state, so those are checked here, on what Hermes answered. When Hermes answered as
 // many chats as it would, the outcome says more may match rather than claiming the list is complete.

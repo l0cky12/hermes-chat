@@ -1,4 +1,4 @@
-// Tags and Saved filters on screen (tags.ts, ADR 0026): the dialog that creates, renames and deletes the profile's
+// Tags and Saved filters on screen (tags.ts, ADR 0106): the dialog that creates, renames and deletes the profile's
 // tags, and the list's Saved filters, each of which opens the search palette with its filter.
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { ListFilter, Pencil, Tag as TagIcon, Trash2 } from "lucide-react";

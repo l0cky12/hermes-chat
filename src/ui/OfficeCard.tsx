@@ -1,4 +1,4 @@
-// An agent's card in the office's building (ADR 0089): who it is, what it does and how long it has run, with Open chat,
+// An agent's card in the office's building (ADR 0122): who it is, what it does and how long it has run, with Open chat,
 // which goes where its row in List goes. Nothing else is done from here. It reads the agent from the office's
 // current rooms on every render, so it follows the agent while open.
 import { useEffect, useId, useRef, useState } from "react";

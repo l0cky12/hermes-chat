@@ -49,7 +49,7 @@ for (const [name, description] of [
   server.skills.add("default", { dir: `/home/liam/.hermes/skills/${name}`, source: "agent" }, skillMd(name, description));
 server.skills.platformDisabled.default = { tui: ["notes"] };
 
-// Automations (ADR 0036): one GitHub route on a webhooks/1 server, with a made-up delivery history.
+// Automations (ADR 0108): one GitHub route on a webhooks/1 server, with a made-up delivery history.
 server.sessions.push(row("hook-41", 0.05, { source: "webhook", title: "Triage example/fixture#41" }));
 server.webhooks.baseUrl = "https://hooks.example.net";
 server.webhooks.add("default", "triage-issues", {
@@ -71,7 +71,7 @@ for (const d of [
   { delivery_id: "4f1c2a90-0000-4000-8000-000000000006", received_at: ago(2), state: "running", session_id: "hook-41", action: "edited", excerpt: issue(43, "[fixture] Dark mode contrast") },
 ])
   server.webhooks.addDelivery("default", "triage-issues", { updated_at: d.received_at, ...d });
-// Settings → Persona (ADR 0014, 0056): `?profiles=1` adds two more profiles, each with its own SOUL.md (synthetic).
+// Settings → Persona (ADR 0014, 0117): `?profiles=1` adds two more profiles, each with its own SOUL.md (synthetic).
 server.souls = {
   default: "# Persona\n\nYou are Hermes, a terse home-lab assistant. Answer in plain words, and say what you changed.\n",
   work: "# Work\n\nYou are Hermes at work: formal, careful, and you cite the ticket you are working on.\n",

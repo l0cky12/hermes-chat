@@ -957,7 +957,7 @@ export class Hermes {
     },
   );
   /**
-   * Settings → Voice's reads and writes (voiceSettings.ts, ADR 0055). Each call names its profile, and goes only over a
+   * Settings → Voice's reads and writes (voiceSettings.ts, ADR 0115). Each call names its profile, and goes only over a
    * connection that is up. Its read of the voice set-up is always fresh; a save drops the chat panes' cached one.
    */
   readonly voiceSettings = new VoiceSettingsApi(
@@ -1017,7 +1017,7 @@ export class Hermes {
   }
 
   /**
-   * Settings → MCP servers' reads and writes (mcp.ts, ADR 0068). Each call names its profile, and goes only over a
+   * Settings → MCP servers' reads and writes (mcp.ts, ADR 0121). Each call names its profile, and goes only over a
    * connection that is up. An edit goes to Rust, which writes Hermes's whole map; `no_mcp` comes from Rust's toolset
    * guards.
    */
@@ -1150,7 +1150,7 @@ export class Hermes {
 
   /**
    * Closes the connection and opens it again, as a drop would but on purpose, so a connection with several routes can
-   * go back to a preferred one (routes.ts `PreferredRoutes`, ADR 0056). Only while connected and quiet: no reply
+   * go back to a preferred one (routes.ts `PreferredRoutes`, ADR 0120). Only while connected and quiet: no reply
    * running, no Approval waiting, no message sending or queued, no chat loading. A Failed message, which waits on the owner, doesn't hold it. Resolves to whether it moved.
    */
   async reroute(reason: string): Promise<boolean> {
@@ -2643,7 +2643,7 @@ export class Hermes {
 
   /**
    * Sends a message as `send` does, and also says which item in the chat it is, so a Voice conversation can follow the
-   * reply to that message and no other (ADR 0041). `itemId` is missing only when the chat isn't in the list.
+   * reply to that message and no other (ADR 0111). `itemId` is missing only when the chat isn't in the list.
    */
   sendTracked(chatId: string, text: string): Promise<{ delivery: Delivery; itemId?: string }> {
     return this.deliver(chatId, text, []);
@@ -3268,7 +3268,7 @@ export class Hermes {
    * afterwards. Rejects when the chat isn't open on Hermes here, when Hermes refuses, or when this Hermes can't
    * compact (and then the chat isn't offered it again on this connection). One compaction at a time for a chat: asked
    * again before Hermes answers, it is busy. A message sent meanwhile goes once Hermes has answered (`deliver`), so it
-   * never lands while Hermes rewrites what the model reads (Idle compaction, ADR 0059).
+   * never lands while Hermes rewrites what the model reads (Idle compaction, ADR 0119).
    */
   async compact(chatId: string): Promise<CompactResult> {
     const { runtimeId, still } = this.liveScope(chatId);

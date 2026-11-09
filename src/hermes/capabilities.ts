@@ -147,7 +147,7 @@ export const CAPABILITIES: readonly CapabilitySpec[] = [
     anchor: "projects",
     probe: { kind: "rpc", method: "projects.list", params: (profile) => ({ profile }), shape: (r) => isObj(r) || isList(r) },
     methods: ["projects.list"],
-    // Not `projects.membership.*`: no Hermes has that store yet (ADR 0033), so its "method not found" is expected.
+    // Not `projects.membership.*`: no Hermes has that store yet (ADR 0109), so its "method not found" is expected.
     writeMethods: /^projects\.(?!list$|get$|membership\.)/,
   },
   {
@@ -226,7 +226,7 @@ export const CAPABILITIES: readonly CapabilitySpec[] = [
     anchor: "skills",
     probe: { kind: "rest", path: (profile) => `api/skills?${new URLSearchParams({ profile })}`, maxBytes: 2 * 1024 * 1024, shape: isList },
     routes: [/^api\/skills$/],
-    // The edit and switch writes. Copying to another profile (`POST api/skills`, ADR 0057) isn't owned: a server without
+    // The edit and switch writes. Copying to another profile (`POST api/skills`, ADR 0118) isn't owned: a server without
     // that route still lists, switches and edits skills, and the copy's refusal is shown per skill.
     writeRoutes: [/^api\/skills\//],
   },

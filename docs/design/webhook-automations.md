@@ -1,7 +1,7 @@
 # Webhook automations: the server contract (`webhooks/1`)
 
 Status: proposed for Hermes, with a reference implementation (`webhook-automations/hermes-bf0203a.patch`) that this app
-was built and verified against. Issue: #83. Decision record: ADR 0036.
+was built and verified against. Issue: #83. Decision record: ADR 0108.
 
 An **automation** is a Hermes webhook route: a named endpoint on the gateway's webhook listener that verifies an
 outside service's signed event and starts a task for it. Hermes already has most of this. This document says what the

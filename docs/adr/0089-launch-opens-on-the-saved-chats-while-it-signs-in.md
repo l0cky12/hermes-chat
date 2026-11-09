@@ -1,6 +1,6 @@
 # Launch opens on the saved chats while it signs in, and a turned-down password still asks
 
-Issue #268. At launch the app showed only "Signing in…" until every step of connecting had finished: two keyring reads, `GET /api/status`, the password sign-in, the WebSocket ticket, `/api/ws` and `gateway.ready`. Over a slow link (a Tailscale relay at about 71 ms a round trip, a dashboard slow to answer its first request after idling) that was about 3 seconds on a good launch, and much longer on a bad one, though the chat list this computer saved was there all along. Offline already shows that saved list after a failed sign-in (ADR 0049); it just wasn't used until one had failed.
+Issue #268. At launch the app showed only "Signing in…" until every step of connecting had finished: two keyring reads, `GET /api/status`, the password sign-in, the WebSocket ticket, `/api/ws` and `gateway.ready`. Over a slow link (a Tailscale relay at about 71 ms a round trip, a dashboard slow to answer its first request after idling) that was about 3 seconds on a good launch, and much longer on a bad one, though the chat list this computer saved was there all along. Offline already shows that saved list after a failed sign-in (ADR 0112); it just wasn't used until one had failed.
 
 ## Decisions
 
@@ -20,4 +20,4 @@ Issue #268. At launch the app showed only "Signing in…" until every step of co
 
 - With saved chats, a wrong saved password shows the chat list for as long as the first try takes, then the sign-in screen.
 - Anything the main screen asks of Hermes in that time waits or fails as it does while reconnecting, and is asked again once connected.
-- **ADR 0049**: launch still signs in to the connection in use with its saved password; the saved list just shows while it does.
+- **ADR 0112**: launch still signs in to the connection in use with its saved password; the saved list just shows while it does.

@@ -1,4 +1,4 @@
-// Idle compaction (GLOSSARY.md "Idle compaction", ADR 0059): once a chat open on Hermes here has had nothing happen in
+// Idle compaction (GLOSSARY.md "Idle compaction", ADR 0119): once a chat open on Hermes here has had nothing happen in
 // it for the owner's idle time, and Hermes last measured its context window at least the owner's percent full, the app
 // has Hermes compact it, as Compact now does (ADR 0025). Idle is when it costs least: the provider's prompt cache has
 // gone cold by then, so the next message pays for the whole context anyway, and it pays for less once compacted.

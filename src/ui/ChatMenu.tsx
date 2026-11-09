@@ -13,7 +13,7 @@ import { useReturnFocus } from "./bits";
 export type ChatProjects = {
   list: Project[];
   of: Set<string>;
-  /** Projects whose change for this chat waits for Hermes, or conflicts with another computer's (ADR 0033). */
+  /** Projects whose change for this chat waits for Hermes, or conflicts with another computer's (ADR 0109). */
   waiting?: Set<string>;
   onToggle: (projectId: string, inProject: boolean) => void;
 };

@@ -1,4 +1,4 @@
-// Which chats are in which project, kept by Hermes when it can (ADR 0033): the status line on the project screen and
+// Which chats are in which project, kept by Hermes when it can (ADR 0109): the status line on the project screen and
 // in the project switcher, and the dialog that previews the move of this computer's membership to Hermes and settles
 // changes that conflict with another computer's.
 import { useId, useRef, useState, type RefObject } from "react";

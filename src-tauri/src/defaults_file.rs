@@ -2,7 +2,7 @@
 //! Hermes Chat on this computer shares. The webview only reads it, and changes it by compare-and-swap: the new text is
 //! written only if the file still holds what the webview read, checked and written while holding an exclusive lock
 //! (`flock`, or `LockFileEx` on Windows) on a lock file beside it. Separate app instances have separate webview storage and lock registries, so this is
-//! what keeps one instance's save from silently replacing another's. Tags and Saved filters (ADR 0026) are kept the
+//! what keeps one instance's save from silently replacing another's. Tags and Saved filters (ADR 0106) are kept the
 //! same way, in a file of their own.
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};

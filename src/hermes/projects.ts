@@ -1,7 +1,7 @@
-// Projects: named groups of chats and of folders on the server (GLOSSARY.md "Project", ADR 0007). The project itself,
+// Projects: named groups of chats and of folders on the server (GLOSSARY.md "Project", ADR 0105). The project itself,
 // its name and its folders, is Hermes's own: the profile's `projects.db`, read and written with the legacy `projects.*`
 // JSON-RPC on `/api/ws`, so the official desktop app and `hermes projects` see the same ones. Which chats belong to a
-// project is kept by Hermes when it has a membership store (membership.ts, ADR 0033), and on this computer when it
+// project is kept by Hermes when it has a membership store (membership.ts, ADR 0109), and on this computer when it
 // doesn't (projectLinks.ts). Which project the list shows is always this computer's.
 //
 // Folders are only references. Nothing here creates, moves or deletes a folder, a repository or a worktree on the
@@ -193,7 +193,7 @@ export function projectsApi(io: ProjectsIO): ProjectsApi {
 }
 
 /**
- * Where this connection and profile's membership is kept, and how far it is from Hermes's (ADR 0033).
+ * Where this connection and profile's membership is kept, and how far it is from Hermes's (ADR 0109).
  * - `unknown`: not asked yet. `checking`: asking Hermes whether it keeps membership.
  * - `local`: Hermes has no membership store, or the owner hasn't moved this computer's to it yet: kept here only.
  * - `preview`: Hermes has one, and this computer has links it doesn't: the move waits for the owner (`preview`).

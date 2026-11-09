@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Settings → Skills, Memory and Persona for any profile (ADR 0057), in the whole app against the fake dashboard: each
+// Settings → Skills, Memory and Persona for any profile (ADR 0118), in the whole app against the fake dashboard: each
 // tab picks the profile it shows; skills are copied, moved and deleted (archived) in Select mode, each read back;
 // memory entries are deleted several at a time; SOUL.md is copied over another profile's; and picking another profile
 // with an unsaved edit asks first. Every skill, entry and persona here is synthetic.

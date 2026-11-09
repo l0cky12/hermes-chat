@@ -1,4 +1,4 @@
-// Automations (GLOSSARY.md "Automation", ADR 0036): Hermes webhook routes that start a task on the server when GitHub
+// Automations (GLOSSARY.md "Automation", ADR 0108): Hermes webhook routes that start a task on the server when GitHub
 // sends an event. Hermes verifies, filters and runs them in its gateway, also while Hermes Chat is closed; this screen
 // sets them up, previews what an event would do, and shows what became of the events that arrived.
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";

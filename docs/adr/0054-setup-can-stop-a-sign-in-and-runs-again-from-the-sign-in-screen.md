@@ -1,6 +1,6 @@
 # Setup can stop a sign-in under way, runs again from the sign-in screen, and drops late answers
 
-ADR 0009 made Setup test a sign-in before keeping it, and ADR 0049 made Add and Edit go through it. Issue #101 asked to finish that flow: stop a connection that is being made, never let a late answer replace what Setup shows, offer Run setup again from the sign-in screen as well as from Settings, and let the owner skip the provider step on a server that already has one. This ADR records how.
+ADR 0009 made Setup test a sign-in before keeping it, and ADR 0112 made Add and Edit go through it. Issue #101 asked to finish that flow: stop a connection that is being made, never let a late answer replace what Setup shows, offer Run setup again from the sign-in screen as well as from Settings, and let the owner skip the provider step on a server that already has one. This ADR records how.
 
 ## Stopping Save and connect
 
@@ -24,11 +24,11 @@ After Save and connect, the step's button is **Skip** while no key has been save
 
 ## Run setup again from the sign-in screen
 
-The sign-in screen for a saved connection offers **Run setup again…**. It opens Setup's Edit for that connection (ADR 0049), starting from what is saved for it without the password, so the same id, drafts and data stay with it. Cancel goes back to the sign-in screen. **Set up a new connection…** still adds another. Reading the saved details can wait on the keyring. Setup then opens only if nothing else was asked for on the sign-in screen meanwhile: no other pick, sign-in, removal or new setup, the screen still showing that connection, and nothing signed in.
+The sign-in screen for a saved connection offers **Run setup again…**. It opens Setup's Edit for that connection (ADR 0112), starting from what is saved for it without the password, so the same id, drafts and data stay with it. Cancel goes back to the sign-in screen. **Set up a new connection…** still adds another. Reading the saved details can wait on the keyring. Setup then opens only if nothing else was asked for on the sign-in screen meanwhile: no other pick, sign-in, removal or new setup, the screen still showing that connection, and nothing signed in.
 
 ## Drafts
 
-Reconfiguring the connection in use keeps its id (ADR 0049), and drafts are kept under the connection's scope, written as the owner types. A changed address, a failed switch that puts the old connection back, and a stopped one all reopen with the same draft. Tests cover each case.
+Reconfiguring the connection in use keeps its id (ADR 0112), and drafts are kept under the connection's scope, written as the owner types. A changed address, a failed switch that puts the old connection back, and a stopped one all reopen with the same draft. Tests cover each case.
 
 ## Considered options
 

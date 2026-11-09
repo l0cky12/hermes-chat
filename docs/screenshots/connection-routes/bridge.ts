@@ -1,4 +1,4 @@
-// A stand-in Hermes dashboard for the connection routes screenshots (ADR 0056) in the real Tauri app: sign-in, the WS
+// A stand-in Hermes dashboard for the connection routes screenshots (ADR 0120) in the real Tauri app: sign-in, the WS
 // ticket, `/api/ws` and dashboard REST, answered by the tests' FakeHermes with synthetic chats. Its `/api/status` names
 // the install given, so two of them are two different servers. The sign-in takes only the throwaway password below.
 // Loopback only.

@@ -40,7 +40,7 @@ The verify stand-in's `POST /__ask` control asks the real app the same requests;
 - **The app's history, with every Back a load.** Rejected: every Back in a dev server reloads the whole app, losing its state and its HMR connection. The chosen `go` falls back to exactly this when WebKit's neighbour doesn't match.
 - **One view for the app run that blocks traversals outside the app's list.** Rejected: more Rust and more state than a view per run of web entries, which the real app showed keeps keyboard focus, Escape and X11 holes under a menu.
 - **Treating every page-reported address as a new entry unless a load is in flight.** Rejected: `replaceState`, a page's own `history.back()` and a redirecting link each made a duplicate entry, which is wrong for ordinary SPA dev servers.
-- **A stable local port per server origin.** Rejected: Rust would hold a port on this computer while nothing shows, against ADR 0052.
+- **A stable local port per server origin.** Rejected: Rust would hold a port on this computer while nothing shows, against ADR 0114.
 - **An ESLint rule for the boundary.** Not possible: the repo has no ESLint. The import-graph test does its work.
 - **A typed port with recent ones instead of detection.** The owner didn't choose; detection was the default asked for, and the address box takes a bare port anyway.
 
@@ -55,4 +55,4 @@ The verify stand-in's `POST /__ask` control asks the real app the same requests;
 - **History isn't kept across restarts.**
 - **The dev server list can be stale** until it is shown again or refreshed.
 - **There are no keyboard shortcuts for Back and Forward yet.**
-- ADR 0081's last consequence (a followed link doesn't change the address) and its `about:blank` close no longer hold. ADR 0052's switch row and its "Reload opens a new tunnel" no longer hold.
+- ADR 0081's last consequence (a followed link doesn't change the address) and its `about:blank` close no longer hold. ADR 0114's switch row and its "Reload opens a new tunnel" no longer hold.

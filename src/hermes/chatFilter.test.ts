@@ -1,4 +1,4 @@
-// Chat filters against a fake Hermes that searches and lists as the deployed dashboard does (chatFilter.ts, ADR 0026):
+// Chat filters against a fake Hermes that searches and lists as the deployed dashboard does (chatFilter.ts, ADR 0106):
 // chats older than the list and archived chats are found, every part of a filter must match, and running a filter
 // only reads.
 import { describe, expect, it } from "vitest";

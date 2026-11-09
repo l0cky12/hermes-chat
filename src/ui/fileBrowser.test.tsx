@@ -58,7 +58,7 @@ const names = () => [...document.querySelectorAll(".files-table tbody .files-lab
 const trail = () => [...document.querySelectorAll(".files-crumbs li")].map((li) => li.textContent);
 const row_ = (name: string) => screen.getByRole("button", { name: new RegExp(`^${name}`) });
 
-/** Server files is the side panel's Files tab (ADR 0039, 0055); the rail has no button for it. */
+/** Server files is the side panel's Files tab (ADR 0039, 0116); the rail has no button for it. */
 async function openFiles(user: ReturnType<typeof userEvent.setup>) {
   if (document.querySelector("aside.side-panel:not([hidden])") === null) await user.click(screen.getByRole("button", { name: /^(Open|Show) the side panel$/ }));
   await user.click(screen.getByRole("tab", { name: "Files" }));

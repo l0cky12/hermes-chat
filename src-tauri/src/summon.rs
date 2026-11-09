@@ -1,5 +1,5 @@
 //! Bringing the one Hermes Chat window forward: `hermes-chat --show`, `hermes-chat --toggle`, a second launch, and a
-//! chat link all come here through remote.rs. There is no global shortcut in the app (ADR 0033 is superseded); anyone
+//! chat link all come here through remote.rs. There is no global shortcut in the app (ADR 0107 is superseded); anyone
 //! who wants a key binds `hermes-chat --toggle` in their desktop's own config, such as a Hyprland `bind`
 //! or, on Windows, the Shortcut key of a shortcut that runs it.
 

@@ -50,7 +50,7 @@ export type Place = Conn & { profile: string };
 
 /**
  * This computer's connection, where restored data goes: its address, and `parts`, what its kept scopes start with
- * (connections.ts `scopeParts`: its stable id, ADR 0049). `parts` stays on this computer; a backup holds the address.
+ * (connections.ts `scopeParts`: its stable id, ADR 0112). `parts` stays on this computer; a backup holds the address.
  */
 export type Target = Conn & { parts?: string[] };
 

@@ -1,13 +1,13 @@
 // Settings → Persona: the SOUL.md of any profile on the Hermes server, edited as plain text. A picker at the top
 // (PersonaPage) lists every profile Hermes has, starting on the one in use; each picked profile gets an editor of its
-// own (PersonaSettings), so edits are never mixed, and picking another asks first while one is unsaved (ADR 0056).
+// own (PersonaSettings), so edits are never mixed, and picking another asks first while one is unsaved (ADR 0117).
 // Picking one here doesn't change the profile the app uses. Nothing is shown as saved until Hermes, read back, has it
 // (persona.ts). An unsaved edit is kept on this computer, so leaving, closing the app, or a crash doesn't lose it, and
 // each version a save replaced is kept to put back (personaStore.ts). The text is the owner's, but it is treated as
 // untrusted: it is only ever a textarea's value, never rendered.
 //
 // The shown profile's saved SOUL.md can be copied over another profile's, through the same check-first, read-back save
-// (ADR 0057).
+// (ADR 0118).
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Copy, FileText, RotateCcw, Save, TriangleAlert, Undo2, X } from "lucide-react";
 import { asReadBack, certainlyUnwritten, PersonaError, sameSoul, soulNotes, type PersonaApi, type ProfileHome, type Soul } from "../hermes/persona";

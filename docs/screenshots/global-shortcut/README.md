@@ -1,6 +1,6 @@
 # Global shortcut screenshots
 
-> The global shortcut was removed in #169 (ADR 0033 is superseded). These screenshots record the feature as it was.
+> The global shortcut was removed in #169 (ADR 0107 is superseded). These screenshots record the feature as it was.
 
 Captured on 2026-11-03 from the running Hermes Chat debug build (WebKitGTK, with the frontend built in) from this branch, on an Xvfb display at 1280 × 820 with the Openbox window manager. Nothing was composited or retouched.
 

@@ -276,7 +276,7 @@ const savedWhen = (at: number) => new Date(at).toLocaleString(undefined, { dateS
  * it opens. Native drops attach to the pane under the pointer. Export, Copy chat link, Settle and Archive are in the header's More menu.
  * `screenshots` attaches captures; `screenshotKeys` names the shortcut.
  * `voice` supplies Dictation and Read aloud. `voiceSend` puts a Voice conversation's turn in the chat as the owner's
- * message; it is left out for a chat not started yet, where a conversation can't start (ADR 0041). `commands` runs the slash commands typed in the composer. `queue` is the
+ * message; it is left out for a chat not started yet, where a conversation can't start (ADR 0111). `commands` runs the slash commands typed in the composer. `queue` is the
  * chat's queue of messages waiting to go after its reply, and `queueApi` changes it; it is left out for a chat not
  * started yet, which can't queue. `branch` offers Branch from here under each message with text (ADR 0027): `blocked`
  * says why none can be made now. `branchedFrom` is shown at the top of a branch, where it came from. `replay` offers
@@ -424,7 +424,7 @@ export function ChatPane({
   // Hidden to the tray, nothing is read aloud (ADR 0034).
   const windowHidden = useWindowHidden();
   useEffect(() => { if (windowHidden) speaker?.stop(); }, [windowHidden, speaker]);
-  // A Voice conversation runs through the same speaker, and pauses whenever the owner can't see it (ADR 0041).
+  // A Voice conversation runs through the same speaker, and pauses whenever the owner can't see it (ADR 0111).
   const minimized = usePageHidden();
   const conversation = useVoiceConversation({
     voice,

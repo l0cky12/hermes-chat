@@ -5,7 +5,7 @@
 //
 // Each Draft keeps its own undo history here, in memory only: the webview's history can't be used in the composer,
 // since text the app writes (a slash pick, a Draft shown again on a chat switch, another pane on the same Draft)
-// breaks it (ADR 0095).
+// breaks it (ADR 0128).
 import { type ScopeSource, scopeParts } from "./connections";
 import { type EditKind, type History, emptyHistory, record, redo, undo } from "./editHistory";
 import { persist } from "./unsaved";

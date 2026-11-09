@@ -1,4 +1,4 @@
-// three.js costs nothing until the office opens (ADR 0089) only while it is reached through one dynamic import. These
+// three.js costs nothing until the office opens (ADR 0122) only while it is reached through one dynamic import. These
 // fail the build when a file elsewhere imports three, or imports the scene other than with import() or for its types.
 import { describe, expect, it } from "vitest";
 

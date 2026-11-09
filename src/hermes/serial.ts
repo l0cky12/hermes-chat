@@ -1,4 +1,4 @@
-// Runs connection changes one at a time (ADR 0049). Rust holds one connection, and a connect that finished after a
+// Runs connection changes one at a time (ADR 0112). Rust holds one connection, and a connect that finished after a
 // later one would take it back, so each change starts only once the one before has finished, and a change that a
 // newer one has overtaken stops at its next step (`stale()`), closing whatever it opened, before the next one runs.
 

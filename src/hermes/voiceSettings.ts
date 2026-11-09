@@ -1,6 +1,6 @@
 // Settings → Voice: which speech-to-text and text-to-speech provider a profile uses on Hermes, each provider's model,
 // voice and language, and its API keys. Read from and written to the dashboard routes Hermes's own `hermes tools`
-// picker uses, at the deployed `f0d94882e8` (`hermes_cli/web_routers/tools.py`, research doc "Voice providers", ADR 0055):
+// picker uses, at the deployed `f0d94882e8` (`hermes_cli/web_routers/tools.py`, research doc "Voice providers", ADR 0115):
 //
 // - `GET /api/tools/toolsets/{stt,tts}/config?profile=` lists the providers Hermes offers (`TOOL_CATEGORIES` plus
 //   plugin rows), each with its readiness (`provider_readiness_status`: ready, needs_keys, needs_setup, needs_auth),

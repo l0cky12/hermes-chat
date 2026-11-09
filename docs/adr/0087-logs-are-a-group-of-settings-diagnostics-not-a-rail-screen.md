@@ -1,10 +1,10 @@
 # Logs are a group of Settings → Diagnostics, not a rail screen
 
-The owner asked for the Logs screen (ADR 0033) to move into Settings, under Diagnostics. Logs had its own rail button in the Server group (ADR 0050, 0055) and covered the chat panes like Usage. Diagnostics already answered "what is wrong with the connection" from the server's side; Logs answers the same question from the log lines. Two places for one question meant two places to look.
+The owner asked for the Logs screen (ADR 0033) to move into Settings, under Diagnostics. Logs had its own rail button in the Server group (ADR 0050, 0116) and covered the chat panes like Usage. Diagnostics already answered "what is wrong with the connection" from the server's side; Logs answers the same question from the log lines. Two places for one question meant two places to look.
 
 ## Decisions
 
-- **Diagnostics shows two groups beside a sub-nav**: **Server**, what was there before (the server's facts, each feature's check, the Bot Desktop's browser), and **Logs**. One shows at a time, as General's groups do (ADR 0051). The sub-nav is `compact`, so in a narrow window it is a row of icons above the group.
+- **Diagnostics shows two groups beside a sub-nav**: **Server**, what was there before (the server's facts, each feature's check, the Bot Desktop's browser), and **Logs**. One shows at a time, as General's groups do (ADR 0113). The sub-nav is `compact`, so in a narrow window it is a row of icons above the group.
 - **Server comes first.** Diagnostics opens at Server, and a screen's "Hermes lacks this" note, or a tab's, opens Diagnostics at Server and the capability it names, even when Logs was the group shown last.
 - **The rail loses its Logs button.** The Server group keeps Outputs, Repository, Scheduled jobs, Automations and Usage.
 - **Logs reads Hermes only while it is shown.** Leaving the Logs group, the Diagnostics tab or Settings stops the polling, and what was read from Hermes goes, as closing the Logs screen did. This app's own diagnostics stay until the app quits. Changing profile starts Logs afresh.

@@ -1,7 +1,7 @@
-// Projects (GLOSSARY.md "Project", ADR 0007): the switcher under the profile's name, which narrows the chat list to one
+// Projects (GLOSSARY.md "Project", ADR 0105): the switcher under the profile's name, which narrows the chat list to one
 // project's chats, and the project screen, where a project is renamed or deleted and its folders added and taken out.
 // The project and its folders are Hermes's; which chats are in it is Hermes's when it keeps it, and this computer's when
-// it doesn't (MembershipSync.tsx, ADR 0033).
+// it doesn't (MembershipSync.tsx, ADR 0109).
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, Check, ChevronDown, FolderGit2, Folder, FolderKanban, GitBranch, Pencil, Plus, Settings2, Trash2, X } from "lucide-react";
 import { EFFORT_LABEL, shortName, type Effort, type ModelCatalog, type ModelPick } from "../hermes/models";

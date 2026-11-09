@@ -81,7 +81,7 @@ export const tauriWebPages: WebPages = {
 
 /**
  * A page on the Hermes server's own loopback, opened through an SSH tunnel to the sign-in's SSH target
- * (src-tauri/src/server_page.rs, ADR 0052). `url`: where the frame loads it, on this computer's `127.0.0.1`.
+ * (src-tauri/src/server_page.rs, ADR 0114). `url`: where the frame loads it, on this computer's `127.0.0.1`.
  * `target`: the SSH target it goes through. `at`: where it is on the server, as `localhost:3000`.
  */
 export type ServerPage = { id: string; url: string; target: string; at: string };

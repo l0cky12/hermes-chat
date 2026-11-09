@@ -1,5 +1,5 @@
 // The Repository screen's model: a Git checkout on the Hermes server, read through the owner's own ssh by a helper
-// the app sends there (src-tauri/src/repo_git.rs, repo_git_helper.py, ADR 0034). This file holds what the helper
+// the app sends there (src-tauri/src/repo_git.rs, repo_git_helper.py, ADR 0110). This file holds what the helper
 // answers, how its changes are grouped for the screen, and how a diff is read. The screen is src/ui/Repository.tsx.
 
 import type { Progress, WorktreeRequest } from "./worktrees";

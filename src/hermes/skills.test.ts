@@ -368,7 +368,7 @@ describe("turning a skill on or off", () => {
   });
 });
 
-describe("copying and archiving across profiles (ADR 0057)", () => {
+describe("copying and archiving across profiles (ADR 0118)", () => {
   const row = async (api: SkillsApi, profile: string, name: string) => (await api.list(profile)).skills.find((s) => s.name === name)!;
 
   it("copies SKILL.md to another profile as a new Local skill in the same category, and reads it back there", async () => {

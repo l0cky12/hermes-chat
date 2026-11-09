@@ -1,4 +1,4 @@
-// A fake Hermes's MCP servers, for tests of Settings → MCP servers (ADR 0068): the `/api/mcp` routes as the deployed
+// A fake Hermes's MCP servers, for tests of Settings → MCP servers (ADR 0121): the `/api/mcp` routes as the deployed
 // `f0d94882` answers them (`hermes_cli/web_routers/mcp.py`, `web_server_mcp.py`), and Rust's single-server edit
 // (`src-tauri/src/mcp.rs` `edited`, `Dashboard::mcp_edit`), which reads the raw config and writes the whole map.
 // Each profile keeps its own raw `mcp_servers`, `.env` and OAuth tokens; plugin servers are listed but can't be changed.

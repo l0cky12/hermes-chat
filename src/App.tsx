@@ -119,7 +119,7 @@ import { tauriTray, type TrayWiring } from "./hermes/tauriTray";
 import { usePageHidden, useWindowHidden } from "./ui/windowState";
 import { getUIPrefs, setUIPrefs, subscribe as subscribeUIPrefs, toggleModelFavorite, type StickyModelPick } from "./hermes/uiPrefs";
 
-/** Keeps the repository folder opened last, and the recent ones, on this computer (Repository screen, ADR 0034). */
+/** Keeps the repository folder opened last, and the recent ones, on this computer (Repository screen, ADR 0110). */
 function rememberRepo(top: string) {
   try {
     localStorage.setItem(REPO_PATH_KEY, top);
@@ -196,7 +196,7 @@ const healthOf = (id: string) => routeHealth.get(id) ?? routeHealth.set(id, kept
 /** The record of recent connection attempts, kept on disk between launches (attempts.ts, #270). */
 const connectionAttempts = new AttemptLog(tauriAttemptStore);
 /**
- * A connection's pipe: its routes in order, and the server id the first route that names one reports kept (ADR 0056).
+ * A connection's pipe: its routes in order, and the server id the first route that names one reports kept (ADR 0120).
  * Each opening is kept in the record of connection attempts.
  */
 const pipeFor = (c: SavedConnection, d: SignInDetails) =>
@@ -238,7 +238,7 @@ const BLANK: SignInDetails = { mode: "ssh", sshTarget: "", url: "", username: ""
 
 /**
  * `d`, the sign-in `c` was made with, held to the server `c` knows now: a route may have reported it since `d` was read
- * (ADR 0056). Only a connection with several routes is held to one.
+ * (ADR 0120). Only a connection with several routes is held to one.
  */
 const withKnownServer = (c: SavedConnection, d: SignInDetails): SignInDetails => {
   const server = savedConnections().get(c.id)?.server;
@@ -404,7 +404,7 @@ function Screens({ links }: { links: LinkInbox }) {
   };
 
   // On a fallback route, the routes before it are checked now and then without the password, and the connection
-  // moves back to one that answers once nothing is running (ADR 0056).
+  // moves back to one that answers once nothing is running (ADR 0120).
   useEffect(() => {
     const d = signedInWith.current;
     const id = connection?.id;
@@ -848,10 +848,10 @@ export function Main({
   onSetUp?: () => void;
   localFiles?: LocalFiles;
   webPages?: WebPages;
-  /** Pages on the Hermes server's own loopback, through SSH (ADR 0052). */
+  /** Pages on the Hermes server's own loopback, through SSH (ADR 0114). */
   serverPages?: ServerPages;
   screenshots?: Screenshots;
-  /** The Repository screen's helper over ssh, and worktrees' (ADR 0034, 0043). */
+  /** The Repository screen's helper over ssh, and worktrees' (ADR 0110, 0043). */
   repoApi?: RepoApi;
   /** Speech to text on this computer and where each recording goes, decided by Rust (ADR 0065, 0067). */
   localStt?: LocalSttApi;
@@ -985,13 +985,13 @@ export function Main({
   }, [localStt]);
   // The project screen covers the chat pane, as Settings does.
   const [projectOpen, setProjectOpen] = useState(false);
-  // The membership sync's dialog: the move to Hermes, and conflicts with another computer (ADR 0033).
+  // The membership sync's dialog: the move to Hermes, and conflicts with another computer (ADR 0109).
   const [membershipOpen, setMembershipOpen] = useState(false);
   /** The Scheduled jobs screen covers the chat, as Settings does. */
   const [jobsOpen, setJobsOpen] = useState(false);
   /** The job the Scheduled jobs screen opens on, when something other than the rail opened it; `n` starts it again. */
   const [jobsAt, setJobsAt] = useState<{ id: string; n: number }>();
-  /** Automations (webhook routes, ADR 0036) cover the chat too. */
+  /** Automations (webhook routes, ADR 0108) cover the chat too. */
   const [automationsOpen, setAutomationsOpen] = useState(false);
   // The side panel's Terminal (ADR 0022, ADR 0039): which shell is shown, kept in the prefs so it opens on the one picked
   // last (the Hermes server's until then, ADR 0051), and which are running, for the rail's dot.
@@ -1006,7 +1006,7 @@ export function Main({
   const terminalRunning = termRunning.server || termRunning.local;
   // The owner holds Hermes's screen: its computer use waits until they hand back, so the Screen tab says so.
   const [screenHeld, setScreenHeld] = useState(false);
-  // The Repository screen covers the chat panes too (ADR 0034).
+  // The Repository screen covers the chat panes too (ADR 0110).
   const [repoOpen, setRepoOpen] = useState(false);
   /** Where the Repository screen opens when a chat's worktree label opened it: that worktree's Worktrees view. */
   const [repoAt, setRepoAt] = useState<{ target: string; path: string; view: "worktrees"; n: number }>();
@@ -1160,7 +1160,7 @@ export function Main({
   // every change in the chats, to tell when a troubleshooting reply has ended.
   const troubleshoots = useMemo(() => new TroubleshootStore(), [hermes]);
   useEffect(() => hermes.subscribe(() => troubleshoots.observe(hermes.getSnapshot())), [hermes, troubleshoots]);
-  // Idle compaction (idleCompact.ts, ADR 0059): a chat open on Hermes here that has sat idle with its context window
+  // Idle compaction (idleCompact.ts, ADR 0119): a chat open on Hermes here that has sat idle with its context window
   // past the owner's mark is compacted, one at a time. It sees every change in the chats, to time how long each has
   // been idle, and looks for one that is due every IDLE_COMPACT_CHECK_MS. Off unless turned on in Settings → Model.
   const compactor = useMemo(
@@ -1209,7 +1209,7 @@ export function Main({
     };
   }, [projects]);
   // Tags and Saved filters: kept on this computer for each connection and profile, never sent to Hermes (tags.ts,
-  // ADR 0026). Another Hermes Chat's changes show once this window is back in front.
+  // ADR 0106). Another Hermes Chat's changes show once this window is back in front.
   const tagsStore = useMemo(() => new TagsStore(savedTagsFile, scope), [scope]);
   const tagSnap = useSyncExternalStore(tagsStore.subscribe, tagsStore.getSnapshot);
   useEffect(() => {
@@ -1751,7 +1751,7 @@ export function Main({
   };
   const switchProfile = (name: string) => guard(() => switchProfileNow(name), "profile");
 
-  // Another saved connection (ADR 0049). Whatever is running or waiting here is named first, from the inbox's entries,
+  // Another saved connection (ADR 0112). Whatever is running or waiting here is named first, from the inbox's entries,
   // which cover every profile on this server; an unsaved persona or memory edit asks first too. Nothing is stopped:
   // Hermes keeps a running reply going after this connection closes, as it does when the profile switches.
   const [connectionAsk, setConnectionAsk] = useState<{ to: SavedConnection; notes: string[]; go: () => void; stay?: () => void }>();
@@ -1941,7 +1941,7 @@ export function Main({
   };
 
   // Putting a chat in a project, or taking it out: Hermes's once it keeps membership, waiting here until it confirms,
-  // and this computer's otherwise (ADR 0033). Undo puts it back.
+  // and this computer's otherwise (ADR 0109). Undo puts it back.
   const setInProject = (chatId: string, p: Project, inProject: boolean) => {
     const title = chats.find((c) => c.id === chatId)?.title ?? "";
     projects.setChat(p.id, chatId, inProject);
@@ -2081,7 +2081,7 @@ export function Main({
     return () => clearInterval(timer);
   }, [hermes, liveWatched]);
   // The office keeps every profile's floor live from `session.active_list` alone, as often as the transport allows,
-  // while it can be seen (ADR 0089). It leaves the heavier read of the other profiles' chat lists at CHECK_EVERY_MS.
+  // while it can be seen (ADR 0122). It leaves the heavier read of the other profiles' chat lists at CHECK_EVERY_MS.
   useEffect(() => {
     if (!officeVisible) return;
     void hermes.checkLive();
@@ -2535,7 +2535,7 @@ export function Main({
             </button>
           }
         />,
-        // Splitting is Ctrl+\, a tab's menu, or dragging a tab to an edge (ADR 0055); a split pane keeps its Close.
+        // Splitting is Ctrl+\, a tab's menu, or dragging a tab to an edge (ADR 0116); a split pane keeps its Close.
         split && (
           <button className="icon-btn" title={`Close the ${paneNames(splitDir)[i].toLowerCase()} pane${isActive ? "" : " (Ctrl+\\)"}`} aria-label={`Close the ${paneNames(splitDir)[i].toLowerCase()} pane`} onClick={() => closePane(p.key)}>
             <X size={16} />
@@ -3830,7 +3830,7 @@ function ChatView({
       screenshotKeys={screenshotKeys}
       voice={voice}
       // A Voice conversation's turn goes straight to the chat, as a slash command's message does: what the owner has
-      // typed stays in the composer, and a failure is a Failed message (ADR 0041).
+      // typed stays in the composer, and a failure is a Failed message (ADR 0111).
       voiceSend={started ? (text) => hermes.sendTracked(chat.id, text) : undefined}
       commands={commands}
       onDismissSideQuestion={(id) => hermes.dismissSideQuestion(chat.id, id)}

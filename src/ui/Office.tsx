@@ -1,4 +1,4 @@
-// The agent office (ADR 0077, ADR 0089): every agent at work on this connection, as a 3D building (OfficeBuilding.tsx)
+// The agent office (ADR 0077, ADR 0122): every agent at work on this connection, as a 3D building (OfficeBuilding.tsx)
 // or as a list. It opens from the rail in place of the chat panes; Escape, or picking a chat, goes back. An agent opens
 // what it stands for: the chat's reply opens the chat, at its Approval card or failure, and a subagent opens in the
 // chat's Subagents panel. Nothing here answers, approves, retries or starts anything. App mounts it only while it is

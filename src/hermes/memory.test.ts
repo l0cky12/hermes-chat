@@ -367,7 +367,7 @@ describe("entry text", () => {
   });
 });
 
-describe("any profile's memory through the profile-scoped routes (ADR 0057)", () => {
+describe("any profile's memory through the profile-scoped routes (ADR 0118)", () => {
   /** A server with `GET /api/learning/graph` and `/api/learning/node`, as the deployed `f0d94882`. */
   const withRoutes = () => {
     const s = server();

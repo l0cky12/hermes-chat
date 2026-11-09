@@ -1,5 +1,5 @@
 //! The app's window. It stays on the app's own page and opens no other windows, so a script that somehow runs in it
-//! can't take the window to another site, such as a copy of the Sign in screen (ADR 0100).
+//! can't take the window to another site, such as a copy of the Sign in screen (ADR 0129).
 
 use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Runtime, Url, WebviewWindowBuilder};

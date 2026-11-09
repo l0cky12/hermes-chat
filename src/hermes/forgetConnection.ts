@@ -1,4 +1,4 @@
-// What removing a saved connection deletes from this computer, and the deleting (ADR 0049). Everything is found by the
+// What removing a saved connection deletes from this computer, and the deleting (ADR 0112). Everything is found by the
 // connection's scope (connections.ts), so another connection's data, even for a profile of the same name, is never
 // touched. Nothing here talks to Hermes: the server's chats, projects, jobs and settings stay as they are.
 import { CACHE_PREFIXES, forgetLiveChatData } from "./chatCache";

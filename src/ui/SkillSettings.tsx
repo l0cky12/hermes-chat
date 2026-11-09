@@ -5,7 +5,7 @@
 // rendered. Installing skills from elsewhere isn't done here.
 //
 // Any profile's skills can be shown (the picker Settings passes in), and in Select mode several can be copied or moved to
-// another profile, or archived, one at a time, each read back from Hermes (ADR 0057).
+// another profile, or archived, one at a time, each read back from Hermes (ADR 0118).
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, ArrowLeft, ArrowRightLeft, Check, CheckSquare, Copy, GitMerge, History, Info, RefreshCw, Search, Trash2 } from "lucide-react";
 import type { ConnectionStatus } from "../hermes/model";
@@ -402,7 +402,7 @@ export function SkillSettings({
       </span>
     );
   };
-  /** One line; the pointer resting on it shows the whole text (ADR 0051). The tip repeats the text, so it's hidden from readers. */
+  /** One line; the pointer resting on it shows the whole text (ADR 0113). The tip repeats the text, so it's hidden from readers. */
   const skillDesc = (s: SkillRow) => (
     <div className="skill-desc">
       <div id={`${domId(s.name)}-desc`} className="skill-desc-line">

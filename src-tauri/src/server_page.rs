@@ -1,4 +1,4 @@
-//! Pages on the Hermes server's own loopback in the Preview (ADR 0052): `http://localhost:3000` in a reply means the
+//! Pages on the Hermes server's own loopback in the Preview (ADR 0114): `http://localhost:3000` in a reply means the
 //! server's port 3000, where Hermes ran the dev server, not this computer's.
 //!
 //! Each page gets a tunnel of its own, made of two parts:

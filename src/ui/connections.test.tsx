@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// The whole App with two saved connections (ADR 0049): the single sign-in kept before is migrated and signs in at
+// The whole App with two saved connections (ADR 0112): the single sign-in kept before is migrated and signs in at
 // launch, a second server is added through setup, and the owner switches between them and removes one. The Rust side
 // is two FakeHermes servers behind `invoke`, one per dashboard URL, and an in-memory keyring keyed by connection.
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";

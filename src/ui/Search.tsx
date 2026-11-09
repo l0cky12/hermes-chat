@@ -1,5 +1,5 @@
 // Search across every chat in the profile from the Ctrl+K palette, with filters for Tag, Source, model, last activity
-// and state (chatFilter.ts, ADR 0026). Words go to Hermes's own search; filters without words list the profile's chats
+// and state (chatFilter.ts, ADR 0106). Words go to Hermes's own search; filters without words list the profile's chats
 // from Hermes. A filter can be saved by name, and its results tagged in bulk once the owner has seen what would change.
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ListFilter, Search, Tag as TagIcon, X } from "lucide-react";

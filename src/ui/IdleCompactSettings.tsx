@@ -1,4 +1,4 @@
-// Settings → Model → Idle compaction (idleCompact.ts, ADR 0059): whether this app has Hermes compact a chat that has sat
+// Settings → Model → Idle compaction (idleCompact.ts, ADR 0119): whether this app has Hermes compact a chat that has sat
 // idle with its context window past a mark, the mark, and how long idle means. Kept on this computer and saved as it
 // is changed; nothing here is written to Hermes.
 import { useState, useSyncExternalStore } from "react";
