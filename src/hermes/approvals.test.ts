@@ -260,13 +260,6 @@ describe("Approvals", () => {
     expect(card()).toMatchObject({ ended: "turn ended" });
   });
 
-  it("turns down other questions from Hermes that it can't show", async () => {
-    const { server, runtime, chat } = await replying();
-    const id = server.ask(runtime, "clarify", { request_id: "c1", question: "Which logs?", choices: ["all", "old"] });
-    expect(server.responses).toEqual([{ jsonrpc: "2.0", id, error: { code: -32601, message: "Hermes Chat can't answer clarify requests yet." } }]);
-    expect(chat().items.some((i) => i.kind === "approval")).toBe(false);
-  });
-
   it("says so when the answer can't go, and keeps the card waiting", async () => {
     vi.useFakeTimers();
     const { server, hermes, id: chatId, runtime, chat, card } = await replying();
@@ -606,5 +599,63 @@ describe("Approvals on a chat another Hermes app also has open", () => {
     expect(card()).toMatchObject({ answer: undefined });
     expect(card()).not.toHaveProperty("ended");
     expect(chat().items.at(-1)).toMatchObject({ kind: "error", text: "Couldn't answer Hermes: approval queue unavailable" });
+  });
+});
+
+/**
+ * Questions this app can't show (#313). Hermes 0.21.3 and later send a question to every client that has its chat open
+ * and settle it on the first answer, an error included, so a refusal from here would end it in the official app too.
+ */
+describe("Questions this app doesn't show", () => {
+  /** A reply under way on a server reporting `version`, with what it checks of itself already read. */
+  async function on(version: string, declinesNotShown: boolean) {
+    const server = new FakeHermes();
+    server.health = { ...server.health, version, displayVersion: version };
+    server.declinesNotShown = declinesNotShown;
+    const r = await replying(server);
+    await r.hermes.capabilities.refresh();
+    expect(r.hermes.capabilities.getSnapshot().facts.version).toBe(version);
+    const ask = (method: string) => server.ask(r.runtime, method, { question: "Which logs?", choices: ["all", "old"] })!;
+    const answerTo = (id: string) => server.responses.find((a) => a.id === id);
+    return { ...r, ask, answerTo };
+  }
+
+  it("turns them down on a Hermes before shared chats, so the agent doesn't wait out the timeout", async () => {
+    const { ask, answerTo, chat } = await on("0.21.2", false);
+    for (const method of ["clarify", "sudo", "secret", "preview.read"]) {
+      const id = ask(method);
+      expect(answerTo(id)).toEqual({ jsonrpc: "2.0", id, error: { code: -32601, message: `Hermes Chat can't answer ${method} requests yet.` } });
+    }
+    expect(chat().items.some((i) => i.kind === "approval")).toBe(false);
+  });
+
+  it("leaves them open for another client on a Hermes that shares chats, and declines window-owned ones with 4404", async () => {
+    const { server, ask, answerTo, chat } = await on("0.22.5", true);
+    const open = ["clarify", "sudo", "secret", "vault.unlock_prompt"].map(ask);
+    for (const id of open) expect(answerTo(id)).toBeUndefined();
+    expect([...server.openRequests.keys()]).toEqual(open);
+    for (const method of ["preview.read", "preview.act", "terminal.read", "window.read", "theme.apply", "tour"]) {
+      const id = ask(method);
+      expect(answerTo(id)).toMatchObject({ id, error: { code: 4404 } });
+    }
+    expect(chat().running).toBe(true);
+  });
+
+  it("knows a shared chat from declines_not_shown before the version is read", async () => {
+    const server = new FakeHermes();
+    server.health = { ...server.health, version: "0.22.5", displayVersion: "0.22.5" };
+    const { hermes, runtime } = await replying(server);
+    await hermes.idle();
+    expect(hermes.capabilities.getSnapshot().facts.version).toBeUndefined();
+    const id = server.ask(runtime, "clarify", { question: "Which logs?" })!;
+    expect(server.responses).toEqual([]);
+    expect(server.openRequests.has(id)).toBe(true);
+  });
+
+  it("answers none of them on a Hermes that shares chats but doesn't count a 4404 as a decline", async () => {
+    const { server, ask, answerTo } = await on("0.21.3", false);
+    const open = ["clarify", "sudo", "preview.read", "tour"].map(ask);
+    for (const id of open) expect(answerTo(id)).toBeUndefined();
+    expect([...server.openRequests.keys()]).toEqual(open);
   });
 });

@@ -49,7 +49,7 @@ import { readBack, sendImport, type PlannedChat } from "./importTranscripts";
 import { memoryApi, type MemoryApi } from "./memory";
 import { MemoryProvidersApi } from "./memoryProviders";
 import { SkillsApi } from "./skills";
-import { CapabilityStore, CapabilityUnsupportedError, failureOf, isNoRoute } from "./capabilities";
+import { CapabilityStore, CapabilityUnsupportedError, failureOf, isNoRoute, sharesChats, type ServerFacts } from "./capabilities";
 import { BOT_CHAT_TITLE, BotChats, BotModeUnsupportedError, isBotChat, isBotChatTitle, rosterOf, type Bot } from "./bots";
 import type { OpenPipe, Pipe, PipeEvent, RestMethod, Route, Speech, Transcript, VoiceSetup } from "./pipe";
 import { RemoteFilesError, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, SESSION_GONE, previewSupport, remoteFiles, type EditIo, type RemoteFiles } from "./remoteFiles";
@@ -324,6 +324,22 @@ type ServerRequest = { id: string; method: string; params: Record<string, unknow
 
 /** JSON-RPC "method not found": what Hermes expects from a client that can't handle a request. */
 const NO_SUCH_METHOD = -32601;
+/** "No window here shows this chat" (`NOT_SHOWN_CODE`, `tui_gateway/server_requests.py`): one client declining. */
+const NOT_SHOWN = 4404;
+/** Requests only the window showing the chat answers (the official app's `WINDOW_OWNED_REQUESTS` at `bf0203a`). */
+const WINDOW_OWNED = new Set(["preview.act", "preview.read", "terminal.read", "theme.apply", "window.read", "tour"]);
+
+/**
+ * The answer to a server request this app doesn't show, or none. On a Hermes that shares chats, the first answer
+ * settles a request for every client attached, an error included, so a refusal would end a question the official app
+ * is showing (#313). There, only a window-owned request is declined, and only where Hermes counts that as a decline.
+ * Unanswered, a request ends at Hermes's own deadline or when the owner stops the reply.
+ */
+function unshownAnswer(method: string, facts: ServerFacts): { code: number; message: string } | undefined {
+  if (!sharesChats(facts)) return { code: NO_SUCH_METHOD, message: `Hermes Chat can't answer ${method} requests yet.` };
+  if (facts.declinesNotShown && WINDOW_OWNED.has(method)) return { code: NOT_SHOWN, message: "No Hermes Chat window shows this chat's preview, terminal or tour." };
+  return undefined;
+}
 const NO_SUBAGENT_LIST = "This Hermes has no subagent.list, so it can't say what they did while the app was disconnected.";
 
 /** Why an Edit or Regenerate made nothing: the chat isn't as the owner saw it in the dialog. */
@@ -3697,14 +3713,11 @@ export class Hermes {
     this.saveTranscript(chatId);
   }
 
-  /**
-   * A question from Hermes. An Approval shows as a card in its chat. Other kinds this app can't show yet are turned
-   * down, so the agent doesn't wait out their timeout for an answer that won't come.
-   */
+  /** A question from Hermes. An Approval shows as a card in its chat. Other kinds this app can't show yet get `unshownAnswer`. */
   private onServerRequest(req: ServerRequest) {
     if (req.method !== "approval") {
-      const error = { code: NO_SUCH_METHOD, message: `Hermes Chat can't answer ${req.method} requests yet.` };
-      void this.pipe?.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, error })).catch(() => {});
+      const error = unshownAnswer(req.method, this.capabilities.getSnapshot().facts);
+      if (error) void this.pipe?.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, error })).catch(() => {});
       return;
     }
     const sid = String(req.params.session_id ?? "");
