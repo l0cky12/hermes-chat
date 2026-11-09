@@ -646,6 +646,7 @@ const officeButton = () => document.querySelector<HTMLButtonElement>(".office-bt
 /** What the app asked Hermes to do, as opposed to read: answers, sends, stops and steers. */
 const writes = (server: FakeHermes) => [
   ...server.responses,
+  ...server.approvalAnswers.filter((a) => a.via === "approval.respond"),
   ...server.requests.filter((r) => ["prompt.submit", "session.interrupt", "subagent.steer", "subagent.interrupt"].includes(r.method)),
 ];
 

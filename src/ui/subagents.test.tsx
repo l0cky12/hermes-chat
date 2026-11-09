@@ -135,7 +135,7 @@ describe("The Subagents panel", () => {
     await user.click(within(panel()).getByRole("button", { name: /Subagents/ }));
     await user.click(within(panel()).getByRole("button", { name: "Go to it" }));
     expect(document.activeElement?.classList.contains("approval")).toBe(true);
-    expect(server.responses).toEqual([]);
+    expect(server.approvalAnswers).toEqual([]);
   });
 
   it("shows a failed subagent while the reply goes on, and has no Steer or Stop for one that ended", async () => {

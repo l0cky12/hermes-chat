@@ -76,7 +76,7 @@ async function waiting() {
 /** Nothing answered, the card still waiting, and the reply still running. */
 async function untouched({ server, hermes }: { server: FakeHermes; hermes: Hermes }) {
   await settle(hermes);
-  expect(server.responses).toEqual([]);
+  expect(server.approvalAnswers).toEqual([]);
   expect(server.openRequests.size).toBe(1);
   expect(interrupts(server)).toEqual([]);
   expect(button("Approve once")).toBeTruthy();
@@ -98,7 +98,7 @@ describe("Approval card by keyboard", () => {
     await s.user.keyboard("{Enter}");
     await settle(s.hermes);
 
-    expect(s.server.responses).toEqual([{ jsonrpc: "2.0", id: s.approvalId, result: { choice: "once", all: false } }]);
+    expect(s.server.approvalAnswers.map((a) => [a.id, a.choice])).toEqual([[s.approvalId, "once"]]);
     expect(screen.getByText("Approved once")).toBeTruthy();
     // Focus stays on the answered card, so the owner keeps their place, and Tab carries on to the composer.
     expect(focused()?.classList.contains("approval")).toBe(true);
@@ -111,7 +111,7 @@ describe("Approval card by keyboard", () => {
     await s.user.tab({ shift: true });
     await s.user.keyboard(" ");
     await settle(s.hermes);
-    expect(s.server.responses.map((r) => r.result)).toEqual([{ choice: "deny", all: false }]);
+    expect(s.server.approvalAnswers.map((a) => a.choice)).toEqual(["deny"]);
     expect(screen.getByText("Denied")).toBeTruthy();
   });
 
@@ -165,7 +165,7 @@ describe("Approval card by keyboard", () => {
     expect(focused()?.classList.contains("approval")).toBe(true);
     await s.user.keyboard("{Enter} 1");
     await settle(s.hermes);
-    expect(s.server.responses).toEqual([]);
+    expect(s.server.approvalAnswers).toEqual([]);
     expect(interrupts(s.server)).toEqual([]);
   });
 
@@ -185,7 +185,7 @@ describe("Approval card by keyboard", () => {
     expect(focused()).toBe(button("Yes, allow for this chat"));
     await s.user.keyboard("{Enter}");
     await settle(s.hermes);
-    expect(s.server.responses.map((r) => (r.result as { choice: string }).choice)).toEqual(["session"]);
+    expect(s.server.approvalAnswers.map((a) => a.choice)).toEqual(["session"]);
     expect(focused()?.classList.contains("approval")).toBe(true);
   });
 
@@ -197,7 +197,7 @@ describe("Approval card by keyboard", () => {
     expect(focused()).toBe(button("Approve once"));
     await s.user.keyboard("{Enter}");
     await settle(s.hermes);
-    expect(s.server.responses).toEqual([]);
+    expect(s.server.approvalAnswers).toEqual([]);
     // Nothing was even tried: a refused answer would have left an error in the chat.
     expect(screen.queryByText(/Couldn't answer Hermes/)).toBeNull();
     expect(screen.getByText("Hermes wants to run a command")).toBeTruthy();

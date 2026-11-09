@@ -240,7 +240,7 @@ describe("The same chat in both panes", () => {
     await s.user.click(within(pane(0)).getByRole("button", { name: "Approve once" }));
     await settle(s.hermes);
     expect(within(pane(1)).queryByRole("button", { name: "Approve once" })).toBeNull();
-    expect(s.server.responses).toEqual([{ jsonrpc: "2.0", id, result: { choice: "once", all: false } }]);
+    expect(s.server.approvalAnswers.map((a) => [a.id, a.choice])).toEqual([[id, "once"]]);
   });
 });
 

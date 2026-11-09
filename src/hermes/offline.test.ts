@@ -565,7 +565,7 @@ describe("Saved copies stay apart, private and inert", () => {
     await hermes.open("nas");
     expect(chat(hermes, "nas").items.some((i) => i.kind === "approval")).toBe(false);
     await hermes.answerApproval("nas", "srq-1", "once");
-    expect(server.responses).toEqual([]);
+    expect(server.approvalAnswers).toEqual([]);
     await hermes.close();
   });
 

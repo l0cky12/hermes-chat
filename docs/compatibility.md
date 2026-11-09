@@ -49,6 +49,10 @@ The app signs in only with the dashboard's username and password (the `basic` pr
 
 Needs Hermes to list `approval` in its answer to `client.capabilities`. A Hermes without `client.capabilities` (0.16.0 and older) asks for approvals in an older way that this app doesn't read, so Approval cards don't show and Hermes decides by the profile's own settings, or waits.
 
+## Answering Approvals
+
+Needs `approval.respond` on `/api/ws`. Hermes `bf0203a` and every Hermes that sends `approval` requests (from `ebe8cda8ea`) has it. An answer sent that way settles the Approval in Hermes's queue, and Hermes then withdraws the card from every other app that has the chat open (`request.cancel`). A plain reply to Hermes's request settles it for this app alone, so another app keeps showing the card. Answering is a change, so diagnostics can't check it by reading. The capability is unknown until this app answers an Approval. A Hermes that answers "method not found" gets the plain reply, then and from then on. Another app's card then stays up until Hermes next lists the chat as not waiting (`session.active_list`), and this app closes its own cards the same way when an older app answers in a plain reply. It does that, and reads an `approval.respond` that settled nothing as answered elsewhere, only for a card that Hermes acknowledged as waiting in its own queue (`approval.received`). With turn isolation (`dashboard.turn_isolation`), the request waits in a child process that neither method sees. Hermes then acknowledges nothing, so the card stays up until Hermes withdraws it or the turn ends, and the answer also goes as a plain reply, which Hermes passes on to the child.
+
 ## Projects
 
 Needs the `projects.*` methods on `/api/ws`. Checked with `projects.list`. Without them, the chat list works, and the project menu says that Hermes doesn't support projects and offers no New project.
