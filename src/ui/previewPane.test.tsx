@@ -388,7 +388,6 @@ describe("What the pane shows", () => {
     expect(address().value).toBe("/home/me/todo.txt");
     expect(fsReads(server)).toEqual([]);
 
-    // Once something is open, the ⋯ menu opens another.
     local.next = { path: "/home/me/locked.txt", name: "locked.txt" };
     await user.click(button("More"));
     await user.click(within(pane()).getByRole("menuitem", { name: "Open a file on this computer…" }));
@@ -616,11 +615,10 @@ describe("Back, Forward and Reload (issue #376)", () => {
   it("follows a link clicked in the page, then goes back and forward in the same view", async () => {
     const { user, view, pages } = await devServer();
     expect(button("Back").disabled).toBe(true);
-    // A link inside the page: the view says where it went, and nothing is asked of it.
     await act(async () => view.say(1, at(`${TUNNEL}/notes`)));
     expect(address().value).toBe("localhost:5173/notes");
     expect(button("Back").disabled).toBe(false);
-    expect(view.asked).toHaveLength(1);
+    expect(view.asked, "a link the page followed asks nothing of the view").toHaveLength(1);
 
     await user.click(button("Back"));
     expect(view.asked.at(-1)).toEqual([1, `go ${TUNNEL}/app?v=2`]);
@@ -710,12 +708,10 @@ describe("Back, Forward and Reload (issue #376)", () => {
     expect(view.asked.at(-1)).toEqual([1, "go http://localhost:5173/app?v=2"]);
     await act(async () => view.land(1));
     expect(button("This computer")).toBeTruthy();
-    // Switching isn't a move: Back still has nothing behind.
-    expect(button("Back").disabled).toBe(true);
-    // A path typed on the same origin stays on this computer.
+    expect(button("Back").disabled, "switching sides isn't a move").toBe(true);
     await user.clear(address());
     await user.type(address(), "localhost:5173/other{Enter}");
-    expect(view.asked.at(-1)).toEqual([1, "go http://localhost:5173/other"]);
+    expect(view.asked.at(-1), "a path typed on the same origin stays on this computer").toEqual([1, "go http://localhost:5173/other"]);
     await user.click(button("This computer"));
     expect(view.asked.at(-1)).toEqual([1, `go ${TUNNEL}/other`]);
     expect(pages.opened).toHaveLength(1);
@@ -772,10 +768,9 @@ describe("Pages on the Hermes server's own loopback (issue #171)", () => {
     expect(pages.opened).toEqual(["http://localhost:5173/"]);
     expect(pages.closed).toEqual([]);
 
-    // Reload loads the page again through the same tunnel.
     await user.click(button("Reload"));
     expect(await frameSrc()).toBe(TUNNEL);
-    expect([...pages.live.keys()]).toEqual(["1"]);
+    expect([...pages.live.keys()], "Reload keeps the tunnel").toEqual(["1"]);
   });
 
   it("says when the sign-in has no SSH target, and offers this computer instead", async () => {
@@ -795,11 +790,10 @@ describe("Pages on the Hermes server's own loopback (issue #171)", () => {
     await user.click(within(alert).getByRole("button", { name: "Open on this computer instead" }));
     expect(await frameSrc()).toBe(APP_URL);
     expect(pages.opened).toHaveLength(1);
-    // A failed tunnel isn't tried again on its own: Reload tries.
     await user.click(button("This computer"));
     expect((await within(pane()).findByRole("alert")).textContent).toContain("No SSH target for this server");
     await user.click(button("Reload"));
-    expect(pages.opened).toHaveLength(2);
+    expect(pages.opened, "Reload tries a failed tunnel again").toHaveLength(2);
   });
 
   it("says when nothing answers at the port on the server, and tries again", async () => {
@@ -987,8 +981,7 @@ describe("The empty Preview (issue #376)", () => {
     await user.click(button("More"));
     const menu = within(pane()).getByRole("menu", { name: "More" });
     expect(menu.textContent).toContain("Pages here run on their own, with no access to Hermes Chat or your sign-in, and only you can use them.");
-    // Without the page view, a link inside the frame can't move the address.
-    expect(menu.textContent).toContain("Links you follow inside a page don't change the address here.");
+    expect(menu.textContent, "a frame can't report a link followed inside it").toContain("Links you follow inside a page don't change the address here.");
     await user.click(within(menu).getByRole("menuitem", { name: "Copy address" }));
     expect(writes).toEqual(["https://docs.example.com/crash"]);
     expect(await within(pane()).findByText("Address copied.")).toBeTruthy();

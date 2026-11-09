@@ -1011,6 +1011,17 @@ mod tests {
     }
 
     #[test]
+    fn lists_what_listens_on_the_server_with_the_tunnels_options_and_no_forward() {
+        let p = page("http://localhost:3000/");
+        let listing = listening_args(" liam@hermes ").unwrap();
+        let tunnel = ssh_args("liam@hermes", Path::new("/tmp/d/s"), &p).unwrap();
+        assert_eq!(listing[listing.len() - 4..], ["--", "liam@hermes", "ss", "-ltnpH"]);
+        assert!(!listing.iter().any(|a| a == "-L" || a == "-N"));
+        assert_eq!(listing[..listing.len() - 4], tunnel[1..tunnel.len() - 4]);
+        assert!(listening_args("-oProxyCommand=x").is_err());
+    }
+
+    #[test]
     fn ssh_failing_to_listen_on_the_port_is_noticed() {
         // What Windows' OpenSSH prints when the port was taken meanwhile.
         let said = "bind [127.0.0.1]:51234: Address already in use\r\nchannel_setup_fwd_listener_tcpip: cannot listen to port: 51234\r\nCould not request local forwarding.";

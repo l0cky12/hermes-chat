@@ -146,8 +146,6 @@ export function PreviewPane({
       (e) => setNote({ text: `Couldn't copy the address: ${messageOf(e)}`, failed: true }),
     );
   };
-  const onTunnel = useCallback((t: Tunnel | undefined) => setTunnel(t), []);
-  const onBusy = useCallback((b: boolean) => setBusy(b), []);
 
   return (
     <section className="preview-content" aria-label="Preview">
@@ -199,8 +197,8 @@ export function PreviewPane({
             serverPages={serverPages}
             serverLabel={serverLabel}
             onStep={onStep}
-            onTunnel={onTunnel}
-            onBusy={onBusy}
+            onTunnel={setTunnel}
+            onBusy={setBusy}
             onOpenInBrowser={openInBrowser}
           />
         ) : here.kind === "tool" ? (
@@ -412,6 +410,21 @@ function MoreMenu({
   );
 }
 
+/** Why the list has no Hermes server side, or none at all. */
+function devServersNote(found: DevServers | { error: string }): string | undefined {
+  if (!("server" in found)) return `Couldn't look for dev servers: ${found.error}`;
+  switch (found.server.kind) {
+    case "noSshTarget":
+      return "Sign in through SSH to see the Hermes server's dev servers.";
+    case "notConnected":
+      return "Not connected to the Hermes server, so only this computer's are listed.";
+    case "failed":
+      return `Couldn't list the Hermes server's: ${found.server.message}`;
+    case "listed":
+      return undefined;
+  }
+}
+
 /**
  * Nothing open: what to do, the dev servers found on the Hermes server and on this computer, and Open a file on this
  * computer. The list is asked for when this shows, when the connection comes or goes, and on its refresh button; it
@@ -444,17 +457,10 @@ function EmptyState({
     };
   }, [web, connected, asks]);
   const rows: (Listening & { on: PageOn })[] =
-    found && "server" in found ? [...(found.server.kind === "listed" ? found.server.ports.map((l) => ({ ...l, on: "server" as const })) : []), ...found.local.map((l) => ({ ...l, on: "local" as const }))] : [];
-  const why =
-    !found || !("server" in found)
-      ? found?.error && `Couldn't look for dev servers: ${found.error}`
-      : found.server.kind === "noSshTarget"
-        ? "Sign in through SSH to see the Hermes server's dev servers."
-        : found.server.kind === "notConnected"
-          ? "Not connected to the Hermes server, so only this computer's are listed."
-          : found.server.kind === "failed"
-            ? `Couldn't list the Hermes server's: ${found.server.message}`
-            : undefined;
+    found && "server" in found
+      ? [...(found.server.kind === "listed" ? found.server.ports : []).map((l) => ({ ...l, on: "server" as const })), ...found.local.map((l) => ({ ...l, on: "local" as const }))]
+      : [];
+  const why = found && devServersNote(found);
   return (
     <div className="preview-empty">
       <div className="preview-empty-icon">
@@ -734,7 +740,6 @@ function FramedWebView({ url, src, check, onOpenInBrowser }: { url: string; src:
 }
 
 
-/** What a tunnel to a page on the Hermes server is doing. */
 type TunnelState =
   | { kind: "none" }
   | { kind: "opening"; remote: string }

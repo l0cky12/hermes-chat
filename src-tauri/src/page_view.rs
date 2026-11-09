@@ -197,7 +197,6 @@ mod imp {
             }
         }
 
-        /// The app is about to ask the view for `url`.
         fn ask(&self, url: url::Url) {
             self.asked.replace(Some(url));
             self.loading.set(true);
