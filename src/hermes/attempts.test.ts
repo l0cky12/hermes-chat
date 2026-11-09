@@ -72,7 +72,8 @@ function memoryStore(lines: Attempt[] = []) {
     put: async (a) => {
       const all = [a.error, ...a.routes.map((r) => r.error)].filter((t): t is string => t !== undefined);
       if (!all.every(addressFree) || all.some((t) => Array.from(t).length > TEXT_MAX || /[\u0000-\u001f\u007f-\u009f]/.test(t))) throw new Error("Not kept: an error text looks like it holds an address.");
-      puts.push(JSON.stringify(a));
+      // Without the values the log makes itself (random ids, clock times): a UUID or Date.now() can hold "9119" (#312).
+      puts.push(JSON.stringify(a, (k, v) => (["id", "run", "at", "ms"].includes(k) ? undefined : v)));
       file = [...file.filter((x) => x.id !== a.id), structuredClone(a)].sort((x, y) => x.at - y.at).slice(-KEEP);
     },
   };
