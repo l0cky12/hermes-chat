@@ -38,7 +38,8 @@ export type CapabilityId =
   | "automations"
   | "outputs"
   | "botMode"
-  | "subagents";
+  | "subagents"
+  | "subagentRoster";
 
 export type CapabilityState = "supported" | "unsupported" | "unknown" | "unreachable";
 
@@ -295,6 +296,16 @@ export const CAPABILITIES: readonly CapabilitySpec[] = [
     notChecked: "Known once a chat opened on this connection lists its subagents.",
     methods: ["subagent.list", "subagent.tail"],
     writeMethods: /^subagent\.(steer|interrupt)$/,
+  },
+  {
+    id: "subagentRoster",
+    label: "Subagents in chats not opened",
+    usedBy: "Keeping a chat not opened since launch in Working while its background subagents run",
+    needs: "subagent.roster on /api/ws.",
+    without: "Only a chat opened on this connection stays in Working while its background subagents run. Others go to the Inbox when their reply ends.",
+    anchor: "subagents-in-chats-not-opened",
+    probe: { kind: "rpc", method: "subagent.roster", params: (profile) => ({ profile }), shape: (r) => isObj(r) && isList(r.sessions) },
+    methods: ["subagent.roster"],
   },
 ];
 

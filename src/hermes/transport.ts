@@ -39,7 +39,7 @@ import { projectsApi, type ProjectsApi } from "./projects";
 import { STEER, askSideQuestion, listServerCommands, runServerCommand, sideAnswer, type CommandDef, type CommandResult, type ServerCommandList } from "./commands";
 import { callText, offeredSkills, runSkill, skillInvocationText, type SkillCall, type SkillCommands } from "./skillCommands";
 import { CronApi } from "./cronJobs";
-import { followsSession, parseKanbanCreate, sameTask, type DispatchedTask } from "./dispatched";
+import { followsSession, nextRoster, parseKanbanCreate, sameTask, type DispatchedTask } from "./dispatched";
 import { KanbanApi, KanbanWatch } from "./kanban";
 import { AutomationsApi } from "./automations";
 import { ModelSettingsApi } from "./modelSettings";
@@ -719,6 +719,12 @@ export class Hermes {
   private runtimeOwners = new Map<string, { profile: string; chatId: string }>();
   /** The latest `session.active_list` read: its connection, when it started, and the read while under way. */
   private liveCheck?: { gen: number; at: number; done?: Promise<void> };
+  /** The latest `subagent.roster` read, for the profile and connection it answered for (`placeRoster`). */
+  private roster?: { gen: number; profile: string; counts: ReadonlyMap<string, number> };
+  /** This Hermes has no `subagent.roster`, so it is asked no more. */
+  private rosterUnsupported = false;
+  /** The next check while a chat waits on roster work, sooner than the app's own timers ask. */
+  private rosterTimer?: ReturnType<typeof setTimeout>;
   private others = new OtherProfilesCheck({
     scope: () => (this.pipe && this.snapshot.status === "connected" && !this.closing ? { connection: this.generation, profile: this.profile } : undefined),
     profiles: () => this.profiles(),
@@ -1463,17 +1469,20 @@ export class Hermes {
   }
 
   /**
-   * Reads the sessions live in the dashboard's process, in every profile, with what each is doing. A check for the
-   * same connection under way is joined; one asked for within 15 seconds of the last is skipped. A server without
-   * the method is asked no more. An answer from a connection since dropped is dropped too.
+   * Reads the sessions live in the dashboard's process, in every profile, with what each is doing, and the shown
+   * profile's background subagents (`subagent.roster`). A check for the same connection under way is joined; one asked
+   * for within 15 seconds of the last is skipped. A server without either method is asked no more for it. An answer
+   * from a connection since dropped is dropped too.
    */
   checkLive(): Promise<void> {
     const gen = this.generation;
-    if (!this.connectedPipe() || this.snapshot.live?.unsupported) return Promise.resolve();
+    if (!this.connectedPipe() || (this.snapshot.live?.unsupported && this.rosterUnsupported)) return Promise.resolve();
     if (this.liveCheck?.gen === gen && (this.liveCheck.done || Date.now() - this.liveCheck.at < LIVE_MIN_GAP_MS - LIVE_SLACK_MS)) return this.liveCheck.done ?? Promise.resolve();
+    const roster = this.readRoster(gen);
     const shown = this.waitingCards();
     const done = (async () => {
       try {
+        if (this.snapshot.live?.unsupported) return;
         const res = obj(await this.request("session.active_list", {}));
         if (gen !== this.generation) return;
         this.closeUnwaited(shown, Array.isArray(res?.sessions) ? res.sessions : []);
@@ -1513,6 +1522,9 @@ export class Hermes {
         if (e instanceof RpcError && e.code === NO_SUCH_METHOD) this.update({ live: { sessions: [], unsupported: true } });
         else this.update({ live: { sessions: this.snapshot.live?.sessions ?? [], checkedAt: this.snapshot.live?.checkedAt, error: (e as Error).message } });
       } finally {
+        // The roster is placed against what the same check found live, so a wake turn under way is seen with it.
+        await roster;
+        this.placeRoster();
         if (this.liveCheck?.gen === gen) this.liveCheck.done = undefined;
       }
     })();
@@ -1542,6 +1554,55 @@ export class Hermes {
       const chat = this.snapshot.chats.find((c) => c.runtimeId === runtimeId);
       if (chat && !waiting.has(runtimeId)) this.patchChat(chat.id, (c) => ({ ...c, items: endWaitingApprovals(c.items, "not waiting", (i) => ids.has(i.id)) }));
     }
+  }
+
+  /**
+   * Reads which of the shown profile's chats have background subagents running (`subagent.roster`), by stored session
+   * id, into `roster`. A read that fails or takes longer than `LIVE_MIN_GAP_MS` keeps the one before; a Hermes without
+   * the method is asked no more.
+   */
+  private async readRoster(gen: number): Promise<void> {
+    if (this.rosterUnsupported) return;
+    const profile = this.profile;
+    try {
+      // Bounded, as the check waits for it: a slow store on Hermes's side would otherwise hold every later check.
+      const res = obj(await timeLimit(this.request("subagent.roster", { profile }), LIVE_MIN_GAP_MS));
+      if (gen !== this.generation || profile !== this.profile) return;
+      const counts = new Map<string, number>();
+      for (const r of Array.isArray(res?.sessions) ? res.sessions : []) {
+        const row = obj(r);
+        if (typeof row?.session_id === "string" && typeof row.subagents === "number" && row.subagents > 0) counts.set(row.session_id, row.subagents);
+      }
+      this.roster = { gen, profile, counts };
+    } catch (e) {
+      if (e instanceof RpcError && e.code === NO_SUCH_METHOD) this.rosterUnsupported = true;
+    }
+  }
+
+  /**
+   * Gives each chat with no Subagents tree here the roster work Hermes counts for its id or any segment of its lineage
+   * (`nextRoster`), with whether a live session shows it on a turn. While any chat has some, the next check comes
+   * `LIVE_MIN_GAP_MS` after the last one started, so the work ending and the wake turn are seen promptly, and placing
+   * it again after a chat list read doesn't put that check off.
+   */
+  private placeRoster() {
+    const r = this.roster;
+    if (!r || r.gen !== this.generation || r.profile !== this.profile) return;
+    const now = Date.now();
+    const working = new Set((this.snapshot.live?.sessions ?? []).filter((l) => l.status === "working").map((l) => l.chatId));
+    let changed = false;
+    const chats = this.snapshot.chats.map((c) => {
+      const ids = [c.id, ...(c.lineage ?? [])];
+      const count = ids.reduce((n, id) => n + (r.counts.get(id) ?? 0), 0);
+      const roster = c.subagents ? undefined : nextRoster(c.roster, count, ids.some((id) => working.has(id)), now);
+      if (roster === c.roster) return c;
+      changed = true;
+      return { ...c, roster };
+    });
+    if (changed) this.update({ chats });
+    clearTimeout(this.rosterTimer);
+    const due = (this.liveCheck?.at ?? now) + LIVE_MIN_GAP_MS;
+    this.rosterTimer = this.snapshot.chats.some((c) => c.roster) ? setTimeout(() => void this.checkLive(), Math.max(0, due - now)) : undefined;
   }
 
   /**
@@ -3393,6 +3454,7 @@ export class Hermes {
     this.generation++;
     this.capabilities.disconnected();
     this.kanbanWatch.stop();
+    clearTimeout(this.rosterTimer);
     clearTimeout(this.retryTimer);
     clearInterval(this.heartbeat);
     this.cancelNotify();
@@ -3728,6 +3790,7 @@ export class Hermes {
     this.generation++;
     this.capabilities.disconnected();
     this.kanbanWatch.stop();
+    clearTimeout(this.rosterTimer);
     clearInterval(this.heartbeat);
     // Lets the Rust side end the tunnel.
     if (pipe) this.droppedClosing = pipe.close().catch(() => {}).finally(() => (this.droppedClosing = undefined));
@@ -4190,6 +4253,7 @@ export class Hermes {
     const switched = !!this.snapshot.switching;
     this.update({ chats, syncError: undefined, switching: undefined });
     this.kanbanWatch.chatsListed();
+    this.placeRoster();
     for (const chatId of readOnScreen) this.seen(chatId);
     this.saveList(profile, chats);
     if (switched) this.cache.rememberProfile(profile);

@@ -64,7 +64,7 @@ describe("capabilities over the transport", () => {
     await checked(hermes);
     const snap = hermes.capabilities.getSnapshot();
     expect(snap.facts).toMatchObject({ version: "0.17.0", commit: "74b2ed65e6c1d2a3b4c5d6e7f8091a2b3c4d5e6f", protocol: "legacy", authProviders: ["basic"], flags: ["per_session_exclusive_submit"] });
-    for (const id of ["chat", "approvals", "projects", "commands", "liveSessions", "memory", "toolsets", "persona", "skills", "serverFiles", "scheduledJobs", "automations", "outputs", "botMode"] as const)
+    for (const id of ["chat", "approvals", "projects", "commands", "liveSessions", "memory", "toolsets", "persona", "skills", "serverFiles", "scheduledJobs", "automations", "outputs", "botMode", "subagentRoster"] as const)
       expect(hermes.capabilities.get(id).state, id).toBe("supported");
     // Nothing the check sent wrote: no REST write, and no JSON-RPC method beyond the reads it names.
     expect(writesSent(server).length).toBe(writesBefore);

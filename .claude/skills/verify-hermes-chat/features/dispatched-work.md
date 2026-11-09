@@ -11,6 +11,7 @@ A reply that hands work to another agent and ends its turn leaves its chat in **
 - `subagents`: a `background` prompt keeps the chat in Working until both subagents have ended.
 - `inbox-office`: the Rail inbox's Running entry and the Office's waiting desk.
 - `relaunch`: after a relaunch the waiting state is rebuilt from the board.
+- `relaunch-subagents`: after a relaunch, a chat whose background subagents still run stays in Working from Hermes's `subagent.roster` counts, without being opened, until they end and its wake turn ends (issue #311).
 
 ## How to get to it (user POV)
 
@@ -33,6 +34,8 @@ Preconditions:
 - **Subagents.** `$S/wd.mjs keys 'do it in the background\n'` in a new chat, then `$S/wd.mjs wait .msg "background"`. The reply ends and the row shows `.row-wait[aria-label="Waiting on 2 subagents"]`. End them with `curl -s -X POST "http://127.0.0.1:$BRIDGE_PORT/__subagent?id=sa-1&status=completed"` and the same for `sa-2`: the hourglass goes and the chat is in the Inbox.
 - **Rail inbox and Office.** With a chat waiting, open the Rail inbox as [rail-inbox.md](rail-inbox.md) Open does, by emitting the tray's `tray-open-inbox` event, and read the entry: state `Waiting`, summary "Hermes is waiting on work it handed off.", and no "Completed, unread" entry for that chat. Close it, `$S/wd.mjs click button Office`, `$S/wd.mjs wait .office-tag`: the chat's tag reads `Waiting on handed-off work` in its `aria-label`, in the Workroom. **List** shows the same label.
 - **Relaunch.** With a chat waiting, `$S/wd.mjs close` then `$S/wd.mjs open` and sign in again. Once the list loads the row is in Working with the hourglass again, read from the board (`GET /api/plugins/kanban/boards` and `board?board=default` in the bridge's log).
+
+- **Relaunch with subagents running.** Send `do it in the background` in a new chat as **Subagents** does, then open a different chat so the waiting one isn't reopened at launch. `$S/wd.mjs close`, `$S/wd.mjs open`, sign in, and wait for the list. The row is in Working with `.row-wait[aria-label="Waiting on 2 subagents"]`, and `bridge.log` shows `WS subagent.roster` and no `WS session.resume` for that chat. End both subagents with `/__subagent` as above, and start its wake turn with `curl -s -X POST "http://127.0.0.1:$BRIDGE_PORT/__live?profile=default&id=<chat id>&status=working"` (the chat id is the row's `data-chat`). After the next check (15 s) the row is still in Working. `…&status=end` ends the wake turn, and within 15 s the chat is in the Inbox.
 
 ## Gotchas
 

@@ -83,7 +83,7 @@ describe("The inbox", () => {
     expect(entries[1]).toMatchObject({ title: "Chat work-done", at: expect.any(Number) });
     expect(entries.filter(needsOwner).length).toBe(2);
     // Reading the server for the inbox resumed, answered or marked nothing.
-    expect(server.requests.map((r) => r.method).filter((m) => m !== "client.capabilities")).toEqual(["session.active_list"]);
+    expect(server.requests.map((r) => r.method).filter((m) => m !== "client.capabilities")).toEqual(["subagent.roster", "session.active_list"]);
     expect(server.restRequests.filter((r) => r.method !== "GET")).toEqual([]);
     expect(server.approvalAnswers).toEqual([]);
   });

@@ -91,8 +91,12 @@ describe("Unread in other profiles", () => {
 
     expect(server.wsProfiles).toEqual(["default"]);
     expect(server.opened).toBe(1);
-    // The socket is only asked what is live across the server, which neither picks nor changes a profile.
-    expect(server.requests.slice(before).map((r) => [r.method, r.params])).toEqual([["session.active_list", {}]]);
+    // The socket is only asked what is live across the server, and which of the shown profile's chats have background
+    // subagents running, which neither picks nor changes a profile.
+    expect(server.requests.slice(before).map((r) => [r.method, r.params])).toEqual([
+      ["subagent.roster", { profile: "default" }],
+      ["session.active_list", {}],
+    ]);
     expect(hermes.getSnapshot()).toMatchObject({ profile: "default", chats });
   });
 

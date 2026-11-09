@@ -50,6 +50,7 @@ const NEW = {
   "RPC projects.list": { projects: [] },
   "RPC commands.catalog": {},
   "RPC session.active_list": { sessions: [] },
+  "RPC subagent.roster": { sessions: [] },
   "RPC learning.detail": { ok: false },
   "RPC profiles.list": { profiles: [{ name: "default", is_default: true, canonical_session: null }] },
   "GET api/tools/toolsets": [],

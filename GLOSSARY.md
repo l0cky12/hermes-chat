@@ -24,7 +24,7 @@ Where the list shows an Active chat while Hermes is writing a reply in it, or th
 _Avoid_: running (fine in conversation), busy, in progress
 
 **Dispatched work**:
-Work a chat's reply handed to another agent before it ended its turn: a kanban task it created that is still outstanding (triage, to do, scheduled, ready or running on Hermes's board), or a Subagent of its own that is queued or running after the reply ended. Hermes starts a new turn in the chat when the work comes back, and that turn writes the answer. While a chat has some, it stays in Working. A task that is blocked or waiting for review needs the owner instead, and the chat goes to the Inbox with that reason. **Stop waiting**, in the row's menu, ignores the work outstanding now, on this computer only; a newer dispatch counts again, and nothing on Hermes is cancelled (ADR 0096).
+Work a chat's reply handed to another agent before it ended its turn: a kanban task it created that is still outstanding (triage, to do, scheduled, ready or running on Hermes's board), or a Subagent of its own that is queued or running after the reply ended. For a chat not opened since launch, the app knows its Subagents only as Hermes's count of those still running. Hermes starts a new turn in the chat when the work comes back, and that turn writes the answer. While a chat has some, it stays in Working. A task that is blocked or waiting for review needs the owner instead, and the chat goes to the Inbox with that reason. **Stop waiting**, in the row's menu, ignores the work outstanding now, on this computer only; a newer dispatch counts again, and nothing on Hermes is cancelled (ADR 0096).
 _Avoid_: background job, pending task, handoff (fine in conversation)
 
 **Snoozed**:
