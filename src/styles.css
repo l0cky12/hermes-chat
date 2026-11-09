@@ -77,6 +77,8 @@
 .hljs-deletion { color: var(--syn-del); background-color: var(--syn-del-bg); }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
+/* The docked Windows touch keyboard covers the window's bottom without resizing it (touchKeyboard.ts, ADR 0103). */
+#root { height: calc(100% - var(--touch-keyboard, 0px)); }
 body { overflow: hidden; -webkit-font-smoothing: antialiased; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
 input, textarea { font: inherit; color: inherit; }
