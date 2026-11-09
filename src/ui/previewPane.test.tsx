@@ -707,6 +707,28 @@ describe("Back, Forward and Reload (issue #376)", () => {
     expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [] });
   });
 
+  it("goes back, forward and reloads in the frame where there is no view (Windows)", async () => {
+    const { user } = await signedIn();
+    const frame = (url: string) => within(pane()).findByTitle(`Web page: ${url}`);
+    await user.click(screen.getByRole("link", { name: "the docs" }));
+    await frame("https://docs.example.com/crash");
+    await user.clear(address());
+    await user.type(address(), "https://other.example/{Enter}");
+    expect((await frame("https://other.example/")).getAttribute("src")).toBe("https://other.example/");
+
+    await user.click(button("Back"));
+    expect((await frame("https://docs.example.com/crash")).getAttribute("src")).toBe("https://docs.example.com/crash");
+    expect(address().value).toBe("https://docs.example.com/crash");
+    await user.click(button("Forward"));
+    const before = await frame("https://other.example/");
+    expect(address().value).toBe("https://other.example/");
+
+    await user.click(button("Reload"));
+    const after = await frame("https://other.example/");
+    expect(after, "Reload loads the page again in a new frame").not.toBe(before);
+    expect(after.getAttribute("src")).toBe("https://other.example/");
+  });
+
   it("shows where the owner left it after another tab, with Back still there", async () => {
     const { user, view } = await devServer();
     await act(async () => view.say(1, at(`${TUNNEL}/notes`)));
