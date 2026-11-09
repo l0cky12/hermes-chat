@@ -504,6 +504,10 @@ _Avoid_: build (any compile), package (pacman's)
 The key pair a Release is signed with. The public half is built into a standalone AppImage, which installs only what that key signed. The private half is the owner's, kept out of Git and logs.
 _Avoid_: signing key (ambiguous with Git commit signing)
 
+**Interface language**:
+The language Hermes Chat's own words are in, picked in Settings → Appearance: System, or a language by its own name. System takes the first of the desktop's languages the app has words for, else English. Dates and numbers follow it too, in the desktop's region where that is in the same language. A screen not yet translated stays English, and a word a language lacks shows in English (ADR 0100). It changes nothing Hermes writes: replies come in whatever language the model answers in.
+_Avoid_: locale (the code's word for the language, its tag and its formats together), translation
+
 ## Relationships
 
 - Every **Chat** is either **Active** or **Settled**, never both. An **Archived** chat keeps that state for when it is restored.
