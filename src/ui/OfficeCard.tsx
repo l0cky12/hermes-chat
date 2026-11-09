@@ -5,7 +5,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { X } from "lucide-react";
 import type { Desk, Room } from "../hermes/office";
 import { STATE_LABEL } from "./officeText";
-import { relTime } from "./bits";
+import { ago } from "./bits";
+import { useLocale } from "../i18n/locale";
 
 /** A length of time in words: "under a minute", "12 min", "2 h 5 min". */
 export function spanOf(ms: number): string {
@@ -24,6 +25,7 @@ function ran(desk: Desk, now: number): string | undefined {
 }
 
 export function OfficeCard({ room, desk, profile, color, onOpen, onClose }: { room: Room; desk: Desk; profile: string; color: string; onOpen: () => void; onClose: () => void }) {
+  const l = useLocale();
   const headId = useId();
   const [now, setNow] = useState(Date.now);
   const open = useRef<HTMLButtonElement>(null);
@@ -39,9 +41,9 @@ export function OfficeCard({ room, desk, profile, color, onOpen, onClose }: { ro
     ["Profile", room.profile === profile ? `${room.profile} (shown)` : room.profile],
     ["State", `${STATE_LABEL[desk.state]}${desk.stale ? ", as last seen" : ""}`],
     ["Goal", desk.detail?.goal],
-    ["Doing now", desk.doing ? `${desk.doing.text}${desk.doing.at ? ` (${relTime(desk.doing.at) === "now" ? "just now" : `${relTime(desk.doing.at)} ago`})` : ""}` : undefined],
+    ["Doing now", desk.doing ? `${desk.doing.text}${desk.doing.at ? ` (${ago(l, desk.doing.at)})` : ""}` : undefined],
     ["Model", desk.detail?.model],
-    ["Time", ran(desk, now) ?? (desk.doing?.at ? `Last heard ${relTime(desk.doing.at) === "now" ? "just now" : `${relTime(desk.doing.at)} ago`}` : undefined)],
+    ["Time", ran(desk, now) ?? (desk.doing?.at ? `Last heard ${ago(l, desk.doing.at)}` : undefined)],
   ];
 
   return (

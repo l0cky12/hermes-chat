@@ -6,12 +6,13 @@ import { Check, CircleAlert, Globe, Pencil, Plug, PlugZap, Plus, Server, Setting
 import { type SavedConnection, NAME_MAX, addressLabel, routesSummary } from "../hermes/connections";
 import { KEPT_ON_SERVER, REMOVED_LOCALLY } from "../hermes/forgetConnection";
 import { stageLabel, type TestOutcome } from "../hermes/setup";
-import { composing, relTime, routeLabel, useReturnFocus } from "./bits";
+import { ago, composing, routeLabel, useReturnFocus } from "./bits";
+import { useLocale, type Locale } from "../i18n/locale";
 import { SettingNote, SettingsSection } from "./SettingRows";
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export const lastUsedText = (c: SavedConnection) => (c.lastUsedAt ? (relTime(c.lastUsedAt) === "now" ? "Used just now" : `Used ${relTime(c.lastUsedAt)} ago`) : "Never connected");
+export const lastUsedText = (c: SavedConnection, l: Locale) => (c.lastUsedAt ? `Used ${ago(l, c.lastUsedAt)}` : "Never connected");
 
 const ModeIcon = ({ c, size = 13 }: { c: SavedConnection; size?: number }) =>
   c.mode === "ssh" ? <Terminal size={size} aria-label="SSH" /> : <Globe size={size} aria-label="URL" />;
@@ -37,6 +38,7 @@ export function ConnectionPicker({
   label?: string;
   disabled?: boolean;
 }) {
+  const l = useLocale();
   const labelId = useId();
   if (!connections.length) return null;
   return (
@@ -63,7 +65,7 @@ export function ConnectionPicker({
                   {c.id === currentId && <span className="badge">In use</span>}
                 </span>
                 <span className="conn-option-meta">
-                  <span className="mono">{addressLabel(c)}</span> · {c.username || "no username"} · {lastUsedText(c)}
+                  <span className="mono">{addressLabel(c)}</span> · {c.username || "no username"} · {lastUsedText(c, l)}
                 </span>
               </span>
               {c.id === selectedId && <Check size={14} className="conn-option-check" aria-hidden />}
@@ -205,6 +207,7 @@ export function ConnectionManager({
   onRename: (c: SavedConnection, name: string) => void;
   onAdd: () => void;
 }) {
+  const l = useLocale();
   const [tests, setTests] = useState<Record<string, ManagerTest>>({});
   const [renaming, setRenaming] = useState<string>();
   const runs = useRef(new Map<string, number>());
@@ -278,7 +281,7 @@ export function ConnectionManager({
                         {c.mode === "ssh" ? "SSH" : "URL"} · <span className="mono">{addressLabel(c)}</span>
                       </>
                     )}{" "}
-                    · {c.username || "no username"} · {lastUsedText(c)}
+                    · {c.username || "no username"} · {lastUsedText(c, l)}
                   </div>
                 </div>
               </div>

@@ -7,7 +7,8 @@ import { useEffect, useId, useRef, useState, type FocusEvent, type KeyboardEvent
 import { Building2, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleHelp, CircleStop, Clock, Coffee, Hourglass, List, Loader, ShieldAlert, X } from "lucide-react";
 import { officeTally, type Desk, type DeskState, type Room } from "../hermes/office";
 import type { OfficeView } from "../hermes/uiPrefs";
-import { composing, relTime } from "./bits";
+import { ago, composing } from "./bits";
+import { useLocale } from "../i18n/locale";
 import { OfficeBuilding, type OfficeMemory } from "./OfficeBuilding";
 import { STATE_LABEL, deskLabel } from "./officeText";
 
@@ -184,6 +185,7 @@ export function Office({
 }
 
 function RoomList({ room, profile, onOpen }: { room: Room; profile: string; onOpen: (room: Room, desk: Desk) => void }) {
+  const l = useLocale();
   const nameId = useId();
   return (
     <li className="office-list-room">
@@ -204,7 +206,7 @@ function RoomList({ room, profile, onOpen }: { room: Room; profile: string; onOp
                     {STATE_LABEL[d.state]}
                     {d.stale && " · as last seen"}
                   </span>
-                  {!!d.doing?.at && <span className="inbox-time">{relTime(d.doing.at) === "now" ? "now" : `${relTime(d.doing.at)} ago`}</span>}
+                  {!!d.doing?.at && <span className="inbox-time">{ago(l, d.doing.at, "now")}</span>}
                 </span>
                 <span className="inbox-title">{d.name}</span>
                 {d.doing && <span className="inbox-summary">{d.doing.text}</span>}

@@ -272,18 +272,18 @@ export function customUntil(input: { at: string } | { amount: string; unit: Dura
   return Math.round(until);
 }
 
-/** When a snoozed chat wakes, short enough for a row: "3:00 PM", "Tue 9:00 AM", "Dec 4". */
-export function wakeLabel(until: number, now: number): string {
+/** When a snoozed chat wakes, short enough for a row: "3:00 PM", "Tue 9:00 AM", "Dec 4". `tag` is the locale's. */
+export function wakeLabel(until: number, now: number, tag?: string): string {
   const u = new Date(until);
-  const time = u.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const time = u.toLocaleTimeString(tag, { hour: "numeric", minute: "2-digit" });
   if (u.toDateString() === new Date(now).toDateString()) return time;
-  if (until - now < 6 * DAY) return `${u.toLocaleDateString(undefined, { weekday: "short" })} ${time}`;
-  return u.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  if (until - now < 6 * DAY) return `${u.toLocaleDateString(tag, { weekday: "short" })} ${time}`;
+  return u.toLocaleDateString(tag, { month: "short", day: "numeric" });
 }
 
-/** When a snoozed chat wakes, in full, for a tooltip or a toast. */
-export const wakeFull = (until: number) =>
-  new Date(until).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+/** When a snoozed chat wakes, in full, for a tooltip or a toast. `tag` is the locale's. */
+export const wakeFull = (until: number, tag?: string) =>
+  new Date(until).toLocaleString(tag, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
 export const STOP_WAITING_KEY = "hermes-chat.stop-waiting";
 export const STOP_WAITING_VERSION = 1;

@@ -6,7 +6,8 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { CircleAlert, CircleCheck, CircleHelp, Loader, RefreshCw, ShieldAlert, X } from "lucide-react";
 import type { LiveSessions, OtherProfiles } from "../hermes/model";
 import { INBOX_FILTERS, dismissable, needsOwner, type InboxEntry, type InboxFilter, type InboxKind } from "../hermes/inbox";
-import { composing, relTime, storedTime, useReturnFocus } from "./bits";
+import { ago, composing, storedTime, useReturnFocus } from "./bits";
+import { useLocale } from "../i18n/locale";
 
 const FILTER_LABEL: Record<InboxFilter, string> = {
   all: "All",
@@ -31,9 +32,6 @@ const KIND_ICON: Record<InboxKind, typeof X> = {
   uncertain: CircleHelp,
   completed: CircleCheck,
 };
-
-/** How long ago, in words, for the notes on how fresh the inbox is. */
-const ago = (at: number) => (relTime(at) === "now" ? "just now" : `${relTime(at)} ago`);
 
 /**
  * `entries`: the ones not dismissed. `server`: how the connection names the server. `leaving`: what switching away
@@ -208,10 +206,11 @@ function emptyNote(filter: InboxFilter): string {
 }
 
 function Row({ entry: e, server, onOpen, onDismiss }: { entry: InboxEntry; server: string; onOpen: () => void; onDismiss: () => void }) {
+  const l = useLocale();
   const Icon = KIND_ICON[e.kind];
   const when = e.at || e.noticedAt;
   const state = e.ended ? "Expired" : e.waiting ? "Waiting" : KIND_LABEL[e.kind];
-  const whenText = when ? `${e.at ? "" : "noticed "}${relTime(when) === "now" ? "now" : `${relTime(when)} ago`}` : "time not known";
+  const whenText = when ? `${e.at ? "" : "noticed "}${ago(l, when, "now")}` : "time not known";
   return (
     <li className={`inbox-row kind-${e.kind}${e.ended ? " is-ended" : ""}${e.stale ? " is-stale" : ""}`}>
       <button
@@ -264,6 +263,7 @@ function Freshness({
   unmatched: number;
   onGuide?: () => void;
 }) {
+  const l = useLocale();
   const failed = Object.entries(others.byName).filter(([, p]) => p.error);
   const partial = Object.entries(others.byName).filter(([, p]) => p.more).map(([n]) => n);
   const notes = [
@@ -279,7 +279,7 @@ function Freshness({
     partial.length && { err: false, text: `Only the 50 most recent chats in ${partial.join(", ")} were checked.` },
     unmatched > 0 && { err: false, text: `${unmatched} running or waiting session${unmatched === 1 ? "" : "s"} couldn't be matched to one chat, so ${unmatched === 1 ? "it isn't" : "they aren't"} listed.` },
   ].filter((n): n is { err: boolean; text: string; title?: string } => !!n);
-  const checked = [others.checkedAt && `profiles ${ago(others.checkedAt)}`, live?.checkedAt && `running work ${ago(live.checkedAt)}`].filter(Boolean);
+  const checked = [others.checkedAt && `profiles ${ago(l, others.checkedAt)}`, live?.checkedAt && `running work ${ago(l, live.checkedAt)}`].filter(Boolean);
   return (
     <div className="inbox-fresh" role="status">
       <div className="inbox-note">{checked.length ? `Checked ${checked.join(", ")}.` : "Not checked yet."}</div>

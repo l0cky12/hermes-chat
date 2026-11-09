@@ -19,7 +19,8 @@ import {
   versionLine,
 } from "../hermes/capabilities";
 import { BROWSER_FIX, browserOf, isUnavailable, type ScreenApi, type ServerBrowser } from "../hermes/screen";
-import { CopyCommand, Spinner, relTime, storedTime } from "./bits";
+import { CopyCommand, Spinner, ago, storedTime } from "./bits";
+import { useLocale } from "../i18n/locale";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
 
 /** Opens a compatibility guide page in the owner's browser. */
@@ -35,6 +36,7 @@ function StateBadge({ state }: { state: CapabilityState }) {
 
 /** "Checked 2 min ago", with the exact time on hover. */
 function Checked({ at, prefix = "Checked" }: { at?: number; prefix?: string }) {
+  const l = useLocale();
   // Re-renders each minute so the relative time stays right.
   const [, tick] = useState(0);
   useEffect(() => {
@@ -42,10 +44,10 @@ function Checked({ at, prefix = "Checked" }: { at?: number; prefix?: string }) {
     return () => clearInterval(t);
   }, []);
   if (at === undefined) return <span>Not checked yet</span>;
-  const ago = relTime(at) === "now" ? "just now" : `${relTime(at)} ago`;
+  const since = ago(l, at);
   return (
     <time dateTime={new Date(at).toISOString()} title={storedTime(at)}>
-      {prefix ? `${prefix} ${ago}` : ago}
+      {prefix ? `${prefix} ${since}` : since}
     </time>
   );
 }

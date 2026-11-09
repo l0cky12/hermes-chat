@@ -4,6 +4,7 @@ import { Archive, ArchiveRestore, Check, Copy, EyeOff, FileInput, Globe, Monitor
 import type { ConnectionStatus, Source } from "../hermes/model";
 import type { Route } from "../hermes/pipe";
 import { SOURCE_LABEL } from "../hermes/model";
+import type { Locale } from "../i18n/locale";
 
 // Approximate brand marks; the real app should use proper icon assets.
 function DiscordGlyph({ size = 12 }: { size?: number }) {
@@ -179,13 +180,10 @@ export function CopyCommand({ command }: { command: string }) {
   );
 }
 
-export function relTime(ts: number) {
-  const s = (Date.now() - ts) / 1000;
-  if (s < 60) return "now";
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  if (s < 86400 * 7) return `${Math.floor(s / 86400)}d`;
-  return `${Math.floor(s / (86400 * 7))}w`;
+/** How long ago, as a phrase: "just now" (or `justNow`), "5m ago". */
+export function ago(l: Locale, at: number, justNow = "just now") {
+  const age = l.fmt.age(at);
+  return age === l.time.now ? justNow : `${age} ago`;
 }
 
 /** A stored message time (Unix ms) as a date and time in the owner's time zone, the same way everywhere. */

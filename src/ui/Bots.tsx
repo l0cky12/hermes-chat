@@ -4,7 +4,8 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { ChevronDown, ChevronRight, Loader, RefreshCw, ShieldAlert, SquarePen, X } from "lucide-react";
 import { BotModeUnsupportedError, type Bot, type BotActivity } from "../hermes/bots";
-import { composing, relTime, storedTime, useReturnFocus } from "./bits";
+import { ago, composing, storedTime, useReturnFocus } from "./bits";
+import { useLocale } from "../i18n/locale";
 
 /** How often the roster is read again while the view is open. Hermes's desktop polls every 5 seconds; this is enough. */
 export const BOTS_REFRESH_MS = 15_000;
@@ -43,6 +44,7 @@ export function Bots({
   onClose: () => void;
   onUnsupported?: (why: string) => void;
 }) {
+  const l = useLocale();
   const [bots, setBots] = useState<Bot[]>();
   const [error, setError] = useState<string>();
   /** This Hermes turned out to have no Bot Mode, and why. */
@@ -174,7 +176,7 @@ export function Bots({
       {!unsupported && (error || !connected) && (
         <p className={`inbox-note bots-note ${error ? "err" : ""}`} role={error ? "alert" : undefined}>
           {!connected ? "Not connected to Hermes." : `Couldn't read the bots: ${error}`}
-          {checkedAt && bots ? ` Showing them as of ${relTime(checkedAt) === "now" ? "just now" : `${relTime(checkedAt)} ago`}.` : ""}
+          {checkedAt && bots ? ` Showing them as of ${ago(l, checkedAt)}.` : ""}
         </p>
       )}
       {asking && (
@@ -208,8 +210,9 @@ export function Bots({
 }
 
 function Row({ bot: b, picture, activity, shown, onOpen, onNewChat }: { bot: Bot; picture?: string; activity: BotActivity; shown: boolean; onOpen: () => void; onNewChat: () => void }) {
+  const l = useLocale();
   const preview = b.botChat?.preview || (b.botChat ? "No messages yet" : "No Bot Chat yet. Open it to start one.");
-  const when = b.lastActive ? (relTime(b.lastActive) === "now" ? "now" : `${relTime(b.lastActive)} ago`) : "";
+  const when = b.lastActive ? ago(l, b.lastActive, "now") : "";
   const state = activity ? ACTIVITY_LABEL[activity] : undefined;
   const label = [
     `${b.name}${b.profile !== b.name.toLowerCase() ? ` (profile ${b.profile})` : ""}`,
