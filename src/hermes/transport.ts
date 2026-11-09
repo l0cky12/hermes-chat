@@ -656,6 +656,8 @@ export class Hermes {
   private usageFrom = new Map<string, UsageCounters | "unknown">();
   /** Last item before a running turn, by stable id; null for an empty transcript. Older Failed messages can go away. */
   private turnStart = new Map<string, string | null>();
+  /** Chats whose running turn no message sent from here began: Hermes started it, or another Hermes client did. */
+  private unprompted = new Set<string>();
   /** Side questions asked on this connection, so each card has its own id (ADR 0070). */
   private sideAsked = 0;
   /**
@@ -2796,6 +2798,8 @@ export class Hermes {
         else this.pinWanted.set(chatId, wantedBefore);
       }
       this.setOutgoing(profile, chatId, user.id, (r) => withOutgoing(r, { state: unknown ? "unknown" : "failed", reason }));
+      // A message Hermes turned down begins no turn, so the next turn there isn't taken for its.
+      if (!unknown && this.turns.get(chatId)?.userId === user.id) this.turns.delete(chatId);
       this.patchChat(chatId, (c) => ({ ...c, running: false, settled: activating || c.settled }));
       return { delivery: { delivery: unknown ? "unknown" : "unsent", reason }, itemId: user.id };
     }
@@ -3416,6 +3420,8 @@ export class Hermes {
     }
     if (type === "message.start") {
       this.turnStart.set(chat.id, chat.items.at(-1)?.id ?? null);
+      if (this.turns.has(chat.id)) this.unprompted.delete(chat.id);
+      else this.unprompted.add(chat.id);
       this.kanbanWatch.turnStarted([chat.id, ...(chat.lineage ?? [])]);
     }
     if (type === "tool.complete") {
@@ -3425,7 +3431,11 @@ export class Hermes {
     }
     const usage = type === "message.complete" ? this.turnUsage(session_id!, payload.usage) : undefined;
     const from = this.turnStart.get(chat.id);
-    if (type === "message.complete" || type === "error") this.turnStart.delete(chat.id);
+    const unprompted = this.unprompted.has(chat.id);
+    if (type === "message.complete" || type === "error") {
+      this.turnStart.delete(chat.id);
+      this.unprompted.delete(chat.id);
+    }
     // A turn that failed without a `message.complete` ends without counters, so the next one can't be measured.
     if (type === "error") this.usageFrom.set(session_id!, "unknown");
     // A streamed delta is in the snapshot at once, so the reply's text is always whole and in order, but the app hears of
@@ -3442,8 +3452,9 @@ export class Hermes {
     if (type === "message.complete") {
       const receipt = (payload.persisted_turn ?? {}) as PersistedTurn;
       this.noteRows(chat.id, [receipt.user_row_id, receipt.final_assistant_row_id, ...(Array.isArray(receipt.row_ids) ? receipt.row_ids : [])]);
-      if (!this.turns.has(chat.id)) this.track(this.showUnsentPrompt(chat.id, receipt, from));
-      this.stampTurn(chat.id, receipt);
+      // Such a turn leaves alone a message sent from here meanwhile, which Hermes holds until the turn ends.
+      if (unprompted) this.track(this.showUnsentPrompt(chat.id, receipt, from));
+      else this.stampTurn(chat.id, receipt);
     }
     if (type === "message.complete") this.track(this.refreshUsage(chat.id));
     // By the end of a turn Hermes has stored the session, so a pin that failed earlier can succeed.
@@ -3561,11 +3572,9 @@ export class Hermes {
     const text = storedText(row?.content);
     if (row?.role !== "user" || row.display_kind === "hidden" || !text.trim() || text.trimStart().startsWith("[System:")) return;
     const at = storedAt(row.timestamp);
-    // A message sent from here that Hermes held until this turn is in the chat already, without its stored row.
-    const shown = (i: Item) => (i.kind === "user" || i.kind === "assistant") && (i.rowId === rowId || (i.kind === "user" && i.rowId === undefined && i.text.trim() === text.trim()));
     this.patchChat(chatId, (c) => {
       const start = turnFrom(c.items, from);
-      if (start < 0 || c.items.some(shown)) return c;
+      if (start < 0 || c.items.some((i) => (i.kind === "user" || i.kind === "assistant") && i.rowId === rowId)) return c;
       const user: Item = { kind: "user", id: nextId(c.items, "w"), text, rowId, ...(at && { at }) };
       return { ...c, items: [...c.items.slice(0, start), user, ...c.items.slice(start)] };
     });
@@ -3671,6 +3680,7 @@ export class Hermes {
     // Runtime sessions end with the connection.
     this.usageFrom.clear();
     this.turnStart.clear();
+    this.unprompted.clear();
     this.earlySideAnswers.clear();
     this.sideAwaiting.clear();
     for (const c of this.snapshot.chats) {

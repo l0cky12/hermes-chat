@@ -158,19 +158,54 @@ describe("A dispatched task's wake turn, against the stand-in's kanban poller", 
     expect(messages(live)).toHaveLength(4);
   });
 
-  it("doesn't show a message sent from here twice when Hermes held it until a wake turn ended", async () => {
-    const { server, hermes, runtime, chat } = await opened();
+  it("shows the notice of a wake turn a message from here waited on, and leaves that message's own turn its stored rows", async () => {
+    const server = new FakeHermes();
+    server.userRowId = 50;
+    const { hermes, runtime, chat } = await opened(server);
+    server.storeMessage("backup", { role: "user", text: "[IMPORTANT: Background process proc_1 completed]", display_kind: "process_complete", row_id: 40 });
     server.event(runtime, "message.start", { turn_id: "wake-1" });
     await hermes.send("backup", "Any news?");
-    const held = server.transcripts.backup.at(-1)!.row_id!;
     server.event(runtime, "message.delta", { text: "Results are in." });
-    server.event(runtime, "message.complete", { text: "Results are in.", status: "complete" });
+    server.event(runtime, "message.complete", { text: "Results are in.", status: "complete", persisted_turn: { user_row_id: 40, final_assistant_row_id: 41 } });
     server.event(runtime, "message.start", { turn_id: "held-1" });
     server.event(runtime, "message.delta", { text: "Not since then." });
-    server.event(runtime, "message.complete", { text: "Not since then.", status: "complete", persisted_turn: { user_row_id: held } });
-    await until(hermes, () => server.restRequests.some((r) => r.path === "/api/sessions/backup/messages"));
-    await hermes.idle();
-    expect(chat().items.filter((i) => i.kind === "user").map((i) => i.kind === "user" && i.text)).toEqual(["Research the backup failures", "Any news?"]);
+    server.event(runtime, "message.complete", { text: "Not since then.", status: "complete", persisted_turn: { user_row_id: 50, final_assistant_row_id: 51 } });
+    await until(hermes, () => chat().items.some((i) => i.kind === "user" && i.rowId === 40) && chat().items.some((i) => i.kind === "assistant" && i.rowId === 51));
+    expect(chat().items.filter((i) => i.kind === "user").map((i) => i.kind === "user" && [i.text, i.rowId])).toEqual([
+      ["Research the backup failures", undefined],
+      ["[IMPORTANT: Background process proc_1 completed]", 40],
+      ["Any news?", 50],
+    ]);
+  });
+
+  it("shows the notice when an earlier message from here was turned down", async () => {
+    const { server, hermes, runtime, chat } = await opened();
+    server.rejectPrompt = { code: 4000, message: "nope" };
+    expect(await hermes.send("backup", "Any news?")).toMatchObject({ delivery: "unsent" });
+    server.rejectPrompt = undefined;
+    server.storeMessage("backup", { role: "user", text: "[IMPORTANT: Background process proc_1 completed]", display_kind: "process_complete", row_id: 40 });
+    server.event(runtime, "message.start", { turn_id: "wake-1" });
+    server.event(runtime, "message.delta", { text: "Results are in." });
+    server.event(runtime, "message.complete", { text: "Results are in.", status: "complete", persisted_turn: { user_row_id: 40 } });
+    await until(hermes, () => chat().items.some((i) => i.kind === "user" && i.rowId === 40));
+    expect(chat().items.slice(-2).map((i) => i.kind === "user" || i.kind === "assistant" ? i.text : i.kind)).toEqual(["[IMPORTANT: Background process proc_1 completed]", "Results are in."]);
+  });
+
+  it("puts the notice before a wake turn that calls a tool", async () => {
+    const { server, hermes, runtime, shown } = await opened();
+    server.storeMessage("backup", { role: "user", text: "✔ [default] Kanban t_1 done — backups", row_id: 40 });
+    server.event(runtime, "message.start", { turn_id: "wake-1" });
+    server.event(runtime, "tool.start", { tool_id: "c1", name: "kanban_show", args: { task_id: "t_1" } });
+    server.event(runtime, "tool.complete", { tool_id: "c1", name: "kanban_show", result: "{}" });
+    server.event(runtime, "message.delta", { text: "Results are in." });
+    server.event(runtime, "message.complete", { text: "Results are in.", status: "complete", persisted_turn: { user_row_id: 40 } });
+    await until(hermes, () => shown().some(([kind]) => kind === "user" && shown().length === 5));
+    expect(shown().slice(1)).toEqual([
+      ["assistant", "Dispatched. I'll synthesize the findings when it returns."],
+      ["user", "✔ [default] Kanban t_1 done — backups"],
+      ["tool", "c1"],
+      ["assistant", "Results are in."],
+    ]);
   });
 
   it("shows nothing for a turn whose message the history hides, such as a background process's heartbeat", async () => {
