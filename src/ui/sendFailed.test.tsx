@@ -1,8 +1,12 @@
 // @vitest-environment jsdom
 // A message Hermes didn't take, or may not have, shows in the transcript marked so, with why and a Retry control.
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { Main } from "../App";
+import { FakeHermes, row } from "../hermes/fakeHermes";
 import type { Chat, ConnectionStatus, Item, OutgoingItem } from "../hermes/model";
+import { connect } from "../hermes/transport";
 import { ChatPane } from "./ChatPane";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
@@ -10,6 +14,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
+  globalThis.CSS ??= { escape: (s: string) => s } as typeof CSS;
 });
 afterEach(cleanup);
 
@@ -90,5 +95,47 @@ describe("A failed message", () => {
     pane([{ kind: "user", id: "u-0", text: TEXT }, { kind: "assistant", id: "a-1", text: "Rotating", interrupted: true }]);
     expect(screen.getByText("Stopped")).toBeDefined();
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("Dismissing failed messages", () => {
+  it("the next reply shows once, after the message that asked for it", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("c1", 1, { pinned: true, title: "Logs" })];
+    server.transcripts = { c1: [{ role: "user", text: "How full is the NAS?" }, { role: "assistant", text: "82% used." }] };
+    const hermes = await connect(server.openPipe);
+    const user = userEvent.setup();
+    const consoleError = vi.spyOn(console, "error");
+    render(<Main hermes={hermes} connection={{ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }} onSignOut={async () => {}} />);
+    await user.click(await screen.findByRole("button", { name: /^Logs/ }));
+    const composer = () => screen.getByPlaceholderText<HTMLTextAreaElement>("Message Hermes");
+    const settle = () => act(async () => void (await hermes.idle()));
+    const sendAndSettle = async (text: string) => {
+      await user.type(composer(), `${text}{Enter}`);
+      await settle();
+    };
+    const runtime = () => server.runtimeIdOf("c1")!;
+    const transcript = () => Array.from(document.querySelectorAll(".msg.user .bubble-text, .msg.assistant > p")).map((m) => m.textContent);
+
+    server.rejectPrompt = { code: 4009, message: "session busy" };
+    await sendAndSettle("First try");
+    await sendAndSettle("Second try");
+    server.rejectPrompt = undefined;
+    await sendAndSettle("Something else");
+    act(() => server.event(runtime(), "message.complete", { text: "On it.", status: "complete" }));
+    await settle();
+    for (const dismiss of screen.getAllByRole("button", { name: "Dismiss" })) await user.click(dismiss);
+
+    await sendAndSettle("And then?");
+    act(() => {
+      server.event(runtime(), "message.delta", { text: "Done." });
+      server.event(runtime(), "message.complete", { status: "complete" });
+    });
+    await settle();
+
+    await waitFor(() => expect(transcript()).toEqual(["How full is the NAS?", "82% used.", "Something else", "On it.", "And then?", "Done."]));
+    expect(consoleError.mock.calls.flat().join("\n")).not.toMatch(/same key/);
+    consoleError.mockRestore();
+    await hermes.close();
   });
 });

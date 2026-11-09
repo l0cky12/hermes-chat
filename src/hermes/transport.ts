@@ -1299,7 +1299,7 @@ export class Hermes {
     const res = await this.runCommand(chatId, STEER, text);
     if (res.kind === "send") return "not running";
     if (this.profile === profile)
-      this.patchChat(chatId, (c) => ({ ...c, items: [...c.items, { kind: "user", id: freeId(c.items, `s-${c.items.length}`), text, steer: true }] }));
+      this.patchChat(chatId, (c) => ({ ...c, items: [...c.items, { kind: "user", id: nextId(c.items, "s"), text, steer: true }] }));
     return "steered";
   }
 
@@ -2720,7 +2720,7 @@ export class Hermes {
     if (activating) this.pinWanted.set(chatId, true);
     const user: OutgoingItem = {
       kind: "user",
-      id: freeId(chat.items, `u-${chat.items.length}`),
+      id: nextId(chat.items, "u"),
       text,
       ...(attachments.length && { attachments: attachments.map((a) => a.name) }),
       outgoing: { state: "sending", ...(attachments.length && { attachments }), ...(skill && { skill }) },
@@ -4794,6 +4794,9 @@ type ReadBack = { role: string; text: string; rowId?: number };
 /** `id`, or a variant of it no item in `items` has. */
 const freeId = (items: Item[], id: string) => (items.some((i) => i.id === id) ? `${id}-${crypto.randomUUID().slice(0, 8)}` : id);
 
+/** A new item's id. The chat's length alone can repeat one, since dismissing or retrying a message shortens the chat. */
+const nextId = (items: Item[], prefix: string) => freeId(items, `${prefix}-${items.length}`);
+
 /** `items` with outbox rows after them, each with an id none of `items` has. */
 const withRows = (items: Item[], rows: OutgoingItem[]): Item[] => [...items, ...rows.map((r) => ({ ...r, id: freeId(items, r.id) }))];
 
@@ -4967,7 +4970,7 @@ function contextUse(u: Record<string, unknown>): ContextUse | undefined {
 }
 
 function errorItem(c: Chat, text: string): Item {
-  return { kind: "error", id: `e-${c.items.length}`, text };
+  return { kind: "error", id: nextId(c.items, "e"), text };
 }
 
 /** Ends a turn's tool calls that were still running when it ended. */
@@ -4982,7 +4985,7 @@ function markInterrupted(items: Item[]): Item[] {
   const out = endRunningTools(items, "stopped");
   const last = out[out.length - 1];
   if (last?.kind === "assistant") out[out.length - 1] = { ...last, interrupted: true };
-  else out.push({ kind: "assistant", id: `a-${out.length}`, text: "", interrupted: true });
+  else out.push({ kind: "assistant", id: nextId(out, "a"), text: "", interrupted: true });
   return out;
 }
 
@@ -5018,21 +5021,21 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>): Chat {
       const text = p.text;
       if (typeof text !== "string" || !text) return c;
       if (last?.kind === "thinking") items[items.length - 1] = { ...last, text: last.text + text };
-      else items.push({ kind: "thinking", id: `r-${items.length}`, text });
+      else items.push({ kind: "thinking", id: nextId(items, "r"), text });
       return { ...c, items, updatedAt: Date.now() };
     }
     // A response's reasoning in one go, up to 500 characters, when the model didn't stream it.
     case "reasoning.available": {
       const text = typeof p.text === "string" ? p.text.trim() : "";
       if (!text || last?.kind === "thinking") return c;
-      items.push({ kind: "thinking", id: `r-${items.length}`, text });
+      items.push({ kind: "thinking", id: nextId(items, "r"), text });
       return { ...c, items };
     }
     case "message.delta": {
       const text = p.text;
       if (typeof text !== "string" || !text) return c;
       if (last?.kind === "assistant") items[items.length - 1] = { ...last, text: last.text + text };
-      else items.push({ kind: "assistant", id: `a-${items.length}`, text });
+      else items.push({ kind: "assistant", id: nextId(items, "a"), text });
       return { ...c, items, updatedAt: Date.now() };
     }
     case "tool.start":
@@ -5082,9 +5085,9 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>): Chat {
       const reasoning = typeof p.reasoning === "string" ? p.reasoning.trim() : "";
       if (reasoning && !items.slice(lastUser + 1).some((i) => i.kind === "thinking")) {
         const reply = items.map((i) => i.kind).lastIndexOf("assistant");
-        items.splice(reply > lastUser ? reply : items.length, 0, { kind: "thinking", id: `r-${items.length}`, text: reasoning });
+        items.splice(reply > lastUser ? reply : items.length, 0, { kind: "thinking", id: nextId(items, "r"), text: reasoning });
       }
-      if (!answered && typeof p.text === "string" && p.text) items.push({ kind: "assistant", id: `a-${items.length}`, text: p.text });
+      if (!answered && typeof p.text === "string" && p.text) items.push({ kind: "assistant", id: nextId(items, "a"), text: p.text });
       const end = { ...c, live: withLive(c.live, undefined, p.usage), running: false, stopping: false, updatedAt: Date.now() };
       // Stopped here or from another Hermes client.
       if (p.status === "interrupted") return { ...end, items: markInterrupted(endWaitingApprovals(items, "turn ended")) };
