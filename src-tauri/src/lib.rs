@@ -21,6 +21,7 @@ pub mod screenshot;
 pub mod server_page;
 pub mod summon;
 pub mod terminal;
+pub mod touch_keyboard;
 pub mod transport;
 pub mod tray;
 pub mod tunnel;
@@ -1449,6 +1450,11 @@ pub fn run(screenshot: bool, link: Option<String>) {
             use tauri::Emitter;
             app.state::<Attachable>().load(app.path().app_data_dir()?.join("attachable.json"));
             main_window::build(app.handle())?;
+            // Lifts the page above the docked touch keyboard, which Windows lays over the window (ADR 0103).
+            #[cfg(windows)]
+            if let Some(window) = app.get_webview_window("main") {
+                touch_keyboard::start(window);
+            }
             // WebKitGTK leaves `navigator.mediaDevices` out unless media capture is turned on. WebView2 has it, and asks
             // `permission` for the microphone.
             #[cfg(target_os = "linux")]
@@ -1605,7 +1611,8 @@ pub fn run(screenshot: bool, link: Option<String>) {
             tray::tray_set_close_to_tray,
             tray::tray_inbox,
             tray::window_unsaved,
-            tray::window_hidden
+            tray::window_hidden,
+            touch_keyboard::touch_keyboard_covered
         ])
         .build(context)
         .expect("error while building tauri application")
