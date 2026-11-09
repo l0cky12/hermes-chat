@@ -255,24 +255,27 @@ function readChats(): ChatsDoc {
 
 const chatListeners = new Set<() => void>();
 
+function writeChats(doc: ChatsDoc): boolean {
+  try {
+    localStorage.setItem(WORKTREE_CHATS_KEY, JSON.stringify(doc));
+  } catch {
+    return false;
+  }
+  chatListeners.forEach((f) => f());
+  return true;
+}
+
 /** This computer's copy of which chat runs in which worktree, for each connection and profile (`scope`). The record on
  * the server is what removal checks; this copy only labels the chat and lets it be detached from its own header. */
 export const worktreeChats = {
   get(scope: string, chatId: string): WorktreeChat | undefined {
     return readChats().scopes[scope]?.[chatId];
   },
-  set(scope: string, chatId: string, chat: WorktreeChat) {
+  /** False: this computer's storage is full or unavailable, and the copy wasn't kept. */
+  set(scope: string, chatId: string, chat: WorktreeChat): boolean {
     const doc = readChats();
     doc.scopes[scope] = { ...(doc.scopes[scope] ?? {}), [chatId]: chat };
-    localStorage.setItem(WORKTREE_CHATS_KEY, JSON.stringify(doc));
-    chatListeners.forEach((f) => f());
-  },
-  remove(scope: string, chatId: string) {
-    const doc = readChats();
-    if (!doc.scopes[scope]?.[chatId]) return;
-    delete doc.scopes[scope][chatId];
-    localStorage.setItem(WORKTREE_CHATS_KEY, JSON.stringify(doc));
-    chatListeners.forEach((f) => f());
+    return writeChats(doc);
   },
   /** Drops every copy that names a token the server no longer holds for that worktree. */
   forgetToken(token: string) {
@@ -284,9 +287,7 @@ export const worktreeChats = {
           delete chats[id];
           changed = true;
         }
-    if (!changed) return;
-    localStorage.setItem(WORKTREE_CHATS_KEY, JSON.stringify(doc));
-    chatListeners.forEach((f) => f());
+    if (changed) writeChats(doc);
   },
   subscribe(f: () => void) {
     chatListeners.add(f);
