@@ -3450,4 +3450,6 @@ p.logs-status { margin: 0 0 8px; line-height: 1.5; }
   background: var(--raised); border: 1px solid var(--line-2); border-radius: 9px; user-select: all;
 }
 .si-badge { margin-left: 8px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--muted); font-size: calc(11rem / 14); }
-.si-add { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.si-add { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; padding-bottom: 12px; }
+/* The button, the Add anyway question and the notes line up with the rows above them. */
+.si-add > :not(.set-row) { margin: 0 16px; }
