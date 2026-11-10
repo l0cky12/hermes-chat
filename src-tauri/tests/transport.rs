@@ -1982,14 +1982,28 @@ fn refuses_extra_headers_that_are_malformed_reserved_or_set_twice() {
     }
 }
 
+struct PasteRoot(std::path::PathBuf, hermes_chat::screenshot::Captures);
+impl Drop for PasteRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+fn paste_root(tag: &str) -> PasteRoot {
+    let base = std::env::temp_dir().join(format!("hermes-chat-paste-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let captures = hermes_chat::screenshot::Captures::open(base.join("captures")).unwrap();
+    PasteRoot(base, captures)
+}
+
 #[test]
-fn stages_a_pasted_file_as_a_private_temp_file() {
+fn stages_a_pasted_file_privately_with_the_screenshots() {
+    let root = paste_root("stage");
     let png = b"\x89PNG\r\n\x1a\npasted";
-    let a = transport::stage_clipboard_file("clipboard-2026-11-02T153000.png", png).unwrap();
-    let b = transport::stage_clipboard_file("clipboard-2026-11-02T153000.png", png).unwrap();
+    let a = transport::stage_clipboard_file(&root.1, "clipboard-2026-11-02T153000.png", png).unwrap();
+    let b = transport::stage_clipboard_file(&root.1, "clipboard-2026-11-02T153000.png", png).unwrap();
     for p in [&a, &b] {
         assert!(p.is_absolute(), "{p:?}");
-        assert!(p.starts_with(std::env::temp_dir().join("hermes-chat")), "{p:?}");
+        assert!(root.1.owns(p), "{p:?}");
         assert_eq!(p.file_name().unwrap(), "clipboard-2026-11-02T153000.png");
         assert_eq!(std::fs::read(p).unwrap(), png);
         #[cfg(unix)]
@@ -2005,13 +2019,14 @@ fn stages_a_pasted_file_as_a_private_temp_file() {
     attachable.add([path_of(&a)]);
     let got = tokio::runtime::Runtime::new().unwrap().block_on(transport::stat_files(&attachable, &[path_of(&a)]));
     assert_eq!(got[0].size, Some(png.len() as u64));
-    for p in [a, b] {
-        std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
-    }
+    assert!(root.1.discard(&a));
+    assert!(!a.exists() && !a.parent().unwrap().exists());
+    assert!(b.exists());
 }
 
 #[test]
 fn a_pasted_file_name_stays_a_plain_basename() {
+    let root = paste_root("names");
     for (hostile, want) in [
         ("../../etc/passwd.png", "passwd.png"),
         ("/etc/passwd", "passwd"),
@@ -2025,16 +2040,14 @@ fn a_pasted_file_name_stays_a_plain_basename() {
         ("report.<script>", "report.<script>"),
         ("Résumé 2026.pdf", "Résumé 2026.pdf"),
     ] {
-        let p = transport::stage_clipboard_file(hostile, b"x").unwrap();
+        let p = transport::stage_clipboard_file(&root.1, hostile, b"x").unwrap();
         assert_eq!(p.file_name().unwrap(), want, "{hostile:?}");
         // Still inside its own fresh folder, not somewhere the name pointed.
-        assert_eq!(p.parent().unwrap().parent().unwrap(), std::env::temp_dir().join("hermes-chat"), "{hostile:?}");
-        std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
+        assert_eq!(p.parent().unwrap().parent().unwrap(), root.1.mine(), "{hostile:?}");
     }
-    let long = transport::stage_clipboard_file(&format!("{}.png", "é".repeat(300)), b"x").unwrap();
+    let long = transport::stage_clipboard_file(&root.1, &format!("{}.png", "é".repeat(300)), b"x").unwrap();
     let name = long.file_name().unwrap().to_str().unwrap();
     assert!(name.len() <= 255 && name.ends_with(".png"), "{name}");
-    std::fs::remove_dir_all(long.parent().unwrap()).unwrap();
 }
 
 #[tokio::test]

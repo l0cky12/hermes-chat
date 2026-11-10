@@ -1,7 +1,8 @@
 // Screenshots for the composer. Rust takes the capture (src-tauri/src/screenshot.rs) and stages it in a private folder;
 // the desk hands it to the composer on screen, where it waits as an image attachment until the owner sends or removes
-// it. The desk remembers which staged files are its captures, so each one is deleted once it is sent, removed, or left
-// behind (a chat switched away from, or signing out). Nothing here sends anything to Hermes.
+// it. Files pasted into the composer are staged the same way. The desk remembers which staged files are its own, so
+// each one is deleted once it is sent, removed, or left behind (a chat switched away from, or signing out). Nothing
+// here sends anything to Hermes.
 
 import type { Attachment } from "./model";
 
@@ -55,7 +56,7 @@ export function failureText(e: unknown): string | undefined {
   }
 }
 
-const RESTORED = "Hermes didn't confirm it got your message, so its screenshot is back here. Send it again, or remove it.";
+const RESTORED = "Hermes didn't confirm it got your message, so its files are back here. Send them again, or remove them.";
 
 /** A capture or a note waiting for a composer to show it. */
 type Waiting = { paths: string[]; restored?: Attachment[]; note?: string; remote: boolean };
@@ -102,6 +103,12 @@ export class ScreenshotDesk {
     } finally {
       this.set({ capturing: false });
     }
+  }
+
+  /** Files Rust staged with the captures from a paste: deleted as captures are, once sent, removed or left behind. */
+  own(paths: readonly string[]) {
+    if (this.disposed) return void paths.forEach((p) => void this.api.discard(p).catch(() => {}));
+    for (const p of paths) this.mine.add(p);
   }
 
   /** The composer now on screen takes captures, and any that were waiting for one. Returns the function that stops it. */

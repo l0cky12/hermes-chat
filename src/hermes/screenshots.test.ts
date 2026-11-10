@@ -33,6 +33,22 @@ function sink(keep: (paths: string[]) => string[] = (p) => p) {
 }
 
 describe("Screenshot desk", () => {
+  it("deletes a pasted file once it is sent, held while its message is in the outbox, and at once after signing out", async () => {
+    const rust = fakeApi();
+    const desk = new ScreenshotDesk(rust.api);
+    const pasted = "/home/liam/.cache/hermes-chat/captures/1/0/clipboard.png";
+    desk.own([pasted]);
+    desk.hold([pasted]);
+    desk.release([pasted]);
+    desk.dispose();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(rust.discarded).toEqual([]);
+    desk.sent([{ path: pasted, name: "clipboard.png", size: 1, kind: "image" }], true);
+    desk.own(["/home/liam/.cache/hermes-chat/captures/1/1/late.png"]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(rust.discarded).toEqual([pasted, "/home/liam/.cache/hermes-chat/captures/1/1/late.png"]);
+  });
+
   it("attaches a capture to the composer on screen, and deletes it once released", async () => {
     const rust = fakeApi();
     const onAttached = vi.fn();
@@ -163,7 +179,7 @@ describe("Screenshot desk", () => {
     desk.sent(["/c/1/0/a.png", "/home/liam/rack.png"].map((path) => ({ path, name: "a.png", size: 10, kind: "image" })), false);
     await new Promise((r) => setTimeout(r, 0));
     expect(composer.attached).toEqual([["/c/1/0/a.png"], ["/c/1/0/a.png"]]);
-    expect(composer.notes).toEqual(["Hermes didn't confirm it got your message, so its screenshot is back here. Send it again, or remove it."]);
+    expect(composer.notes).toEqual(["Hermes didn't confirm it got your message, so its files are back here. Send them again, or remove them."]);
     expect(rust.discarded).toEqual([]);
 
     desk.sent([{ path: "/c/1/0/a.png", name: "a.png", size: 10, kind: "image" }], true);
