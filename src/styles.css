@@ -400,8 +400,11 @@ kbd {
 mark.hit { background: rgba(245, 184, 74, 0.28); color: inherit; border-radius: 3px; padding: 0 1px; }
 mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2px rgba(245, 184, 74, 0.35); }
 
-.transcript { flex: 1; overflow-y: auto; }
+/* Blocks out of view skip layout and paint, so a long chat costs what's on screen. One keeps its last height while
+   skipped. Engines that anchor scrolling would undo what anchorScroll does, so it alone keeps the view still. */
+.transcript { flex: 1; overflow-y: auto; overflow-anchor: none; }
 .transcript-inner { max-width: var(--chat-width); margin: 0 auto; padding: 28px 32px 56px; display: flex; flex-direction: column; gap: 22px; }
+.transcript-inner > * { content-visibility: auto; contain-intrinsic-block-size: auto 160px; }
 .imported-note {
   display: flex; align-items: center; gap: 6px; font-size: calc(12rem / 14); color: var(--faint); justify-content: center; padding-bottom: 6px;
 }
@@ -502,6 +505,10 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 
 /* tool calls */
 .tools { display: flex; flex-direction: column; }
+/* A transcript block clips what it paints (content-visibility). A tool line's hover reaches 8px left of its text, so its
+   block takes that room, and a jumped-to call's outline goes inside. */
+.transcript-inner > .tools { padding-left: 8px; margin-left: -8px; }
+.transcript-inner .tool.jumped { outline-offset: -2px; }
 .tool-line {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 5px 8px; margin-left: -8px;
   border-radius: 7px; color: var(--muted); font-size: calc(13rem / 14); min-width: 0;

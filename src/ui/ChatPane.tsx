@@ -35,6 +35,7 @@ import type { VoiceSetup } from "../hermes/pipe";
 import { ChatUsageButton, ReplyUsageLine } from "./Usage";
 import { useLinkMenu, useOpenPreview } from "./previewContext";
 import { ShowInChatContext, type ShowInChat } from "./showInChat";
+import { anchorScroll } from "./scrollAnchor";
 import { linkTarget, previewName, toolTargets, withoutBidi } from "../hermes/preview";
 import { type CommandHost, useSlashCommands } from "./SlashCommands";
 import { BranchButton } from "./Branch";
@@ -594,19 +595,25 @@ export function ChatPane({
     if (el && stickToBottom.current && !q) el.scrollTop = el.scrollHeight;
   });
 
-  // Resizing the pane rewraps the transcript without a render; one at the bottom stays there.
+  // Resizing the pane rewraps the transcript without a render; one at the bottom stays there, and one scrolled up keeps
+  // its place when blocks above it change height.
   const qRef = useRef(q);
   qRef.current = q;
   useEffect(() => {
     const el = scrollRef.current;
     const inner = el?.firstElementChild;
     if (!el || !inner || typeof ResizeObserver === "undefined") return;
+    const following = () => stickToBottom.current && !qRef.current;
     const ro = new ResizeObserver(() => {
-      if (stickToBottom.current && !qRef.current) el.scrollTop = el.scrollHeight;
+      if (following()) el.scrollTop = el.scrollHeight;
     });
     ro.observe(el);
     ro.observe(inner);
-    return () => ro.disconnect();
+    const unanchor = anchorScroll(el, inner, following);
+    return () => {
+      ro.disconnect();
+      unanchor();
+    };
   }, []);
 
   const step = (d: number) => {
