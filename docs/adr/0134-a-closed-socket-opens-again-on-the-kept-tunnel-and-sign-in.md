@@ -1,6 +1,6 @@
 # A closed socket opens again on the kept tunnel and sign-in
 
-When the `/api/ws` socket closed, the app treated it as a lost connection (#409). It closed the whole connection in Rust, the SSH tunnel and the signed-in dashboard session with it. Then it waited 1 second and opened everything again: a new `ssh`, `GET /api/status`, the password sign-in, a ticket, and the socket. Measured with real Hermes `f0d94882` over SSH, the socket came back about 1.2 seconds after it closed: the 1-second wait plus the full open. Every drop also spent one sign-in, and Hermes answers 429 after five in a short window, so a connection whose socket kept dropping went Offline.
+When the `/api/ws` socket closed, the app treated it as a lost connection (#409). It closed the whole connection in Rust, the SSH tunnel and the signed-in dashboard session with it. Then it waited 1 second and opened everything again: a new `ssh`, `GET /api/status`, the password sign-in, a ticket, and the socket. Measured with real Hermes `f0d94882` over SSH, the socket came back about 1.2 seconds after it closed: the 1-second wait plus the full open. Every drop also spent one sign-in, and Hermes allows 10 password sign-ins a minute from one address, so a connection whose socket kept dropping went Offline.
 
 A socket can close while the rest of the connection is fine, for example when a proxy in front of Hermes ends the WebSocket.
 
