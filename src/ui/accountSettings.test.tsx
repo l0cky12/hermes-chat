@@ -19,14 +19,14 @@ afterEach(async () => {
   await Promise.all(running.splice(0).map((h) => h.close()));
 });
 
-async function shown(which: "signIns" | "endpoints", { s = new FakeHermes(), profile = "default" } = {}) {
+async function shown(which: "signIns" | "endpoints", { s = new FakeHermes(), profile = "default", pollGapMs = 5 } = {}) {
   const hermes = await connect(s.openPipe as OpenPipe, "default");
   running.push(hermes);
   const user = userEvent.setup();
   const openUrl = vi.fn(async (_url: string) => {});
   const view = render(
     which === "signIns" ? (
-      <SignInSettings api={hermes.accounts} profile={profile} connected openUrl={openUrl} pollGapMs={5} />
+      <SignInSettings api={hermes.accounts} profile={profile} connected openUrl={openUrl} pollGapMs={pollGapMs} />
     ) : (
       <EndpointSettings api={hermes.accounts} profile={profile} connected />
     ),
@@ -107,6 +107,16 @@ describe("Settings → Providers, subscription sign-ins", () => {
     answer({ state: "approved" });
     expect(await screen.findByText(/^Signed in to ChatGPT or Codex Subscription after all/)).toBeTruthy();
     expect(within(rowOf("ChatGPT or Codex Subscription")).getByRole("button", { name: "Sign out of ChatGPT or Codex Subscription" })).toBeTruthy();
+  });
+
+  it("shows signed in when Hermes approved the sign-in between two polls, as the owner cancelled", async () => {
+    const { s, hermes, user } = await shown("signIns", { pollGapMs: 300 });
+    vi.spyOn(hermes.accounts, "waitSignIn").mockResolvedValue({ state: "pending" });
+    await user.click(await screen.findByRole("button", { name: "Sign in to ChatGPT or Codex Subscription" }));
+    await screen.findByRole("status", { name: /Sign-in code/ });
+    s.accounts.settle(s.accounts.pending("openai-codex")!.id, "approved");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText(/^Signed in to ChatGPT or Codex Subscription after all/, undefined, { timeout: 3000 })).toBeTruthy();
   });
 
   it("cancels the sign-in when the screen closes", async () => {

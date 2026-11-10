@@ -1418,6 +1418,8 @@ impl Dashboard {
         if method == Method::DELETE && is_env_route(&routed) {
             return Err(TransportError::NotRelayed(format!("{method} {path}")));
         }
+        // Hermes answers removing an endpoint with the endpoints left, each with its key's preview (ADR 0106).
+        let answer_unread = method == Method::DELETE && routed.starts_with("api/providers/custom-endpoints/");
         let mut req = self.signed(method, url);
         if let Some(body) = body {
             req = req.header(header::CONTENT_TYPE, "application/json").body(body);
@@ -1425,6 +1427,7 @@ impl Dashboard {
         let resp = req.send().await.map_err(unreachable)?;
         self.keep_cookies(&resp);
         match resp.status() {
+            s if s.is_success() && answer_unread => Ok(r#"{"ok":true}"#.to_owned()),
             s if s.is_success() => resp.text().await.map_err(unreachable),
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
             _ => Err(unexpected(resp, &self.hide).await),

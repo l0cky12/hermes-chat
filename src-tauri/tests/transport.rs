@@ -3201,7 +3201,9 @@ async fn accounts_stub() -> (Dashboard, Bodies) {
         .route("/api/providers/custom-endpoints", get(endpoints).post(save))
         .route("/api/providers/custom-endpoints/validate", post(validate))
         .route("/api/providers/oauth/{id}/start", post(echo_write))
-        .route("/api/providers/custom-endpoints/{id}/activate", post(echo_write));
+        .route("/api/providers/custom-endpoints/{id}/activate", post(echo_write))
+        // As `delete_custom_endpoint` answers: the endpoints left, previews and all.
+        .route("/api/providers/custom-endpoints/{id}", axum::routing::delete(endpoints));
     (sign_in_at(&serve(app).await, &sign_in("hunter2")).await.unwrap(), bodies)
 }
 
@@ -3309,4 +3311,11 @@ async fn the_relay_takes_only_a_bodiless_sign_in_start_and_endpoint_activation()
         let err = dashboard.request("POST", path, body.map(Into::into)).await.unwrap_err();
         assert!(matches!(err, TransportError::NotRelayed(_)), "POST {path}: {err:?}");
     }
+}
+
+#[tokio::test]
+async fn removing_an_endpoint_through_the_relay_doesnt_pass_on_the_key_previews_hermes_answers_with() {
+    let (dashboard, _) = accounts_stub().await;
+    let answer = dashboard.request("DELETE", "api/providers/custom-endpoints/ollama?profile=work", None).await.unwrap();
+    assert_eq!(answer, r#"{"ok":true}"#);
 }
