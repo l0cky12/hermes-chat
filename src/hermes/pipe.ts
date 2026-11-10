@@ -1,6 +1,7 @@
 // The pipe under the frontend Hermes transport: JSON-RPC text frames in and out of `/api/ws`, plus
 // signed-in dashboard REST calls, the local files the owner attaches, and the dashboard's audio routes for Dictation
 // and Read aloud. In the app it is the Rust side (tauriPipe.ts); in tests it is FakeHermes.
+import type { CustomEndpoint, EndpointForm, EndpointSave, ProviderSignIn } from "./accounts";
 import type { AttemptTrace, Step } from "./attempts";
 import type { McpEdit } from "./mcp";
 import type { Downloaded, PickedUpload, TransferProgress } from "./remoteFiles";
@@ -108,6 +109,16 @@ export interface Pipe {
    * window's REST relay refuses `DELETE api/env`, so this is the only way (src-tauri `Dashboard::remove_provider_key`).
    */
   removeProviderKey(profile: string, envVar: string): Promise<void>;
+  /** `profile`'s subscription providers and whether each is signed in, without Hermes's token previews (ADR 0133). */
+  providerSignIns(profile: string): Promise<ProviderSignIn[]>;
+  /** `profile`'s OpenAI-compatible endpoints, without Hermes's key previews (ADR 0133). */
+  customEndpoints(profile: string): Promise<CustomEndpoint[]>;
+  /**
+   * Has Hermes check an OpenAI-compatible endpoint, then adds it to `profile` with the models it found. A check that
+   * doesn't pass saves nothing, unless `anyway`. The key goes to Hermes and isn't kept on this computer
+   * (src-tauri `Dashboard::save_endpoint`).
+   */
+  saveEndpoint(profile: string, form: EndpointForm, anyway: boolean): Promise<EndpointSave>;
   /** Sends a recording to Hermes to transcribe with `profile`'s speech-to-text provider. */
   transcribe(profile: string, audio: Uint8Array, mime: string): Promise<Transcript>;
   /** Asks Hermes to read `text` aloud with `profile`'s text-to-speech provider. */

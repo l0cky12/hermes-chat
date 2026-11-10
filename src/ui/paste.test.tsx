@@ -10,6 +10,7 @@ import type { Attachment } from "../hermes/model";
 import { connect } from "../hermes/transport";
 import { ChatPane, pastedName, refuseStrayFileDrops } from "./ChatPane";
 import { stagedFiles } from "../hermes/unsaved";
+import { ScreenshotDesk } from "../hermes/screenshots";
 
 type Invoke = (cmd: string, args?: unknown, opts?: { headers?: Record<string, string> }) => Promise<unknown>;
 const tauri = vi.hoisted(() => ({ invoke: (async () => undefined) as Invoke }));
@@ -33,7 +34,7 @@ const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPh
 const PNG = Uint8Array.from(atob(PNG_B64), (c) => c.charCodeAt(0));
 
 /** A new chat's pane on a fake Hermes, with `draft` in its composer. `staged` lists what Rust was asked to save. */
-async function setUp(draft = "") {
+async function setUp(draft = "", screenshots?: ScreenshotDesk) {
   const server = new FakeHermes();
   const hermes = await connect(server.openPipe);
   const id = await hermes.newChat();
@@ -64,6 +65,7 @@ async function setUp(draft = "") {
       onSend={onSend}
       onStop={() => {}}
       onAnswer={() => {}}
+      screenshots={screenshots}
     />,
   );
   return { server, runtime: server.runtimeIdOf(id)!, staged, onSend, onDraft };
@@ -136,6 +138,23 @@ describe("Pasting into the composer", () => {
     await waitFor(() => expect(chips()).toHaveLength(1));
     fireEvent.keyDown(composer(), { key: "Enter" });
     expect(onSend).toHaveBeenCalledWith("Which cable is loose?", [expect.objectContaining({ path: staged[0].path, kind: "image" })]);
+  });
+
+  it("deletes a pasted file once it is removed from the composer, or the composer goes", async () => {
+    const discard = vi.fn(async () => {});
+    const desk = new ScreenshotDesk({ capture: async () => Promise.reject(new Error("no captures here")), discard });
+    const { staged } = await setUp("", desk);
+    paste([new File([PNG], "a.png", { type: "image/png" })]);
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    expect(discard).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTitle("Remove"));
+    await waitFor(() => expect(discard).toHaveBeenCalledWith(staged[0].path));
+
+    paste([new File([PNG], "b.png", { type: "image/png" })]);
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    expect(discard).toHaveBeenCalledTimes(1);
+    cleanup();
+    expect(discard).toHaveBeenLastCalledWith(staged[1].path);
   });
 
   it("keeps a pasted file's own name", async () => {

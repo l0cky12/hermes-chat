@@ -2,6 +2,7 @@
 // `/api/ws` frames and REST calls. It also reads the files the owner attaches, so their bytes never pass through the
 // webview.
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { CustomEndpoint, EndpointSave, ProviderSignIn } from "./accounts";
 import type { LocalFile, OpenPipe, Pipe, PipeEvent, Route, ToolsetGuards, Transcript, VoiceSetup } from "./pipe";
 import type { Downloaded, PickedUpload, TransferProgress } from "./remoteFiles";
 import type { Probe, Probed, ProbeFailure, SavedKey } from "./setup";
@@ -118,6 +119,9 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
       sendFile: (head, path, tail, maxBytes) => invoke<void>("hermes_send_file", { head, path, tail, maxBytes }).catch(asError),
       saveProviderKey: (profile, key, value) => invoke<SavedKey>("hermes_save_provider_key", { profile, key, value }).catch(asError),
       removeProviderKey: (profile, key) => invoke<void>("hermes_remove_provider_key", { profile, key }).catch(asError),
+      providerSignIns: (profile) => invoke<ProviderSignIn[]>("hermes_provider_sign_ins", { profile }).catch(asError),
+      customEndpoints: (profile) => invoke<CustomEndpoint[]>("hermes_custom_endpoints", { profile }).catch(asError),
+      saveEndpoint: (profile, form, anyway) => invoke<EndpointSave>("hermes_save_endpoint", { profile, form, anyway }).catch(asError),
       // The recording goes as the raw body, not as a JSON list of numbers.
       transcribe: (profile, audio, mime) =>
         invoke<Transcript>("hermes_transcribe", audio, {

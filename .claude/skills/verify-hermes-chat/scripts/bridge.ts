@@ -22,6 +22,8 @@
 //   `session.active_list` reports one: the chat is stored in that profile, listed as working or waiting, and `end`
 //   takes it off the list and leaves it Unread there (a test's control). With `profile=default` it runs one in an
 //   existing chat of the shown profile that this app hasn't resumed, such as a wake turn after a relaunch.
+//   `POST /__signin[?session=<id>]&status=approved|denied|expired|error` settles a subscription sign-in (the pending
+//   one when no session is named) as the provider would once the owner acts in the browser (a test's control).
 //   `POST /__kanban?id=<task id>&status=<running|done|blocked|review|archived>` moves a task as a worker would (a test's
 //   control). `done`, `blocked` and `review` send the chat a `status.update` naming the task and, 2 s later,
 //   a streamed wake turn when the chat is live, subscribed, not stopped, and no turn runs, as Hermes's poller does.
@@ -295,6 +297,13 @@ const http = createServer(async (req, res) => {
     if (status !== "end") server.liveSessions.push({ id: `rt-${id}`, session_key: id, status, last_active: t, started_at: t, title: stored.title ?? "" });
     save();
     return json(200, { ok: true, live: server.liveSessions.length });
+  }
+  if (url.pathname === "/__signin" && req.method === "POST") {
+    const status = url.searchParams.get("status") ?? "approved";
+    const session = url.searchParams.get("session") || [...server.accounts.sessions.values()].find((s) => s.status === "pending")?.id;
+    if (!session || !["approved", "denied", "expired", "error"].includes(status)) return json(400, { detail: "No pending sign-in, or status isn't approved|denied|expired|error" });
+    server.accounts.settle(session, status as "approved", status === "error" ? "Token exchange failed." : undefined);
+    return json(200, { ok: true, session });
   }
   if (url.pathname === "/__kanban" && req.method === "POST") {
     const id = url.searchParams.get("id") ?? "";
