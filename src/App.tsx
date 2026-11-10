@@ -1203,13 +1203,9 @@ export function Main({
     return store;
   }, [hermes, scope, projectStores]);
   const proj = useSyncExternalStore(projects.subscribe, projects.getSnapshot);
-  // The project page's composer writes the New chat draft, and its Start chat opens the New chat pane and sends it
-  // from there (`startWith`), so a chat started on the page starts exactly as one started in the pane does.
   const newChatDraftKey = draftKey(connection, profile, null);
   const newChatDraft = useSyncExternalStore(savedDrafts.subscribe, () => savedDrafts.get(newChatDraftKey));
   const [startWith, setStartWith] = useState<{ pane: string; n: number }>();
-  // What chats are told of their projects' context files (ADR 0135). A project's capacity follows its default model's
-  // context window, read as each message goes.
   const contexts = useMemo(
     () => chatContext(hermes.contextFiles, savedContextLedger, projects, (id) => knownWindow(hermes.getSnapshot().chats, projects.getSnapshot().defaults[id]?.model)),
     [hermes, projects],
@@ -3466,9 +3462,7 @@ function ChatView({
   sticky?: ModelPick;
   favorites: string[];
   projects: ProjectsStore;
-  /** What a chat is told of its project's context files as it starts (ADR 0135). */
   contexts: ChatContexts;
-  /** Set, on the New chat pane: send its draft now, as the project page's Start chat asks. A new value asks again. */
   autoSend?: number;
   onAutoSent: () => void;
   projectNames?: string[];
@@ -3566,7 +3560,6 @@ function ChatView({
       if (problem) throw new Error(problem);
       // Hermes would run a chat in a folder it can't list, or quietly in its own; check it is there and allowed first.
       if (s.folder.value) await hermes.projects.checkFolder(profile, s.folder.value);
-      // The project's context files as they are now: the chat starts with them, after the instructions.
       const context = shown && (await contexts.start(shown.id));
       const seed = { folder: s.folder.value, context: context?.blocks[0] };
       // The owner may have switched profile, or another window the project shown, meanwhile: these were that one's.
@@ -3652,7 +3645,6 @@ function ChatView({
       // Retain ownership until Rust protects the outbox, as in the single-pane send path.
     }
   };
-  // A message typed on the project page starts its chat here, by the same road as one typed in this composer.
   useEffect(() => {
     if (autoSend === undefined || chatId !== null) return;
     onAutoSent();

@@ -1,8 +1,5 @@
 // Reading and changing a project's context files on the server (GLOSSARY.md "Context file", ADR 0135), for the project
-// page's Context card and for every send in a project's chat. The folder is the list: nothing here keeps one. Reads are
-// dashboard GETs. Writes go through narrow Rust commands (src-tauri `context_*`), because the window's REST relay
-// refuses every write under `api/files` and `api/fs` (ADR 0012). Where a profile's tools run over SSH, the files are on
-// that machine, and Hermes can only write text into a folder that is already there.
+// page's Context card and for every send in a project's chat.
 import {
   CONTEXT_DIR,
   MAX_FILE_BYTES,
@@ -57,7 +54,6 @@ export type ContextPipe = {
 };
 
 export type ContextFilesIo = {
-  /** A dashboard GET, as text. */
   get: RemoteGet;
   /** The Rust commands, while connected. */
   pipe(): ContextPipe | undefined;
@@ -77,7 +73,6 @@ const picked = (found: PickedFile[]): Picked => ({
   refused: found.flatMap((f) => (f.error === undefined && f.size !== undefined ? [] : [{ name: f.name, why: `${f.name} wasn't added: ${f.error ?? "this computer couldn't read it"}.` }])),
 });
 
-/** The project as the card needs it. */
 export type ContextProject = Pick<Project, "id" | "name" | "folders">;
 
 /** A project's main folder: the one Hermes names primary, which every computer agrees on. */
@@ -129,18 +124,15 @@ export const asEntry = (f: ContextFile): RemoteEntry => ({ name: f.name, path: f
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const NOT_CONNECTED = "Hermes isn't connected. Context files can be changed once it is.";
-/** The most texts kept, so a long run over many projects doesn't hold every file ever read. */
 const TEXTS_KEPT = 300;
 
-/** FNV-1a, to tell one text from another where the server gives no modified time. */
-function hash(text: string): string {
+function fnv1a(text: string): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
   return (h >>> 0).toString(16);
 }
 
 export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
-  // Texts read, by connection, path and version: a file's text is read once for as long as the file doesn't change.
   const texts = new Map<string, string | null>();
   const keyOf = (path: string, version: string, ssh?: string) => [io.scope(), ssh ?? "", path, version].join("\n");
   const keep = (key: string, text: string | null) => {
@@ -155,12 +147,10 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
   };
   const json = async (pathAndQuery: string) => JSON.parse(await io.get(pathAndQuery)) as unknown;
 
-  /** Whether `profile`'s tools run over SSH (`terminal.backend`), which is where its files are then. */
   const overSsh = async (profile: string) => {
     const config = await json(`api/config?${new URLSearchParams({ profile })}`);
     return isObj(config) && isObj(config.terminal) && config.terminal.backend === "ssh";
   };
-  /** The profile's own folder on the server, as Hermes reports it. */
   const homeOf = async (profile: string) => {
     const res = await json("api/profiles");
     const row = (isObj(res) && Array.isArray(res.profiles) ? res.profiles : []).find((p) => isObj(p) && p.name === profile);
@@ -188,7 +178,6 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
 
   type Folder = { dir: string; exists: boolean; files: ListedFile[]; main: string };
 
-  /** The context folder on the dashboard's machine. A `context` that leads out of the main folder is refused. */
   const managedFolder = async (main: string): Promise<Folder> => {
     let top;
     try {
@@ -228,7 +217,7 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
       const file: ListedFile =
         text === undefined
           ? { name: e.name, path: e.path, version: "unread", kind: named === "pdf" || named === "docx" ? named : "binary" }
-          : { name: e.name, path: e.path, size: bytesOf(text), version: `${bytesOf(text)}:${hash(text)}`, kind: named ?? "text" };
+          : { name: e.name, path: e.path, size: bytesOf(text), version: `${bytesOf(text)}:${fnv1a(text)}`, kind: named ?? "text" };
       if (text !== undefined) keep(keyOf(file.path, file.version, profile), text);
       files.push(file);
     }
@@ -237,7 +226,6 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
 
   const folder = (main: string, profile: string, ssh: boolean) => (ssh ? sshFolder(main, profile) : managedFolder(main));
 
-  /** A listing made after a write: the file counts only as the listing shows it. */
   const listedNow = async (profile: string, dir: string, writes: ContextWrites, name: string) => {
     const main = dir.slice(0, dir.length - CONTEXT_DIR.length - 1);
     const now = await folder(main, profile, writes === "text-only");
@@ -252,7 +240,6 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
     }
     if (found?.size !== size) throw new Error(`Hermes said it saved ${name}, but ${dir} ${found ? "has it at another size" : "doesn't list it"}. It may not have been written whole.`);
   };
-  /** A refused write as the owner reads it. */
   const refusal = (e: unknown, name: string) => {
     const message = messageOf(e);
     if (message === "exists") return new ContextExistsError(name);
@@ -276,11 +263,9 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
         const found = await folder(main, profile, ssh);
         const files: ContextFile[] = [];
         for (const f of found.files) {
-          // On an SSH profile, listing the folder already read every file that has text.
           const read = () => (ssh ? (texts.get(keyOf(f.path, f.version, profile)) ?? null) : readText(f).catch(() => undefined));
           files.push(needsRead(f) ? contextFile(f, await read()) : contextFile(f));
         }
-        // A repository isn't touched for a folder that isn't there: nothing in it could be committed yet.
         const excluded = git && found.exists ? await io.pipe()?.gitExclude(found.main, sshOf(profile, writes)).catch(() => undefined) : undefined;
         return { kind: "ready", dir: found.dir, exists: found.exists, files, gitNote: excluded === "added" || excluded === "already", capacity: capacityOf(files, window), writes };
       } catch (e) {
@@ -353,7 +338,6 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
 
 export const CONTEXT_LEDGER_KEY = "hermes-chat.projectContext";
 const LEDGER_VERSION = 1;
-/** The most chats one connection and profile keeps entries for; the ones told longest ago go first. */
 const CHATS_KEPT = 2_000;
 
 /**
@@ -397,9 +381,7 @@ export function contextLedger(storage: Pick<Storage, "getItem" | "setItem">): Co
             if (entries.length) scopes[scope][chat] = Object.fromEntries(entries);
           }
         }
-    } catch {
-      // Unreadable: every chat is told again, which costs room in its context and loses nothing.
-    }
+    } catch {}
     return scopes;
   };
   const write = (next: LedgerDoc) => {
@@ -408,9 +390,7 @@ export function contextLedger(storage: Pick<Storage, "getItem" | "setItem">): Co
       const raw = JSON.stringify({ v: LEDGER_VERSION, scopes: next });
       storage.setItem(CONTEXT_LEDGER_KEY, raw);
       cachedRaw = raw;
-    } catch {
-      // Storage is full: kept in memory until the app closes.
-    }
+    } catch {}
   };
   return {
     get: (scope, chatId, projectId) => current()[scope]?.[chatId]?.[projectId],
@@ -456,7 +436,6 @@ export function chatContext(files: ProjectContextFiles, ledger: ContextLedger, p
     const set = { project: project.name, dir: state.dir, files: state.files };
     const mode = state.capacity.mode;
     const was = entry === "start" ? undefined : entry();
-    // Only the texts this chat hasn't had are read.
     const wanted = mode === "full" ? state.files.filter((f) => !(was?.files[f.path]?.version === f.version && was.files[f.path].text)) : [];
     const texts = await files.texts(projects.profile, state, wanted);
     return { projectId, was, told: entry === "start" ? start(set, texts, mode) : plan(was, set, texts, mode) };

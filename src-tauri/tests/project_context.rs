@@ -1,7 +1,6 @@
 //! A project's context file commands (ADR 0135) against a stub dashboard with an in-memory disk, whose routes answer as
 //! `hermes_cli/web_routers/files.py` does at `bf0203a`: managed files' download, upload-stream, mkdir and delete, and
-//! the agent fs routes' read-text, write-text and git-root. One disk stands for both machines; the requests show which
-//! routes each command used.
+//! the agent fs routes' read-text, write-text and git-root.
 
 use axum::extract::{Query, RawQuery, State};
 use axum::http::StatusCode;
@@ -20,9 +19,7 @@ use url::Url;
 struct Disk {
     files: Mutex<BTreeMap<String, Vec<u8>>>,
     dirs: Mutex<Vec<String>>,
-    /// Every request that changes the disk, as `route path`.
     writes: Mutex<Vec<String>>,
-    /// Every read, as `route path query`.
     reads: Mutex<Vec<String>>,
 }
 
@@ -191,7 +188,6 @@ fn scratch(test: &str) -> PathBuf {
     dir
 }
 
-/// A local file with `bytes` in it, attached as a drop would attach it.
 fn attached(attachable: &Attachable, dir: &std::path::Path, name: &str, bytes: &[u8]) -> String {
     let path = dir.join(name);
     std::fs::write(&path, bytes).unwrap();

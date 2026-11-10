@@ -271,17 +271,13 @@ function GitNote({ path, facts }: { path: string; facts?: FolderFacts }) {
 /** One of the project's chats, as the project page lists it. */
 export type ProjectChat = { id: string; title: string; updatedAt?: number; unread?: boolean };
 
-/** A part of the project's settings, opened from the ⋯ menu. `defaults` is also where the instructions are edited. */
 type Section = "folders" | "defaults" | "delete";
 
 
 /**
- * A project's own page, over the chat pane like Settings, laid out as Claude's project page is (ADR 0135). The main
- * column starts a new chat in the project and lists its chats. Beside it, or below it where there's no room, are the
- * project's instructions and its context files. The ⋯ menu holds the rest: its folders on the server, its defaults for
- * new chats, Rename and Delete. A folder is checked on the server before it is added, and each folder shows the
- * connection it is on and its path there. The only folder this app ever makes is the one for a project's context
- * files (ProjectContext.tsx); no repository or worktree is made.
+ * A project's own page, over the chat pane like Settings (ADR 0135). A folder is checked on the server before it is
+ * added. The only folder this app ever makes is the one for a project's context files (ProjectContext.tsx); no
+ * repository or worktree is made.
  */
 export function ProjectScreen({
   project,
@@ -342,7 +338,6 @@ export function ProjectScreen({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [facts, setFacts] = useState<Record<string, FolderFacts>>({});
   const [menuOpen, setMenuOpen] = useState(false);
-  // The settings section shown, and what in it takes focus as it opens.
   const [open, setOpen] = useState<{ section: Section; focus: "heading" | "instructions" }>();
   const moreBox = useRef<HTMLDivElement>(null);
   const more = useRef<HTMLButtonElement>(null);
@@ -616,7 +611,6 @@ export function ProjectScreen({
             </section>
           )}
 
-          {/* Kept while closed, so edits that weren't saved are still there when it opens again. */}
           <div data-section="defaults" hidden={open?.section !== "defaults"}>
             <DefaultsSection {...defaults} folders={project.folders} profile={profile} connection={connection} />
           </div>

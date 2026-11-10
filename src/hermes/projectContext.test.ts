@@ -5,6 +5,7 @@ import {
   DEFAULT_LIMIT_TOKENS,
   MAX_FILE_BYTES,
   capacityOf,
+  tokensOfText,
   contextFile,
   defaultFolder,
   folderSlug,
@@ -69,6 +70,11 @@ describe("what counts as a context file", () => {
 });
 
 describe("capacity", () => {
+  it("counts a file's text as Hermes estimates it: a token per CJK character, else one per four UTF-8 bytes", () => {
+    expect(tokensOfText("abcdefgh")).toBe(2);
+    expect(tokensOfText("日本語のテキスト")).toBe(8);
+    expect(tokensOfText("привет")).toBe(3);
+  });
   it("is half the default model's context window, and full mode up to exactly that", () => {
     const at = (tokens: number) => capacityOf([{ ...file("a.md", "x"), tokens }], 200_000);
     expect(at(1_000)).toEqual({ used: 1_000, limit: 100_000, mode: "full" });

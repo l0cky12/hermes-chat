@@ -1544,7 +1544,6 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .project-screen .settings-row > .btn { flex: none; white-space: nowrap; }
 .project-screen .settings-row > p { margin: 0; }
 
-/* ---------- project page (Projects.tsx, ProjectContext.tsx, ADR 0135); pctx-: its Context card ---------- */
 .project-head { display: flex; align-items: center; gap: 10px; }
 .project-head .project-title, .project-head .project-rename { flex: 1; min-width: 0; }
 .project-title > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1555,7 +1554,6 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .project-settings[hidden] { display: none; }
 .project-settings section { border-top: 0; padding: 18px 0 20px; }
 .project-settings-close { position: absolute; top: 10px; right: 10px; z-index: 1; }
-/* The main column, with the instructions and context beside it; below it once the page is too narrow for both. */
 .project-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 28px; align-items: start; margin-top: 18px; }
 .project-main, .project-side { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
 @container settings (max-width: 820px) {

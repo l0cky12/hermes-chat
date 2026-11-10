@@ -1065,24 +1065,6 @@ async fn fs_save_text(
     transfers.run(id, epoch, work).await
 }
 
-/// A transfer's id as the webview names it: a number, or the same number as a string (the project context commands).
-struct TransferId(u64);
-
-impl<'de> Deserialize<'de> for TransferId {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Raw {
-            Number(u64),
-            Text(String),
-        }
-        match Raw::deserialize(d)? {
-            Raw::Number(n) => Ok(TransferId(n)),
-            Raw::Text(s) => s.parse().map(TransferId).map_err(|_| serde::de::Error::custom("a transfer id is a whole number")),
-        }
-    }
-}
-
 /// Opens the native Open dialog for files to add to a project's context (ADR 0135). The picked files become attachable
 /// (ADR 0129), so `context_upload` may send them. `[]`: the owner cancelled.
 #[tauri::command]
@@ -1100,7 +1082,7 @@ async fn context_local_files(attachable: State<'_, Attachable>, paths: Vec<Strin
 
 /// Uploads the attached file `local` (up to 30 MB) to `server_path` in a project's context folder (ADR 0135), as
 /// transfer `id`, so `files_cancel` stops it and a closed or replaced connection never sends it (ADR 0023).
-/// `ssh_profile`: the profile's tools run over SSH, so only UTF-8 text up to 8 MiB goes, through `write-text`.
+/// `ssh_profile`: the profile's tools run over SSH, so only UTF-8 text up to 8 MiB goes.
 /// `overwrite` false: rejects with `exists` when a file is already there.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -1108,7 +1090,7 @@ async fn context_upload(
     app: tauri::AppHandle,
     transfers: State<'_, Transfers>,
     attachable: State<'_, Attachable>,
-    id: TransferId,
+    id: u64,
     local: String,
     server_path: String,
     overwrite: bool,
@@ -1125,11 +1107,11 @@ async fn context_upload(
         };
         project_context::upload(&dashboard, file, &to, overwrite, ssh_profile.as_deref(), report).await
     };
-    transfers.run(id.0, epoch, work).await
+    transfers.run(id, epoch, work).await
 }
 
-/// Writes `text` as `server_path` in a project's context folder: Add text content (ADR 0135). `overwrite` false:
-/// rejects with `exists` when a file is already there.
+/// Writes `text` as `server_path` in a project's context folder (ADR 0135). `overwrite` false: rejects with `exists`
+/// when a file is already there.
 #[tauri::command]
 async fn context_write_text(state: State<'_, AppState>, server_path: String, text: String, overwrite: bool, ssh_profile: Option<String>) -> Result<(), String> {
     let to = project_context::ContextPath::parse(&server_path)?;

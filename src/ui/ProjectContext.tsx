@@ -1,6 +1,5 @@
 // The project page's Context card (GLOSSARY.md "Context file", ADR 0135): the files in the project's context folder on
-// the server, how much of the model's room they take, and the ways to add, replace, preview and remove them. The folder
-// is the list, so the card reads it again after every change and shows only what the server has.
+// the server, how much of the model's room they take, and the ways to add, replace, preview and remove them.
 import { useEffect, useId, useRef, useState, type DragEvent, type ReactNode, type RefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -34,7 +33,6 @@ export type CapacityModel = { name?: string; window?: number };
 const SSH_NOTE =
   "This profile's tools run over SSH, so its files are on that machine. Hermes can only write text files there, up to 8 MB, into a context folder that is already there, and can't remove a file or make a folder yet.";
 
-/** What 100% stands for, in words. */
 function limitNote(c: Capacity, model: CapacityModel): string {
   const tokens = `${c.limit.toLocaleString("en-US")} tokens`;
   if (model.window) return `100% is half of ${model.name ?? "the default model"}'s context window: ${tokens}.`;
@@ -42,7 +40,6 @@ function limitNote(c: Capacity, model: CapacityModel): string {
   return `100% is ${tokens}, as this project has no default model.`;
 }
 
-/** A dialog over the page: Escape and a click outside it close it, and Tab stays inside. */
 function Dialog({ label, className = "", onClose, children, returnTo }: { label: string; className?: string; onClose: () => void; children: ReactNode; returnTo?: RefObject<HTMLElement | null> }) {
   const box = useRef<HTMLDivElement>(null);
   const keys = useModal(box, returnTo);
@@ -68,13 +65,11 @@ function Dialog({ label, className = "", onClose, children, returnTo }: { label:
   );
 }
 
-/** What the card is doing besides showing the files: one thing at a time. */
 type Doing =
   | { kind: "idle" }
   | { kind: "busy"; what: string }
   | { kind: "menu" }
   | { kind: "text"; title: string; text: string; taken?: string; saving: boolean; error?: string }
-  /** Files whose names are taken, asked about one at a time; `dir` is where they go. */
   | { kind: "replace"; dir: string; writes: ContextWrites; files: LocalFile[] }
   | { kind: "remove"; dir: string; file: ContextFile }
   | { kind: "preview"; writes: ContextWrites; preview: Preview };
@@ -111,7 +106,6 @@ export function ContextCard({
   const addButton = useRef<HTMLButtonElement>(null);
   const titleId = useId();
 
-  // What an answer must still be for when it arrives: this connection, profile, project and main folder.
   const key = [connection ?? "", profile, project.id, mainFolder(project) ?? ""].join("\n");
   const shown = useRef(key);
   shown.current = key;
@@ -130,7 +124,6 @@ export function ContextCard({
     setDoing({ kind: "idle" });
     if (connected) void refreshRef.current();
   }, [key, connected]);
-  // The capacity follows the default model, whose window a chat may report while the page is open.
   useEffect(() => {
     if (connected && state.kind === "ready") void refreshRef.current();
   }, [model.window]);
@@ -140,7 +133,6 @@ export function ContextCard({
   const target: AddTarget | undefined = state.kind === "ready" || state.kind === "noFolder" ? state : undefined;
   const cantAdd = !connected ? "Connect to Hermes to add context files." : doing.kind === "busy" ? doing.what : undefined;
 
-  /** Runs a change for the card as it is now, and shows what came of it only if the card is still on the same project. */
   const change = async (what: string, run: (note: (text: string) => void) => Promise<Doing | void>) => {
     const asked = key;
     const said: string[] = [];
@@ -171,7 +163,6 @@ export function ContextCard({
         try {
           await files.upload(profile, dir, to.writes, f, false);
         } catch (e) {
-          // Something put a file of that name there since the folder was listed: the owner is asked, as for the others.
           if (e instanceof ContextExistsError) taken.push(f);
           else note(messageOf(e));
         }
@@ -253,8 +244,7 @@ export function ContextCard({
     return () => void unlisten.then((stop) => stop());
   }, [files]);
 
-  // A file dropped as HTML5 has no path of its own: Rust stages its bytes, as it does for a chat's attachments. One
-  // over the limit is refused before its bytes are read into the window.
+  // A file dropped as HTML5 has no path of its own, so Rust stages its bytes.
   const dropped = (e: DragEvent) => {
     if (!e.dataTransfer?.types.includes("Files")) return;
     e.preventDefault();

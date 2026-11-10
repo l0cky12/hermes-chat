@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 // A project's context files in the app (ADR 0135): what Hermes is sent when a chat in the project starts and when one
-// already open sends its next message, and the project page's Context card. The fake Hermes's `requests` are what
-// Hermes received; its disks are what the server has (fakeProjectContext.ts).
+// already open sends its next message, and the project page's Context card.
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -9,10 +8,10 @@ import { FakeHermes, row, type FakeProject } from "../hermes/fakeHermes";
 import { connect, type Hermes } from "../hermes/transport";
 import { projectScope } from "../hermes/projectLinks";
 import { savedDefaults } from "../hermes/projectDefaults";
+import { DEFAULT_LIMIT_TOKENS } from "../hermes/projectContext";
 import { Main } from "../App";
 
 type DropEvent = { payload: { type: "drop"; paths: string[]; position: { x: number; y: number } } };
-/** Everything listening for Tauri's native file drop, so a test can drop files on the window. */
 const dropListeners = vi.hoisted(() => new Set<(e: DropEvent) => void>());
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({
@@ -52,7 +51,6 @@ const project = (id: string, name: string, folders: string[] = []): FakeProject 
   folders: folders.map((path, i) => ({ path, label: null, is_primary: i === 0, added_at: 1 })),
 });
 
-/** A project whose main folder is /srv/budget, with one context file, and two chats outside it. */
 function server() {
   const s = new FakeHermes();
   s.sessions = [row("backup", 1, { pinned: true, title: "Nightly backup" }), row("nas", 2, { pinned: true, title: "NAS disks" })];
@@ -71,7 +69,6 @@ async function launch(s: FakeHermes) {
   await settle();
   const user = userEvent.setup();
   const prompts = () => s.requests.filter((r) => r.method === "prompt.submit").map((r) => String(r.params.text));
-  /** Types a message and waits until Hermes has it. */
   const send = async (text: string) => {
     const before = prompts().length;
     await user.type(screen.getByPlaceholderText("Message Hermes"), `${text}{Enter}`);
@@ -79,7 +76,6 @@ async function launch(s: FakeHermes) {
     await settle();
     return prompts()[before];
   };
-  /** Hermes answers the turn under way and ends it, so the next message is a new turn. */
   const reply = async () => {
     const chat = hermes.getSnapshot().chats.find((c) => c.running && c.runtimeId)!;
     act(() => {
@@ -93,7 +89,6 @@ async function launch(s: FakeHermes) {
     await user.click(await screen.findByRole("option", { name: new RegExp(name) }));
   };
   const seeded = () => s.requests.filter((r) => r.method === "session.create").map((r) => r.params.messages as { role: string; content: string; display_kind: string }[] | undefined);
-  /** Opens the page of the project the list shows. */
   const openPage = async (name = "Budget Tracker") => {
     await pick(name);
     await user.click(screen.getByTitle(`Project settings for ${name}`));
@@ -108,7 +103,6 @@ async function launch(s: FakeHermes) {
   return { hermes, user, send, reply, pick, prompts, seeded, settle, openPage, add };
 }
 
-/** The names on the Context card's file cards. */
 const cards = () => [...document.querySelectorAll(".pctx-file-name")].map((e) => e.textContent);
 
 const START = [
@@ -143,7 +137,6 @@ describe("what Hermes is sent for a chat in a project with context files", () =>
 
     s.managedFiles.nodes[`${DIR}/plan.md`] = { text: "Save more." };
     expect(await app.send("And the plan?")).toBe(`And the plan?${MARK}${CHANGED}\n\nAdded: ${DIR}/plan.md (10 B, MD)\nSave more.`);
-    // The owner sees their own words, and nothing of what rode below them.
     expect(screen.getByText("And the plan?")).toBeTruthy();
     expect(document.body.textContent).not.toContain("Attached Context");
     await app.reply();
@@ -165,8 +158,7 @@ describe("what Hermes is sent for a chat in a project with context files", () =>
 
   it("past 100% sends the files' paths instead of their text, and their text again once they fit", async () => {
     const s = server();
-    // 400,004 bytes are 100,001 tokens: just over the 100,000 a project without a default model may use.
-    s.managedFiles.nodes[`${DIR}/big.txt`] = { text: "x".repeat(400_004) };
+    s.managedFiles.nodes[`${DIR}/big.txt`] = { text: "x".repeat(DEFAULT_LIMIT_TOKENS * 4 + 4) };
     const app = await launch(s);
     await app.pick("Budget Tracker");
     await app.send("Hello");
@@ -179,15 +171,13 @@ describe("what Hermes is sent for a chat in a project with context files", () =>
     expect(await app.send("And now?")).toBe(`And now?${MARK}${CHANGED}\n\nAdded: ${DIR}/notes.md (13 B, MD)\nRent is 900.\n\nRemoved: ${DIR}/big.txt`);
     await app.reply();
 
-    // Over again: an open chat gets the whole list of paths once.
-    s.managedFiles.nodes[`${DIR}/big.txt`] = { text: "y".repeat(400_004) };
+    s.managedFiles.nodes[`${DIR}/big.txt`] = { text: "y".repeat(DEFAULT_LIMIT_TOKENS * 4 + 4) };
     expect(await app.send("Again?")).toBe(`Again?${MARK}${LIST}\n- ${DIR}/big.txt (390.6 KB, TXT)\n- ${DIR}/notes.md (13 B, MD)`);
   });
 
   it("follows membership: a chat put in the project gets every file, and one taken out gets no more", async () => {
     const s = server();
     const app = await launch(s);
-    // A chat with nothing in it would be named by its first message.
     s.transcripts.nas = [
       { role: "user", text: "Which disks?" },
       { role: "assistant", text: "Two of them." },
@@ -253,7 +243,6 @@ describe("the project page", () => {
       { role: "user", display_kind: "hidden", content: expect.stringContaining("Use metric units.") },
       { role: "user", display_kind: "hidden", content: START },
     ]);
-    // The chat is on screen, in the project, and the page's composer is empty for the next one.
     expect(document.querySelector(".chat-title span")?.textContent).toBe("What's the rent?");
     await app.user.click(screen.getByTitle("Project settings for Budget Tracker"));
     expect(within(screen.getByRole("region", { name: "Chats" })).getByRole("button", { name: /What's the rent\?/ })).toBeTruthy();
@@ -285,7 +274,6 @@ describe("the project page", () => {
     expect(screen.queryByRole("menu")).toBeNull();
     expect(document.activeElement).toBe(more);
 
-    // Tab follows the page: the composer, the chats, then the instructions and the context.
     const order = [
       screen.getByRole("textbox", { name: "Message to start a new chat in Budget Tracker" }),
       screen.getByRole("button", { name: "Edit instructions" }),

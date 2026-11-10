@@ -50,7 +50,6 @@ describe("reading a project's context folder", () => {
     expect(first.capacity).toEqual({ used: 4, limit: 100_000, mode: "full" });
     expect(first.writes).toBe("all");
 
-    // Copied in outside the app: the next read has it.
     server.managedFiles.nodes[`${DIR}/plan.txt`] = { text: "Save more." };
     expect(shown(await files.read("default", budget)).map(([name]) => name)).toEqual(["logo.png", "notes.md", "plan.txt"]);
   });
@@ -105,7 +104,6 @@ describe("reading a project's context folder", () => {
     expect(ready(await files.read("default", budget, { git: true })).gitNote).toBe(true);
     expect(ready(await files.read("default", budget, { git: true })).gitNote).toBe(true);
     expect([...server.context.excluded]).toEqual(["/srv/budget"]);
-    // A read made for a send doesn't touch the repository.
     server.context.excluded.clear();
     await files.read("default", budget);
     expect(server.context.excluded.size).toBe(0);

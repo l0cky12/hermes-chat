@@ -48,7 +48,6 @@ function server() {
   s.projects.default = [project("p_budget", "Budget Tracker", ["/srv/budget"])];
   s.serverDirs = new Set(["/srv", "/srv/app", "/srv/app-feature", "/srv/budget"]);
   s.serverFiles = { "/srv/readme.md": "" };
-  // The dashboard's own file routes see the same folders (the project page lists its main folder's context files).
   for (const dir of s.serverDirs) s.managedFiles.nodes[dir] = { dir: true };
   s.repos = [[{ path: "/srv/app", branch: "main" }, { path: "/srv/app-feature", branch: "feature/login" }]];
   return s;
@@ -76,7 +75,6 @@ async function pick(user: ReturnType<typeof userEvent.setup>, name: string) {
 }
 
 type Part = "Folders" | "Defaults for new chats" | "Rename" | "Delete project";
-/** Opens a part of the project's settings from the project page's ⋯ menu. */
 async function openPart(user: ReturnType<typeof userEvent.setup>, part: Part) {
   await user.click(screen.getByRole("button", { name: "Project settings" }));
   await user.click(screen.getByRole("menuitem", { name: part }));

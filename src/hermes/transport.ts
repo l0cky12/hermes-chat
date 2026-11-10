@@ -853,10 +853,7 @@ export class Hermes {
     cancel: (id) => this.pipe?.cancelTransfer(id) ?? Promise.resolve(),
   });
 
-  /**
-   * A project's context files on the server (projectContextFiles.ts, ADR 0135). Reads go while connected; a change
-   * goes through Rust's own commands, and only on a server that has the routes it needs.
-   */
+  /** A project's context files on the server (projectContextFiles.ts, ADR 0135). */
   readonly contextFiles: ProjectContextFiles = projectContextFiles({
     get: (pathAndQuery, maxBytes) => this.restGet(pathAndQuery, maxBytes),
     pipe: () => (this.closing || this.snapshot.status !== "connected" ? undefined : this.pipe?.context),
@@ -869,8 +866,8 @@ export class Hermes {
   });
   /**
    * What a message to `chatId` carries below the owner's words: what its projects' context files are now, for a chat
-   * that hasn't been told (projectContextFiles.ts `chatContext`). The app sets it, since which chats are in a project
-   * is kept outside this transport. Asked just before each message goes; `accepted` is called once Hermes took it.
+   * that hasn't been told (projectContextFiles.ts `chatContext`). Asked just before each message goes; `accepted` is
+   * called once Hermes took it.
    */
   sendContext?: (profile: string, chatId: string) => Promise<ChatContext | undefined> | undefined;
 
@@ -2959,8 +2956,6 @@ export class Hermes {
       // A compaction Hermes hasn't answered yet goes first: the message mustn't land while it rewrites the context.
       const submitting = this.resume(chatId).then((runtimeId) => {
         const go = async () => {
-          // Read as the message goes, so the chat hears of a file added a moment ago. A read that fails holds nothing up.
-          // A chat in no project is asked nothing, and its message goes without waiting a turn.
           const asking = this.sendContext?.(profile, chatId);
           if (asking) told = await asking.catch(() => undefined);
           if (!skill) return this.submit(runtimeId, text, attachments, goingOut, !!queued, told?.blocks);
@@ -4015,8 +4010,6 @@ export class Hermes {
    * desktop app does. If anything fails the message isn't sent, and images already queued are taken back so they
    * don't ride along with the next one. `goingOut` hears the prompt just before it goes. `hold`: should a turn still be
    * running there, Hermes holds the message until it ends, instead of redirecting or interrupting it (research doc).
-   * `context`: what the chat is told of its projects' context files, below the prompt where no Hermes client shows it
-   * (ADR 0135). It isn't part of what `goingOut` hears: the history is matched by the owner's words.
    */
   private async submit(runtimeId: string, text: string, attachments: Attachment[], goingOut: (prompt: string) => void, hold = false, context: readonly string[] = []) {
     const queued: string[] = [];
@@ -5161,7 +5154,6 @@ function arrived(row: OutgoingItem, readBack: ReadBack[]): boolean {
     (m) =>
       m.role === "user" &&
       (sent.after === undefined || m.rowId === undefined || m.rowId > sent.after) &&
-      // Hermes stores a message with what it attached below it, which isn't part of what went out as the prompt.
       (typedText(m.text).trim() === sent.prompt.trim() || (!!attachments?.length && !!words && m.text.includes(words))),
   );
 }
@@ -5209,7 +5201,6 @@ function historyItems(messages: TranscriptMessage[]): Item[] {
     if (!m.text?.trim()) return thought;
     const at = storedAt(m.timestamp);
     const rowId = Number.isSafeInteger(m.row_id) ? (m.row_id as number) : undefined;
-    // Below the owner's words Hermes keeps what it attached to them, a project's context files among it (ADR 0135).
     if (m.role === "user")
       return [{ kind: "user", id, text: typedText(m.text), ...(at && { at }), ...(rowId !== undefined && { rowId }), ...(m.display_kind === "steer" && { steer: true }) }];
     if (m.role === "assistant") return [...thought, { kind: "assistant", id, text: m.text, ...(at && { at }), ...(rowId !== undefined && { rowId }) }];

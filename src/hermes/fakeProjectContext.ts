@@ -1,7 +1,4 @@
-// The Rust commands for a project's context files (src-tauri `context_*`, ADR 0135), over a fake Hermes's disks: the
-// dashboard machine's (`FakeServerFiles`, as `POST /api/files/upload-stream`, `mkdir` and `DELETE /api/files` change
-// it) and, for a profile whose tools run over SSH, the agent's (`POST /api/fs/write-text`). They refuse what Rust
-// refuses: a file the app wasn't given, one over 30 MB, a path that isn't a plain name inside a `context` folder.
+// The Rust commands for a project's context files (src-tauri `context_*`, ADR 0135), over a fake Hermes's disks.
 import type { FakeFile, FakeWorktree } from "./fakeHermes";
 import type { FakeServerFiles } from "./fakeServerFiles";
 import type { LocalFile as PickedFile } from "./pipe";
@@ -33,7 +30,6 @@ export class FakeProjectContext {
   shortBy?: number;
   /** Every file written, in order: where, and whether it replaced one. */
   readonly writes: { path: string; overwrite: boolean; ssh?: string }[] = [];
-  /** Every text read, in order, by server path. */
   readonly reads: string[] = [];
   readonly removed: string[] = [];
   readonly made: string[] = [];
@@ -43,7 +39,6 @@ export class FakeProjectContext {
 
   constructor(private disks: FakeContextDisks) {}
 
-  /** A local file the app was given, or why it can't be read, as Rust answers for one it wasn't. */
   private stat(path: string): PickedFile {
     const f = this.disks.local()[path];
     if (f === undefined || (typeof f === "object" && "dir" in f)) return { path, name: basename(path), error: "it isn't a file the app was given" };
@@ -93,7 +88,6 @@ export class FakeProjectContext {
       mkdir: async (path) => {
         if (basename(path) !== "context") throw new Error(`${path} isn't a project's context folder.`);
         this.disks.managed.nodes[path] ??= { dir: true };
-        // The same disk the agent's routes list, on a profile whose tools run on the dashboard's machine.
         this.disks.agentDirs().add(path).add(dirname(path));
         this.made.push(path);
         return path;

@@ -12,20 +12,14 @@ use std::io::Read as _;
 use std::time::Duration;
 
 const MIB: u64 = 1024 * 1024;
-/// The most one context file may hold, as in Claude Projects.
 pub const CONTEXT_FILE_MAX_BYTES: u64 = 30 * MIB;
-/// The most text taken from one file. Past it the file is listed by path: 8 MiB is about 2M tokens, more than half of
-/// any model's window.
 const EXTRACTED_MAX_BYTES: usize = 8 * MIB as usize;
-/// The most of a `.docx`'s `word/document.xml` inflated, so a zip bomb can't fill memory.
 const DOCX_XML_MAX_BYTES: u64 = 64 * MIB;
-/// A PDF that takes longer is listed by path. The blocking thread can't be stopped, so it finishes on its own.
+/// The blocking thread can't be stopped, so it finishes on its own.
 const EXTRACT_TIME_LIMIT: Duration = Duration::from_secs(30);
 /// `read-text` sends at most 512 KiB of text, which JSON escaping can make several times longer.
 const READ_TEXT_ANSWER_MAX_BYTES: u64 = 4 * MIB;
-/// `.git`, `commondir`, `HEAD`, `info/exclude` and `.gitignore` files are read up to this.
 const GIT_FILE_MAX_BYTES: u64 = MIB;
-/// An answer to mkdir or delete: a short JSON object.
 const ANSWER_MAX_BYTES: u64 = 64 * 1024;
 
 /// What a write is refused with when a file is already at its path and `overwrite` is false.
@@ -88,7 +82,6 @@ impl ContextPath {
     }
 }
 
-/// `path`'s segments, if it is a full server path without empty, `.` or `..` segments or control characters.
 fn segments(path: &str) -> Result<Vec<&str>, String> {
     let Some(rest) = path.strip_prefix('/') else {
         return Err(format!("{path} isn't a full path on the server."));
@@ -132,8 +125,6 @@ impl AttachedFile {
     }
 }
 
-/// Where a read or write goes: the dashboard's managed files, or, for a profile whose tools run over SSH, that machine
-/// through the agent fs routes.
 #[derive(Clone, Copy)]
 enum Machine<'a> {
     Dashboard,
@@ -146,12 +137,10 @@ impl<'a> Machine<'a> {
     }
 }
 
-/// What reading a server path found.
 enum Read {
     Bytes(Vec<u8>),
     Missing,
     NotAFile,
-    /// `read-text` judged it binary, or sent only its start.
     NotText,
 }
 
@@ -174,8 +163,6 @@ fn query(pairs: &[(&str, &str)]) -> String {
     q.finish()
 }
 
-/// Reads `path`: managed files through `GET api/files/download` (the exact bytes, up to `max_bytes`), the SSH machine
-/// through `GET api/fs/read-text` (the first 512 KiB as text). Both answer 404 for a missing path and 400 for a folder.
 async fn read(dashboard: &Dashboard, on: Machine<'_>, path: &str, max_bytes: u64) -> Result<Read, TransportError> {
     let answer = match on {
         Machine::Dashboard => dashboard.send_limited(Method::GET, "api/files/download", &query(&[("path", path)]), None, max_bytes).await,
@@ -207,9 +194,8 @@ fn written(e: TransportError) -> String {
     }
 }
 
-/// Uploads an attached file to `to`. Managed files: `Dashboard::upload` (ADR 0023). An SSH profile: only UTF-8 text up
-/// to 8 MiB, through `POST api/fs/write-text`, else `SSH_BINARY_REFUSED`. `overwrite` false: `EXISTS` when a file is
-/// already there.
+/// Uploads an attached file to `to` (ADR 0023). On an SSH profile only UTF-8 text up to 8 MiB goes, else
+/// `SSH_BINARY_REFUSED`. `overwrite` false: `EXISTS` when a file is already there.
 pub async fn upload(
     dashboard: &Dashboard,
     file: AttachedFile,
@@ -236,8 +222,8 @@ pub async fn upload(
     Ok(())
 }
 
-/// Writes `text` as the file `to` (Add text content). Managed files: the upload route, up to `CONTEXT_FILE_MAX_BYTES`.
-/// An SSH profile: `POST api/fs/write-text`, up to 8 MiB. `overwrite` false: `EXISTS` when a file is already there.
+/// Writes `text` as the file `to`, up to `CONTEXT_FILE_MAX_BYTES`, or 8 MiB on an SSH profile. `overwrite` false:
+/// `EXISTS` when a file is already there.
 pub async fn write_text(dashboard: &Dashboard, to: &ContextPath, text: String, overwrite: bool, ssh_profile: Option<&str>) -> Result<(), String> {
     match ssh_profile {
         Some(profile) => write_over_ssh(dashboard, profile, to, &text, overwrite).await,
@@ -260,7 +246,7 @@ async fn write_over_ssh(dashboard: &Dashboard, profile: &str, to: &ContextPath, 
     dashboard.write_agent_text(profile, to.as_str(), text, None).await.map(drop).map_err(written)
 }
 
-/// Creates `dir` and its missing parents through `POST api/files/mkdir`. Returns the path Hermes answers with.
+/// Creates `dir` and its missing parents. Returns the path Hermes answers with.
 pub async fn mkdir(dashboard: &Dashboard, dir: &ContextDir) -> Result<String, String> {
     #[derive(Deserialize)]
     struct Made {
@@ -271,7 +257,7 @@ pub async fn mkdir(dashboard: &Dashboard, dir: &ContextDir) -> Result<String, St
     serde_json::from_slice::<Made>(&answer).map(|m| m.path).map_err(|_| "Hermes's answer to creating the context folder didn't name it.".into())
 }
 
-/// Deletes the file `file` through `DELETE api/files`, never a folder's contents (`recursive` false).
+/// Deletes the file `file`, never a folder's contents.
 pub async fn remove(dashboard: &Dashboard, file: &ContextPath) -> Result<(), String> {
     let body = json!({ "path": file.as_str(), "recursive": false });
     dashboard.send_limited(Method::DELETE, "api/files", "", Some(&body), ANSWER_MAX_BYTES).await.map(drop).map_err(|e| e.to_string())
@@ -312,7 +298,6 @@ pub fn extract_text(name: &str, bytes: &[u8]) -> Option<String> {
     (text.len() <= EXTRACTED_MAX_BYTES).then_some(text)
 }
 
-/// Plain text: valid UTF-8 with no NUL in its first 4 KiB, without a byte order mark.
 fn plain_text(bytes: &[u8]) -> Option<&str> {
     if bytes[..bytes.len().min(4096)].contains(&0) {
         return None;
@@ -331,8 +316,6 @@ fn docx_text(bytes: &[u8]) -> Option<String> {
     Some(document_xml_text(&xml))
 }
 
-/// The text of a `.docx`'s `word/document.xml`: the runs' text (`w:t`), a line per paragraph, with its tabs and breaks.
-/// Field codes (`w:instrText`) and deleted text (`w:delText`) are left out.
 fn document_xml_text(xml: &str) -> String {
     let mut out = String::new();
     let (mut in_text, mut in_tab_stops) = (false, false);
@@ -420,7 +403,6 @@ pub enum GitExclude {
     Already,
 }
 
-/// `<git common dir>/info/exclude`, the only file `git_exclude` writes. It can only be made from a common dir.
 struct ExcludeFile(String);
 
 impl ExcludeFile {
@@ -431,8 +413,7 @@ impl ExcludeFile {
 
 /// Keeps `<main_folder>/context/` out of the Git repository the main folder is in, if any, by appending an anchored line
 /// to the repository's `info/exclude`, unless `info/exclude`, the root's `.gitignore` or the main folder's already
-/// ignores it. A worktree's `.git` file is followed through `gitdir:` and `commondir` to the repository's common dir.
-/// Reads and the one write go to managed files, or to the SSH machine for `ssh_profile`. Never writes a `.gitignore`.
+/// ignores it. Never writes a `.gitignore`.
 pub async fn git_exclude(dashboard: &Dashboard, main_folder: &str, ssh_profile: Option<&str>) -> Result<GitExclude, String> {
     #[derive(Deserialize)]
     struct GitRoot {
@@ -515,7 +496,6 @@ pub fn exclude_with_context(rel: &str, exclude: &str, root_ignore: &str, main_ig
     Some(text)
 }
 
-/// `path` as a gitignore pattern matches it literally: its glob characters escaped.
 fn escape_pattern(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
     for c in path.chars() {
@@ -527,7 +507,6 @@ fn escape_pattern(path: &str) -> String {
     out
 }
 
-/// `main` under `root`, without a leading slash: `""` when it is the root, `None` when it isn't under it.
 fn relative(root: &str, main: &str) -> Option<String> {
     if main == root {
         return Some(String::new());
@@ -535,12 +514,10 @@ fn relative(root: &str, main: &str) -> Option<String> {
     main.strip_prefix(root.trim_end_matches('/'))?.strip_prefix('/').map(str::to_owned)
 }
 
-/// The folder a `.git` file's `gitdir:` line names, from `root`, the folder that holds the `.git` file.
 fn gitdir_of(root: &str, dot_git: &str) -> Option<String> {
     join(root, dot_git.lines().find_map(|l| l.strip_prefix("gitdir:"))?.trim())
 }
 
-/// `rel` from `base`, or `rel` itself when it is a full path, normalized.
 fn join(base: &str, rel: &str) -> Option<String> {
     match rel {
         "" => None,
@@ -549,8 +526,6 @@ fn join(base: &str, rel: &str) -> Option<String> {
     }
 }
 
-/// A full path with `.` and `..` segments resolved and repeated slashes collapsed, or `None` if it isn't a full path or
-/// goes above `/`.
 fn normalize(path: &str) -> Option<String> {
     let rest = path.strip_prefix('/')?;
     let mut out: Vec<&str> = Vec::new();
@@ -639,8 +614,6 @@ mod tests {
 
     #[test]
     fn a_line_that_ignores_another_folder_does_not_count() {
-        // `/context/` in the root's files is the root's context/, not app's; `app/context` in app's .gitignore is
-        // app/app/context.
         for (exclude, root, main) in
             [("/context/", "", ""), ("", "/context", ""), ("", "", "app/context/"), ("# context/", "!context/", ""), ("other/context/", "", "")]
         {

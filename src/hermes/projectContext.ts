@@ -1,7 +1,5 @@
 // Context files of a project (GLOSSARY.md "Context file", ADR 0135): the files in `<main folder>/context` on the
-// server, which every chat in the project gets. This module is the rules, with no I/O: what counts as a context file,
-// how much of the model's room the files take, what a chat is told about them, and what each chat has been told so far
-// (the ledger), so the same text never goes to a chat twice. projectContextFiles.ts reads and writes the folder.
+// server, which every chat in the project gets.
 import { previewSupport, type RemoteEntry } from "./remoteFiles";
 
 /** How a file's text is had: as it is, by extraction (`pdf`, `docx`), or not at all (`binary`). */
@@ -41,13 +39,10 @@ export type ContextState =
 /** A file on this computer to add: `path` is known to Rust only (src-tauri `context_pick`, `context_local_files`). */
 export type LocalFile = { path: string; name: string; size: number };
 
-/** The most one context file may hold, as in Claude's projects. */
 export const MAX_FILE_BYTES = 30 * 1024 * 1024;
 /** The most Hermes writes where a profile's tools run (`POST /api/fs/write-text`). */
 export const SSH_MAX_BYTES = 8 * 1024 * 1024;
-/** A project's capacity when its default model's context window isn't known. */
 export const DEFAULT_LIMIT_TOKENS = 100_000;
-/** What Rust answers when a file can't go to an SSH profile (src-tauri `context_upload`). */
 export const SSH_REFUSED = "can't add this file to a project on an SSH profile yet";
 
 export const CONTEXT_DIR = "context";
@@ -74,10 +69,15 @@ export function sizeText(bytes: number): string {
   return `${n.toFixed(1)} ${units[unit]}`;
 }
 
-/** Hermes's own estimate: a token for every four UTF-8 bytes (`agent/model_metadata.py`). */
 export const tokensOf = (bytes: number) => Math.ceil(bytes / 4);
 const utf8 = new TextEncoder();
 export const bytesOf = (text: string) => utf8.encode(text).length;
+const CJK_DENSE = /[\u1100-\u11ff\u2e80-\u9fff\ua960-\ua97f\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]/g;
+/** Hermes's `estimate_tokens_rough` (`agent/model_metadata.py`): a token per CJK, Hangul or Kana character, else a token per four UTF-8 bytes. */
+export function tokensOfText(text: string): number {
+  const rest = text.replace(CJK_DENSE, "");
+  return text.length - rest.length + tokensOf(bytesOf(rest));
+}
 
 /**
  * A file's kind from its name and the type the server reports, before anything is read. Undefined: the name doesn't
@@ -119,7 +119,7 @@ export function contextFile(f: ListedFile, text?: string | null): ContextFile {
   const base = { name: f.name, path: f.path, version: f.version, kind, ...(size !== undefined && { size }), ...(f.mime && { mime: f.mime }) };
   if (kind === "binary" || text === null) return base;
   if (kind === "text") return size === undefined ? base : { ...base, tokens: tokensOf(size) };
-  return typeof text === "string" ? { ...base, tokens: tokensOf(bytesOf(text)) } : base;
+  return typeof text === "string" ? { ...base, tokens: tokensOfText(text) } : base;
 }
 
 /**
@@ -225,7 +225,6 @@ const neutralize = (text: string) => text.replace(/@(?=file:|folder:|git:|url:|d
 const described = (f: ContextFile) => `${f.path} (${f.size === undefined ? "" : `${sizeText(f.size)}, `}${typeLabel(f.name)})`;
 const body = (text: string) => text.replace(/\s+$/, "");
 
-/** What a new chat is told while the files fit: each file's text under its path, then the files that have none. */
 function fullStart(set: ContextSet, texts: ContextTexts): string {
   const withText = set.files.filter((f) => texts.has(f.path));
   const without = set.files.filter((f) => !texts.has(f.path));
@@ -236,14 +235,12 @@ function fullStart(set: ContextSet, texts: ContextTexts): string {
   ].join("\n\n");
 }
 
-/** What a chat is told once the files are over capacity: where they are, and each one's path. */
 function listStart(set: ContextSet): string {
   return `Context files from the project "${set.project}" are too large to include here. They are in ${set.dir}. Open the ones you need with your file tools:\n${set.files.map((f) => `- ${described(f)}`).join("\n")}`;
 }
 
 type Change = { kind: "Added" | "Replaced"; file: ContextFile; text?: string } | { kind: "Removed"; path: string };
 
-/** What an open chat is told when the files changed since it last got them. */
 function update(project: string, changes: readonly Change[]): string {
   return [
     `The context files of the project "${project}" changed since this chat last got them.`,
@@ -295,7 +292,7 @@ export function plan(entry: LedgerEntry | undefined, set: ContextSet, texts: Con
   return { block: all.length ? neutralize(update(set.project, all)) : null, next };
 }
 
-/** Whether two entries say the same, so an unchanged one isn't written again. */
+/** Whether two entries say the same. */
 export function sameEntry(a: LedgerEntry | undefined, b: LedgerEntry): boolean {
   if (!a || a.mode !== b.mode) return false;
   const paths = Object.keys(a.files);
