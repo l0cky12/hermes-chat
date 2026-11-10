@@ -92,8 +92,9 @@ describe("Saved connections", () => {
     const { default: App } = await import("../App");
     render(<App />);
 
-    // Launch signs in to the migrated connection with its old keyring entry.
-    expect(await screen.findByText("Alpha backups")).toBeTruthy();
+    // Launch signs in to the migrated connection with its old keyring entry. A cold launch, sign-in then the first
+    // mount of the main screen, takes about 0.7s on an idle machine, so findBy's 1s default runs out on a busy one (#322).
+    expect(await screen.findByText("Alpha backups", {}, { timeout: 15_000 })).toBeTruthy();
     expect(connects).toEqual([{ url: ALPHA, password: "alpha-pass" }]);
     await userEvent.type(composer(), "draft for alpha");
 
