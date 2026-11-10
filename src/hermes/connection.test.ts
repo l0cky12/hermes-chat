@@ -263,6 +263,46 @@ describe("Reconnecting", () => {
     expect(hermes.getSnapshot().chats.map((c) => c.id).sort()).toEqual(["old", "recent"]);
   });
 
+  it("counts the older chats the reconnect lists when its read on the dropped connection answers first", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("recent", 1), row("ancient", 90)];
+    const { hermes } = await signedIn(server);
+    await hermes.sync();
+    const listRead = server.rest["GET /api/sessions"];
+    let answer!: () => void;
+    server.rest["GET /api/sessions"] = (...a: Parameters<typeof listRead>) => new Promise((resolve) => (answer = () => resolve(listRead(...a))));
+    const pulled = hermes.pullOlderHistory();
+    await vi.advanceTimersByTimeAsync(0);
+
+    server.drop();
+    server.rest["GET /api/sessions"] = listRead;
+    answer();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect((await pulled).map((c) => c.id)).toEqual(["ancient"]);
+    expect(hermes.getSnapshot().chats.map((c) => c.id).sort()).toEqual(["ancient", "recent"]);
+  });
+
+  it("counts the older chats the reconnect lists when its read on the dropped connection fails first", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("recent", 1), row("ancient", 90)];
+    const { hermes } = await signedIn(server);
+    await hermes.sync();
+    const listRead = server.rest["GET /api/sessions"];
+    let fail!: () => void;
+    server.rest["GET /api/sessions"] = () => new Promise((_, reject) => (fail = () => reject(new Error("Hermes stopped answering: nothing came back for 60 s."))));
+    const pulled = hermes.pullOlderHistory();
+    await vi.advanceTimersByTimeAsync(0);
+
+    server.drop();
+    server.rest["GET /api/sessions"] = listRead;
+    fail();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect((await pulled).map((c) => c.id)).toEqual(["ancient"]);
+    expect(hermes.getSnapshot()).toMatchObject({ olderPulled: true, syncError: undefined });
+  });
+
   it("stays connected while Hermes answers its pings", async () => {
     const { server, status } = await signedIn();
     await vi.advanceTimersByTimeAsync(5 * 60_000);

@@ -1084,9 +1084,16 @@ async fn slow_stub() -> Dashboard {
         tokio::time::sleep(Duration::from_secs(300)).await;
         Json(json!({"ok": true}))
     };
+    let list = |RawQuery(q): RawQuery| async move {
+        if q.as_deref() != Some("error") {
+            std::future::pending::<()>().await;
+        }
+        let head = futures_util::stream::once(async { Ok::<_, std::io::Error>("{\"detail\": ") });
+        (StatusCode::SERVICE_UNAVAILABLE, axum::body::Body::from_stream(futures_util::StreamExt::chain(head, futures_util::stream::pending()))).into_response()
+    };
     let app = Router::new()
         .route("/auth/password-login", post(login))
-        .route("/api/sessions", get(std::future::pending::<String>))
+        .route("/api/sessions", get(list))
         .route("/api/skills", get(five_minutes))
         .route("/api/memory/providers/{name}/setup", post(five_minutes));
     sign_in_at(&serve(app).await, &sign_in("hunter2")).await.expect("signed in")
@@ -1097,6 +1104,16 @@ async fn a_chat_list_read_hermes_never_answers_fails_after_a_minute_without_a_by
     let dashboard = slow_stub().await;
     let started = tokio::time::Instant::now();
     let read = tokio::time::timeout(Duration::from_secs(3600), dashboard.request("GET", "api/sessions", None)).await;
+    let err = read.expect("the read gave up within the hour").err().unwrap();
+    assert!(matches!(err, TransportError::Stalled(60)), "{err:?}");
+    assert_eq!(started.elapsed().as_secs(), 60);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_chat_list_error_whose_body_stops_arriving_fails_after_a_minute_without_a_byte() {
+    let dashboard = slow_stub().await;
+    let started = tokio::time::Instant::now();
+    let read = tokio::time::timeout(Duration::from_secs(3600), dashboard.request("GET", "api/sessions?error", None)).await;
     let err = read.expect("the read gave up within the hour").err().unwrap();
     assert!(matches!(err, TransportError::Stalled(60)), "{err:?}");
     assert_eq!(started.elapsed().as_secs(), 60);
