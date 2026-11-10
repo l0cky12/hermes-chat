@@ -6,6 +6,7 @@
 # signs in, so it needs only `hv build` first.
 # `single` is `stream` with one chat and no split (bench/main.tsx stream).
 #   bench/app-split/run.sh <turns> <out.jsonl> [samples] [ms per sample] [stream|drag|single]
+# PROBE=<file> installs another probe in place of probe.js.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 S=$(git -C "$HERE" rev-parse --show-toplevel)/.claude/skills/verify-hermes-chat/scripts
@@ -26,8 +27,12 @@ if [ "$mode" != single ]; then
   $W click '.row-open[data-chat=long2]' >/dev/null
   $W wait '.pane:last-child .msg.assistant' "" 60000 >/dev/null
 fi
-$W eval "$(cat "$HERE/probe.js")" >/dev/null
-record() { echo "{\"turns\":$turns,\"mode\":\"$mode\",\"sample\":$1,\"load\":\"$(cut -d' ' -f1-3 /proc/loadavg)\",$2}" >>"$out"; }
+$W eval "$(cat "${PROBE:-$HERE/probe.js}")" >/dev/null
+record() {
+  local line="{\"turns\":$turns,\"mode\":\"$mode\",\"sample\":$1,\"load\":\"$(cut -d' ' -f1-3 /proc/loadavg)\",$2}"
+  node -e 'const s = JSON.parse(process.argv[1]).split; if (s.bareFrames - s.frames > 1) { console.error(`sample saw ${s.frames} of ${s.bareFrames} frames`); process.exit(1); }' "$line"
+  echo "$line" >>"$out"
+}
 
 if [ "$mode" = drag ]; then
   $W eval 'window.__pt = null; addEventListener("pointermove", (e) => (window.__pt = [e.clientX, e.clientY])); return 1' >/dev/null
