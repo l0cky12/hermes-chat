@@ -389,10 +389,11 @@ pub fn args(engine: &Engine, model: &Path, wav: &Path, out: &Path, language: &st
     }
 }
 
-/// whisper-cli's own default is 4 threads. On a 14-thread CPU, 8 transcribed about 15% faster and 14 was slower
-/// than 10 to 12, so it gets one per CPU this process may use, up to 8.
+const WHISPER_CPP_DEFAULT_THREADS: usize = 4;
+const WHISPER_CPP_MAX_THREADS: usize = 8;
+
 fn whisper_cpp_threads() -> usize {
-    std::thread::available_parallelism().map_or(4, |n| n.get().min(8))
+    std::thread::available_parallelism().map_or(WHISPER_CPP_DEFAULT_THREADS, |n| n.get().min(WHISPER_CPP_MAX_THREADS))
 }
 
 /// An engine's output as one line of text, without the lines that are only a note in brackets: whisper.cpp's
@@ -1323,7 +1324,7 @@ mod tests {
         let e = |kind| Engine { kind, binary: "/bin/x".into(), model: Some(m.into()) };
         let strs = |k, l| args(&e(k), m, w, o, l).into_iter().map(|a| a.into_string().unwrap()).collect::<Vec<_>>().join(" ");
         let t = whisper_cpp_threads();
-        assert!((1..=8).contains(&t));
+        assert!((1..=WHISPER_CPP_MAX_THREADS).contains(&t));
         assert_eq!(strs(Kind::WhisperCpp, "auto"), format!("-m /m/model -f /t/audio.wav -l auto -t {t} -nt -np -otxt -of {of}"));
         assert_eq!(strs(Kind::FasterWhisper, "auto"), "/t/audio.wav --model_directory /m/model --output_dir /t --output_format txt --verbose False");
         assert_eq!(strs(Kind::OpenaiWhisper, "auto"), "/t/audio.wav --model /m/model --output_dir /t --output_format txt --verbose False --fp16 False");
