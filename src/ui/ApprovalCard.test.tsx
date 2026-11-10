@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ApprovalItem } from "../hermes/model";
@@ -68,6 +69,13 @@ describe("Approval card", () => {
     const html = show(card({ command: "rm -rf /tmp/\u202Egol.\u200Bsh\n  ls\tx", description: "a\u2066b" }));
     expect(html).toContain("rm -rf /tmp/\\u{202E}gol.\\u{200B}sh\n  ls\tx");
     expect(html).toContain("a\\u{2066}b");
+  });
+
+  // jsdom doesn't paint, so this checks the rules: the real-app repro is in #414.
+  it("can't be painted over by a reply's math", () => {
+    const css = readFileSync("src/styles.css", "utf8");
+    expect(css).toMatch(/^\.msg\.assistant \{ clip-path: inset\(-0\.5em -100vw\); \}$/m);
+    expect(css).toMatch(/^\.approval \{\n {2}position: relative; z-index: 1;$/m);
   });
 
   it("asks the owner to confirm allowing the command for the rest of the chat", () => {
