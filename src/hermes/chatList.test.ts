@@ -108,6 +108,35 @@ describe("Chat list sync", () => {
     expect(ids(chats())).toEqual(["from-telegram"]);
   });
 
+  it("tells no one when a refresh finds nothing changed", async () => {
+    const server = new FakeHermes();
+    const usage = { input_tokens: 1200, output_tokens: 300, api_call_count: 2, estimated_cost_usd: 0.01, cost_status: "estimated" };
+    server.sessions = [row("a", 1, usage), row("b", 2, { _lineage_ids: ["b0", "b"] }), row("c", 3, { pinned: true, last_read_at: 0 })];
+    const { hermes } = await signedIn(server);
+    await hermes.sync();
+    const before = hermes.getSnapshot();
+    let told = 0;
+    hermes.subscribe(() => told++);
+    server.broadcast("sessions.changed");
+    await hermes.idle();
+    await hermes.sync();
+    expect(told).toBe(0);
+    expect(hermes.getSnapshot()).toBe(before);
+  });
+
+  it("keeps the chats a refresh didn't change, and shows the one it did", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("a", 1), row("b", 2)];
+    const { hermes, chat } = await signedIn(server);
+    await hermes.sync();
+    const a = chat("a");
+    server.sessions[1].title = "Renamed elsewhere";
+    server.broadcast("sessions.changed");
+    await hermes.idle();
+    expect(chat("b").title).toBe("Renamed elsewhere");
+    expect(chat("a")).toBe(a);
+  });
+
   it("runs one more sync, not one per request, when asked while a sync is running", async () => {
     const { server, hermes } = await signedIn();
     await Promise.all([hermes.sync(), hermes.sync(), hermes.sync()]);

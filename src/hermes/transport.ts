@@ -4236,7 +4236,8 @@ export class Hermes {
         const readHere = this.readWrites.has(r.id) || this.readSinceListRead.has(r.id);
         const onScreen = this.isViewing(r.id);
         if (onScreen && r.unread && !readHere) readOnScreen.add(r.id);
-        return {
+        const lineage = Array.isArray(r._lineage_ids) ? r._lineage_ids.filter((x): x is string => typeof x === "string") : undefined;
+        const next: Chat = {
           items: outbox[r.id] ?? [],
           ...c,
           id: r.id,
@@ -4250,8 +4251,10 @@ export class Hermes {
           unread: !!r.unread && !readHere && !onScreen,
           // List rows carry the stored token and cost totals too.
           usage: newerChatUsage(c?.usage, chatUsageOf(r, Date.now())),
-          ...(Array.isArray(r._lineage_ids) && { lineage: r._lineage_ids.filter((x): x is string => typeof x === "string") }),
+          ...(lineage && { lineage: c?.lineage && sameIds(c.lineage, lineage) ? c.lineage : lineage }),
         };
+        // The chat as it was when the row brings nothing new, so the list and every row drawn from it stay as they are.
+        return c && sameChat(c, next) ? c : next;
       });
     // Chats started or resumed on this connection stay even before Hermes stores them (a new chat has no row
     // until its first prompt), and so do chats picked from a search and chats being archived or restored.
@@ -4263,8 +4266,10 @@ export class Hermes {
       .map((c) => (botChats.has(c.id) && !c.bot ? { ...c, bot: true, title: BOT_CHAT_TITLE } : c));
     const chats = [...onThisConnection, ...listed];
     this.listedAt = Date.now();
-    const switched = !!this.snapshot.switching;
-    this.update({ chats, syncError: undefined, switching: undefined });
+    const was = this.snapshot;
+    const switched = !!was.switching;
+    if (switched || was.syncError !== undefined || chats.length !== was.chats.length || chats.some((c, i) => c !== was.chats[i]))
+      this.update({ chats, syncError: undefined, switching: undefined });
     this.kanbanWatch.chatsListed();
     this.placeRoster();
     for (const chatId of readOnScreen) this.seen(chatId);
@@ -4761,6 +4766,15 @@ export class Hermes {
  * A side question whose item went, as when the chat's items are read again from Hermes with new ids or cut short, takes
  * the item now at that item's place, or the last one, so what comes after still shows below it (ADR 0086).
  */
+/** `next` is built on `was`, so it holds every key `was` does. */
+function sameChat(was: Chat, next: Chat): boolean {
+  return (Object.keys(next) as (keyof Chat)[]).every((k) => next[k] === was[k]);
+}
+
+function sameIds(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i]);
+}
+
 function keepSidePlaces(before: Chat[], chats: Chat[]): Chat[] {
   return chats.map((c) => {
     const qs = c.sideQuestions;
