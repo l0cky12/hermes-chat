@@ -10,6 +10,7 @@ import { connect, type Hermes } from "../hermes/transport";
 import { localChatCache, outboxAttachmentPaths, subscribeOutbox } from "../hermes/chatCache";
 import { setUIPrefs } from "../hermes/uiPrefs";
 import type { Captured } from "../hermes/screenshots";
+import { stagedFiles } from "../hermes/unsaved";
 import { Main, type Screenshots } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
@@ -90,8 +91,8 @@ function fakeRust(server: FakeHermes) {
 /** Signed in with one Active chat and the New chat pane on screen, focus in its composer. */
 async function signedIn() {
   const server = new FakeHermes();
-  server.sessions = [row("backup", 1, { pinned: true, title: "Nightly backup" })];
-  server.transcripts = { backup: [{ role: "user", text: "Why did the backup fail?" }] };
+  server.sessions = [row("backup", 1, { pinned: true, title: "Nightly backup" }), row("nas", 2, { pinned: true, title: "NAS disks" })];
+  server.transcripts = { backup: [{ role: "user", text: "Why did the backup fail?" }], nas: [{ role: "user", text: "Which disk is failing?" }] };
   const hermes = await connect(server.openPipe, undefined, localChatCache({ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }));
   const rust = fakeRust(server);
   const user = userEvent.setup();
@@ -381,6 +382,96 @@ describe("Taking a screenshot for the composer", () => {
     // The button still works.
     await user.click(screen.getByRole("button", { name: "Attach a screenshot" }));
     expect(rust.names).toHaveLength(1);
+  });
+});
+
+describe("Attachments staged in each chat (#443)", () => {
+  const openChat = async (user: ReturnType<typeof userEvent.setup>, hermes: Hermes, title: RegExp) => {
+    await user.click(screen.getByRole("button", { name: title }));
+    await settle(hermes);
+  };
+  const rowOf = (title: RegExp) => screen.getByRole("button", { name: title }).closest(".row") as HTMLElement;
+
+  it("keeps a chat's capture while another chat is opened and sent in, and sends it with that chat's next message", async () => {
+    const { server, hermes, rust, user } = await signedIn();
+    await openChat(user, hermes, /Nightly backup/);
+    await user.click(screen.getByRole("button", { name: "Attach a screenshot" }));
+    const path = await rust.land();
+    await waitFor(() => expect(chips()).toHaveLength(1));
+
+    await openChat(user, hermes, /NAS disks/);
+    expect(chips()).toHaveLength(0);
+    await user.type(composer(), "Check sda{Enter}");
+    await settle(hermes);
+    expect(server.requests.filter((r) => r.method === "image.attach_bytes")).toHaveLength(0);
+    expect(rust.discarded).toEqual([]);
+    expect(server.files[path]).toBe(PNG);
+    expect(stagedFiles.getSnapshot()).toEqual([`${rust.names[0]}.png`]);
+
+    await openChat(user, hermes, /Nightly backup/);
+    expect(chips()).toHaveLength(1);
+    await user.type(composer(), "Here is the error{Enter}");
+    await settle(hermes);
+    await waitFor(() => expect(rust.discarded).toEqual([path]));
+    const attached = server.requests.filter((r) => r.method === "image.attach_bytes");
+    expect(attached).toHaveLength(1);
+    expect(attached[0].params).toMatchObject({ filename: `${rust.names[0]}.png`, content_base64: btoa(PNG) });
+    expect(chips()).toHaveLength(0);
+    expect(stagedFiles.getSnapshot()).toEqual([]);
+  });
+
+  it("keeps the New chat pane's capture while a chat is open in its place", async () => {
+    const { rust, user, hermes } = await signedIn();
+    await user.click(screen.getByRole("button", { name: "Attach a screenshot" }));
+    const path = await rust.land();
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    await openChat(user, hermes, /Nightly backup/);
+    expect(chips()).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "New chat (Ctrl+N)" }));
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    expect(rust.discarded).not.toContain(path);
+  });
+
+  it("deletes a capture once the owner removes it from its chat, even after switching away and back", async () => {
+    const { rust, user, hermes } = await signedIn();
+    await openChat(user, hermes, /Nightly backup/);
+    await user.click(screen.getByRole("button", { name: "Attach a screenshot" }));
+    const path = await rust.land();
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    await openChat(user, hermes, /NAS disks/);
+    await openChat(user, hermes, /Nightly backup/);
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    expect(chips()).toHaveLength(0);
+    expect(rust.discarded).toEqual([path]);
+  });
+
+  it("deletes a chat's captures when the chat is deleted", async () => {
+    const { server, rust, user, hermes } = await signedIn();
+    await openChat(user, hermes, /NAS disks/);
+    await user.click(screen.getByRole("button", { name: "Attach a screenshot" }));
+    const path = await rust.land();
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    await openChat(user, hermes, /Nightly backup/);
+    expect(rust.discarded).toEqual([]);
+    await user.click(within(rowOf(/NAS disks/)).getByTitle("Delete"));
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete chat" }));
+    await settle(hermes);
+    await waitFor(() => expect(rust.discarded).toEqual([path]));
+    expect(server.sessions.some((s) => s.id === "nas")).toBe(false);
+    expect(stagedFiles.getSnapshot()).toEqual([]);
+  });
+
+  it("deletes a chat's captures when the chat is archived", async () => {
+    const { rust, user, hermes } = await signedIn();
+    await openChat(user, hermes, /NAS disks/);
+    await user.click(screen.getByRole("button", { name: "Attach a screenshot" }));
+    const path = await rust.land();
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    await openChat(user, hermes, /Nightly backup/);
+    await user.click(within(rowOf(/NAS disks/)).getByTitle(/^Archive:/));
+    await settle(hermes);
+    await waitFor(() => expect(rust.discarded).toEqual([path]));
+    expect(stagedFiles.getSnapshot()).toEqual([]);
   });
 });
 
