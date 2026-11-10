@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
-// The chat list writes a chat's age in the interface's language (#353): "5m" in English, "5min" in Spanish. The age
-// moves on by itself, with nothing else changing (#420).
+// The chat list writes a chat's age in the interface's language (#353): "5m" in English, "5min" in Spanish.
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import type { Chat } from "../hermes/model";

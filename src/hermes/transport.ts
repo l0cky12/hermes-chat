@@ -4281,12 +4281,11 @@ export class Hermes {
       .filter((c) => (c.runtimeId || this.revealed.has(c.id) || this.archiveWanted.has(c.id)) && !listedIds.has(c.id))
       .map((c) => (botChats.has(c.id) && !c.bot ? { ...c, bot: true, title: BOT_CHAT_TITLE } : c));
     const chats = [...onThisConnection, ...listed];
-    // The first read also tells listeners, because `hasListed` turns true with it.
-    const firstRead = this.listedAt === undefined;
+    const wasUnlisted = !this.hasListed();
     this.listedAt = Date.now();
     const was = this.snapshot;
     const switched = !!was.switching;
-    if (firstRead || switched || was.syncError !== undefined || chats.length !== was.chats.length || chats.some((c, i) => c !== was.chats[i]))
+    if (wasUnlisted || switched || was.syncError !== undefined || chats.length !== was.chats.length || chats.some((c, i) => c !== was.chats[i]))
       this.update({ chats, syncError: undefined, switching: undefined });
     this.kanbanWatch.chatsListed();
     this.placeRoster();

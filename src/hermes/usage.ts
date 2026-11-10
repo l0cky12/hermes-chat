@@ -84,10 +84,6 @@ export function newerChatUsage(shown: ChatUsage | undefined, read: ChatUsage | u
   return read;
 }
 
-/**
- * `newerChatUsage` for a list refresh, which reads every chat's totals in passing: a read with the same totals keeps the
- * one shown, with its read time, so a refresh that finds nothing new leaves the chat as it was.
- */
 export function newerListedUsage(shown: ChatUsage | undefined, read: ChatUsage | undefined): ChatUsage | undefined {
   return shown && read && sameTotals(shown, read) ? shown : newerChatUsage(shown, read);
 }

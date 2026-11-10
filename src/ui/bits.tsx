@@ -180,10 +180,8 @@ export function CopyCommand({ command }: { command: string }) {
   );
 }
 
-/** How often a shown age ("now", "5m") is worked out again. */
 export const AGE_TICK_MS = 60_000;
 
-/** One timer for every age on screen, running only while one is shown. */
 const ageClock = (() => {
   let ticks = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -206,7 +204,6 @@ const ageClock = (() => {
   };
 })();
 
-/** How long ago `at` was, short ("now", "5m"). It keeps itself current, so nothing else has to render for it to move on. */
 export function Age({ at }: { at: number }) {
   useSyncExternalStore(ageClock.subscribe, ageClock.ticks);
   return useLocale().fmt.age(at);
