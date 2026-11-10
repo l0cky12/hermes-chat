@@ -72,7 +72,7 @@ describe("Approval card", () => {
     expect(html).toContain("a\\u{2066}b");
   });
 
-  // jsdom doesn't paint, so this checks the rules: the real-app repro is in #414.
+  // Tests can't paint; the real-app repro is in #414.
   it("can't be painted over by a reply's math", () => {
     const css = readFileSync("src/styles.css", "utf8");
     expect(css).toMatch(/^\.msg\.assistant \{ clip-path: inset\(-0\.5em -100vw\); \}$/m);

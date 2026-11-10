@@ -434,8 +434,8 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 .send-failed-why svg { flex: none; margin-top: 2px; }
 .send-failed-actions { display: flex; gap: 6px; }
 .send-failed-actions .btn { height: 28px; padding: 0 10px; font-size: calc(12.5rem / 14); }
-/* A reply's math can paint far outside its line (\smash{\rule[-14em]…}), as far as over an approval card's command.
-   Clipped above and below, with room for KaTeX's ink past its metrics; sideways the transcript already clips it. */
+/* KaTeX can paint math far outside its line (\smash{\rule[-14em]…}). Clipped above and below only, leaving 0.5em for
+   its ink past its metrics. */
 .msg.assistant { clip-path: inset(-0.5em -100vw); }
 .msg.assistant > :first-child { margin-top: 0; }
 .msg.assistant > :last-child { margin-bottom: 0; }
@@ -528,7 +528,7 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
   max-height: 220px; overflow: auto; white-space: pre-wrap;
 }
 
-/* approval, above anything else in the transcript that paints past its own box */
+/* approval */
 .approval {
   position: relative; z-index: 1;
   border: 1px solid rgba(245, 184, 74, 0.3); background: rgba(245, 184, 74, 0.05); border-radius: 12px; padding: 12px 14px;
