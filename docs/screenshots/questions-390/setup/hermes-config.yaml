@@ -1,0 +1,14 @@
+model:
+  default: fake
+  provider: custom
+  base_url: http://127.0.0.91:47391/v1
+  api_key: sk-fake
+  context_length: 64000
+terminal:
+  backend: local
+  cwd: <scratch>/work
+approvals:
+  mode: "off"
+onboarding:
+  seen:
+    profile_build_offered: true

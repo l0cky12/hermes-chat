@@ -258,6 +258,22 @@ The agent office, opened from the rail in place of the chat panes: every agent a
 Hermes asking the owner before it runs a command it counts as dangerous. It shows as a card in the chat, and the reply waits until the owner approves or denies it, Hermes stops waiting, or the reply is stopped. The card offers only the answers Hermes offers: once, for the rest of the chat, always, or deny. The two broader grants ask the owner to confirm first.
 _Avoid_: permission, confirmation, prompt
 
+**Question** (from Hermes):
+Hermes stopping in a reply to ask the owner something, and waiting for the answer. It shows as a card in its chat, and the reply waits until the owner answers it, Hermes stops waiting (its deadline, or the reply is stopped), or another Hermes app answers it first. Four kinds show here: an **Approval**, a **Clarify**, a **Sudo password** and a **Secret**. Whatever ends one closes its card, and the card says how. Hermes asks other kinds too (a password manager's master password, a login to save, one-time codes, and requests only the official app's own window answers). The app doesn't show those, and on a Hermes that shares chats it leaves them for another app to answer (ADR 0136).
+_Avoid_: prompt, request (Hermes's word for the message that carries it), dialog
+
+**Clarify**:
+A Question with one to five questions Hermes's model asks the owner, each open or with choices, one or several of which may be picked. The owner can also answer in their own words. Each answer is **locked** on its own, and Hermes keeps it from then on, after a reconnect too; the last lock answers the Clarify. Skip skips every question not locked yet, and Hermes keeps the answers locked before.
+_Avoid_: clarification, follow-up question, survey
+
+**Sudo password**:
+A Question for the password of a `sudo` command Hermes wants to run on the server. The card shows the command and takes the password in a masked field. Hermes keeps the password in memory for the chat's later sudo commands. Skip lets the command run without one, so it fails. Hermes Chat never keeps it.
+_Avoid_: root password, admin password
+
+**Secret**:
+A Question for a value Hermes saves in the profile's settings on the server under a name (an env var), such as an API key a skill needs. The card shows what Hermes asks and takes the value in a masked field. Hermes Chat never keeps it.
+_Avoid_: provider key (a Secret can be one, but Settings → Providers is where the app sets those), credential, token
+
 **Approval mode**:
 How Hermes decides, in a chat, whether to ask for an Approval before a command it counts as dangerous, as Hermes reports it for the chat. The pill in the composer shows it and changes it. **Smart**: Hermes's checker lets safe-looking commands run and asks about the rest. **Manual**: Hermes asks before every command it flags as dangerous. Smart and Manual are the profile's setting, so a change reaches every chat on the profile, CLI and messaging ones too, from Hermes's next command. **YOLO**, shown "YOLO · this chat": Hermes runs every command in the chat without asking. It is the chat's own, other chats still ask, and the app warns every time it is turned on. Writes to AGENTS.md, CLAUDE.md and SOUL.md still ask, and Hermes's blocklist still blocks. Picking Smart or Manual in a YOLO chat turns its YOLO off. **YOLO · all chats**: the profile's mode is off, set outside this app, so no chat on it asks; the app shows it but doesn't offer it. A Hermes launched with `--yolo` reads as YOLO in every chat (ADR 0091).
 _Avoid_: permission mode, auto-approve, safe mode
@@ -553,6 +569,8 @@ _Avoid_: locale (the code's word for the language, its tag and its formats toget
 - **Import** vs **Export** and **Upload**: Export saves one chat as a file on this computer; Import makes chats in Hermes from such a file; Upload puts a file on the server's disk, not in a chat.
 - **Draft** vs the New chat pane: the code also calls the pane for a chat not started yet "the draft". In this glossary a Draft is only the composer's unsent text.
 - **Approval** vs **Approval mode**: an Approval is one question Hermes asks, as a card in the chat; the Approval mode decides which commands Hermes asks about at all.
+- **Question** (from Hermes) vs **Side question (/btw)**: a Question is Hermes asking the owner, and the reply waits for the answer; a Side question is the owner asking Hermes, and nothing waits on it.
+- **Secret** vs **Provider key**: both are values Hermes keeps on the server. A Secret is asked for by Hermes in a reply, under a name Hermes picks; a Provider key is set by the owner in Settings → Providers.
 - **Toolset** vs **Approval** and the **Approval mode**: a toolset decides which tools the model is offered at all; the Approval mode, and the Approvals it leads to, decide whether a command Hermes counts as dangerous runs without asking. Turning a toolset on or off changes neither. Speech-to-text is listed among the toolsets because Hermes lists it there, but it has no tools: its switch is the profile's `stt.enabled`, which Dictation uses.
 - **Dictation**, **Read aloud** and **Voice conversation** vs Hermes's voice mode: Hermes's `/voice` mode (`voice.record`, `voice.tts` over the socket) records with the server's own microphone and speaks through the server's speakers. This app never uses it. Dictation and a Voice conversation record on this computer, and all three use the server only to transcribe and to make the audio. A Voice conversation borrows only voice mode's turn settings (`voice.silence_*`, `voice.max_recording_seconds`).
 - **Stop speaking** vs **Stop reply** (in a Voice conversation): Stop speaking stops the reply's audio and leaves the reply as it is; Stop reply is the composer's Stop, which has Hermes stop the reply itself.

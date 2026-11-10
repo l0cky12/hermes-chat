@@ -1,0 +1,38 @@
+# Clarify, sudo and secret questions share the Approval card's lifecycle, and their values are never kept
+
+Hermes Chat showed Approvals and no other question from Hermes (#390). Since #313 it leaves a `clarify`, `sudo` or `secret` request unanswered on a Hermes that shares chats, so the official app can answer it. When Hermes Chat is the only client on the chat, nothing answers: the reply waits for Hermes's deadline (3600 s for a clarify by default, 120 s for sudo, 300 s for a secret) or for Stop.
+
+The contracts are in `tui_gateway/contracts/server_requests.py`, the same at `bf0203a` and `f0d94882`: `ClarifyRequestParams {questions: [{qid, question, choices, multi_select}], answers?}` with `ClarifyResult {answers?, outcome?}`, `SudoRequestParams {command}`, `SecretRequestParams {env_var, prompt, metadata?}`, and `ValueResult {value}`, where an empty value is a skip. A clarify's answers lock one question at a time with the `clarify.lock` RPC, and the last lock settles the request. A reconnect's `open_requests` carries a clarify's locked answers as `answers`.
+
+Checked with two clients against a real `f0d94882`: when one client answers a clarify (`clarify.lock`), a sudo or a secret (`request.answer`), Hermes sends the other client no `request.cancel`. `server_requests.resolve_response` and `lock_answer` settle the request and tell no one. What the other client does see is the tool call that asked (`clarify`, `terminal`, `skill_view`) finishing, `tool.complete` right after the answer, and `expired` if it answers afterwards.
+
+## Decisions
+
+- **One kind of item for every question, a variant per kind.** `clarify`, `sudo` and `secret` items join `approval` as `QuestionItem` (`src/hermes/model.ts`). They share the Approval's lifecycle: a card waits until it has an `answer` or has `ended`, with why. For an Approval the answer is the owner's choice; for the others it is `answered` or `skipped`. `isWaiting` covers every kind, so the inbox, the sidebar, the queue, branching, Voice conversation and idle compaction treat a waiting clarify, sudo or secret as they treat a waiting Approval. Wording that names an Approval keeps doing so for Approvals and says "question" for the rest.
+- **One table maps a request method to its card and its answers** (`QUESTIONS` in `src/hermes/transport.ts`). Each row parses the request into a card, or into nothing when its params don't parse, and names the result a Skip sends and the result a value sends. A method with no row, or a request that doesn't parse, keeps #313's handling (`unshownAnswer`): left open on a Hermes that shares chats, `-32601` before one, `4404` for a window-owned request where Hermes counts it as a decline.
+- **A clarify locks its answers one at a time.** Picking a single choice locks it. Ticked choices, and words of the owner's own, lock with Lock answer. Each lock is `clarify.lock {request_id, question_id, answer}`, a multiple-choice answer as a JSON list, as the official app sends it. Hermes's "(Recommended)" mark is not part of the answer. The card shows each locked answer; the last lock answers the clarify. Skip sends `ClarifyResult` with no `answers`, which Hermes reads as cancel-all and keeps the locks.
+- **Sudo, secret and Skip answers go with `request.answer`**, not a plain reply to the request, because it says whether Hermes still waited (`ok` or `expired`). A Hermes that answers "method not found" gets the plain reply, as the official app sends.
+- **A password or secret is never an item field.** It lives in the card's masked field (`type="password"`, no autocomplete, no spell check) until the owner sends it, goes to Hermes as `ValueResult`, and is dropped. The field is cleared as it goes. The card keeps only `answered`. So the value never reaches the chat's items, and through them the Saved copy, the chat list kept here, exports, branches, backups or diagnostics. It is never a Draft and has no Draft history. No error text names it: a failed answer says only what failed.
+- **A card closes when Hermes stops waiting, however it stops.** `request.cancel` closes a waiting card with Hermes's reason (`timeout`, `interrupted`, `resolved`, ...). The turn ending closes it as `turn ended`. Since Hermes tells no client when another answered, a waiting card also closes, as answered in another Hermes app, once every tool call that was running before it in the chat has finished: the call that asked was among them, and Hermes withdraws a question it gave up on itself before that call goes on. An answer from here that Hermes calls `expired` closes the card as one Hermes had stopped waiting on. This rule covers Approvals too, which helps an Approval an older app answered in a plain reply (#318).
+- **A reconnect shows a waiting question again as Hermes has it.** The resume's `open_requests` rebuilds the card, a clarify with the answers Hermes says are locked. A card closed here stays closed, as an Approval does, and one the owner answered whose answer never reached Hermes says so.
+- **One way to answer for each kind, and once.** A closed card ignores every answer. A clarify question locks once. A second Send or Skip on a card already answered sends nothing. The card shows the answer before it goes and goes back to waiting, with the chat saying why, when it can't go.
+
+## How this relates to ADR 0133
+
+ADR 0133 keeps the secrets Hermes holds out of the window: the provider lists' token and key previews stop in Rust. This change goes the other way. The owner types a secret into the window for Hermes, so it is in the window from the keystroke to the send, and it crosses Tauri's IPC to Rust in the frame that carries it, as a Provider key typed in Settings does. ADR 0133's rule still holds: the app never reads a secret back from Hermes, and once a value is sent nothing in the window has it.
+
+## Considered options
+
+- **A plain reply to the request for every answer**, as the official app sends. Rejected for sudo, secret and Skip: a late answer would vanish without a word, and the card would say "answered". `request.answer` is in Hermes from `bf0203a` and carries the same result.
+- **Closing cards by `session.active_list`**, as #318 does for Approvals in Hermes's own queue. Rejected: with turn isolation the question waits in a child process the list doesn't see, so the list would close a card Hermes still waits on.
+- **Closing a card when any tool call finishes**, or when the next message streams. Rejected: a call that ran beside the one that asked can finish first.
+- **One `question` item kind with the Approval inside it.** Rejected for now: it renames every Approval consumer and test for no change in behavior.
+- **Showing the cards only from 0.21.3** (`sharesChats`). Rejected: a card is the right answer whenever the request parses, and an older Hermes that sent one gets an answer instead of `-32601`.
+
+## Consequences
+
+- When Hermes Chat is the only client on a chat, a clarify, sudo or secret question gets an answer from the owner instead of waiting out its deadline.
+- On a shared chat, a card the official app answered stays up until the call that asked finishes, which is right after the answer. A question asked with no tool call running, such as a plugin command's, stays up until the turn ends.
+- A Hermes without `clarify.lock` can't take a clarify answer from here, only a Skip.
+- Password manager questions (`vault.*`) and `theme.pick` still don't show.
+- See `docs/compatibility.md`, "Clarify, Sudo password and Secret questions". Verification: `src/hermes/questions.test.ts` and `src/ui/questionCard.test.tsx` against `FakeHermes`, and the real app against a real `f0d94882` (PR body).

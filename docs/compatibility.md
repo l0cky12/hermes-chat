@@ -49,12 +49,20 @@ The app signs in only with the dashboard's username and password (the `basic` pr
 
 Needs Hermes to list `approval` in its answer to `client.capabilities`. A Hermes without `client.capabilities` (0.16.0 and older) asks for approvals in an older way that this app doesn't read, so Approval cards don't show and Hermes decides by the profile's own settings, or waits.
 
-The app shows no other kind of question from Hermes yet, such as clarify, sudo or secret. How it handles one depends on the server:
+## Clarify, Sudo password and Secret questions
+
+A `clarify`, `sudo` or `secret` request shows as a card, on any version, once its params parse as `tui_gateway/contracts/server_requests.py` has them at `bf0203a` and `f0d94882`: a clarify needs at least one question with a `qid`, and a secret needs its `env_var`. One that doesn't parse is handled like any question the app doesn't show (below). Clarify answers go one question at a time with `clarify.lock`, as the official app sends them, and Hermes answers the whole clarify on the last lock. A sudo password, a secret and a Skip go with `request.answer`, which says whether Hermes still waited (`expired` when it didn't). A Hermes that answers "method not found" to `request.answer` gets a plain reply to its request instead, and a late answer then gets no word back. Hermes waits 120 s for a sudo password and 300 s for a secret. A clarify waits for `agent.clarify_timeout` in Hermes's config, 3600 s by default; set to 0 or less, it waits until it is answered or the owner presses Stop.
+
+On a shared chat, Hermes sends no `request.cancel` when another app answers one of these, or an Approval in a plain reply: `resolve_response` and `lock_answer` settle the request without telling any other client (checked with two clients against a real `f0d94882`). This app's card then closes once every tool call that was running when it arrived has finished, since the call that asked has then gone on. Hermes withdraws a question it stops waiting on itself (timeout, Stop) with `request.cancel` before that call goes on, so such a card says another app answered it. A card that arrived with no tool call running, such as a plugin command's question, waits until the turn ends. An answer from here that Hermes calls `expired` closes the card as one Hermes had stopped waiting on.
+
+## Questions the app doesn't show
+
+The app doesn't show a password manager's questions (`vault.unlock_prompt`, `vault.save_login`, `vault.code`), `theme.pick`, or a clarify or secret whose params don't parse. How it handles one depends on the server:
 
 - **Before 0.21.3**, Hermes doesn't send these questions as JSON-RPC requests to every client on a chat. If one reaches the app, it answers "method not found" (`-32601`), so the agent goes on at once instead of waiting.
 - **0.21.3 and later** send each question to every client that has the chat open, and the first answer settles it for all of them, an error included. The app leaves the question unanswered, so the official app can still show it. Questions that only the window showing the chat can answer (`preview.read`, `preview.act`, `terminal.read`, `window.read`, `theme.apply`, `tour`) get code `4404`, but only when the `client.capabilities` answer says `declines_not_shown: true` (0.21.6 and later). Hermes counts that code as a decline, not as an answer. Before 0.21.6, a `4404` would settle the question like any other error, so those get no answer either.
 
-When no other client answers, the reply keeps running until Hermes stops waiting or the owner presses Stop, which withdraws the question. Hermes stops waiting after 300 s at most for every kind but clarify (120 s for sudo). From 0.21.6, a window-owned question that every client declines with `4404` ends at once. Before 0.21.6, it waits for its deadline. A clarify waits for `agent.clarify_timeout` in Hermes's config, which is 3600 s by default. Set to 0 or less, a clarify waits until it is answered or the owner presses Stop.
+When no other client answers, the reply keeps running until Hermes stops waiting or the owner presses Stop, which withdraws the question. Hermes stops waiting after 300 s at most for these kinds (120 s for a password manager's master password). From 0.21.6, a window-owned question that every client declines with `4404` ends at once. Before 0.21.6, it waits for its deadline.
 
 ## Answering Approvals
 
