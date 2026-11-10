@@ -9,6 +9,8 @@
 //   Each read replaces the last, so nothing is counted twice.
 // This app keeps no price list: a cost shows only as Hermes recorded it, labelled the way Hermes labelled it.
 
+import { sameFields } from "./model";
+
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined);
 const obj = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined);
 
@@ -74,8 +76,7 @@ export function replyUsageOf(v: unknown): ReplyUsage | undefined {
 
 /**
  * The newer of two reads of a chat's usage. Hermes's stored counts only ever grow, so a read with fewer model calls than
- * the one shown was taken before it, and loses. A read with the same totals as the one shown keeps the one shown, so a
- * list refresh that finds nothing new changes nothing on screen.
+ * the one shown was taken before it, and loses. A read with the same totals as the one shown keeps the one shown.
  */
 export function newerChatUsage(shown: ChatUsage | undefined, read: ChatUsage | undefined): ChatUsage | undefined {
   if (!read) return shown;
@@ -87,11 +88,6 @@ function sameTotals(a: ChatUsage, b: ChatUsage): boolean {
   const { readAt: _a, cost: costA, ...countsA } = a;
   const { readAt: _b, cost: costB, ...countsB } = b;
   return sameFields(countsA, countsB) && sameFields(costA, costB);
-}
-
-function sameFields<T extends object>(a: T, b: T): boolean {
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)] as (keyof T)[]);
-  return [...keys].every((k) => a[k] === b[k]);
 }
 
 /**

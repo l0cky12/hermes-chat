@@ -29,7 +29,7 @@ import { McpApi } from "./mcp";
 import { GatewaysApi } from "./gateways";
 import { PersonaApi } from "./persona";
 import { ProfileCloneApi } from "./profileClone";
-import { APPROVAL_CHOICES, isBroadGrant, isOutgoing, isWaiting, offeredChoices, turnStart, type ApprovalChoice, type ApprovalItem, type AttachCheck, type Attachment, type Chat, type ChatQueue, type ConnectionStatus, type ContextUse, type Found, type Item, type ListedChat, type LiveSession, type LiveSessions, type OtherProfiles, type Outgoing, type OutgoingItem, type Queued, type SavedSend, type SeenFailure, type SessionLive, type SideQuestion, type Source, QUEUE_LIMIT } from "./model";
+import { APPROVAL_CHOICES, isBroadGrant, isOutgoing, isWaiting, offeredChoices, sameFields, turnStart, type ApprovalChoice, type ApprovalItem, type AttachCheck, type Attachment, type Chat, type ChatQueue, type ConnectionStatus, type ContextUse, type Found, type Item, type ListedChat, type LiveSession, type LiveSessions, type OtherProfiles, type Outgoing, type OutgoingItem, type Queued, type SavedSend, type SeenFailure, type SessionLive, type SideQuestion, type Source, QUEUE_LIMIT } from "./model";
 import { catalogFromServer, fallbackCatalog, isEffort, modelKey, pickFromInfo, type ModelCatalog, type ModelPick } from "./models";
 import { approvalsOf, isApprovalMode, writesFor, type ApprovalPick } from "./approvals";
 import { noOthers, OtherProfilesCheck } from "./otherProfiles";
@@ -4253,8 +4253,7 @@ export class Hermes {
           usage: newerChatUsage(c?.usage, chatUsageOf(r, Date.now())),
           ...(lineage && { lineage: c?.lineage && sameIds(c.lineage, lineage) ? c.lineage : lineage }),
         };
-        // The chat as it was when the row brings nothing new, so the list and every row drawn from it stay as they are.
-        return c && sameChat(c, next) ? c : next;
+        return c && sameFields(c, next) ? c : next;
       });
     // Chats started or resumed on this connection stay even before Hermes stores them (a new chat has no row
     // until its first prompt), and so do chats picked from a search and chats being archived or restored.
@@ -4760,11 +4759,6 @@ export class Hermes {
     clearTimeout(this.notifyDue.timer);
     this.notifyDue = undefined;
   }
-}
-
-/** `next` is built on `was`, so it holds every key `was` does. */
-function sameChat(was: Chat, next: Chat): boolean {
-  return (Object.keys(next) as (keyof Chat)[]).every((k) => next[k] === was[k]);
 }
 
 function sameIds(a: string[], b: string[]): boolean {
