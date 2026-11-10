@@ -1,8 +1,9 @@
 // A fake Hermes's subscription sign-ins and custom endpoints, for tests of Settings → Providers (ADR 0106): the
 // `/api/providers/oauth` and `/api/providers/custom-endpoints` routes as the deployed `bf0203a` answers them
-// (`hermes_cli/web_routers/oauth.py`, `config_env.py`), and the Rust side's reads and endpoint save, which drop the
-// previews and check before saving (`Dashboard::provider_sign_ins`, `custom_endpoints`, `save_endpoint`). Each profile
-// keeps its own sign-ins and endpoints.
+// (`hermes_cli/web_routers/oauth.py`, `config_env.py`), which the stand-in dashboard serves to the real app, and, for
+// component tests, the Rust side's reads and endpoint save, which drop the previews and check before saving
+// (`Dashboard::provider_sign_ins`, `custom_endpoints`, `save_endpoint`). Each profile keeps its own sign-ins and
+// endpoints.
 import { endpointFormProblem, type CustomEndpoint, type EndpointForm, type EndpointSave, type ProviderSignIn } from "./accounts";
 import type { RestRequest } from "./fakeHermes";
 
@@ -96,7 +97,8 @@ export class FakeAccounts {
     if (!model) throw new Error("Enter the model's name: Hermes found no models at that address.");
     const id = form.name.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
     const list = (this.endpoints[profile] ??= []);
-    const key = form.key?.trim() || list.find((e) => e.id === id)?.key;
+    // A blank key clears the one an endpoint of that name had, as Rust sends it blank.
+    const key = form.key?.trim() || undefined;
     const entry: Endpoint = { id, name: form.name.trim(), base_url: form.baseUrl.trim().replace(/\/+$/, ""), model, models: checked.models, key };
     this.endpoints[profile] = [...list.filter((e) => e.id !== id), entry];
     return { outcome: "saved", id, checked: checked.ok };
@@ -113,6 +115,21 @@ export class FakeAccounts {
   private oauth(req: RestRequest, parts: string[]): unknown {
     const profile = this.profileOf(req);
     const [a, b, c] = parts;
+    // Hermes's own list, previews and all, which the Rust side reads (`Dashboard::provider_sign_ins`).
+    if (req.method === "GET" && parts.length === 1 && !a) {
+      const shown = new Map(this.signIns(profile).map((r) => [r.id, r]));
+      return {
+        providers: CATALOG.map((p) => {
+          const r = shown.get(p.id)!;
+          return {
+            ...p,
+            disconnectable: p.flow === "device_code" && !this.fromEnv.has(p.id),
+            disconnect_hint: r.signOutHint ?? null,
+            status: { logged_in: r.signedIn, token_preview: r.signedIn ? "tok-…9f3a" : null, expires_at: null },
+          };
+        }),
+      };
+    }
     if (req.method === "POST" && b === "start" && parts.length === 2) {
       const p = CATALOG.find((x) => x.id === a);
       if (!p) throw answered(400, `Unknown provider ${a}`);
@@ -149,6 +166,26 @@ export class FakeAccounts {
     const profile = this.profileOf(req);
     const list = this.endpoints[profile] ?? [];
     const [id, action] = parts;
+    // Hermes's own list, check and save, which the Rust side calls (`Dashboard::custom_endpoints`, `save_endpoint`).
+    if (parts.length === 1 && !id) {
+      if (req.method === "GET")
+        return {
+          endpoints: list.map((e) => ({ id: e.id, name: e.name, base_url: e.base_url, model: e.model, has_api_key: !!e.key, api_key_preview: e.key ? "«redacted:…»" : null, is_current: this.current[profile] === e.id, source: "providers" })),
+        };
+      if (req.method === "POST") {
+        const b = req.body ?? {};
+        const text = (k: string) => (typeof b[k] === "string" ? (b[k] as string) : "");
+        const eid = text("name").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+        const entry: Endpoint = { id: eid, name: text("name").trim(), base_url: text("base_url"), model: text("model"), models: Array.isArray(b.models) ? (b.models as string[]) : [], key: text("api_key").trim() || undefined };
+        this.endpoints[profile] = [...list.filter((e) => e.id !== eid), entry];
+        return { ok: true, id: eid };
+      }
+    }
+    if (req.method === "POST" && id === "validate" && parts.length === 1) {
+      const b = req.body ?? {};
+      const base = typeof b.base_url === "string" ? b.base_url : "";
+      return { ...this.check({ name: "", baseUrl: base, model: "" }), reachable: !base.includes("offline"), resolved_base_url: base.trim().replace(/\/+$/, "") };
+    }
     if (req.method === "POST" && action === "activate" && parts.length === 2) {
       const e = list.find((x) => x.id === id);
       if (!e) throw answered(404, "custom endpoint not found");
@@ -161,7 +198,6 @@ export class FakeAccounts {
       if (this.current[profile] === id) this.current[profile] = undefined;
       return { ok: true };
     }
-    // The list and the save are Rust's (`signIns`, `save`), and the window can't reach them through the relay.
     throw answered(405, "Method Not Allowed");
   }
 }

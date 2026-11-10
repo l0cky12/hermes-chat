@@ -90,6 +90,13 @@ export function SignInSettings({
   const open = (url: string, id: string) =>
     void Promise.resolve(openUrl(url)).catch((e) => setNote({ id, ok: false, text: `Couldn't open your browser: ${messageOf(e)} Open ${url} yourself.` }));
 
+  const lateApproval = async (scope: number, p: ProviderSignIn) => {
+    await api.signedIn(profile).catch(() => undefined);
+    const after = await load(scope);
+    if (live(scope) && !session.current && after?.items.find((x) => x.id === p.id)?.signedIn)
+      setNote({ id: p.id, ok: true, text: `Signed in to ${p.name} after all: Hermes finished the sign-in before the cancel reached it.` });
+  };
+
   /** Waits on Hermes until the sign-in leaves `pending`, then reads the list to see whether it took. */
   const follow = async (scope: number, p: ProviderSignIn, started: StartedSignIn) => {
     const mine = () => live(scope) && session.current === started.session;
@@ -97,7 +104,11 @@ export function SignInSettings({
     for (;;) {
       const t0 = Date.now();
       const progress = await api.waitSignIn(profile, p.id, started.session).catch((e: unknown) => ({ state: "failed" as const, why: `Lost track of it: ${messageOf(e)}` }));
-      if (!mine()) return;
+      if (!mine()) {
+        // Cancelled while Hermes was already approving it: the list says whether it took.
+        if (progress.state === "approved" && live(scope) && !session.current) await lateApproval(scope, p);
+        return;
+      }
       if (progress.state === "approved") ended = { approved: true };
       else if (progress.state === "failed") ended = { approved: false, why: progress.why };
       else {

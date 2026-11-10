@@ -7,6 +7,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeHermes } from "../hermes/fakeHermes";
+import type { SignInProgress } from "../hermes/accounts";
 import type { OpenPipe } from "../hermes/pipe";
 import { connect, type Hermes } from "../hermes/transport";
 import { EndpointSettings } from "./EndpointSettings";
@@ -92,6 +93,20 @@ describe("Settings → Providers, subscription sign-ins", () => {
     expect(await screen.findByText("Sign-in cancelled.")).toBeTruthy();
     await waitFor(() => expect(s.accounts.sessions.has(session)).toBe(false));
     expect(sent(s)).toContain(`DELETE /api/providers/oauth/sessions/${session}`);
+  });
+
+  it("shows signed in when Hermes approved the sign-in just before the cancel reached it", async () => {
+    const { s, hermes, user } = await shown("signIns");
+    let answer: (p: SignInProgress) => void = () => {};
+    vi.spyOn(hermes.accounts, "waitSignIn").mockImplementation(() => new Promise((r) => (answer = r)));
+    await user.click(await screen.findByRole("button", { name: "Sign in to ChatGPT or Codex Subscription" }));
+    await screen.findByRole("status", { name: /Sign-in code/ });
+    s.accounts.settle(s.accounts.pending("openai-codex")!.id, "approved");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText("Sign-in cancelled.")).toBeTruthy();
+    answer({ state: "approved" });
+    expect(await screen.findByText(/^Signed in to ChatGPT or Codex Subscription after all/)).toBeTruthy();
+    expect(within(rowOf("ChatGPT or Codex Subscription")).getByRole("button", { name: "Sign out of ChatGPT or Codex Subscription" })).toBeTruthy();
   });
 
   it("cancels the sign-in when the screen closes", async () => {

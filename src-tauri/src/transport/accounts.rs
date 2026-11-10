@@ -85,6 +85,10 @@ struct Checked {
     message: String,
     #[serde(default)]
     models: Vec<String>,
+    /// The base that served the models: Hermes tries the address typed and its `/v1` twin, and the runtime appends
+    /// `/chat/completions` to the one saved.
+    #[serde(default)]
+    resolved_base_url: Option<String>,
 }
 
 /// A provider id as Hermes's catalog spells it: `nous`, `openai-codex`, `xai-oauth`.
@@ -212,10 +216,9 @@ impl Dashboard {
             None => s.to_owned(),
         };
 
-        let mut body = json!({"name": name, "base_url": base_url, "model": model});
-        if let Some(k) = &key {
-            body["api_key"] = json!(k);
-        }
+        // A blank key is sent blank: Hermes clears the key an endpoint of that name had, rather than keeping it for
+        // the new address.
+        let mut body = json!({"name": name, "base_url": base_url, "model": model, "api_key": key.as_deref().unwrap_or("")});
         let answer =
             self.call(&http, Method::POST, endpoint(&self.base, "api/providers/custom-endpoints/validate"), Some(body.to_string()), show_failure).await?;
         let checked: Checked = serde_json::from_str(&answer).map_err(|_| TransportError::Unexpected {
@@ -232,6 +235,10 @@ impl Dashboard {
             return Err(TransportError::Endpoint("Enter the model's name: Hermes found no models at that address.".into()));
         }
         body["model"] = json!(model);
+        let resolved = checked.resolved_base_url.as_deref().and_then(|r| Url::parse(r).ok()).filter(|r| r.origin() == url.origin());
+        if let Some(r) = resolved {
+            body["base_url"] = json!(r.as_str().trim_end_matches('/'));
+        }
         if !checked.models.is_empty() {
             body["models"] = json!(checked.models);
         }

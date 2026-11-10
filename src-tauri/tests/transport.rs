@@ -3141,7 +3141,7 @@ async fn a_failed_password_sign_in_shows_a_body_that_doesnt_repeat_the_password(
 type Bodies = Arc<Mutex<Vec<(String, Value)>>>;
 
 /// A dashboard with Hermes's sign-in and custom endpoint routes (`oauth.py`, `config_env.py` at `bf0203a`), trimmed.
-/// The endpoint check passes for `http://ollama:11434/v1`, finds no models at `http://empty:8000/v1`, and turns any
+/// The endpoint check passes for `http://ollama:11434/v1` and its host root, finds no models at `http://empty:8000/v1`, and turns any
 /// other address down, quoting the key it was sent.
 async fn accounts_stub() -> (Dashboard, Bodies) {
     let bodies = Bodies::default();
@@ -3156,7 +3156,13 @@ async fn accounts_stub() -> (Dashboard, Bodies) {
         move |uri, Json(body): Json<Value>| async move {
             let body = keep(uri, Json(body)).await;
             Json(match body["base_url"].as_str() {
-                Some("http://ollama:11434/v1") => json!({"ok": true, "reachable": true, "message": "", "models": ["qwen3:8b", "llama3.2"]}),
+                Some("http://ollama:11434/v1") => {
+                    json!({"ok": true, "reachable": true, "message": "", "models": ["qwen3:8b", "llama3.2"], "resolved_base_url": "http://ollama:11434/v1"})
+                }
+                // The host root, which serves its models only under `/v1`.
+                Some("http://ollama:11434") => {
+                    json!({"ok": true, "reachable": true, "message": "", "models": ["qwen3:8b"], "resolved_base_url": "http://ollama:11434/v1"})
+                }
                 Some("http://empty:8000/v1") => json!({"ok": false, "reachable": true, "message": "No models listed.", "models": []}),
                 _ => {
                     json!({"ok": false, "reachable": true, "message": format!("The endpoint rejected the API key {}.", body["api_key"].as_str().unwrap_or("")), "models": []})
@@ -3238,6 +3244,14 @@ async fn an_endpoint_is_checked_then_saved_with_the_models_found() {
         bodies[1].1,
         json!({"name": "Ollama", "base_url": "http://ollama:11434/v1", "model": "qwen3:8b", "api_key": "sk-local", "models": ["qwen3:8b", "llama3.2"]})
     );
+}
+
+#[tokio::test]
+async fn an_endpoint_is_saved_at_the_address_that_served_its_models_and_without_a_key_clears_one() {
+    let (dashboard, bodies) = accounts_stub().await;
+    dashboard.save_endpoint("work", &endpoint_form("Ollama", "http://ollama:11434", "", None), false).await.unwrap();
+    let bodies = bodies.lock().unwrap();
+    assert_eq!(bodies[1].1, json!({"name": "Ollama", "base_url": "http://ollama:11434/v1", "model": "qwen3:8b", "api_key": "", "models": ["qwen3:8b"]}));
 }
 
 #[tokio::test]
