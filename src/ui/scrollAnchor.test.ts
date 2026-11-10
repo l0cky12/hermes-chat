@@ -52,7 +52,10 @@ beforeEach(() => {
   observers = [];
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("anchorScroll", () => {
   it("keeps the view still when a block above it grows or shrinks", () => {
@@ -84,6 +87,17 @@ describe("anchorScroll", () => {
     t.lay([400, 400, 700, 900]);
     resize([t.blocks[2], t.blocks[3]]);
     expect(t.scroller.scrollTop).toBe(1000);
+  });
+
+  it("lets a block laid out for the first time across the view's top grow upward, and one in view grow down", () => {
+    // The view shows 900 to 1500 of the content. Block 1 (800 to 960) and block 3 (1120 to 1280) have never been laid out.
+    const t = transcript([800, 160, 160, 160], 900);
+    vi.spyOn(window, "getComputedStyle").mockImplementation(() => ({ containIntrinsicBlockSize: "auto 160px" }) as CSSStyleDeclaration);
+    anchorScroll(t.scroller, t.list, () => false);
+    resize(t.blocks);
+    t.lay([800, 600, 160, 400]);
+    resize([t.blocks[1], t.blocks[3]]);
+    expect(t.scroller.scrollTop).toBe(900 + 440);
   });
 
   it("leaves a view that follows the bottom to the code that follows it", () => {

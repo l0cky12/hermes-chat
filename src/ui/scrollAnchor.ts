@@ -1,7 +1,7 @@
 /**
- * Keeps what's on screen in `scroller` still when a child of `list` above the view changes height, as CSS scroll
- * anchoring would. WebKitGTK doesn't anchor, and transcript blocks change height above the view the first time they
- * lay out, since `content-visibility` skips them until they come near. `following`: the view sticks to the bottom, so
+ * Keeps what's on screen in `scroller` still when children of `list` change height, as CSS scroll anchoring would.
+ * WebKitGTK doesn't anchor, and transcript blocks change height the first time they lay out: `content-visibility`
+ * skips each one, at its placeholder height, until it comes into view. `following`: the view sticks to the bottom, so
  * there's nothing to hold. Returns the cleanup.
  */
 export function anchorScroll(scroller: HTMLElement, list: Element, following: () => boolean): () => void {
@@ -15,8 +15,12 @@ export function anchorScroll(scroller: HTMLElement, list: Element, following: ()
     for (const { el, rect } of changed) {
       const was = heights.get(el);
       heights.set(el, rect.height);
-      // Where it was before the blocks above it changed: wholly above the view, so its change moved what's on screen.
-      if (was !== undefined && rect.top - shift + was <= viewTop) shift += rect.height - was;
+      if (was === undefined) continue;
+      // Where it was before the blocks above it in this pass changed.
+      const top = rect.top - shift;
+      // A block laid out for the first time showed nothing yet, so one reaching above the view grows upward, holding
+      // the blocks under it. Any other change holds only when the whole block was above, so nothing on screen moves.
+      if (Math.abs(was - placeholder(el)) < 0.5 ? top < viewTop : top + was <= viewTop) shift += rect.height - was;
     }
     if (shift && !following()) scroller.scrollTop += shift;
   });
@@ -32,4 +36,11 @@ export function anchorScroll(scroller: HTMLElement, list: Element, following: ()
     mo.disconnect();
     ro.disconnect();
   };
+}
+
+/** The height a block skipped before it was ever laid out has: its `contain-intrinsic-block-size` and its box. */
+function placeholder(el: Element): number {
+  const s = getComputedStyle(el);
+  const px = (v: string | undefined) => parseFloat(v ?? "") || 0;
+  return px(s.containIntrinsicBlockSize?.replace("auto", "")) + px(s.paddingTop) + px(s.paddingBottom) + px(s.borderTopWidth) + px(s.borderBottomWidth);
 }
