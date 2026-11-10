@@ -203,11 +203,12 @@ describe("Reconnecting", () => {
 
 /**
  * `server`'s pipes, each able to open its socket again on the connection it holds, as src-tauri `hermes_reopen` does.
- * `reopenFails`: the next reopen fails, as it does when the tunnel or the sign-in is gone. `reopenHangs` and
- * `openHangs`: the next reopen, or full open, waits until it is stopped, as one whose server doesn't answer does.
+ * `reopenFails`: the next reopen fails, as it does when the tunnel or the sign-in is gone; `openFails`: every full open
+ * fails. `reopenHangs` and `openHangs`: the next reopen, or full open, waits until it is stopped, as one whose server
+ * doesn't answer does.
  */
 function reopening(server: FakeHermes) {
-  const seen = { opens: 0, reopens: 0, closes: 0, reopenFails: undefined as string | undefined, reopenHangs: false, openHangs: false };
+  const seen = { opens: 0, reopens: 0, closes: 0, reopenFails: undefined as string | undefined, openFails: undefined as string | undefined, reopenHangs: false, openHangs: false };
   const untilStopped = (signal?: AbortSignal) => new Promise((_, reject) => signal?.addEventListener("abort", () => reject(new Error("Connecting was stopped."))));
   const kept = (pipe: Pipe): Pipe => ({
     ...pipe,
@@ -226,6 +227,7 @@ function reopening(server: FakeHermes) {
   });
   const open: OpenPipe = async (onEvent, profile, signal) => {
     seen.opens++;
+    if (seen.openFails) throw new Error(seen.openFails);
     if (seen.openHangs) await untilStopped(signal);
     return kept(await server.openPipe(onEvent, profile, signal));
   };
@@ -328,6 +330,22 @@ describe("Reopening the socket", () => {
     server.drop();
     await vi.advanceTimersByTimeAsync(0);
     expect(seen).toMatchObject({ reopens: 1, opens: 2 });
+
+    await hermes.close();
+    expect(seen.closes).toBe(1);
+  });
+
+  it("closes the kept connection when the app closes after the reopen and the full open both failed", async () => {
+    const server = new FakeHermes();
+    const { seen, open } = reopening(server);
+    const hermes = await connect(open);
+    await vi.advanceTimersByTimeAsync(5_000);
+    seen.reopenFails = "Can't reach the Hermes dashboard: connection reset";
+    seen.openFails = "SSH failed: connect to host hermes port 22: Connection refused";
+    server.drop();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hermes.getSnapshot().status).toBe("reconnecting");
+    expect(seen).toMatchObject({ opens: 2, reopens: 1 });
 
     await hermes.close();
     expect(seen.closes).toBe(1);
