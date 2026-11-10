@@ -2,6 +2,9 @@
 //! The Repository screen's helper (repo_git_helper.py), run as the server runs it: the exact remote command string
 //! through `sh -c`, against real Git repositories in a temporary folder. Only ssh itself is left out.
 
+mod common;
+
+use common::write_executable;
 use hermes_chat::repo_git::{self, DiffSide, RepoError, Request};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -297,9 +300,7 @@ async fn commit(d: &Dir, p: &Value, message: &str) -> Result<Value, RepoError> {
 
 fn hook(d: &Dir, name: &str, body: &str) {
     let p = d.path().join(".git/hooks").join(name);
-    std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&p, &format!("#!/bin/sh\n{body}\n"));
 }
 
 /// A repository with two changed files and an untracked one.
@@ -934,9 +935,7 @@ async fn a_server_side_refusal_and_a_pre_push_hook_are_told_apart() {
     std::fs::remove_file(d.path().join(".git/hooks/pre-push")).unwrap();
 
     let p = remote.path().join("hooks/pre-receive");
-    std::fs::write(&p, "#!/bin/sh\necho 'feature is protected' >&2\nexit 1\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&p, "#!/bin/sh\necho 'feature is protected' >&2\nexit 1\n");
     let e = serde_json::to_value(push(&d, Some(head(&d))).await.unwrap_err()).unwrap();
     assert_eq!(e["kind"], "remote-rejected", "{e}");
     assert!(e["output"].as_str().unwrap().contains("feature is protected"));
@@ -1129,7 +1128,6 @@ async fn a_separate_push_destination_is_asked_not_assumed() {
 
 #[tokio::test]
 async fn a_pull_request_made_but_slow_to_read_back_keeps_its_link() {
-    use std::os::unix::fs::PermissionsExt;
     let (d, remote) = with_remote("pr-readback");
     push(&d, Some(head(&d))).await.unwrap();
     // The remote is written as a GitHub URL, and rewritten to the local bare repository for Git.
@@ -1138,8 +1136,7 @@ async fn a_pull_request_made_but_slow_to_read_back_keeps_its_link() {
     // A stand-in gh: makes the pull request, then never answers the read-back in time.
     let bin = Dir::new("pr-readback-bin");
     let gh = bin.path().join("gh");
-    std::fs::write(&gh, "#!/bin/sh\ncase \"$1 $2\" in\n  'pr list') echo '[]';;\n  'pr create') cat >/dev/null; echo 'https://github.com/acme/widgets/pull/5';;\n  'pr view') sleep 5;;\nesac\n").unwrap();
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&gh, "#!/bin/sh\ncase \"$1 $2\" in\n  'pr list') echo '[]';;\n  'pr create') cat >/dev/null; echo 'https://github.com/acme/widgets/pull/5';;\n  'pr view') sleep 5;;\nesac\n");
     let mut c = helper();
     c.env("PATH", format!("{}:{}", bin.s(), std::env::var("PATH").unwrap())).env("HERMES_REPO_READBACK_TIMEOUT", "1");
     let r = repo_git::run(
@@ -1337,12 +1334,10 @@ async fn publish_info_still_offers_push_when_gh_is_missing() {
 
 #[tokio::test]
 async fn publish_info_still_offers_push_when_gh_is_too_slow() {
-    use std::os::unix::fs::PermissionsExt;
     let (d, _remote) = github_written("publish-slow-gh");
     let bin = Dir::new("publish-slow-gh-bin");
     let gh = bin.path().join("gh");
-    std::fs::write(&gh, "#!/bin/sh\nsleep 5\n").unwrap();
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&gh, "#!/bin/sh\nsleep 5\n");
     let mut c = helper();
     c.env("PATH", format!("{}:{}", bin.s(), std::env::var("PATH").unwrap())).env("HERMES_REPO_GH_TIMEOUT", "1");
     let p = repo_git::run(c, &Request::PublishInfo { repo: d.s() }).await.unwrap();

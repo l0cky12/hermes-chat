@@ -2,6 +2,8 @@
 //! The artifact was signed by `tauri signer sign` with two throwaway keys, deleted after signing. Only their public
 //! halves and the signatures are here (docs/releases.md, "The verification tests").
 
+mod common;
+
 use axum::body::{Body, Bytes};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -296,15 +298,13 @@ mod owned_by_a_package {
     use std::path::Path;
     use std::sync::OnceLock;
 
-    /// Written once, before any test runs it: a script still open for writing in one test while another forks can't be
-    /// run ("Text file busy").
+    /// Written once: rewriting it while another test runs it would fail with "Text file busy".
     fn fake_pacman() -> &'static Path {
         static SCRIPT: OnceLock<PathBuf> = OnceLock::new();
         SCRIPT.get_or_init(|| {
             let script = Path::new(env!("CARGO_TARGET_TMPDIR")).join("fake-pacman");
             let body = "#!/bin/sh\ncase \"$1\" in\n  -Qqo) [ -e \"$2.owned\" ] && echo hermes-chat ;;\n  -Q) echo \"$2 0.2.0-1\" ;;\n  *) exit 2 ;;\nesac\n";
-            std::fs::write(&script, body).unwrap();
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            common::write_executable(&script, body);
             script
         })
     }

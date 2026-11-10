@@ -1,5 +1,8 @@
 //! The preview's framing check and "Open in your browser" against local sites (issue #55).
 
+#[cfg(target_os = "linux")]
+mod common;
+
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
@@ -81,12 +84,10 @@ fn browser(name: &str, script: &str) -> (std::path::PathBuf, gtk::gio::DesktopAp
 /// `browser`, with `args` after the program on its `Exec` line and more lines in its `[Desktop Entry]`.
 #[cfg(target_os = "linux")]
 fn browser_with(name: &str, script: &str, args: &str, more: &str) -> (std::path::PathBuf, gtk::gio::DesktopAppInfo) {
-    use std::os::unix::fs::PermissionsExt;
     let dir = std::env::temp_dir().join(format!("hermes-browser-{}-{}", std::process::id(), name.replace(' ', "-")));
     std::fs::create_dir_all(&dir).unwrap();
     let program = dir.join("browser");
-    std::fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    common::write_executable(&program, &format!("#!/bin/sh\n{script}\n"));
     let desktop = dir.join(format!("{name}.desktop"));
     let entry = format!("[Desktop Entry]\nType=Application\nName={name}\nExec={} {args}\n{more}", program.display());
     std::fs::write(&desktop, entry).unwrap();

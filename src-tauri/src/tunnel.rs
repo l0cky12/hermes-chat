@@ -206,9 +206,7 @@ while True:
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("fake.py"), FAKE_SSH).unwrap();
             let program = dir.join("ssh");
-            std::fs::write(&program, format!("#!/bin/sh\nexec python3 {}/fake.py {} \"$@\"\n", dir.display(), dir.display())).unwrap();
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::test_common::write_executable(&program, &format!("#!/bin/sh\nexec python3 {}/fake.py {} \"$@\"\n", dir.display(), dir.display()));
             FakeSsh { program: program.to_str().unwrap().to_owned(), dir }
         }
 

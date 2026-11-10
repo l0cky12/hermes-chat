@@ -2,6 +2,9 @@
 //! Worktrees on the server (ADR 0043): the helper's worktree operations, run as the server runs them (the exact remote
 //! command string through `sh -c`), against real Git repositories in a temporary folder. Only ssh itself is left out.
 
+mod common;
+
+use common::write_executable;
 use hermes_chat::repo_git::{self, RepoError, Request};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -665,8 +668,7 @@ async fn an_ignored_setup_link_doesnt_stop_changes_being_kept() {
 async fn a_failing_post_checkout_hook_leaves_the_worktree_recorded_with_retry() {
     let (d, app) = repo("hook");
     let hook = app.join(".git/hooks/post-checkout");
-    std::fs::write(&hook, "#!/bin/sh\necho 'post-checkout: npm ci failed' >&2\nexit 1\n").unwrap();
-    std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    write_executable(&hook, "#!/bin/sh\necho 'post-checkout: npm ci failed' >&2\nexit 1\n");
     let made = create(&app, ID, "feature/h", false).await;
     assert_eq!(made["worktree"]["state"], "setup-failed");
     assert!(made["worktree"]["setup"]["log"].as_str().unwrap().contains("npm ci failed"));

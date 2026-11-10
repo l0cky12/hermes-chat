@@ -1387,7 +1387,8 @@ mod tests {
     #[cfg(unix)]
     fn fake_engine(dir: &Path, name: &str, script: &str) -> Engine {
         let binary = dir.join(name).join("whisper-cli");
-        file(&binary, &format!("#!/bin/sh\n{script}\n"), 0o755);
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        crate::test_common::write_executable(&binary, &format!("#!/bin/sh\n{script}\n"));
         file(&dir.join("ggml-tiny.bin"), "", 0o644);
         Engine { kind: Kind::WhisperCpp, binary, model: Some(dir.join("ggml-tiny.bin")) }
     }
