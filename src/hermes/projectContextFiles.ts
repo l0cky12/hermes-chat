@@ -328,7 +328,13 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
           (e: unknown) => messageOf(e),
         );
       // Hermes answers 404 for a file something else removed meanwhile: gone is what was asked for.
-      const still = await listedNow(profile, dir, "all", file.name).catch(() => undefined);
+      let still;
+      try {
+        still = await listedNow(profile, dir, "all", file.name);
+      } catch (e) {
+        const why = failed ? `Couldn't remove ${file.name}: ${failed}` : `Hermes said it removed ${file.name}`;
+        throw new Error(`${why}, and the folder couldn't be listed to check: ${messageOf(e)}`);
+      }
       if (still) throw new Error(failed ? `Couldn't remove ${file.name}: ${failed}` : `Hermes said it removed ${file.name}, but ${dir} still lists it.`);
     },
     async preview(profile, writes, file) {

@@ -466,23 +466,35 @@ pub async fn git_exclude(dashboard: &Dashboard, main_folder: &str, ssh_profile: 
         Read::NotAFile | Read::NotText => Err(unreadable(&path)),
     };
 
-    let git_dir = match read_git(format!("{root}/.git")).await? {
-        (_, Read::NotAFile) => format!("{root}/.git"),
-        (path, Read::Bytes(bytes)) => gitdir_of(&root, &String::from_utf8_lossy(&bytes)).ok_or_else(|| unreadable(&path))?,
+    let dot_git = match read_git(format!("{root}/.git")).await? {
+        (_, Read::NotAFile) => DotGit::Dir,
+        (path, Read::Bytes(bytes)) => DotGit::File(gitdir_of(&root, &String::from_utf8_lossy(&bytes)).ok_or_else(|| unreadable(&path))?),
         (path, _) => return Err(unreadable(&path)),
     };
-    let common = match read_git(format!("{git_dir}/commondir")).await? {
-        (_, Read::Missing) => git_dir,
-        (path, Read::Bytes(bytes)) => join(&git_dir, String::from_utf8_lossy(&bytes).trim()).ok_or_else(|| unreadable(&path))?,
+    let git_dir = match &dot_git {
+        DotGit::Dir => format!("{root}/.git"),
+        DotGit::File(git_dir) => git_dir.clone(),
+    };
+    let commondir = match read_git(format!("{git_dir}/commondir")).await? {
+        (_, Read::Missing) => None,
+        (_, Read::Bytes(bytes)) => Some(String::from_utf8_lossy(&bytes).trim().to_owned()),
         (path, _) => return Err(unreadable(&path)),
     };
-    // `.git` and `commondir` can name any folder, and the upload route creates missing parents: only a folder that
-    // looks like a repository gets an `info/exclude`.
+    let Some(common) = common_dir(&root, &dot_git, commondir.as_deref()) else {
+        return Err(format!("{git_dir} isn't {root}'s own Git folder or one of its worktrees, so context/ wasn't excluded."));
+    };
     if !matches!(read_git(format!("{common}/HEAD")).await?, (_, Read::Bytes(_))) {
         return Err(format!("{common} doesn't look like a Git repository, so context/ wasn't excluded."));
     }
     let exclude = ExcludeFile::in_common_dir(&common);
-    let exclude_text = text_or_empty(read_git(exclude.0.clone()).await?)?;
+    if !exclude_is_itself(dashboard, on, &exclude).await? {
+        return Err(format!("{} is a link, so context/ wasn't added to it.", exclude.0));
+    }
+    let exclude_text = match read_git(exclude.0.clone()).await? {
+        (_, Read::Bytes(bytes)) => String::from_utf8(bytes).map_err(|_| format!("{} isn't UTF-8 text, so context/ wasn't added to it.", exclude.0))?,
+        (_, Read::Missing) => String::new(),
+        (path, _) => return Err(unreadable(&path)),
+    };
     let root_ignore = text_or_empty(read_git(format!("{root}/.gitignore")).await?)?;
     let main_ignore = if rel.is_empty() { String::new() } else { text_or_empty(read_git(format!("{main_folder}/.gitignore")).await?)? };
     let Some(text) = exclude_with_context(&rel, &exclude_text, &root_ignore, &main_ignore) else {
@@ -540,6 +552,71 @@ fn relative(root: &str, main: &str) -> Option<String> {
         return Some(String::new());
     }
     main.strip_prefix(root.trim_end_matches('/'))?.strip_prefix('/').map(str::to_owned)
+}
+
+/// What a repository root's `.git` is: its Git folder, or a file naming a worktree's.
+pub enum DotGit {
+    Dir,
+    File(String),
+}
+
+/// The Git folder whose `info/exclude` serves the repository at `root`: `<root>/.git`, or for a worktree
+/// `<repo>/.git`, where the worktree's own folder is `<repo>/.git/worktrees/<name>` and its `commondir` leads back to
+/// that `<repo>/.git`. `None` for anything else, so a `.git` file or `commondir` naming another folder gets nothing
+/// written there.
+pub fn common_dir(root: &str, dot_git: &DotGit, commondir: Option<&str>) -> Option<String> {
+    match dot_git {
+        DotGit::Dir => commondir.is_none().then(|| format!("{root}/.git")),
+        DotGit::File(git_dir) => {
+            let (common, name) = git_dir.rsplit_once("/worktrees/")?;
+            if name.is_empty() || name.contains('/') || !common.ends_with("/.git") {
+                return None;
+            }
+            (join(git_dir, commondir?)? == common).then(|| common.to_owned())
+        }
+    }
+}
+
+/// Whether `exclude` is a file of its own or not there yet, as the server resolves it: not a link to somewhere else,
+/// whose target an upload or `write-text` would replace.
+async fn exclude_is_itself(dashboard: &Dashboard, on: Machine<'_>, exclude: &ExcludeFile) -> Result<bool, String> {
+    #[derive(Deserialize)]
+    struct Entry {
+        name: String,
+        path: String,
+        #[serde(default)]
+        broken_link: bool,
+    }
+    #[derive(Deserialize)]
+    struct Listing {
+        path: String,
+        entries: Vec<Entry>,
+    }
+    #[derive(Deserialize)]
+    struct Resolved {
+        path: String,
+    }
+    let info = exclude.0.trim_end_matches("/exclude");
+    let answer = match on {
+        Machine::Dashboard => dashboard.send_limited(Method::GET, "api/files", &query(&[("path", info)]), None, GIT_FILE_MAX_BYTES).await,
+        Machine::Ssh(profile) => {
+            let q = query(&[("path", &exclude.0), ("profile", profile)]);
+            dashboard.send_limited(Method::GET, "api/fs/read-text", &q, None, READ_TEXT_ANSWER_MAX_BYTES).await
+        }
+    };
+    let body = match answer {
+        Ok(body) => body,
+        Err(TransportError::Unexpected { status: 404, .. }) => return Ok(true),
+        Err(e) => return Err(e.to_string()),
+    };
+    let unknown = || "Hermes's answer about info/exclude wasn't one Hermes Chat knows.".to_owned();
+    Ok(match on {
+        Machine::Dashboard => {
+            let listing: Listing = serde_json::from_slice(&body).map_err(|_| unknown())?;
+            listing.path == info && listing.entries.iter().filter(|e| e.name == "exclude").all(|e| e.path == exclude.0 && !e.broken_link)
+        }
+        Machine::Ssh(_) => serde_json::from_slice::<Resolved>(&body).map_err(|_| unknown())?.path == exclude.0,
+    })
 }
 
 fn gitdir_of(root: &str, dot_git: &str) -> Option<String> {

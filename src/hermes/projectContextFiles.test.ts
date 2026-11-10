@@ -189,6 +189,16 @@ describe("changing a project's context files", () => {
     await expect(files.remove("default", DIR, file)).resolves.toBeUndefined();
     await expect(files.remove("default", DIR, { ...file, path: "/etc/passwd" })).rejects.toThrow(/isn't in/);
   });
+
+  it("doesn't count a file as removed when the folder can't be listed to check", async () => {
+    const { server, files } = await signedIn((s) => (s.managedFiles.nodes[`${DIR}/notes.md`] = { text: "x" }));
+    const [file] = ready(await files.read("default", budget)).files;
+    delete server.managedFiles.nodes[`${DIR}/notes.md`];
+    server.rest["GET /api/files"] = () => {
+      throw new Error("The dashboard answered 500: listing failed");
+    };
+    await expect(files.remove("default", DIR, file)).rejects.toThrow(/Couldn't remove notes.md: .*404.*, and the folder couldn't be listed to check/);
+  });
 });
 
 describe("a profile whose tools run over SSH", () => {

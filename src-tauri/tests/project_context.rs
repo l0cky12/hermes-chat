@@ -21,6 +21,8 @@ struct Disk {
     dirs: Mutex<Vec<String>>,
     writes: Mutex<Vec<String>>,
     reads: Mutex<Vec<String>>,
+    /// A symbolic link's path and its target, which Hermes resolves before it lists or reads.
+    links: Mutex<BTreeMap<String, String>>,
 }
 
 type Shared = Arc<Disk>;
@@ -55,6 +57,10 @@ impl Disk {
         self.file(path).is_some() || self.is_dir(path)
     }
 
+    fn resolved(&self, path: &str) -> String {
+        self.links.lock().unwrap().get(path).cloned().unwrap_or_else(|| path.to_owned())
+    }
+
     fn writes(&self) -> Vec<String> {
         self.writes.lock().unwrap().clone()
     }
@@ -70,6 +76,24 @@ fn detail(status: StatusCode, detail: &str) -> Response {
 
 async fn login() -> Response {
     (axum::response::AppendHeaders([(axum::http::header::SET_COOKIE, "hermes_session_at=AT; Path=/")]), Json(json!({"ok": true}))).into_response()
+}
+
+async fn list(State(disk): State<Shared>, Query(q): Query<HashMap<String, String>>) -> Response {
+    let path = q["path"].clone();
+    disk.reads.lock().unwrap().push(format!("list {path}"));
+    if !disk.is_dir(&path) {
+        return detail(StatusCode::NOT_FOUND, "Path not found");
+    }
+    let under = format!("{path}/");
+    let entries: Vec<Value> = disk
+        .files
+        .lock()
+        .unwrap()
+        .keys()
+        .filter_map(|f| f.strip_prefix(&under).filter(|n| !n.contains('/')).map(|n| (n.to_owned(), f.clone())))
+        .map(|(name, f)| json!({"name": name, "path": disk.resolved(&f), "is_directory": false}))
+        .collect();
+    Json(json!({"path": disk.resolved(&path), "entries": entries})).into_response()
 }
 
 async fn download(State(disk): State<Shared>, Query(q): Query<HashMap<String, String>>) -> Response {
@@ -126,7 +150,7 @@ async fn read_text(State(disk): State<Shared>, Query(q): Query<HashMap<String, S
             Json(json!({
                 "binary": head.contains(&0),
                 "byteSize": data.len(),
-                "path": path,
+                "path": disk.resolved(&path),
                 "text": String::from_utf8_lossy(shown),
                 "truncated": data.len() > 512 * 1024,
             }))
@@ -169,7 +193,7 @@ async fn stub(disk: &Shared) -> Dashboard {
         .route("/api/files/download", get(download))
         .route("/api/files/upload-stream", post(upload_stream))
         .route("/api/files/mkdir", post(mkdir))
-        .route("/api/files", axum::routing::delete(delete))
+        .route("/api/files", axum::routing::delete(delete).get(list))
         .route("/api/fs/read-text", get(read_text))
         .route("/api/fs/write-text", post(write_text))
         .route("/api/fs/git-root", get(git_root))
@@ -404,8 +428,47 @@ async fn git_exclude_writes_nothing_outside_a_repository() {
     let disk = Disk::with(&[("/home/me/proj/.git", "gitdir: /home/me/.ssh\n"), ("/home/me/.ssh/id_ed25519", "secret")]);
     let dashboard = stub(&disk).await;
     let err = project_context::git_exclude(&dashboard, "/home/me/proj", None).await.unwrap_err();
-    assert!(err.contains("doesn't look like a Git repository"), "{err}");
+    assert!(err.contains("isn't /home/me/proj's own Git folder"), "{err}");
     assert!(disk.writes().is_empty(), "a .git file naming another folder gets nothing written there");
+}
+
+#[tokio::test]
+async fn git_exclude_writes_nothing_to_another_repository_a_git_file_or_commondir_names() {
+    let other = [("/other/.git/HEAD", "ref: refs/heads/main\n"), ("/other/.git/info/exclude", "keep\n")];
+    let named_by_gitdir = Disk::with(&[other[0], other[1], ("/proj/.git", "gitdir: /other/.git\n")]);
+    let by_commondir = Disk::with(&[
+        other[0],
+        other[1],
+        ("/r/.git/HEAD", "ref: refs/heads/main\n"),
+        ("/wt/.git", "gitdir: /r/.git/worktrees/wt\n"),
+        ("/r/.git/worktrees/wt/commondir", "/other/.git\n"),
+    ]);
+    let main_with_commondir = Disk::with(&[other[0], other[1], ("/proj/.git/HEAD", "ref: refs/heads/main\n"), ("/proj/.git/commondir", "/other/.git\n")]);
+    for (disk, main) in [(named_by_gitdir, "/proj"), (by_commondir, "/wt"), (main_with_commondir, "/proj")] {
+        let dashboard = stub(&disk).await;
+        let err = project_context::git_exclude(&dashboard, main, None).await.unwrap_err();
+        assert!(err.contains("own Git folder"), "{main}: {err}");
+        assert!(disk.writes().is_empty(), "{main}: {:?}", disk.writes());
+        assert_eq!(disk.text("/other/.git/info/exclude").as_deref(), Some("keep\n"));
+    }
+}
+
+#[tokio::test]
+async fn git_exclude_leaves_a_linked_or_non_utf8_info_exclude_alone() {
+    for ssh in [None, Some("work")] {
+        let disk = Disk::with(&[("/r/.git/HEAD", "ref: refs/heads/main\n"), ("/r/.git/info/exclude", "x"), ("/etc/target", "keep\n")]);
+        disk.links.lock().unwrap().insert("/r/.git/info/exclude".into(), "/etc/target".into());
+        let dashboard = stub(&disk).await;
+        let err = project_context::git_exclude(&dashboard, "/r", ssh).await.unwrap_err();
+        assert!(err.contains("is a link"), "{ssh:?}: {err}");
+        assert!(disk.writes().is_empty(), "{ssh:?}: {:?}", disk.writes());
+    }
+    let disk = Disk::with(&[("/r/.git/HEAD", "ref: refs/heads/main\n")]);
+    disk.put("/r/.git/info/exclude", b"caf\xe9\n");
+    let dashboard = stub(&disk).await;
+    let err = project_context::git_exclude(&dashboard, "/r", None).await.unwrap_err();
+    assert!(err.contains("isn't UTF-8 text"), "{err}");
+    assert_eq!(disk.file("/r/.git/info/exclude").as_deref(), Some(&b"caf\xe9\n"[..]), "left byte for byte");
 }
 
 #[tokio::test]
