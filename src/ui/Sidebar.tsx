@@ -351,10 +351,9 @@ function RenameRow({
  * the focused row all ask before deleting (`onAskDelete`, with what focus goes back to if the owner keeps the chat).
  * An archived chat has Restore in place of Settle and Archive. A chat with
  * a reply running can't be archived, restored or deleted. `snooze`: the chat can be snoozed from its menu. A snoozed
- * chat shows when it wakes (`sleepsUntil`) in place of its age. `section`: where the list shows it, for styling. Regenerate title in the menu shows a spinner until the new
+ * chat shows when it wakes in place of its age. `section`: where the list shows it, for styling. Regenerate title in the menu shows a spinner until the new
  * title is saved, and why underneath if it isn't. When Hermes can't use the Text generation model's provider, that
  * note says how to fix it and offers the setting.
- * Memoized (`sameRowProps`), so a reply streaming in one chat re-renders that chat's row, not the whole list.
  */
 const ChatRow = memo(function ChatRow({
   chat,
@@ -380,6 +379,8 @@ const ChatRow = memo(function ChatRow({
   section,
   hidden,
   sleepsUntil,
+  wake,
+  age,
 }: {
   chat: Chat;
   selected: boolean;
@@ -412,8 +413,9 @@ const ChatRow = memo(function ChatRow({
   /** In a collapsed section: kept, with its rename box or menu, but out of sight. */
   hidden?: boolean;
   sleepsUntil?: number;
-  /** The list's clock to the minute, so the row's age redraws as time passes. */
-  minute: number;
+  /** When the snoozed chat wakes, as the row shows it. */
+  wake?: string;
+  age: string;
 }) {
   const l = useLocale();
   const [renaming, setRenaming] = useState(false);
@@ -447,7 +449,6 @@ const ChatRow = memo(function ChatRow({
     if (wasRenaming.current && !renaming && (!now || now === document.body)) openButton.current?.focus();
     wasRenaming.current = renaming;
   }, [renaming]);
-  const now = Date.now();
   if (renaming) return <RenameRow chat={chat} selected={selected} hidden={hidden} onRename={onRename} onDone={() => setRenaming(false)} />;
   return (
     <div
@@ -500,7 +501,7 @@ const ChatRow = memo(function ChatRow({
           </span>
         )}
         <span className="row-meta">
-          {sleepsUntil && <span className="row-wake">{wakeLabel(sleepsUntil, now, l.tag)}</span>}
+          {wake && <span className="row-wake">{wake}</span>}
           {handoff?.kind === "needsOwner" && (
             <span className="row-owner" role="img" aria-label={handoff.reason} title={handoff.reason}>
               <CircleAlert size={12} />
@@ -515,7 +516,7 @@ const ChatRow = memo(function ChatRow({
           ) : chat.unread ? (
             <span className="dot" title="Unread" />
           ) : (
-            !sleepsUntil && l.fmt.age(chat.updatedAt)
+            !sleepsUntil && age
           )}
         </span>
       </button>
@@ -581,14 +582,8 @@ const ChatRow = memo(function ChatRow({
   );
 }, sameRowProps);
 
-/**
- * Whether a row's props draw the same row. The list builds each row's objects afresh every render, so plain objects,
- * arrays and Sets compare by value, and other objects by identity. Callbacks compare only by presence: the list's all
- * call its latest props (`live` in ChatList), so a row that skips a render never calls a stale one.
- */
 function sameRowProps(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
-  if (typeof a === "function" || typeof b === "function") return typeof a === typeof b;
   if (a instanceof Set) return b instanceof Set && a.size === b.size && [...a].every((x) => b.has(x));
   if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((x, i) => sameRowProps(x, b[i]));
   if (!isPlain(a) || !isPlain(b)) return false;
@@ -1103,22 +1098,47 @@ export function ChatList({
   useEffect(() => {
     if (selectedIn) setCollapsed(selectedIn, false);
   }, [selectedId]);
-  const latest = { onOpen, onOpenIn, onOpenTab, onSettle, onArchive, onRename, onRegenTitle, onCopyLink, onTextGenerationSettings, projectsOf, tagsOf, onPin, onStopWaiting, onSnooze, onWake };
+  const l = useLocale();
+  const latest = { chats, onOpen, onOpenIn, onOpenTab, onSettle, onArchive, onRename, onRegenTitle, onCopyLink, onTextGenerationSettings, projectsOf, tagsOf, onPin, onStopWaiting, onSnooze, onWake };
   const live = useRef(latest);
   live.current = latest;
-  const minute = Math.floor(now / 60_000);
+  const handlersFor = (id: string) => {
+    const chat = () => live.current.chats.find((c) => c.id === id);
+    return {
+      open: () => live.current.onOpen(id),
+      openIn: (side: number) => live.current.onOpenIn(id, side),
+      openTab: () => live.current.onOpenTab(id),
+      settle: (settled: boolean) => live.current.onSettle(id, settled),
+      archive: (archived: boolean) => live.current.onArchive(id, archived),
+      askDelete: (from: HTMLElement | null) => {
+        const c = chat();
+        if (c) setDeleting({ chat: c, from });
+      },
+      rename: (title: string, from: string) => live.current.onRename(id, title, from),
+      regenTitle: () => live.current.onRegenTitle(id),
+      copyLink: () => {
+        const c = chat();
+        if (c) live.current.onCopyLink?.(c);
+      },
+      textGenerationSettings: () => live.current.onTextGenerationSettings?.(),
+      toggleProject: (projectId: string, on: boolean) => live.current.projectsOf?.(id)?.onToggle(projectId, on),
+      toggleTag: (tagId: string, on: boolean) => live.current.tagsOf?.(id)?.onToggle(tagId, on),
+      manageTags: () => live.current.tagsOf?.(id)?.onManage(),
+      snooze: (until: number) => live.current.onSnooze?.(id, until),
+      customSnooze: () => setCustomFor(chat()),
+      wake: () => live.current.onWake?.(id),
+      pin: (on: boolean) => live.current.onPin?.(id, on),
+      stopWaiting: () => live.current.onStopWaiting?.(id),
+    };
+  };
+  const handlers = useRef(new Map<string, ReturnType<typeof handlersFor>>()).current;
   const row = (c: Chat, section?: SectionKey, hidden?: boolean) => {
+    let on = handlers.get(c.id);
+    if (!on) handlers.set(c.id, (on = handlersFor(c.id)));
     const projects = projectsOf?.(c.id);
     const tags = tagsOf?.(c.id);
-    const snooze: ChatSnooze | undefined =
-      onSnooze && onWake && !c.settled && !c.archived
-        ? {
-            until: snoozes[c.id],
-            onSnooze: (until) => live.current.onSnooze?.(c.id, until),
-            onCustom: () => setCustomFor(c),
-            onWake: () => live.current.onWake?.(c.id),
-          }
-        : undefined;
+    const snooze = onSnooze && onWake && !c.settled && !c.archived ? { until: snoozes[c.id], onSnooze: on.snooze, onCustom: on.customSnooze, onWake: on.wake } : undefined;
+    const sleepsUntil = snooze?.until !== undefined && snooze.until > now ? snooze.until : undefined;
     return (
       <ChatRow
         key={c.id}
@@ -1128,30 +1148,25 @@ export function ChatList({
         selected={c.id === selectedId}
         alsoShown={c.id === alsoShownId && c.id !== selectedId}
         split={split}
-        onOpen={() => live.current.onOpen(c.id)}
-        onOpenIn={(side) => live.current.onOpenIn(c.id, side)}
-        onOpenTab={() => live.current.onOpenTab(c.id)}
-        onSettle={(s) => live.current.onSettle(c.id, s)}
-        onArchive={(a) => live.current.onArchive(c.id, a)}
-        onAskDelete={(from) => setDeleting({ chat: c, from })}
-        onRename={(title, from) => live.current.onRename(c.id, title, from)}
-        onRegenTitle={() => live.current.onRegenTitle(c.id)}
-        onCopyLink={onCopyLink && (() => live.current.onCopyLink?.(c))}
-        onTextGenerationSettings={onTextGenerationSettings && (() => live.current.onTextGenerationSettings?.())}
-        projects={projects && { ...projects, onToggle: (id, on) => live.current.projectsOf?.(c.id)?.onToggle(id, on) }}
-        tags={
-          tags && {
-            ...tags,
-            onToggle: (id, on) => live.current.tagsOf?.(c.id)?.onToggle(id, on),
-            onManage: () => live.current.tagsOf?.(c.id)?.onManage(),
-          }
-        }
+        onOpen={on.open}
+        onOpenIn={on.openIn}
+        onOpenTab={on.openTab}
+        onSettle={on.settle}
+        onArchive={on.archive}
+        onAskDelete={on.askDelete}
+        onRename={on.rename}
+        onRegenTitle={on.regenTitle}
+        onCopyLink={onCopyLink && on.copyLink}
+        onTextGenerationSettings={onTextGenerationSettings && on.textGenerationSettings}
+        projects={projects && { ...projects, onToggle: on.toggleProject }}
+        tags={tags && { ...tags, onToggle: on.toggleTag, onManage: on.manageTags }}
         snooze={snooze}
-        sleepsUntil={snooze?.until !== undefined && snooze.until > now ? snooze.until : undefined}
-        minute={minute}
-        pin={onPin && !c.archived ? { pinned: pins[c.id] !== undefined, onPin: (on) => live.current.onPin?.(c.id, on) } : undefined}
+        sleepsUntil={sleepsUntil}
+        wake={sleepsUntil === undefined ? undefined : wakeLabel(sleepsUntil, now, l.tag)}
+        age={l.fmt.age(c.updatedAt, now)}
+        pin={onPin && !c.archived ? { pinned: pins[c.id] !== undefined, onPin: on.pin } : undefined}
         handoff={handoffs?.get(c.id)}
-        onStopWaiting={onStopWaiting && (() => live.current.onStopWaiting?.(c.id))}
+        onStopWaiting={onStopWaiting && on.stopWaiting}
       />
     );
   };

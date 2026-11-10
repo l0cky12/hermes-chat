@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
-// A reply streaming in one chat redraws that chat's row, not the whole list, while every row still acts on the
-// list's latest props and redraws its age as time passes.
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import type { Chat } from "../hermes/model";
-import { LocaleContext, localeFor, type Locale } from "../i18n/locale";
 import { ChatList } from "./Sidebar";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
+let rowsDrawn = 0;
+vi.mock("./bits", async (original) => {
+  const bits = await original<typeof import("./bits")>();
+  return { ...bits, SettleButton: (p: ComponentProps<typeof bits.SettleButton>) => (rowsDrawn++, bits.SettleButton(p)) };
+});
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -20,50 +22,43 @@ afterEach(() => {
   localStorage.clear();
 });
 
-const english = localeFor("en", []);
-let agesWritten = 0;
-const counting: Locale = { ...english, fmt: { ...english.fmt, age: (ms, now) => (agesWritten++, english.fmt.age(ms, now)) } };
-
 const chats = (n: number): Chat[] =>
   Array.from({ length: n }, (_, i) => ({ id: `c${i}`, title: `Chat ${i}`, source: "app", settled: false, updatedAt: Date.now() - (i + 5) * 60_000, items: [] }));
 
 type Props = Partial<ComponentProps<typeof ChatList>> & { chats: Chat[] };
-// As App.tsx renders it: fresh callbacks and per-chat objects on every render.
 const list = (p: Props) => (
-  <LocaleContext value={counting}>
-    <ChatList
-      profile="default"
-      status="connected"
-      others={{ byName: {} }}
-      selectedId={null}
-      onOpen={() => {}}
-      onSettle={() => {}}
-      onArchive={() => {}}
-      onDelete={() => {}}
-      onRename={async () => {}}
-      onRegenTitle={async () => {}}
-      onListProfiles={async () => ["default"]}
-      onCheckOthers={() => {}}
-      onSwitchProfile={() => {}}
-      onRetrySwitch={() => {}}
-      onPin={() => {}}
-      onSnooze={() => {}}
-      onWake={() => {}}
-      tagsOf={() => ({ list: [{ id: "t1", name: "infra" }], of: [], onToggle: () => {}, onManage: () => {} })}
-      {...p}
-    />
-  </LocaleContext>
+  <ChatList
+    profile="default"
+    status="connected"
+    others={{ byName: {} }}
+    selectedId={null}
+    onOpen={() => {}}
+    onSettle={() => {}}
+    onArchive={() => {}}
+    onDelete={() => {}}
+    onRename={async () => {}}
+    onRegenTitle={async () => {}}
+    onListProfiles={async () => ["default"]}
+    onCheckOthers={() => {}}
+    onSwitchProfile={() => {}}
+    onRetrySwitch={() => {}}
+    onPin={() => {}}
+    onSnooze={() => {}}
+    onWake={() => {}}
+    tagsOf={() => ({ list: [{ id: "t1", name: "infra" }], of: [], onToggle: () => {}, onManage: () => {} })}
+    {...p}
+  />
 );
 const rowOf = (id: string) => document.querySelector<HTMLElement>(`.row-open[data-chat="${id}"]`)!;
 
 it("redraws only the chat that changed when the list renders again", () => {
   const before = chats(50);
   const { rerender } = render(list({ chats: before }));
-  agesWritten = 0;
+  rowsDrawn = 0;
   const after = before.map((c) => (c.id === "c3" ? { ...c, title: "Renamed" } : c));
   rerender(list({ chats: after }));
   expect(rowOf("c3").textContent).toContain("Renamed");
-  expect(agesWritten).toBe(1);
+  expect(rowsDrawn).toBe(1);
 });
 
 it("calls the list's latest callbacks from a row that skipped a render", () => {
