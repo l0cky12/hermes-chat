@@ -577,17 +577,22 @@ fn screenshot_show_window(app: tauri::AppHandle) {
     tray::show(&app);
 }
 
-/// Saves a file pasted into the composer to a temp file and returns its path. Its bytes come as the raw body, not
-/// JSON, so a big screenshot isn't sent as a list of numbers; its name comes URI-encoded in the `x-name` header.
+/// Stages a file pasted into the composer with the screenshots and returns its path. Its bytes come as the raw body,
+/// not JSON, so a big screenshot isn't sent as a list of numbers; its name comes URI-encoded in the `x-name` header.
 #[tauri::command]
-async fn stage_clipboard_file(attachable: State<'_, Attachable>, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+async fn stage_clipboard_file(
+    screenshots: State<'_, Screenshots>,
+    attachable: State<'_, Attachable>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err("The pasted file didn't arrive as bytes.".into());
     };
     let header = request.headers().get("x-name").and_then(|v| v.to_str().ok()).unwrap_or_default();
     // encodeURIComponent never writes `+`, `&` or `=` bare, so one form-decoded key is exactly the name.
     let name = url::form_urlencoded::parse(header.as_bytes()).next().map(|(k, _)| k.into_owned()).unwrap_or_default();
-    let path = transport::stage_clipboard_file(&name, bytes).map_err(|e| e.to_string())?.to_string_lossy().into_owned();
+    let captures = screenshots.captures().map_err(|e| e.to_string())?;
+    let path = transport::stage_clipboard_file(&captures, &name, bytes).map_err(|e| e.to_string())?.to_string_lossy().into_owned();
     attachable.add([path.clone()]);
     Ok(path)
 }
