@@ -75,7 +75,8 @@ describe("Unread in other profiles", () => {
     await hermes.checkOtherProfiles();
 
     expect(unreadOf()).toEqual({ work: 2, aegis: 0 });
-    expect(others().byName.work).toMatchObject({ more: false, checkedAt: expect.any(Number) });
+    expect(others().byName.work).toMatchObject({ more: false });
+    expect(hermes.checkTimes.get().byProfile).toEqual({ work: expect.any(Number), aegis: expect.any(Number) });
     // The profile shown has its own dots in the list, so it isn't among the others.
     expect(others().byName.default).toBeUndefined();
     const reads = server.restRequests.filter((r) => r.path === "/api/sessions" && r.query.get("profile") !== "default");
@@ -144,9 +145,9 @@ describe("Unread in other profiles", () => {
   it("totals the other profiles for the switcher", () => {
     const total = totalUnread({
       byName: {
-        work: { unread: 2, checkedAt: 1 },
-        aegis: { unread: 1, more: true, checkedAt: 1 },
-        anvil: { unread: 0, checkedAt: 1 },
+        work: { unread: 2 },
+        aegis: { unread: 1, more: true },
+        anvil: { unread: 0 },
         argus: { error: "The dashboard answered 500" },
       },
     });
@@ -260,13 +261,13 @@ describe("Unread in other profiles", () => {
 
     it("reads at most 20 profiles per check, the ones checked longest ago first", async () => {
       vi.useFakeTimers();
-      const { server, hermes, others } = await signedIn();
+      const { server, hermes } = await signedIn();
       const names = Array.from({ length: 25 }, (_, i) => `p${String(i).padStart(2, "0")}`);
       server.otherProfiles = Object.fromEntries(names.map((n) => [n, []]));
       await hermes.checkOtherProfiles();
       const first = listed(server).filter((p) => p !== "default");
       expect(first).toHaveLength(20);
-      expect(Object.values(others().byName).filter((p) => p.checkedAt)).toHaveLength(20);
+      expect(Object.keys(hermes.checkTimes.get().byProfile)).toHaveLength(20);
 
       await vi.advanceTimersByTimeAsync(15_000);
       await hermes.checkOtherProfiles();
@@ -289,13 +290,15 @@ describe("Unread in other profiles", () => {
       return { ...signed, told: () => told, later: () => vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 20_000 }) };
     }
 
-    it("tells no one, and leaves the snapshot as it was", async () => {
+    it("tells no one, and leaves the snapshot as it was, though it says when it checked", async () => {
       const { hermes, told, later } = await checkedOnce();
       const before = hermes.getSnapshot();
       later();
       await hermes.checkOtherProfiles();
       expect(told()).toBe(0);
       expect(hermes.getSnapshot()).toBe(before);
+      const now = Date.now();
+      expect(hermes.checkTimes.get()).toEqual({ others: now, live: now, byProfile: { work: now, aegis: now } });
     });
 
     it("tells no one when only the live check runs, as the office's does", async () => {
@@ -305,6 +308,7 @@ describe("Unread in other profiles", () => {
       await hermes.checkLive();
       expect(told()).toBe(0);
       expect(hermes.getSnapshot()).toBe(before);
+      expect(hermes.checkTimes.get().live).toBe(Date.now());
     });
 
     it("tells listeners when a session starts", async () => {
@@ -351,8 +355,9 @@ describe("Unread in other profiles", () => {
       const { hermes, others } = await signedIn();
       await hermes.switchProfile("work");
       expect(others().byName).toEqual({
-        default: { unread: 1, more: false, checkedAt: expect.any(Number), chats: expect.arrayContaining([expect.objectContaining({ id: "home-1", unread: true })]), sends: [] },
+        default: { unread: 1, more: false, chats: expect.arrayContaining([expect.objectContaining({ id: "home-1", unread: true })]), sends: [] },
       });
+      expect(hermes.checkTimes.get().byProfile.default).toEqual(expect.any(Number));
     });
 
     it("shows nothing for a profile switched away from before its list was read", async () => {

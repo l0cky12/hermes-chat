@@ -252,13 +252,12 @@ export type ConnectionStatus = "connected" | "connecting" | "reconnecting" | "of
 /**
  * Unread chats in a profile the app isn't showing, as its latest check found them (`Hermes.checkOtherProfiles`).
  * `unread`: how many chats in the profile's list are Unread. `more`: the check read only the profile's most recent
- * chats and the list holds more, so more of them may be Unread. `checkedAt`: when that was read. `error`: why the
- * latest check failed; the other fields then come from an earlier check, if there was one.
+ * chats and the list holds more, so more of them may be Unread. `error`: why the latest check failed; the other
+ * fields then come from an earlier check, if there was one. When it was read is in `CheckTimes`.
  */
 export type OtherProfile = {
   unread?: number;
   more?: boolean;
-  checkedAt?: number;
   error?: string;
   chats?: ListedChat[];
   sends?: SavedSend[];
@@ -282,7 +281,7 @@ export type ListedChat = { id: string; title: string; at: number; unread: boolea
 export type SavedSend = { chatId: string; itemId: string; state: "failed" | "unknown"; title?: string };
 
 /** The profiles the app isn't showing, by name. `error`: why the latest check couldn't list the profiles. */
-export type OtherProfiles = { byName: Record<string, OtherProfile>; checkedAt?: number; error?: string };
+export type OtherProfiles = { byName: Record<string, OtherProfile>; error?: string };
 
 /**
  * The sessions live in the dashboard's own process, in every profile, as `session.active_list` last reported them:
@@ -293,7 +292,14 @@ export type OtherProfiles = { byName: Record<string, OtherProfile>; checkedAt?: 
  * this Hermes has no `session.active_list`.
  */
 export type LiveSession = { chatId: string; status: "working" | "waiting"; at: number; profile?: string; title?: string; source?: Source };
-export type LiveSessions = { sessions: LiveSession[]; checkedAt?: number; error?: string; unsupported?: boolean };
+export type LiveSessions = { sessions: LiveSession[]; error?: string; unsupported?: boolean };
+
+/**
+ * When each background check last read its answer (Unix ms), kept apart from what it found so a check that finds
+ * nothing new changes nothing the app draws (#423). `others`: the profiles were listed. `byProfile`: each profile not
+ * shown had its chats read; a failed read keeps the time of the one before. `live`: `session.active_list` answered.
+ */
+export type CheckTimes = { others?: number; live?: number; byProfile: Record<string, number> };
 
 /**
  * A chat found by searching all chats (`Hermes.search`). `snippet`: the text around the match, with the matched words

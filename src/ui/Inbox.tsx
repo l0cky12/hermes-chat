@@ -2,10 +2,11 @@
 // rail over the chat list, and leaves the chat panes as they are, so the chats on screen stay read. Opening an entry
 // goes to its chat, in its profile, and to the Approval card or message it is about. Nothing here answers, retries
 // or resends: that happens in the chat, the usual way.
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import { CircleAlert, CircleCheck, CircleHelp, Loader, RefreshCw, ShieldAlert, X } from "lucide-react";
 import type { LiveSessions, OtherProfiles } from "../hermes/model";
 import { INBOX_FILTERS, dismissable, needsOwner, type InboxEntry, type InboxFilter, type InboxKind } from "../hermes/inbox";
+import type { CheckTimesStore } from "../hermes/otherProfiles";
 import { ago, composing, storedTime, useReturnFocus } from "./bits";
 import { useLocale } from "../i18n/locale";
 
@@ -36,7 +37,7 @@ const KIND_ICON: Record<InboxKind, typeof X> = {
 /**
  * `entries`: the ones not dismissed. `server`: how the connection names the server. `leaving`: what switching away
  * from the shown profile leaves behind, which the owner is asked about before an entry takes them to another profile.
- * `unmatched`: live sessions the inbox couldn't put with one chat.
+ * `unmatched`: live sessions the inbox couldn't put with one chat. `checkTimes`: when `others` and `live` were read.
  */
 export function Inbox({
   entries,
@@ -46,6 +47,7 @@ export function Inbox({
   connected,
   others,
   live,
+  checkTimes,
   leaving,
   onOpen,
   onDismiss,
@@ -63,6 +65,7 @@ export function Inbox({
   connected: boolean;
   others: OtherProfiles;
   live?: LiveSessions;
+  checkTimes: CheckTimesStore;
   leaving?: string;
   onOpen: (e: InboxEntry) => void;
   onDismiss: (e: InboxEntry) => void;
@@ -173,7 +176,7 @@ export function Inbox({
           </button>
         ))}
       </div>
-      <Freshness connected={connected} others={others} live={live} unmatched={unmatched} onGuide={onGuide} />
+      <Freshness connected={connected} others={others} live={live} checkTimes={checkTimes} unmatched={unmatched} onGuide={onGuide} />
       {asking && (
         <div className="confirm inbox-leave" role="alertdialog" aria-label={`Switch to ${asking.profile}?`}>
           <span>{leaving}</span>
@@ -254,16 +257,19 @@ function Freshness({
   connected,
   others,
   live,
+  checkTimes,
   unmatched,
   onGuide,
 }: {
   connected: boolean;
   others: OtherProfiles;
   live?: LiveSessions;
+  checkTimes: CheckTimesStore;
   unmatched: number;
   onGuide?: () => void;
 }) {
   const l = useLocale();
+  const times = useSyncExternalStore(checkTimes.subscribe, checkTimes.get);
   const failed = Object.entries(others.byName).filter(([, p]) => p.error);
   const partial = Object.entries(others.byName).filter(([, p]) => p.more).map(([n]) => n);
   const notes = [
@@ -279,7 +285,7 @@ function Freshness({
     partial.length && { err: false, text: `Only the 50 most recent chats in ${partial.join(", ")} were checked.` },
     unmatched > 0 && { err: false, text: `${unmatched} running or waiting session${unmatched === 1 ? "" : "s"} couldn't be matched to one chat, so ${unmatched === 1 ? "it isn't" : "they aren't"} listed.` },
   ].filter((n): n is { err: boolean; text: string; title?: string } => !!n);
-  const checked = [others.checkedAt && `profiles ${ago(l, others.checkedAt)}`, live?.checkedAt && `running work ${ago(l, live.checkedAt)}`].filter(Boolean);
+  const checked = [times.others && `profiles ${ago(l, times.others)}`, times.live && `running work ${ago(l, times.live)}`].filter(Boolean);
   return (
     <div className="inbox-fresh" role="status">
       <div className="inbox-note">{checked.length ? `Checked ${checked.join(", ")}.` : "Not checked yet."}</div>

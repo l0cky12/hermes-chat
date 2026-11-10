@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import type { ComponentProps } from "react";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import type { Chat } from "../hermes/model";
+import { CheckTimesStore } from "../hermes/otherProfiles";
 import { AGE_TICK_MS } from "./bits";
 import { ChatList } from "./Sidebar";
 
@@ -32,6 +33,7 @@ const list = (p: Props) => (
     profile="default"
     status="connected"
     others={{ byName: {} }}
+    checkTimes={new CheckTimesStore()}
     selectedId={null}
     onOpen={() => {}}
     onSettle={() => {}}
