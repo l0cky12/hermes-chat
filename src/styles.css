@@ -528,8 +528,7 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
   max-height: 220px; overflow: auto; white-space: pre-wrap;
 }
 
-/* approval */
-/* Above anything else in the transcript that paints past its own box. */
+/* approval, above anything else in the transcript that paints past its own box */
 .approval {
   position: relative; z-index: 1;
   border: 1px solid rgba(245, 184, 74, 0.3); background: rgba(245, 184, 74, 0.05); border-radius: 12px; padding: 12px 14px;
