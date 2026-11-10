@@ -30,6 +30,8 @@
 //   the request's id; the app's answer shows in `/__state` under `answers`.
 // HV_INBOX=1 gives the `work` profile two Unread chats for the Rail inbox: one last active 3 days ago, one an hour ago.
 // HV_LIST=<n> adds n Active, read chats to `default`, one an hour apart, so its Inbox is longer than the list panel.
+// HV_LONG_CHAT=<n> adds "Long chat, n turns" (id `long`) to `default`: the bench's seeded turns (bench/fixture.ts), with
+// reasoning, tool calls and markdown replies, to time a long transcript in the app.
 // HV_DELAY_MS=<ms> holds each /api/ answer that long, as a distant server's round trip would.
 // HV_FAIL_PATCH=<id>,<id> answers 503 to every edit (PATCH) of those sessions, as a server that fails a write does.
 // HV_MEMORY_URL=<url> is the address `default`'s Honcho gives for its documentation and its API key's "Get one" link.
@@ -43,6 +45,7 @@ import type { Socket } from "node:net";
 import { FakeHermes, row } from "../../../../src/hermes/fakeHermes";
 import { HONCHO, RETAINDB } from "../../../../src/hermes/fakeMemoryProviders";
 import type { Pipe } from "../../../../src/hermes/pipe";
+import { makeChat } from "../../../../bench/fixture";
 
 const port = Number(process.argv[2] ?? 47990);
 const stateFile = process.argv[3];
@@ -74,6 +77,22 @@ for (let i = 0; i < Number(process.env.HV_LIST ?? 0); i++) {
   server.sessions.push(row(`list${i + 1}`, at, { title, pinned: true }));
   server.storeMessage(`list${i + 1}`, { role: "user", text: `${title}?` });
   server.storeMessage(`list${i + 1}`, { role: "assistant", text: "Checked. Nothing to do for now." });
+}
+
+const longTurns = Number(process.env.HV_LONG_CHAT ?? 0);
+if (longTurns > 0) {
+  server.sessions.push(row("long", 0.01, { title: `Long chat, ${longTurns} turns`, message_count: longTurns * 2 }));
+  let reasoning: string | undefined;
+  for (const i of makeChat(longTurns).items) {
+    if (i.kind === "user") server.storeMessage("long", { role: "user", text: i.text });
+    else if (i.kind === "thinking") reasoning = i.text;
+    else if (i.kind === "tool")
+      server.storeMessage("long", { role: "tool", name: i.name, tool_call_id: i.id, context: String(i.args?.command ?? ""), args: i.args, result: i.result });
+    else if (i.kind === "assistant") {
+      server.storeMessage("long", { role: "assistant", text: i.text, ...(reasoning && { reasoning }) });
+      reasoning = undefined;
+    }
+  }
 }
 
 for (const id of (process.env.HV_FAIL_PATCH ?? "").split(",").filter(Boolean))
