@@ -600,6 +600,27 @@ struct Open {
     target: String,
     /// Ends the tunnel, starting or open, with what to tell the webview (`None`: the webview asked).
     stop: oneshot::Sender<Option<String>>,
+    served: Option<Served>,
+}
+
+struct Served {
+    local_port: u16,
+    jar: Jar,
+}
+
+/// Every server page is served at `127.0.0.1`, and cookies don't tell ports apart, so in one jar each page would get
+/// every other server page's cookies.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Jar {
+    target: String,
+    origin: url::Origin,
+}
+
+#[cfg(test)]
+impl Jar {
+    pub fn of(target: &str, url: &str) -> Jar {
+        Jar { target: target.into(), origin: Url::parse(url).unwrap().origin() }
+    }
 }
 
 /// The most keys of pages closed before Rust heard of them kept, so a late `open` with one is refused.
@@ -657,7 +678,7 @@ impl ServerPages {
             return Err(ServerPageError::TooMany);
         }
         let (stop, stopped) = oneshot::channel();
-        open.insert(key.to_owned(), Open { target: target.clone(), stop });
+        open.insert(key.to_owned(), Open { target: target.clone(), stop, served: None });
         Ok(Starting { key: key.to_owned(), target, stopped })
     }
 
@@ -685,6 +706,9 @@ impl ServerPages {
         };
         let local_port = listener.local_addr().map_err(|e| ServerPageError::Io(e.to_string()))?.port();
         let address = end.address();
+        if let Some(open) = self.open.lock().unwrap().get_mut(&key) {
+            open.served = Some(Served { local_port, jar: Jar { target: target.clone(), origin: page.url.origin() } });
+        }
 
         let pages = Arc::clone(self);
         let task_key = key.clone();
@@ -758,6 +782,14 @@ impl ServerPages {
                 let _ = o.stop.send(Some(why.to_owned()));
             }
         }
+    }
+
+    pub fn jar(&self, url: &Url) -> Option<Jar> {
+        if url.host() != Some(Host::Ipv4(std::net::Ipv4Addr::LOCALHOST)) {
+            return None;
+        }
+        let port = url.port_or_known_default()?;
+        self.open.lock().unwrap().values().find_map(|o| o.served.as_ref().filter(|s| s.local_port == port)).map(|s| s.jar.clone())
     }
 
     pub fn len(&self) -> usize {
@@ -1389,6 +1421,36 @@ while True:
             let pid = f.ran().0;
             until("ssh ends", || ended(pid)).await;
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn each_page_has_a_cookie_jar_of_its_own_and_gets_it_back_when_opened_again() {
+        let (a, b) = (web_server("a").await, web_server("b").await);
+        let pages = Arc::new(ServerPages::default());
+        let fakes: Vec<Fake> = (0..4).map(|i| Fake::new(&format!("jar-{i}"), "ok")).collect();
+        let url = |port: u16| format!("http://localhost:{port}/");
+        let jar = |opened: &Opened| pages.jar(&Url::parse(&opened.url).unwrap());
+        let first_a = open_page(&pages, &fakes[0].program, "hermes", &url(a), |_| {}).await.unwrap();
+        let on_b = open_page(&pages, &fakes[1].program, "hermes", &url(b), |_| {}).await.unwrap();
+        let elsewhere_a = open_page(&pages, &fakes[2].program, "other", &url(a), |_| {}).await.unwrap();
+        assert!(jar(&first_a).is_some());
+        assert_ne!(jar(&first_a), jar(&on_b), "another port on the same server");
+        assert_ne!(jar(&first_a), jar(&elsewhere_a), "the same port on another server");
+
+        let first_jar = jar(&first_a);
+        pages.close(&first_a.id);
+        until("it closes", || pages.len() == 2).await;
+        assert_eq!(jar(&first_a), None, "a closed page's local port is no page's");
+        let again_a = open_page(&pages, &fakes[3].program, "hermes", &url(a), |_| {}).await.unwrap();
+        assert_eq!(jar(&again_a), first_jar, "opened again, on another local port");
+
+        let b_port = Url::parse(&on_b.url).unwrap().port().unwrap();
+        for not_local in [format!("http://localhost:{b_port}/"), format!("http://127.0.0.1:{a}/"), "https://example.com/".into()] {
+            assert_eq!(pages.jar(&Url::parse(&not_local).unwrap()), None, "{not_local}");
+        }
+        pages.close_all("done");
+        until("all close", || pages.is_empty()).await;
     }
 
     #[cfg(unix)]

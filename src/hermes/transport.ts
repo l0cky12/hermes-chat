@@ -705,8 +705,8 @@ export class Hermes {
   private background = new Set<Promise<unknown>>();
   /** When the shown profile's list last synced on this connection. */
   private listedAt?: number;
-  /** The server commands listed for a connection and profile (`serverCommands`). */
-  private commandsRead?: { key: string; done: Promise<ServerCommandList> };
+  /** The `commands.catalog` read for a connection and profile at `at` (`catalog`). */
+  private catalogRead?: { key: string; at: number; done: Promise<ServerCommandList> };
   /** The skills the composer offers, read for a connection and profile at `at` (`skillCommands`). */
   private skillsRead?: { key: string; at: number; done: Promise<SkillCommands | undefined> };
   /** The voice set-up read for a connection and profile (`voiceSetup`). */
@@ -1070,7 +1070,7 @@ export class Hermes {
   /** Settings → Skills' reads and writes of a profile's skills (skills.ts). Each call names its profile. */
   readonly skills = new SkillsApi((method, pathAndQuery, body) => {
     // A switch or an edit can change which skills the composer offers, and their descriptions: read them again.
-    if (method !== "GET") this.skillsRead = undefined;
+    if (method !== "GET") this.skillsRead = this.catalogRead = undefined;
     return this.rest(method, pathAndQuery, body);
   });
   /** The Clone profile dialog's profile list, create and delete (profileClone.ts, ADR 0074). Each call names its profiles. */
@@ -1304,20 +1304,28 @@ export class Hermes {
   }
 
   /**
-   * The registry's server commands this Hermes lists for the shown profile (commands.ts). Read once per connection and
-   * profile; a failed read is tried again on the next call.
+   * The registry's server commands this Hermes lists for the shown profile (commands.ts), from the catalog
+   * `skillCommands` shares. Read once per connection and profile; a failed read is tried again on the next call.
    */
   serverCommands(): Promise<ServerCommandList> {
     if (!this.connectedPipe()) return Promise.reject(new Error("Not connected to Hermes."));
+    return this.catalog(Infinity);
+  }
+
+  /**
+   * The shown profile's `commands.catalog`, one read for `serverCommands` and `skillCommands`: read again once older
+   * than `maxAgeMs`, on a new connection or profile, after a change from Settings → Skills, or after a failed read.
+   */
+  private catalog(maxAgeMs: number): Promise<ServerCommandList> {
     const key = `${this.generation}/${this.profile}`;
-    if (this.commandsRead?.key !== key) {
-      const done = listServerCommands((method, params) => this.request(method, params), this.profile);
-      this.commandsRead = { key, done };
-      done.catch(() => {
-        if (this.commandsRead?.done === done) this.commandsRead = undefined;
-      });
-    }
-    return this.commandsRead.done;
+    const read = this.catalogRead;
+    if (read?.key === key && Date.now() - read.at <= maxAgeMs) return read.done;
+    const entry = { key, at: Date.now(), done: listServerCommands((method, params) => this.request(method, params), this.profile) };
+    this.catalogRead = entry;
+    entry.done.catch(() => {
+      if (this.catalogRead === entry) this.catalogRead = undefined;
+    });
+    return entry.done;
   }
 
   /**
@@ -1332,7 +1340,7 @@ export class Hermes {
     const read = this.skillsRead;
     if (read?.key !== key || Date.now() - read.at > SKILL_COMMANDS_FRESH_MS) {
       const profile = this.profile;
-      const done = Promise.all([listServerCommands((method, params) => this.request(method, params), profile), this.skills.list(profile)]).then(
+      const done = Promise.all([this.catalog(SKILL_COMMANDS_FRESH_MS), this.skills.list(profile)]).then(
         ([catalog, view]) => (catalog.skills ? offeredSkills(catalog.skills, view) : undefined),
       );
       const entry = { key, at: Date.now(), done };

@@ -7,7 +7,7 @@ import type { CommandHost } from "./ui/SlashCommands";
 import { STEER, type ServerCommandList } from "./hermes/commands";
 import type { SkillCall, SkillCommands } from "./hermes/skillCommands";
 import { CHECK_EVERY_MS } from "./hermes/otherProfiles";
-import { type Account, type Kept, type SavedSignIn, launchOpen, launchSignIn, removeConnection, savedSignIn, signIn, signInForm, signOutToSignIn } from "./hermes/account";
+import { type Account, type Kept, type SavedSignIn, launchOpen, launchSignIn, removeConnection, savedSignIn, savedSignInOrForm, signIn, signInForm, signOutToSignIn } from "./hermes/account";
 import { CONNECTIONS_KEY, Connections, type SavedConnection, addressLabel, defaultName, keptRouteHealth, prefScope } from "./hermes/connections";
 import { forgetConnectionData } from "./hermes/forgetConnection";
 import { serial as makeSerial } from "./hermes/serial";
@@ -274,8 +274,9 @@ function launch(): Promise<Launch> {
   return (launching ??= (async () => {
     const c = account.connections.current();
     if (!c) return { initial: BLANK, firstRun: !account.connections.recent().length };
-    const saved = await savedSignIn(c, account);
-    if (!saved) return { connection: c, initial: await signInForm(c, account) };
+    const read = await savedSignInOrForm(c, account);
+    if ("form" in read) return { connection: c, initial: read.form };
+    const saved = read.saved;
     try {
       return { ...(await launchOpen(c, saved, account)), connection: c, details: saved };
     } catch (e) {
@@ -436,9 +437,10 @@ function Screens({ links }: { links: LinkInbox }) {
       try {
         await current.current?.close().catch(() => {});
         setHermes(null);
-        const d = await savedSignIn(target, account);
+        const read = await savedSignInOrForm(target, account);
         if (stale()) return;
-        if (!d) return showSignIn(target, await signInForm(target, account));
+        if ("form" in read) return showSignIn(target, read.form);
+        const d = read.saved;
         try {
           const h = await launchSignIn(target, d, account);
           if (stale()) return void (await h.close().catch(() => {}));
@@ -505,12 +507,13 @@ function Screens({ links }: { links: LinkInbox }) {
         return { notSaved, kept };
       } catch (e) {
         if (!stale() && before && beforeConnection) {
-          const previous = beforeDetails ?? (await savedSignIn(beforeConnection, account));
+          const read = beforeDetails ? { saved: beforeDetails } : await savedSignInOrForm(beforeConnection, account);
+          const previous = "saved" in read ? read.saved : undefined;
           const back = previous ? await launchSignIn(beforeConnection, previous, account).catch(() => null) : null;
           if (back && previous) setHeaders(headerNames(previous));
           if (!back) {
             signedInWith.current = undefined;
-            setInitial(await signInForm(beforeConnection, account));
+            setInitial("form" in read ? read.form : await signInForm(beforeConnection, account));
           }
           use(back);
         }
@@ -674,7 +677,8 @@ function Screens({ links }: { links: LinkInbox }) {
         onPick={(c) => {
           signInAsks.current++;
           void serial(async (stale) => {
-            const d = (await savedSignIn(c, account)) ?? (await signInForm(c, account));
+            const read = await savedSignInOrForm(c, account);
+            const d = "saved" in read ? read.saved : read.form;
             if (!stale()) showSignIn(c, d);
           });
         }}
