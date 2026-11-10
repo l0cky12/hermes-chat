@@ -2732,6 +2732,7 @@ export function Main({
           switching={switching}
           status={status}
           others={others}
+          checkTimes={hermes.checkTimes}
           chats={listed}
           syncError={syncError}
           selectedId={covering ? null : active.chatId}
@@ -2800,6 +2801,7 @@ export function Main({
           connected={status === "connected"}
           others={others}
           live={live}
+          checkTimes={hermes.checkTimes}
           leaving={leavingNote(profile, chats)}
           onOpen={openEntry}
           onDismiss={(e) => acks.dismiss(e, inbox.entries)}

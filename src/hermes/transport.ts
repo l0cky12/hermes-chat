@@ -32,7 +32,7 @@ import { ProfileCloneApi } from "./profileClone";
 import { APPROVAL_CHOICES, isBroadGrant, isOutgoing, isWaiting, offeredChoices, sameFields, turnStart, type ApprovalChoice, type ApprovalItem, type AttachCheck, type Attachment, type Chat, type ChatQueue, type ConnectionStatus, type ContextUse, type Found, type Item, type ListedChat, type LiveSession, type LiveSessions, type OtherProfiles, type Outgoing, type OutgoingItem, type Queued, type SavedSend, type SeenFailure, type SessionLive, type SideQuestion, type Source, QUEUE_LIMIT } from "./model";
 import { catalogFromServer, fallbackCatalog, isEffort, modelKey, pickFromInfo, type ModelCatalog, type ModelPick } from "./models";
 import { approvalsOf, isApprovalMode, writesFor, type ApprovalPick } from "./approvals";
-import { noOthers, OtherProfilesCheck } from "./otherProfiles";
+import { CheckTimesStore, noOthers, OtherProfilesCheck } from "./otherProfiles";
 import { failureMark } from "./inbox";
 // Projects are Hermes's own, read and written with legacy `projects.*` (projects.ts, research doc "Projects").
 import { projectsApi, type ProjectsApi } from "./projects";
@@ -748,13 +748,18 @@ export class Hermes {
   private rosterUnsupported = false;
   /** The next check while a chat waits on roster work, sooner than the app's own timers ask. */
   private rosterTimer?: ReturnType<typeof setTimeout>;
-  private others = new OtherProfilesCheck({
-    scope: () => (this.pipe && this.snapshot.status === "connected" && !this.closing ? { connection: this.generation, profile: this.profile } : undefined),
-    profiles: () => this.profiles(),
-    unreadIn: (profile) => this.unreadIn(profile),
-    sendsIn: (profile) => this.sendsIn(profile),
-    publish: (others) => this.update({ others }),
-  });
+  /** When `checkOtherProfiles` and `checkLive` last read their answers; what they found is in the snapshot. */
+  readonly checkTimes = new CheckTimesStore();
+  private others = new OtherProfilesCheck(
+    {
+      scope: () => (this.pipe && this.snapshot.status === "connected" && !this.closing ? { connection: this.generation, profile: this.profile } : undefined),
+      profiles: () => this.profiles(),
+      unreadIn: (profile) => this.unreadIn(profile),
+      sendsIn: (profile) => this.sendsIn(profile),
+      publish: (others) => this.update({ others }),
+    },
+    this.checkTimes,
+  );
 
   /** Lease changes Hermes broadcasts for the Bot Desktop (`display.lease`). */
   private leaseListeners = new Set<(profileKey: string, lease: DisplayLease) => void>();
@@ -1518,7 +1523,8 @@ export class Hermes {
    * Checks the profiles not shown for Unread chats, over dashboard REST and without switching the socket, and asks
    * Hermes which sessions are working or waiting in any profile (`session.active_list`). Only reads: nothing is marked
    * read, resumed or answered. Runs at most every 15 seconds; the app calls it every `CHECK_EVERY_MS`, and more often
-   * while the inbox is open. Results land in the snapshot's `others` and `live`.
+   * while the inbox is open. Results land in the snapshot's `others` and `live`, and only when they changed; when
+   * each was read lands in `checkTimes`.
    */
   checkOtherProfiles(): Promise<void> {
     return Promise.all([this.others.check(), this.checkLive()]).then(() => {});
@@ -1572,11 +1578,14 @@ export class Hermes {
           const owner = s.profile ? undefined : this.sessionOwners.get(key);
           return owner ? { ...s, ...owner } : s;
         });
-        this.update({ live: { sessions: placed, checkedAt: Date.now() } });
+        this.checkTimes.set({ live: Date.now() });
+        this.showLive({ sessions: placed });
       } catch (e) {
         if (gen !== this.generation) return;
-        if (e instanceof RpcError && e.code === NO_SUCH_METHOD) this.update({ live: { sessions: [], unsupported: true } });
-        else this.update({ live: { sessions: this.snapshot.live?.sessions ?? [], checkedAt: this.snapshot.live?.checkedAt, error: (e as Error).message } });
+        if (e instanceof RpcError && e.code === NO_SUCH_METHOD) {
+          this.checkTimes.set({ live: undefined });
+          this.showLive({ sessions: [], unsupported: true });
+        } else this.showLive({ sessions: this.snapshot.live?.sessions ?? [], error: (e as Error).message });
       } finally {
         // The roster is placed against what the same check found live, so a wake turn under way is seen with it.
         await roster;
@@ -1586,6 +1595,18 @@ export class Hermes {
     })();
     this.liveCheck = { gen, at: Date.now(), done };
     return done;
+  }
+
+  /** Puts `live` in the snapshot, unless it holds the same already. */
+  private showLive(live: LiveSessions) {
+    const was = this.snapshot.live;
+    const same =
+      was &&
+      was.error === live.error &&
+      was.unsupported === live.unsupported &&
+      was.sessions.length === live.sessions.length &&
+      was.sessions.every((s, i) => sameFields(s, live.sessions[i]));
+    if (!same) this.update({ live });
   }
 
   /** The waiting Approval cards in Hermes's own approval queue (`queuedApprovals`), by their chat's runtime session. */

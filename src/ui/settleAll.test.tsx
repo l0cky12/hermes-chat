@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import type { Chat, Item } from "../hermes/model";
+import { CheckTimesStore } from "../hermes/otherProfiles";
 import { PINS_KEY, SNOOZE_KEY, inboxSettle } from "../hermes/snooze";
 import { connect, type Hermes } from "../hermes/transport";
 import { projectScope } from "../hermes/projectLinks";
@@ -42,6 +43,7 @@ function List({ chats, onSettleAll, snoozes, pins }: { chats: Chat[]; onSettleAl
       profile="default"
       status="connected"
       others={{ byName: {} }}
+      checkTimes={new CheckTimesStore()}
       chats={chats}
       selectedId={null}
       onOpen={() => {}}

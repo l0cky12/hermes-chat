@@ -68,7 +68,7 @@ describe("The office's rooms", () => {
   });
 
   it("marks another profile's desks as last seen once a check can't list the profiles, keeping what the one before read", () => {
-    const listed = { chats: [{ id: "w1", title: "Deploy", at: 5_000, unread: true, source: "app" as const }], checkedAt: 4_000 };
+    const listed = { chats: [{ id: "w1", title: "Deploy", at: 5_000, unread: true, source: "app" as const }] };
     expect(rooms([], { others: { byName: { work: listed } } })[0].desks[0].stale).toBeUndefined();
     const failed = rooms([], { others: { byName: { work: listed }, error: "Couldn't list the profiles: 502" } });
     expect(failed[0].desks[0]).toMatchObject({ state: "unread", stale: "As last seen: Hermes couldn't be checked." });

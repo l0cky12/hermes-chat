@@ -1,13 +1,13 @@
 // Icon rail beside a chat list (ADR 0001), ported from the prototype's variants C and A, with the profile's tools in one
 // Server group and tips that show at once (ADR 0050, 0116). Server files and the Terminal live in the side panel only. The list's header is the profile switcher. Settings opens from the
 // rail's foot. Right-clicking a chat opens its menu (ChatMenu.tsx).
-import { memo, useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useId, useReducer, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Hourglass, LockOpen, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
 import { waitingLabel, type Handoff } from "../hermes/dispatched";
-import type { Chat, ConnectionStatus, OtherProfile, OtherProfiles } from "../hermes/model";
+import type { Chat, CheckTimes, ConnectionStatus, OtherProfile, OtherProfiles } from "../hermes/model";
 import { SOURCE_LABEL, isWaiting } from "../hermes/model";
-import { CHECK_EVERY_MS, totalUnread } from "../hermes/otherProfiles";
+import { CHECK_EVERY_MS, totalUnread, type CheckTimesStore } from "../hermes/otherProfiles";
 import type { Route } from "../hermes/pipe";
 import { RenameConflict, TitleModelUnavailable, type Snapshot } from "../hermes/transport";
 import { SECTION_LABEL, chatSections, inboxSettle, settleByDrop, wakeFull, wakeLabel, type InboxSettle, type Pins, type SectionKey, type Snoozes } from "../hermes/snooze";
@@ -595,24 +595,24 @@ const unreadCount = (p: OtherProfile) => `${p.unread}${p.more ? "+" : ""}`;
 const CHECKED_EVERY = `Other profiles are checked every ${CHECK_EVERY_MS / 60_000} minutes`;
 
 /** What the latest check of another profile found, and when; an earlier answer is kept through a failed check. */
-function otherTip(l: Locale, p?: OtherProfile): string {
+function otherTip(l: Locale, p?: OtherProfile, checkedAt?: number): string {
   const found = (q: OtherProfile) =>
-    q.checkedAt === undefined
+    checkedAt === undefined
       ? undefined
-      : `${q.unread ? `${unreadCount(q)} unread` : "No unread chats"}${q.more ? " in its most recent chats" : ""}, checked ${ago(l, q.checkedAt)}`;
+      : `${q.unread ? `${unreadCount(q)} unread` : "No unread chats"}${q.more ? " in its most recent chats" : ""}, checked ${ago(l, checkedAt)}`;
   if (p?.error) return [`Couldn't check: ${p.error}`, found(p) && `Earlier: ${found(p)}`].filter(Boolean).join(". ");
   return (p && found(p)) ?? "Not checked yet";
 }
 
 /** The switcher's tooltip: which other profiles have Unread chats, which couldn't be checked, and how fresh it is. */
-function switcherTip(l: Locale, others: OtherProfiles): string {
+function switcherTip(l: Locale, others: OtherProfiles, times: CheckTimes): string {
   const { withUnread, failed } = totalUnread(others);
   return [
     "Switch profile",
     withUnread.length && `Unread chats in ${withUnread.map((n) => `${n} (${unreadCount(others.byName[n])})`).join(", ")}`,
     failed.length && `Couldn't check ${failed.join(", ")}`,
     others.error,
-    `${CHECKED_EVERY}${others.checkedAt ? `; last ${ago(l, others.checkedAt)}` : ""}`,
+    `${CHECKED_EVERY}${times.others ? `; last ${ago(l, times.others)}` : ""}`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -652,11 +652,12 @@ export function leavingNote(profile: string, chats: Chat[]): string | undefined 
  * the first match; Escape or a click outside closes it. A dot on it, and a count on each profile in the menu, show
  * Unread chats in the other profiles, as the latest poll found them. Opening the menu asks for a fresh check.
  * `leaving`: what switching away now leaves behind, which the owner is asked about first. `clone`: the menu's Clone a
- * profile, whose dialog opens the profile it made through the same question.
+ * profile, whose dialog opens the profile it made through the same question. `checkTimes`: when the others were checked.
  */
 function ProfileSwitcher({
   profile,
   others,
+  checkTimes,
   leaving,
   onListProfiles,
   onCheckOthers,
@@ -665,6 +666,7 @@ function ProfileSwitcher({
 }: {
   profile: string;
   others: OtherProfiles;
+  checkTimes: CheckTimesStore;
   leaving?: string;
   onListProfiles: () => Promise<string[]>;
   onCheckOthers: () => void;
@@ -681,6 +683,9 @@ function ProfileSwitcher({
   const [profiles, setProfiles] = useState<string[]>();
   const [error, setError] = useState<string>();
   const box = useRef<HTMLDivElement>(null);
+  // The button is always drawn, so its tooltip reads the check times as it is about to show rather than subscribing:
+  // a check that finds nothing new mustn't draw it again (#423).
+  const [, freshTip] = useReducer((n: number) => n + 1, 0);
 
   useEffect(() => {
     if (!open) return;
@@ -722,7 +727,15 @@ function ProfileSwitcher({
 
   return (
     <div className="profile-switch" ref={box}>
-      <button ref={button} className="profile-btn" title={switcherTip(l, others)} aria-expanded={open} onClick={() => (open ? close() : setOpen(true))}>
+      <button
+        ref={button}
+        className="profile-btn"
+        title={switcherTip(l, others, checkTimes.get())}
+        aria-expanded={open}
+        onPointerEnter={freshTip}
+        onFocus={freshTip}
+        onClick={() => (open ? close() : setOpen(true))}
+      >
         <span className="profile-name">{profile}</span>
         {elsewhere && <span className="dot" aria-label="Unread chats in other profiles" />}
         <ChevronDown size={14} className="profile-chev" />
@@ -734,6 +747,7 @@ function ProfileSwitcher({
           profiles={profiles}
           error={error}
           others={others}
+          checkTimes={checkTimes}
           onPick={pick}
           onClose={close}
           onClone={
@@ -838,6 +852,7 @@ function ProfileMenu({
   profiles,
   error,
   others,
+  checkTimes,
   onPick,
   onClose,
   onClone,
@@ -846,11 +861,13 @@ function ProfileMenu({
   profiles?: string[];
   error?: string;
   others: OtherProfiles;
+  checkTimes: CheckTimesStore;
   onPick: (name: string) => void;
   onClose: () => void;
   onClone?: () => void;
 }) {
   const l = useLocale();
+  const times = useSyncExternalStore(checkTimes.subscribe, checkTimes.get);
   const [filter, setFilter] = useState("");
   useReturnFocus();
 
@@ -878,7 +895,7 @@ function ProfileMenu({
             key={p}
             role="option"
             aria-selected={p === profile}
-            title={p === profile ? undefined : otherTip(l, others.byName[p])}
+            title={p === profile ? undefined : otherTip(l, others.byName[p], times.byProfile[p])}
             className={`profile-option ${p === profile ? "on" : ""}`}
             onClick={() => onPick(p)}
           >
@@ -893,7 +910,7 @@ function ProfileMenu({
       {others.error && <div className="profile-hint err">{others.error}</div>}
       {profiles && profiles.length > 1 && (
         <div className="profile-hint">
-          Unread checked every {CHECK_EVERY_MS / 60_000} min{others.checkedAt ? `, last ${ago(l, others.checkedAt)}` : ""}
+          Unread checked every {CHECK_EVERY_MS / 60_000} min{times.others ? `, last ${ago(l, times.others)}` : ""}
         </div>
       )}
       {onClone && (
@@ -953,6 +970,7 @@ export function ChatList({
   switching,
   status,
   others,
+  checkTimes,
   chats,
   syncError,
   selectedId,
@@ -994,6 +1012,8 @@ export function ChatList({
   switching?: Snapshot["switching"];
   status: ConnectionStatus;
   others: OtherProfiles;
+  /** When the other profiles were checked (`Hermes.checkTimes`). */
+  checkTimes: CheckTimesStore;
   chats: Chat[];
   syncError?: string;
   /** The chat in the active pane. */
@@ -1199,6 +1219,7 @@ export function ChatList({
         <ProfileSwitcher
           profile={profile}
           others={others}
+          checkTimes={checkTimes}
           leaving={leavingNote(profile, chats)}
           onListProfiles={onListProfiles}
           onCheckOthers={onCheckOthers}
