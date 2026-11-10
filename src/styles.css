@@ -437,6 +437,9 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 .send-failed-why svg { flex: none; margin-top: 2px; }
 .send-failed-actions { display: flex; gap: 6px; }
 .send-failed-actions .btn { height: 28px; padding: 0 10px; font-size: calc(12.5rem / 14); }
+/* KaTeX can paint math far outside its line (\smash{\rule[-14em]…}). Clipped above and below only, leaving 0.5em for
+   its ink past its metrics. */
+.msg.assistant { clip-path: inset(-0.5em -100vw); }
 .msg.assistant > :first-child { margin-top: 0; }
 .msg.assistant > :last-child { margin-bottom: 0; }
 .msg.assistant p { margin: 0 0 0.75em; }
@@ -529,6 +532,7 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 
 /* approval */
 .approval {
+  position: relative; z-index: 1;
   border: 1px solid rgba(245, 184, 74, 0.3); background: rgba(245, 184, 74, 0.05); border-radius: 12px; padding: 12px 14px;
 }
 .approval.answered { border-color: var(--line); background: transparent; padding: 8px 12px; }
