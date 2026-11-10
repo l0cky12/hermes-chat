@@ -6,7 +6,7 @@ import type { SavedSignIn } from "./account";
 import { localChatCache } from "./chatCache";
 import { FakeHermes, row } from "./fakeHermes";
 import { isOutgoing } from "./model";
-import { type Hermes, connect } from "./transport";
+import { type Hermes, SKILL_COMMANDS_FRESH_MS, connect } from "./transport";
 
 const nas: SavedSignIn = { mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" };
 const SKILLS = "/home/liam/.hermes/skills";
@@ -28,7 +28,10 @@ beforeEach(() => {
     removeItem: (k: string) => void store.delete(k),
   });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 const launch = async (server: FakeHermes) => {
   const hermes = await connect(server.openPipe, undefined, localChatCache(nas));
@@ -140,6 +143,10 @@ describe("The skills the composer offers", () => {
     await hermes().skillCommands();
     await hermes().serverCommands();
     expect(catalogs()).toBe(2);
+    const later = Date.now() + SKILL_COMMANDS_FRESH_MS + 1;
+    vi.spyOn(Date, "now").mockReturnValue(later);
+    await hermes().skillCommands();
+    expect(catalogs()).toBe(3);
   });
 
   it("are none when Hermes's catalog lists no skills", async () => {
