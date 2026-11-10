@@ -3,6 +3,7 @@
 // preview pane, never in the app's own window (previewContext.tsx).
 import { Children, Fragment, isValidElement, memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
+import { invoke } from "@tauri-apps/api/core";
 import { Check, CodeXml, Copy, Image as ImageIcon, Workflow } from "lucide-react";
 import "katex/dist/katex.min.css";
 import { PreviewLink } from "./previewContext";
@@ -98,12 +99,14 @@ function CodeBlock({ children }: { children?: ReactNode }) {
  * already emptied `data:` and other sources it doesn't allow.
  */
 function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?: string }) {
-  const [load, setLoad] = useState(false);
-  if (!src || load) return <img src={src || undefined} alt={alt} title={title} />;
+  const [load, setLoad] = useState<"loading" | { dataUrl: string } | { failed: string }>();
+  if (!src) return <img alt={alt} title={title} />;
+  if (typeof load === "object" && "dataUrl" in load) return <img src={load.dataUrl} alt={alt} title={title} />;
   let host = src;
   try {
     host = new URL(src, location.href).host || src;
   } catch {}
+  const image = `${alt ? `${alt}: image` : "Image"} from ${host}`;
   return (
     <button
       type="button"
@@ -112,11 +115,16 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        setLoad(true);
+        if (load === "loading") return;
+        setLoad("loading");
+        invoke<string>("markdown_image_load", { url: src }).then(
+          (dataUrl) => setLoad({ dataUrl }),
+          (error: unknown) => setLoad({ failed: error instanceof Error ? error.message : String(error) }),
+        );
       }}
     >
       <ImageIcon size={13} />
-      {alt ? `${alt}: image` : "Image"} from {host}, click to load
+      {load === "loading" ? `${image}, loading…` : load ? `${image} didn't load. ${load.failed} Click to try again.` : `${image}, click to load`}
     </button>
   );
 }

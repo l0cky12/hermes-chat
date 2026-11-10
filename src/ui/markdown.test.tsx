@@ -10,9 +10,15 @@ import { Markdown } from "./Markdown";
 import { replyMarkdown } from "./CopyMessage";
 import { LinksProvider } from "./previewContext";
 
+const invoke = vi.fn(async (_cmd: string, _args?: unknown): Promise<unknown> => undefined);
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (cmd: string, args?: unknown) => invoke(cmd, args) }));
+
 const render = (text: string, query?: string) => renderToStaticMarkup(<Markdown text={text} query={query} />);
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  invoke.mockReset();
+});
 
 describe("Markdown", () => {
   it("highlights tagged code, and guesses the language of untagged code, on every render", () => {
@@ -38,21 +44,46 @@ describe("Markdown", () => {
     }
   });
 
-  it("loads a remote image once its placeholder is clicked, without following a link around it", async () => {
-    const preview = vi.fn();
-    const { container } = renderDom(
+  const PNG = "data:image/png;base64,iVBORw==";
+  const linkedImage = (preview: () => void) =>
+    renderDom(
       <LinksProvider preview={preview} web={{ openInBrowser: vi.fn() }} onToast={vi.fn()}>
         <Markdown text="[![chart](https://example.test/p.png)](https://example.test/page)" />
       </LinksProvider>,
-    );
+    ).container;
+  const networkImages = (container: Element) => [...container.querySelectorAll("img")].filter((img) => !img.getAttribute("src")?.startsWith("data:"));
+
+  it("loads a remote image through the app once its placeholder is clicked, without following a link around it", async () => {
+    let answer!: (dataUrl: string) => void;
+    invoke.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    const preview = vi.fn();
+    const container = linkedImage(preview);
     expect(container.querySelector("img")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: /example\.test/ }));
+    expect(invoke).toHaveBeenCalledWith("markdown_image_load", { url: "https://example.test/p.png" });
+    expect(screen.getByRole("button", { name: /example\.test, loading/ })).toBeTruthy();
+    expect(networkImages(container)).toEqual([]);
+    act(() => answer(PNG));
+    await waitFor(() => expect(container.querySelector("img")?.getAttribute("src")).toBe(PNG));
     expect(preview).not.toHaveBeenCalled();
-    expect(container.querySelector("img")?.getAttribute("src")).toBe("https://example.test/p.png");
     expect(container.querySelector("img")?.getAttribute("alt")).toBe("chart");
     expect(screen.queryByRole("button", { name: /example\.test/ })).toBeNull();
     await userEvent.click(container.querySelector("img")!);
     expect(preview).toHaveBeenCalledWith({ kind: "web", url: "https://example.test/page" });
+  });
+
+  it("says why a clicked image didn't load, and tries again on the next click", async () => {
+    invoke.mockRejectedValueOnce("That address isn't an image.").mockResolvedValueOnce(PNG);
+    const preview = vi.fn();
+    const container = linkedImage(preview);
+    await userEvent.click(screen.getByRole("button", { name: /example\.test/ }));
+    const failed = await screen.findByRole("button", { name: /didn't load\. That address isn't an image\. Click to try again/ });
+    expect(container.querySelector("img")).toBeNull();
+    await userEvent.click(failed);
+    await waitFor(() => expect(container.querySelector("img")?.getAttribute("src")).toBe(PNG));
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(networkImages(container)).toEqual([]);
+    expect(preview).not.toHaveBeenCalled();
   });
 });
 
