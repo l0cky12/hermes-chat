@@ -1408,13 +1408,15 @@ impl Dashboard {
         if method == Method::DELETE && is_env_route(&routed) {
             return Err(TransportError::NotRelayed(format!("{method} {path}")));
         }
+        let list = method == Method::GET && is_session_list(&routed);
         let mut req = self.signed(method, url);
         if let Some(body) = body {
             req = req.header(header::CONTENT_TYPE, "application/json").body(body);
         }
-        let resp = req.send().await.map_err(unreachable)?;
+        let resp = if list { unless_stalled(READ_STALL, req.send()).await? } else { req.send().await.map_err(unreachable)? };
         self.keep_cookies(&resp);
         match resp.status() {
+            s if s.is_success() && list => text_unless_stalled(resp, READ_STALL).await,
             s if s.is_success() => resp.text().await.map_err(unreachable),
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
             _ => Err(unexpected(resp, &self.hide).await),
@@ -2603,6 +2605,34 @@ fn unreachable(e: reqwest::Error) -> TransportError {
     TransportError::Unreachable(describe(&e.without_url()))
 }
 
+/// How long the chat list's read waits for the next bytes of Hermes's answer, its head first and then each part of its
+/// body. The clock restarts with every part, so a page that keeps arriving is never cut off, however slow the link.
+/// Hermes answers the list from its session store, a read-only query of at most 100 rows that waits at most 5 s on a
+/// lock, so a minute with nothing means the read has stalled. Other routes have no such limit: some stay silent for
+/// minutes and still answer, such as files on an SSH profile, the update check, or a read behind a memory provider's
+/// setup.
+const READ_STALL: Duration = Duration::from_secs(60);
+
+/// The chat list's read, `api/sessions` itself. Empty segments are skipped, as `is_file_route` does.
+fn is_session_list(path: &str) -> bool {
+    let mut segs = path.split('/').filter(|seg| !seg.is_empty());
+    segs.next() == Some("api") && segs.next() == Some("sessions") && segs.next().is_none()
+}
+
+/// One step of a read, given up after `limit` without an answer.
+async fn unless_stalled<T>(limit: Duration, step: impl std::future::Future<Output = reqwest::Result<T>>) -> Result<T, TransportError> {
+    tokio::time::timeout(limit, step).await.map_err(|_| TransportError::Stalled(limit.as_secs()))?.map_err(unreachable)
+}
+
+/// `resp`'s body as text, given up once `limit` passes without a part of it.
+async fn text_unless_stalled(mut resp: reqwest::Response, limit: Duration) -> Result<String, TransportError> {
+    let mut body = Vec::new();
+    while let Some(part) = unless_stalled(limit, resp.chunk()).await? {
+        body.extend_from_slice(&part);
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
 fn describe(e: &reqwest::Error) -> String {
     let mut parts = vec![e.to_string()];
     let mut source = std::error::Error::source(e);
@@ -2878,9 +2908,10 @@ fn agent_text_body(path: &str, text: &str, session: Option<&str>) -> Result<serd
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_text_body, memory_entry_edit_allowed, memory_provider_write, profile_create_allowed, provider_key_name, skill_create_allowed, webhook_write,
-        TransportError,
+        agent_text_body, memory_entry_edit_allowed, memory_provider_write, profile_create_allowed, provider_key_name, skill_create_allowed, text_unless_stalled,
+        unless_stalled, webhook_write, TransportError,
     };
+    use std::time::Duration;
 
     #[test]
     fn an_artifact_save_names_the_chat_whose_sandbox_the_file_is_in() {
@@ -3083,5 +3114,52 @@ mod tests {
         for bad in ["HERMES_DASHBOARD_SESSION_TOKEN", "PATH", "OPENAI_BASE_URL", "openrouter_api_key", "_API_KEY", "A B_KEY", "X\nY_KEY", ""] {
             assert!(!provider_key_name(bad), "{bad}");
         }
+    }
+
+    /// A server that answers one request with `parts` chunks, `gap` apart in real time, then ends the body if `end`.
+    async fn trickle(parts: usize, gap: std::time::Duration, end: bool) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 4096];
+            let _ = sock.read(&mut request).await;
+            sock.write_all(b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n").await.unwrap();
+            for i in 0..parts {
+                if i > 0 {
+                    tokio::time::sleep(gap).await;
+                }
+                let part = format!("part{i};");
+                sock.write_all(format!("{:x}\r\n{part}\r\n", part.len()).as_bytes()).await.unwrap();
+            }
+            if end {
+                sock.write_all(b"0\r\n\r\n").await.unwrap();
+            }
+            std::future::pending::<()>().await;
+        });
+        url
+    }
+
+    #[tokio::test]
+    async fn a_read_that_keeps_arriving_finishes_however_long_it_takes_in_all() {
+        let url = trickle(10, Duration::from_millis(150), true).await;
+        let limit = Duration::from_secs(1);
+        let started = std::time::Instant::now();
+        let resp = unless_stalled(limit, reqwest::get(url)).await.unwrap();
+        let text = text_unless_stalled(resp, limit).await.unwrap();
+        assert_eq!(text, (0..10).map(|i| format!("part{i};")).collect::<String>());
+        assert!(started.elapsed() > limit, "the whole read took {:?}, longer than the limit", started.elapsed());
+    }
+
+    #[tokio::test]
+    async fn a_read_that_stops_arriving_is_given_up_once_the_limit_passes_without_a_byte() {
+        let url = trickle(2, Duration::from_millis(50), false).await;
+        let limit = Duration::from_millis(500);
+        let started = std::time::Instant::now();
+        let resp = unless_stalled(limit, reqwest::get(url)).await.unwrap();
+        let err = text_unless_stalled(resp, limit).await.unwrap_err();
+        assert!(matches!(err, TransportError::Stalled(_)), "{err:?}");
+        assert!(started.elapsed() >= limit + Duration::from_millis(50), "{:?}", started.elapsed());
     }
 }

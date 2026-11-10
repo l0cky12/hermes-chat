@@ -3434,20 +3434,22 @@ export class Hermes {
       this.syncAgain = true;
       return this.syncing;
     }
-    this.syncing = (async () => {
+    const passes = async (): Promise<Error | undefined> => {
       try {
         let failure: Error | undefined;
         do {
           this.syncAgain = false;
-          failure = await this.syncOnce();
-        } while (this.syncAgain);
+          failure = await this.syncOnce(() => this.syncing === syncing);
+        } while (this.syncAgain && this.syncing === syncing);
         return failure;
       } finally {
-        this.syncing = undefined;
+        if (this.syncing === syncing) this.syncing = undefined;
       }
-    })();
-    this.track(this.syncing);
-    return this.syncing;
+    };
+    const syncing = passes();
+    this.syncing = syncing;
+    this.track(syncing);
+    return syncing;
   }
 
   /** Resolves once background work (list syncs, pinning) has finished. Tests wait on it; the app doesn't need to. */
@@ -3805,6 +3807,9 @@ export class Hermes {
     this.kanbanWatch.stop();
     clearTimeout(this.rosterTimer);
     clearInterval(this.heartbeat);
+    // A list read on this connection may never answer; the reconnect syncs again without waiting for it.
+    this.syncing = undefined;
+    this.syncAgain = false;
     // Lets the Rust side end the tunnel.
     if (pipe) this.droppedClosing = pipe.close().catch(() => {}).finally(() => (this.droppedClosing = undefined));
     for (const p of this.pending.values()) p.reject(new ConnectionLostError(`Connection closed: ${reason}`));
@@ -4189,7 +4194,8 @@ export class Hermes {
     return title;
   }
 
-  private async syncOnce(): Promise<Error | undefined> {
+  /** One pass of `syncList`. `current`: whether the pass is still the list's sync, which `detach` ends. */
+  private async syncOnce(current: () => boolean): Promise<Error | undefined> {
     const profile = this.profile;
     const cutoff = this.snapshot.olderPulled ? -Infinity : Date.now() - LIST_WINDOW_MS;
     this.pinnedSinceListRead.clear();
@@ -4209,11 +4215,12 @@ export class Hermes {
         for (const id of old.botChats) botChats.add(id);
       }
     } catch (e) {
-      if (this.profile === profile) this.update({ syncError: `Couldn't refresh the chat list: ${(e as Error).message}`, ...this.switchFailed(e as Error) });
+      if (this.profile === profile && current())
+        this.update({ syncError: `Couldn't refresh the chat list: ${(e as Error).message}`, ...this.switchFailed(e as Error) });
       return e as Error;
     }
-    // The owner switched profile meanwhile; the switch syncs the new one.
-    if (this.profile !== profile) return undefined;
+    // The owner switched profile meanwhile, or the connection dropped; the switch or the reconnect syncs again.
+    if (this.profile !== profile || !current()) return undefined;
 
     const known = new Map(this.snapshot.chats.map((c) => [c.id, c]));
     // A chat new to the list brings its outbox, kept on this computer.
