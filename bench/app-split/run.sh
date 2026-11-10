@@ -4,8 +4,7 @@
 # for <ms> each. `drag` (bench/run.mjs drag): the divider dragged 30% of the width left and back with real X pointer
 # input, a move every 16 ms, <samples> times. Starts its own `hv up` (stand-in with HV_TURNS and HV_LONG_REPLY) and
 # signs in, so it needs only `hv build` first.
-# `single` is `stream` with one chat and no split (bench/main.tsx stream), to compare the two engines where the bench
-# and the app lay the chat out alike.
+# `single` is `stream` with one chat and no split (bench/main.tsx stream).
 #   bench/app-split/run.sh <turns> <out.jsonl> [samples] [ms per sample] [stream|drag|single]
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -31,19 +30,18 @@ $W eval "$(cat "$HERE/probe.js")" >/dev/null
 record() { echo "{\"turns\":$turns,\"mode\":\"$mode\",\"sample\":$1,\"load\":\"$(cut -d' ' -f1-3 /proc/loadavg)\",$2}" >>"$out"; }
 
 if [ "$mode" = drag ]; then
-  # The window's client origin on the X screen, from where one real move lands in the page.
   $W eval 'window.__pt = null; addEventListener("pointermove", (e) => (window.__pt = [e.clientX, e.clientY])); return 1' >/dev/null
   read -r cx cy width < <($W eval 'const d = document.querySelector(".divider").getBoundingClientRect(); return [Math.round(d.left + d.width / 2), Math.round(d.top + d.height / 2), Math.round(document.querySelector(".panes-row").getBoundingClientRect().width)].join(" ")' | tr -d '"')
   "$S/hv" x mousemove 400 400 >/dev/null
   read -r px py < <($W eval 'return (window.__pt ?? []).join(" ")' | tr -d '"')
   [ -n "$px" ] || { echo "drag: no pointermove reached the page" >&2; exit 1; }
-  ox=$((400 - px)) oy=$((400 - py))
+  win_x=$((400 - px)) win_y=$((400 - py))
   for i in $(seq 1 "$samples"); do
     path=()
-    for k in $(seq 1 30); do path+=(mousemove $((ox + cx - width * 3 * k / 300)) $((oy + cy)) sleep 0.016); done
-    for k in $(seq 29 -1 1); do path+=(mousemove $((ox + cx - width * 3 * k / 300)) $((oy + cy)) sleep 0.016); done
+    for k in $(seq 1 30); do path+=(mousemove $((win_x + cx - width * 3 * k / 300)) $((win_y + cy)) sleep 0.016); done
+    for k in $(seq 29 -1 1); do path+=(mousemove $((win_x + cx - width * 3 * k / 300)) $((win_y + cy)) sleep 0.016); done
     $W eval 'return window.__split.start()' >/dev/null
-    "$S/hv" x mousemove $((ox + cx)) $((oy + cy)) sleep 0.1 mousedown 1 sleep 0.05 "${path[@]}" mousemove $((ox + cx - width / 10)) $((oy + cy)) mouseup 1
+    "$S/hv" x mousemove $((win_x + cx)) $((win_y + cy)) sleep 0.1 mousedown 1 sleep 0.05 "${path[@]}" mousemove $((win_x + cx - width / 10)) $((win_y + cy)) mouseup 1
     $W eval 'return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))' >/dev/null
     record "$i" "\"split\":$($W eval 'return window.__split.stop()' | tr -d '\n')"
   done
