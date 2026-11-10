@@ -112,6 +112,24 @@ describe("The transcript", () => {
     expect(screen.getByText("2 of 3")).toBeTruthy();
   });
 
+  it("marks a match a reply shows through a character reference or an escape", () => {
+    const items: Item[] = [
+      { kind: "assistant", id: "a-0", text: "Fish &amp; chips, and 2 \\* 3." },
+      { kind: "assistant", id: "a-1", text: "No match here." },
+    ];
+    const { show } = pane(chatOf(items), { query: "fish & chips", at: 1 });
+    expect(screen.getByText("1 of 1")).toBeTruthy();
+    expect(item("a-0")?.querySelector("mark.hit")?.textContent).toBe("Fish & chips");
+    show(chatOf(items), { query: "2 * 3", at: 2 });
+    expect(screen.getByText("1 of 1")).toBeTruthy();
+  });
+
+  it("marks a footnote's number, which the reply's text doesn't hold", () => {
+    pane(chatOf([{ kind: "assistant", id: "a-0", text: "See this[^note].\n\n[^note]: A note." }]), { query: "1", at: 1 });
+    expect(screen.getByText("1 of 1")).toBeTruthy();
+    expect(document.querySelector("mark.hit")?.closest("sup")).not.toBeNull();
+  });
+
   it("answers an Approval card through the handler App passed last", () => {
     const first = vi.fn<Answer>();
     const latest = vi.fn<Answer>();
