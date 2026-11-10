@@ -427,6 +427,38 @@ async fn hermes_remove_provider_key(state: State<'_, AppState>, profile: String,
     dashboard.remove_provider_key(&profile, &key).await.map_err(|e| e.to_string())
 }
 
+/// The signed-in Hermes's dashboard, or the error a closed connection gives.
+async fn signed_in_dashboard(state: &State<'_, AppState>) -> Result<Arc<Dashboard>, String> {
+    match &*state.0.lock().await {
+        Some(conn) => Ok(conn.dashboard.clone()),
+        None => Err(transport::TransportError::Closed.to_string()),
+    }
+}
+
+/// `profile`'s subscription providers and whether each is signed in, without token previews (ADR 0133).
+#[tauri::command]
+async fn hermes_provider_sign_ins(state: State<'_, AppState>, profile: String) -> Result<Vec<transport::ProviderSignIn>, String> {
+    signed_in_dashboard(&state).await?.provider_sign_ins(&profile).await.map_err(|e| e.to_string())
+}
+
+/// `profile`'s OpenAI-compatible endpoints, without key previews (ADR 0133).
+#[tauri::command]
+async fn hermes_custom_endpoints(state: State<'_, AppState>, profile: String) -> Result<Vec<transport::CustomEndpoint>, String> {
+    signed_in_dashboard(&state).await?.custom_endpoints(&profile).await.map_err(|e| e.to_string())
+}
+
+/// Checks an OpenAI-compatible endpoint and adds it to `profile` (`Dashboard::save_endpoint`, ADR 0133). Its key goes
+/// to the server and isn't kept on this computer.
+#[tauri::command]
+async fn hermes_save_endpoint(
+    state: State<'_, AppState>,
+    profile: String,
+    form: transport::EndpointForm,
+    anyway: bool,
+) -> Result<transport::EndpointSave, String> {
+    signed_in_dashboard(&state).await?.save_endpoint(&profile, &form, anyway).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn hermes_send(state: State<'_, AppState>, frame: String) -> Result<(), String> {
     match &*state.0.lock().await {
@@ -545,17 +577,22 @@ fn screenshot_show_window(app: tauri::AppHandle) {
     tray::show(&app);
 }
 
-/// Saves a file pasted into the composer to a temp file and returns its path. Its bytes come as the raw body, not
-/// JSON, so a big screenshot isn't sent as a list of numbers; its name comes URI-encoded in the `x-name` header.
+/// Stages a file pasted into the composer with the screenshots and returns its path. Its bytes come as the raw body,
+/// not JSON, so a big screenshot isn't sent as a list of numbers; its name comes URI-encoded in the `x-name` header.
 #[tauri::command]
-async fn stage_clipboard_file(attachable: State<'_, Attachable>, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+async fn stage_clipboard_file(
+    screenshots: State<'_, Screenshots>,
+    attachable: State<'_, Attachable>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err("The pasted file didn't arrive as bytes.".into());
     };
     let header = request.headers().get("x-name").and_then(|v| v.to_str().ok()).unwrap_or_default();
     // encodeURIComponent never writes `+`, `&` or `=` bare, so one form-decoded key is exactly the name.
     let name = url::form_urlencoded::parse(header.as_bytes()).next().map(|(k, _)| k.into_owned()).unwrap_or_default();
-    let path = transport::stage_clipboard_file(&name, bytes).map_err(|e| e.to_string())?.to_string_lossy().into_owned();
+    let captures = screenshots.captures().map_err(|e| e.to_string())?;
+    let path = transport::stage_clipboard_file(&captures, &name, bytes).map_err(|e| e.to_string())?.to_string_lossy().into_owned();
     attachable.add([path.clone()]);
     Ok(path)
 }
@@ -1546,6 +1583,9 @@ pub fn run(screenshot: bool, link: Option<String>) {
             hermes_reach,
             hermes_save_provider_key,
             hermes_remove_provider_key,
+            hermes_provider_sign_ins,
+            hermes_custom_endpoints,
+            hermes_save_endpoint,
             password_load,
             password_save,
             password_delete,
