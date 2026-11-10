@@ -983,34 +983,23 @@ fn write_json(path: &std::path::Path, value: &impl Serialize) -> std::io::Result
     })
 }
 
-/// Writes a file pasted into the composer to a new temp file and returns its path, so it attaches like a dropped
-/// one: a pasted screenshot has no file of its own. Each paste gets its own folder under `<temp>/hermes-chat`, so
-/// the same name pasted twice stays two files. `name` is cut down to a safe basename. Nothing removes these files.
-pub fn stage_clipboard_file(name: &str, bytes: &[u8]) -> Result<std::path::PathBuf, TransportError> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static PASTES: AtomicU64 = AtomicU64::new(0);
-    let io = |e: std::io::Error| TransportError::File(format!("couldn't save the pasted file: {e}"));
-
-    // Pastes can be private: only this user's folders, and not one someone else made (or linked) in a shared /tmp.
-    let root = std::env::temp_dir().join("hermes-chat");
-    local_fs::private_dir_builder().recursive(true).create(&root).map_err(io)?;
-    let meta = std::fs::symlink_metadata(&root).map_err(io)?;
-    if !meta.is_dir() || !local_fs::only_mine(&meta).map_err(io)? {
-        return Err(TransportError::File(format!("couldn't save the pasted file: {} isn't private", root.display())));
+/// Stages a file pasted into the composer in a slot of `captures` and returns its path. `name` is cut down to a safe
+/// basename.
+pub fn stage_clipboard_file(captures: &crate::screenshot::Captures, name: &str, bytes: &[u8]) -> Result<std::path::PathBuf, TransportError> {
+    let failed = |e: &dyn std::fmt::Display| TransportError::File(format!("couldn't save the pasted file: {e}"));
+    let path = captures.slot(&safe_name(name)).map_err(|e| failed(&e))?;
+    if let Err(e) = std::fs::write(&path, bytes) {
+        captures.discard(&path);
+        return Err(failed(&e));
     }
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-    let dir = root.join(format!("{nanos}-{}-{}", std::process::id(), PASTES.fetch_add(1, Ordering::Relaxed)));
-    local_fs::private_dir_builder().create(&dir).map_err(io)?;
-    let path = dir.join(safe_name(name));
-    std::fs::write(&path, bytes).map_err(io)?;
     Ok(path)
 }
 
-/// How a local file is opened for the preview, and a private folder made, on this platform.
+/// How a local file is opened for the preview on this platform.
 #[cfg(unix)]
 mod local_fs {
-    use std::fs::{DirBuilder, File, Metadata};
-    use std::os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+    use std::fs::File;
+    use std::os::unix::fs::{FileExt, OpenOptionsExt};
     use std::path::Path;
 
     pub fn open_no_follow(path: &Path) -> std::io::Result<File> {
@@ -1020,26 +1009,13 @@ mod local_fs {
     pub fn read_at(file: &File, buf: &mut [u8], at: u64) -> std::io::Result<usize> {
         file.read_at(buf, at)
     }
-
-    pub fn private_dir_builder() -> DirBuilder {
-        let mut b = DirBuilder::new();
-        b.mode(0o700);
-        b
-    }
-
-    /// Ownership matters, not just the mode: another user's folder could be opened up again after this check.
-    pub fn only_mine(meta: &Metadata) -> std::io::Result<bool> {
-        let me = std::fs::metadata("/proc/self")?.uid();
-        Ok(meta.uid() == me && meta.permissions().mode() & 0o077 == 0)
-    }
 }
 
-/// Windows has no FIFOs in folders and no Unix modes. A link is opened as itself (so it isn't a regular file and is
-/// refused), and the temp folder is the user's own (`%LOCALAPPDATA%\Temp`), which only they (and administrators) can
-/// open, so a folder made in it is private already.
+/// Windows has no FIFOs in folders and no Unix modes. A link is opened as itself, so it isn't a regular file and is
+/// refused.
 #[cfg(windows)]
 mod local_fs {
-    use std::fs::{DirBuilder, File, Metadata};
+    use std::fs::File;
     use std::os::windows::fs::{FileExt, MetadataExt, OpenOptionsExt};
     use std::path::{Component, Path, Prefix};
 
@@ -1068,14 +1044,6 @@ mod local_fs {
 
     pub fn read_at(file: &File, buf: &mut [u8], at: u64) -> std::io::Result<usize> {
         file.seek_read(buf, at)
-    }
-
-    pub fn private_dir_builder() -> DirBuilder {
-        DirBuilder::new()
-    }
-
-    pub fn only_mine(meta: &Metadata) -> std::io::Result<bool> {
-        Ok(!meta.file_type().is_symlink())
     }
 }
 
