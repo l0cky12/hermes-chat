@@ -69,3 +69,8 @@ windows = { version = "0.62", features = ["Data_Xml_Dom", "UI_Notifications"] }
 axum = { version = "0.8", features = ["ws", "multipart"] }
 # `tauri::test`, a mock runtime for tests/update.rs. The feature adds no crate.
 tauri = { version = "2", features = ["test"] }
+
+[profile.release]
+# The symbol table only names functions for a debugger. The dynamic symbols stay, so WebKitGTK still finds
+# gtk_clipboard_request_targets (build.rs).
+strip = "symbols"

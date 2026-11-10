@@ -13,7 +13,8 @@
 //! Access, on every request and the WebSocket handshake (ADR 0104).
 //! Setup uses two more things here: `probe`, which tests a sign-in without keeping it, and
 //! `Dashboard::save_provider_key`, which gives Hermes a model provider's API key, and `Dashboard::remove_provider_key`,
-//! which takes one away (Settings → Providers, ADR 0095).
+//! which takes one away (Settings → Providers, ADR 0095). `accounts` reads the subscription sign-ins and custom
+//! endpoints for the same screen, and saves an endpoint with its key (ADR 0133).
 //! Before any password goes out, `read_server` reads the dashboard's public `/api/status` and `identify` checks it is
 //! a Hermes dashboard, and the same one the connection signed in to before (ADR 0120).
 
@@ -34,6 +35,9 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
+
+mod accounts;
+pub use accounts::{CustomEndpoint, EndpointForm, EndpointSave, ProviderSignIn};
 
 /// The dashboard's username/password provider (`/api/status.auth_providers` on the live server), used when the server's
 /// list of providers can't be read (ADR 0058).
@@ -110,6 +114,11 @@ pub enum TransportError {
     /// `DELETE /api/env` answered, but `GET /api/env` still lists the key as set (ADR 0095).
     #[error("Hermes still lists the {0} key as set after removing it. It may keep the key somewhere else on the server.")]
     KeyStillSet(String),
+    /// Settings → Providers' Add an endpoint form, refused before anything was sent (ADR 0133).
+    #[error("{0}")]
+    Endpoint(String),
+    #[error("Hermes didn't finish checking and saving the endpoint within {0} s. It may have saved it anyway: the list of endpoints shows what Hermes has.")]
+    EndpointTimedOut(u64),
     #[error("This Hermes server can't {0}: it has no {1} route. Updating Hermes adds it.")]
     NoVoiceRoute(&'static str, &'static str),
     #[error("{0}")]
@@ -972,34 +981,23 @@ fn write_json(path: &std::path::Path, value: &impl Serialize) -> std::io::Result
     })
 }
 
-/// Writes a file pasted into the composer to a new temp file and returns its path, so it attaches like a dropped
-/// one: a pasted screenshot has no file of its own. Each paste gets its own folder under `<temp>/hermes-chat`, so
-/// the same name pasted twice stays two files. `name` is cut down to a safe basename. Nothing removes these files.
-pub fn stage_clipboard_file(name: &str, bytes: &[u8]) -> Result<std::path::PathBuf, TransportError> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static PASTES: AtomicU64 = AtomicU64::new(0);
-    let io = |e: std::io::Error| TransportError::File(format!("couldn't save the pasted file: {e}"));
-
-    // Pastes can be private: only this user's folders, and not one someone else made (or linked) in a shared /tmp.
-    let root = std::env::temp_dir().join("hermes-chat");
-    local_fs::private_dir_builder().recursive(true).create(&root).map_err(io)?;
-    let meta = std::fs::symlink_metadata(&root).map_err(io)?;
-    if !meta.is_dir() || !local_fs::only_mine(&meta).map_err(io)? {
-        return Err(TransportError::File(format!("couldn't save the pasted file: {} isn't private", root.display())));
+/// Stages a file pasted into the composer in a slot of `captures` and returns its path. `name` is cut down to a safe
+/// basename.
+pub fn stage_clipboard_file(captures: &crate::screenshot::Captures, name: &str, bytes: &[u8]) -> Result<std::path::PathBuf, TransportError> {
+    let failed = |e: &dyn std::fmt::Display| TransportError::File(format!("couldn't save the pasted file: {e}"));
+    let path = captures.slot(&safe_name(name)).map_err(|e| failed(&e))?;
+    if let Err(e) = std::fs::write(&path, bytes) {
+        captures.discard(&path);
+        return Err(failed(&e));
     }
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-    let dir = root.join(format!("{nanos}-{}-{}", std::process::id(), PASTES.fetch_add(1, Ordering::Relaxed)));
-    local_fs::private_dir_builder().create(&dir).map_err(io)?;
-    let path = dir.join(safe_name(name));
-    std::fs::write(&path, bytes).map_err(io)?;
     Ok(path)
 }
 
-/// How a local file is opened for the preview, and a private folder made, on this platform.
+/// How a local file is opened for the preview on this platform.
 #[cfg(unix)]
 mod local_fs {
-    use std::fs::{DirBuilder, File, Metadata};
-    use std::os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+    use std::fs::File;
+    use std::os::unix::fs::{FileExt, OpenOptionsExt};
     use std::path::Path;
 
     pub fn open_no_follow(path: &Path) -> std::io::Result<File> {
@@ -1009,26 +1007,13 @@ mod local_fs {
     pub fn read_at(file: &File, buf: &mut [u8], at: u64) -> std::io::Result<usize> {
         file.read_at(buf, at)
     }
-
-    pub fn private_dir_builder() -> DirBuilder {
-        let mut b = DirBuilder::new();
-        b.mode(0o700);
-        b
-    }
-
-    /// Ownership matters, not just the mode: another user's folder could be opened up again after this check.
-    pub fn only_mine(meta: &Metadata) -> std::io::Result<bool> {
-        let me = std::fs::metadata("/proc/self")?.uid();
-        Ok(meta.uid() == me && meta.permissions().mode() & 0o077 == 0)
-    }
 }
 
-/// Windows has no FIFOs in folders and no Unix modes. A link is opened as itself (so it isn't a regular file and is
-/// refused), and the temp folder is the user's own (`%LOCALAPPDATA%\Temp`), which only they (and administrators) can
-/// open, so a folder made in it is private already.
+/// Windows has no FIFOs in folders and no Unix modes. A link is opened as itself, so it isn't a regular file and is
+/// refused.
 #[cfg(windows)]
 mod local_fs {
-    use std::fs::{DirBuilder, File, Metadata};
+    use std::fs::File;
     use std::os::windows::fs::{FileExt, MetadataExt, OpenOptionsExt};
     use std::path::{Component, Path, Prefix};
 
@@ -1057,14 +1042,6 @@ mod local_fs {
 
     pub fn read_at(file: &File, buf: &mut [u8], at: u64) -> std::io::Result<usize> {
         file.seek_read(buf, at)
-    }
-
-    pub fn private_dir_builder() -> DirBuilder {
-        DirBuilder::new()
-    }
-
-    pub fn only_mine(meta: &Metadata) -> std::io::Result<bool> {
-        Ok(!meta.file_type().is_symlink())
     }
 }
 
@@ -1365,6 +1342,8 @@ impl Dashboard {
     /// (`memory_provider_write`, ADR 0045), and Settings → Voice's provider pick and key save (`voice_provider_write`,
     /// ADR 0115), Settings → MCP servers' add, switch, test, sign-in and catalog install (`mcp::relayed`, ADR 0121), and
     /// Settings → Gateways' Telegram and Discord save and status check (`gateway_write`, ADR 0073).
+    /// Settings → Providers' two writes that carry nothing secret, starting a sign-in and activating an endpoint
+    /// (`provider_account_write`, ADR 0133).
     /// `DELETE api/env` is refused whatever the body: a key leaves the server only through
     /// `Dashboard::remove_provider_key`, which checks that it is a model provider's (ADR 0095).
     /// Returns the response body on 2xx.
@@ -1394,6 +1373,7 @@ impl Dashboard {
             ("PUT", _) if crate::mcp::relayed("PUT", path, body.as_deref()) => Method::PUT,
             ("POST", _) if gateway_write("POST", path, body.as_deref()) => Method::POST,
             ("PUT", _) if gateway_write("PUT", path, body.as_deref()) => Method::PUT,
+            ("POST", _) if provider_account_write(path, body.as_deref()) => Method::POST,
             ("POST" | "PUT", _) => return Err(TransportError::NotRelayed(format!("{method} {path}"))),
             (other, _) => return Err(TransportError::NotRelayed(format!("{other} requests"))),
         };
@@ -1406,6 +1386,8 @@ impl Dashboard {
         if method == Method::DELETE && is_env_route(&routed) {
             return Err(TransportError::NotRelayed(format!("{method} {path}")));
         }
+        // Hermes answers removing an endpoint with the endpoints left, each with its key's preview (ADR 0133).
+        let answer_unread = method == Method::DELETE && routed.starts_with("api/providers/custom-endpoints/");
         let mut req = self.signed(method, url);
         if let Some(body) = body {
             req = req.header(header::CONTENT_TYPE, "application/json").body(body);
@@ -1413,6 +1395,7 @@ impl Dashboard {
         let resp = req.send().await.map_err(unreachable)?;
         self.keep_cookies(&resp);
         match resp.status() {
+            s if s.is_success() && answer_unread => Ok(r#"{"ok":true}"#.to_owned()),
             s if s.is_success() => resp.text().await.map_err(unreachable),
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
             _ => Err(unexpected(resp, &self.hide).await),
@@ -2037,6 +2020,25 @@ fn relay_url(base: &Url, path: &str, query: &str) -> Result<(Url, String), Trans
 fn is_file_route(path: &str) -> bool {
     let mut segs = path.split('/').filter(|seg| !seg.is_empty());
     segs.next() == Some("api") && matches!(segs.next(), Some("files" | "fs"))
+}
+
+/// Settings → Providers' writes through the relay that carry nothing secret (ADR 0133), each without a body:
+/// - `POST api/providers/oauth/<provider>/start` starts a device-code sign-in. Hermes refuses an `external` provider.
+/// - `POST api/providers/custom-endpoints/<id>/activate` makes an endpoint the profile's default model provider, as
+///   `POST api/model/set` can.
+///
+/// Saving an endpoint carries its key, so it goes through `Dashboard::save_endpoint`, and its check route isn't relayed.
+pub fn provider_account_write(path: &str, body: Option<&str>) -> bool {
+    let empty = body.is_none_or(|b| matches!(b.trim(), "" | "{}"));
+    let Some(rest) = path.strip_prefix("api/providers/") else {
+        return false;
+    };
+    empty
+        && match rest.split('/').collect::<Vec<_>>().as_slice() {
+            ["oauth", id, "start"] => accounts::provider_slug(id),
+            ["custom-endpoints", id, "activate"] => accounts::endpoint_segment(id),
+            _ => false,
+        }
 }
 
 /// The dashboard's routes on the profile's `.env`: `api/env` and anything under it. Empty segments are skipped, as
