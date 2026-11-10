@@ -36,7 +36,9 @@
   --mono: var(--mono-font, "JetBrains Mono"), "JetBrains Mono", "Fira Code", ui-monospace, "SFMono-Regular", Menlo, monospace;
   --mono-size: 13px;
   color-scheme: dark;
-  font-family: var(--ui-font, Inter), Inter, "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* system-ui first: WebKitGTK searches the system for each named font that isn't installed, again at every font size,
+     which cost about 40 ms before the chat list showed at launch (#456). */
+  font-family: var(--ui-font, system-ui), sans-serif;
   font-size: 14px;
   color: var(--text);
   background: var(--bg);
