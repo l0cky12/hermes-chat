@@ -92,6 +92,8 @@ pub enum TransportError {
     WebSocket(String),
     #[error("The chat connection is closed.")]
     Closed,
+    #[error("Hermes stopped answering: nothing came back for {0} s.")]
+    Stalled(u64),
     #[error("The dashboard sign-in has expired. Sign in again.")]
     SignedOut,
     #[error("Hermes Chat doesn't relay {0}.")]

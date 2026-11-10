@@ -1079,6 +1079,42 @@ async fn an_expired_sign_in_is_signed_out() {
     assert!(matches!(err, TransportError::SignedOut), "{err:?}");
 }
 
+/// A dashboard whose chat list never answers, and whose skills list and memory provider setup each work for five
+/// minutes before they answer, as they can behind an install.
+async fn slow_stub() -> Dashboard {
+    let five_minutes = || async {
+        tokio::time::sleep(Duration::from_secs(300)).await;
+        Json(json!({"ok": true}))
+    };
+    let app = Router::new()
+        .route("/auth/password-login", post(login))
+        .route("/api/sessions", get(std::future::pending::<String>))
+        .route("/api/skills", get(five_minutes))
+        .route("/api/memory/providers/{name}/setup", post(five_minutes));
+    sign_in_at(&serve(app).await, &sign_in("hunter2")).await.expect("signed in")
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_chat_list_read_hermes_never_answers_fails_after_a_minute_without_a_byte() {
+    let dashboard = slow_stub().await;
+    let started = tokio::time::Instant::now();
+    let read = tokio::time::timeout(Duration::from_secs(3600), dashboard.request("GET", "api/sessions", None)).await;
+    let err = read.expect("the read gave up within the hour").err().unwrap();
+    assert!(matches!(err, TransportError::Stalled(60)), "{err:?}");
+    assert_eq!(started.elapsed().as_secs(), 60);
+}
+
+#[tokio::test(start_paused = true)]
+async fn other_calls_hermes_works_on_for_minutes_still_get_their_answer() {
+    let dashboard = slow_stub().await;
+    let read = dashboard.request("GET", "api/skills", None).await.expect("the read answered");
+    let body = json!({"values": {}}).to_string();
+    let write = dashboard.request("POST", "api/memory/providers/honcho/setup", Some(body)).await.expect("the write answered");
+    for text in [read, write] {
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), json!({"ok": true}));
+    }
+}
+
 #[tokio::test]
 async fn a_failed_rest_call_reports_status_and_body() {
     let dashboard = signed_in().await;
