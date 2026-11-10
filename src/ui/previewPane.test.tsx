@@ -488,6 +488,7 @@ const stubLayout = () => {
     "ResizeObserver",
     class {
       observe() {}
+      unobserve() {}
       disconnect() {}
     },
   );
@@ -1165,6 +1166,7 @@ describe("Closing and resizing", () => {
         observe() {
           this.cb([{ contentRect: { width: 600 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
         }
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -1196,6 +1198,7 @@ describe("Closing and resizing", () => {
         observe() {
           this.cb([{ contentRect: { width: 600 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
         }
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -1218,6 +1221,7 @@ describe("Closing and resizing", () => {
         observe() {
           this.cb([{ contentRect: { width: 700 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
         }
+        unobserve() {}
         disconnect() {}
       },
     );

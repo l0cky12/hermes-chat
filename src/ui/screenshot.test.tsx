@@ -317,6 +317,7 @@ describe("Taking a screenshot for the composer", () => {
       observe() {
         this.cb([{ contentRect: { width: 600 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
       }
+      unobserve() {}
       disconnect() {}
     });
     const { rust, user } = await signedIn();
