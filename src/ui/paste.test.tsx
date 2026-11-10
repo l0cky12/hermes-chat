@@ -157,6 +157,34 @@ describe("Pasting into the composer", () => {
     expect(discard).toHaveBeenLastCalledWith(staged[1].path);
   });
 
+  it("deletes a paste that is saved after its composer has gone", async () => {
+    const discard = vi.fn(async () => {});
+    const { staged } = await setUp("", new ScreenshotDesk({ capture: async () => Promise.reject(new Error("no captures here")), discard }));
+    const save = tauri.invoke;
+    let land: (() => void) | undefined;
+    tauri.invoke = (cmd, args, opts) =>
+      cmd === "stage_clipboard_file" ? new Promise((resolve) => (land = () => resolve(save(cmd, args, opts)))) : save(cmd, args, opts);
+    paste([new File([PNG], "a.png", { type: "image/png" })]);
+    await waitFor(() => expect(land).toBeDefined());
+    cleanup();
+    land!();
+    await waitFor(() => expect(discard).toHaveBeenCalledWith(staged[0].path));
+  });
+
+  it("deletes the files already saved when a paste fails part-way", async () => {
+    const discard = vi.fn(async () => {});
+    const { staged } = await setUp("", new ScreenshotDesk({ capture: async () => Promise.reject(new Error("no captures here")), discard }));
+    const save = tauri.invoke;
+    let saves = 0;
+    tauri.invoke = (cmd, args, opts) =>
+      cmd === "stage_clipboard_file" && ++saves === 2 ? Promise.reject(new Error("disk full")) : save(cmd, args, opts);
+    paste([new File([PNG], "a.png", { type: "image/png" }), new File([PNG], "b.png", { type: "image/png" })]);
+    await screen.findByText("Couldn't attach the files: disk full");
+    expect(staged).toHaveLength(1);
+    await waitFor(() => expect(discard).toHaveBeenCalledWith(staged[0].path));
+    expect(chips()).toHaveLength(0);
+  });
+
   it("keeps a pasted file's own name", async () => {
     const { staged } = await setUp();
     paste([new File(["sda 92%"], "disk report.txt", { type: "text/plain" })]);

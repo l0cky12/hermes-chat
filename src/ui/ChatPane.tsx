@@ -1336,6 +1336,11 @@ function Composer({
   }, [shot.capturing]);
   const staged = useRef(attachments);
   staged.current = attachments;
+  const open = useRef(true);
+  useEffect(() => {
+    open.current = true;
+    return () => void (open.current = false);
+  }, []);
   useEffect(() => {
     if (!screenshots || !autoFocus) return;
     let current = true;
@@ -1376,15 +1381,21 @@ function Composer({
     try {
       const files = await incoming;
       const tooBig = files.filter((f) => f.size > LIMITS.file.bytes);
-      const paths = await Promise.all(
+      const saved = await Promise.allSettled(
         files
           .filter((f) => !tooBig.includes(f))
           .map(async (f) =>
             invoke<string>("stage_clipboard_file", await f.arrayBuffer(), { headers: { "x-name": encodeURIComponent(nameOf(f)) } }),
           ),
       );
+      const paths = saved.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
       screenshots?.own(paths);
-      const kept = await add(paths);
+      const failed = saved.find((r): r is PromiseRejectedResult => r.status === "rejected");
+      if (failed) {
+        screenshots?.release(paths);
+        throw failed.reason;
+      }
+      const kept = await add(paths, () => open.current);
       screenshots?.release(paths.filter((p) => !kept.includes(p)));
       const notes = tooBig.map((f) => overLimitNote(nameOf(f), f.size, LIMITS.file));
       if (notes.length) setRefused((cur) => (paths.length ? [...cur, ...notes] : notes));
