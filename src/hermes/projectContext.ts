@@ -220,7 +220,9 @@ export type ContextTexts = ReadonlyMap<string, string>;
 
 // Hermes expands `@file:`, `@folder:`, `@git:`, `@url:`, `@diff` and `@staged` in a submitted message, and fetches a
 // `@url:` (`agent/context_references.py`). A word joiner after the `@` keeps a file's text from being read as one.
-const neutralize = (text: string) => text.replace(/@(?=file:|folder:|git:|url:|diff|staged)/g, "@⁠");
+// The match is Hermes's `REFERENCE_PATTERN`: an `@` not after a word character or `/`.
+const neutralize = (text: string) =>
+  text.replace(/(?<![\p{L}\p{N}_/])@(?=(?:diff|staged)(?![\p{L}\p{N}_])|(?:file|folder|git|url):\S)/gu, "@\u2060");
 
 const described = (f: ContextFile) => `${f.path} (${f.size === undefined ? "" : `${sizeText(f.size)}, `}${typeLabel(f.name)})`;
 const body = (text: string) => text.replace(/\s+$/, "");

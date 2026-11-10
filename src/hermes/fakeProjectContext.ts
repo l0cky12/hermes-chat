@@ -2,7 +2,7 @@
 import type { FakeFile, FakeWorktree } from "./fakeHermes";
 import type { FakeServerFiles } from "./fakeServerFiles";
 import type { LocalFile as PickedFile } from "./pipe";
-import { MAX_FILE_BYTES, SSH_MAX_BYTES, SSH_REFUSED, nameProblem } from "./projectContext";
+import { MAX_FILE_BYTES, SSH_MAX_BYTES, SSH_REFUSED, bytesOf, nameProblem } from "./projectContext";
 import type { ContextPipe, GitExclude } from "./projectContextFiles";
 
 const dirname = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
@@ -115,6 +115,14 @@ export class FakeProjectContext {
         } catch {
           return undefined;
         }
+      },
+      sshFile: async (serverPath) => {
+        this.reads.push(serverPath);
+        const f = this.disks.agentFiles()[serverPath];
+        if (typeof f !== "string") throw new Error(`The dashboard answered 404: {"detail":"File not found"}`);
+        const size = bytesOf(f);
+        // Hermes's read-text sends at most 512 KiB, and says so.
+        return size <= 512 * 1024 && !f.slice(0, 4096).includes("\0") ? { size, text: f.replace(/^\uFEFF/, "") } : { size };
       },
       gitExclude: async (mainFolder): Promise<GitExclude> => {
         const inRepo = this.disks.repos().some((trees) => trees.some((t) => mainFolder === t.path || mainFolder.startsWith(`${t.path}/`)));

@@ -308,6 +308,33 @@ async fn on_an_ssh_profile_only_text_goes_through_write_text_and_binary_is_refus
 }
 
 #[tokio::test]
+async fn on_an_ssh_profile_a_file_keeps_its_byte_order_mark_and_its_size_past_what_read_text_sends() {
+    let disk = Disk::with(&[]);
+    disk.dirs.lock().unwrap().push("/srv/plan/context".into());
+    let dashboard = stub(&disk).await;
+    let attachable = Attachable::default();
+    let dir = scratch("ssh-sizes");
+
+    let bom = "\u{feff}# Notes\n".as_bytes();
+    let local = attached(&attachable, &dir, "bom.md", bom);
+    let to = path("/srv/plan/context/bom.md");
+    project_context::upload(&dashboard, AttachedFile::check(&attachable, &local).unwrap(), &to, false, Some("work"), |_, _| {}).await.expect("text goes");
+    assert_eq!(disk.file("/srv/plan/context/bom.md").as_deref(), Some(bom), "written byte for byte");
+    let listed = project_context::ssh_file(&dashboard, &to, "work").await.unwrap();
+    assert_eq!(listed.size, bom.len() as u64);
+    assert_eq!(listed.text.as_deref(), Some("# Notes\n"));
+
+    let long = vec![b'a'; 600 * 1024];
+    let local = attached(&attachable, &dir, "long.md", &long);
+    let to = path("/srv/plan/context/long.md");
+    project_context::upload(&dashboard, AttachedFile::check(&attachable, &local).unwrap(), &to, false, Some("work"), |_, _| {})
+        .await
+        .expect("text up to 8 MiB goes");
+    let listed = project_context::ssh_file(&dashboard, &to, "work").await.unwrap();
+    assert_eq!(listed, project_context::SshFile { size: 600 * 1024, text: None }, "read-text cut it short, so it is listed by path at its real size");
+}
+
+#[tokio::test]
 async fn read_text_extracts_what_it_can_and_says_none_for_the_rest() {
     let disk = Disk::with(&[("/srv/p/context/notes.md", "# Notes\nThe vault code is 4471.\n")]);
     disk.put("/srv/p/context/logo.png", b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR");

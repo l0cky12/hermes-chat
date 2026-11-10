@@ -49,6 +49,8 @@ export type ContextPipe = {
   remove(serverPath: string): Promise<void>;
   /** A file's text, extracted from a PDF or a Word document; undefined when it has none to read. */
   readText(serverPath: string, size: number, sshProfile?: string): Promise<string | undefined>;
+  /** A file where an SSH profile's tools run: its size there, and its text when Hermes sent all of it and it is text. */
+  sshFile(serverPath: string, sshProfile: string): Promise<{ size: number; text?: string }>;
   /** Keeps `context/` out of the repository `mainFolder` is in, by its `info/exclude`, unless it is ignored already. */
   gitExclude(mainFolder: string, sshProfile?: string): Promise<GitExclude>;
 };
@@ -212,12 +214,14 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
     const files: ListedFile[] = [];
     for (const e of entries) {
       if (!isObj(e) || typeof e.name !== "string" || typeof e.path !== "string" || e.isDirectory === true || e.name.startsWith(".")) continue;
-      const text = await io.pipe()?.readText(e.path, 0, profile).catch(() => undefined);
+      const read = await io.pipe()?.sshFile(e.path, profile).catch(() => undefined);
+      const text = read?.text;
       const named = kindByName(e.name);
+      const sized = read ? { size: read.size } : {};
       const file: ListedFile =
         text === undefined
-          ? { name: e.name, path: e.path, version: "unread", kind: named === "pdf" || named === "docx" ? named : "binary" }
-          : { name: e.name, path: e.path, size: bytesOf(text), version: `${bytesOf(text)}:${fnv1a(text)}`, kind: named ?? "text" };
+          ? { name: e.name, path: e.path, ...sized, version: read ? `${read.size}:unread` : "unread", kind: named === "pdf" || named === "docx" ? named : "binary" }
+          : { name: e.name, path: e.path, size: read!.size, version: `${read!.size}:${fnv1a(text)}`, kind: named ?? "text" };
       if (text !== undefined) keep(keyOf(file.path, file.version, profile), text);
       files.push(file);
     }

@@ -153,6 +153,16 @@ struct ReadText {
     binary: bool,
     #[serde(default)]
     truncated: bool,
+    #[serde(default, rename = "byteSize")]
+    byte_size: Option<u64>,
+}
+
+/// A context file where an SSH profile's tools run: its size on that machine, and its text when `read-text` sent all of
+/// it and it is plain text.
+#[derive(Serialize, Debug, PartialEq, Eq)]
+pub struct SshFile {
+    pub size: u64,
+    pub text: Option<String>,
 }
 
 fn query(pairs: &[(&str, &str)]) -> String {
@@ -211,7 +221,8 @@ pub async fn upload(
         return Err(SSH_BINARY_REFUSED.into());
     }
     let bytes = tokio::fs::read(&file.path).await.map_err(|e| format!("Couldn't read {} on this computer: {e}.", file.name))?;
-    let text = match plain_text(&bytes) {
+    // Written as it is, a byte-order mark included, so the listing shows the size that was picked.
+    let text = match plain_text(&bytes).and(std::str::from_utf8(&bytes).ok()) {
         Some(text) if bytes.len() as u64 <= transport::AGENT_TEXT_MAX_BYTES => text,
         _ => return Err(SSH_BINARY_REFUSED.into()),
     };
@@ -275,6 +286,23 @@ pub async fn read_text(dashboard: &Dashboard, file: &ContextPath, size: u64, ssh
         Read::Missing => Err(format!("{} isn't in the context folder any more.", file.name())),
         Read::NotAFile => Err(format!("{} isn't a file.", file.name())),
     }
+}
+
+/// `file` on the SSH machine of `profile`, read once with `read-text`, which reports the size even of a file it cuts
+/// short at 512 KiB.
+pub async fn ssh_file(dashboard: &Dashboard, file: &ContextPath, profile: &str) -> Result<SshFile, String> {
+    let q = query(&[("path", file.as_str()), ("profile", profile)]);
+    let body = match dashboard.send_limited(Method::GET, "api/fs/read-text", &q, None, READ_TEXT_ANSWER_MAX_BYTES).await {
+        Ok(body) => body,
+        Err(TransportError::Unexpected { status: 404, .. }) => return Err(format!("{} isn't in the context folder any more.", file.name())),
+        Err(TransportError::Unexpected { status: 400, .. }) => return Err(format!("{} isn't a file.", file.name())),
+        Err(e) => return Err(e.to_string()),
+    };
+    let answer: ReadText = serde_json::from_slice(&body).map_err(|_| "the answer to reading a file wasn't Hermes's".to_owned())?;
+    let whole = !answer.binary && !answer.truncated;
+    let text = whole.then(|| plain_text(answer.text.as_bytes()).map(str::to_owned)).flatten();
+    let size = answer.byte_size.unwrap_or(answer.text.len() as u64);
+    Ok(SshFile { size, text })
 }
 
 /// `extract_text` on a blocking thread, which catches a panic in the PDF parser as a `JoinError`, and given up after

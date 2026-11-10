@@ -199,12 +199,12 @@ describe("a profile whose tools run over SSH", () => {
     s.serverFiles[`${DIR}/logo.png`] = "\x89PNG\0\0";
   };
 
-  it("lists the folder on the SSH machine, with sizes from the text read", async () => {
+  it("lists the folder on the SSH machine, with the sizes Hermes reports", async () => {
     const { files } = await signedIn(ssh);
     const state = ready(await files.read("default", budget));
     expect(state.writes).toBe("text-only");
     expect(state.files.map((f) => [f.name, f.size, f.kind, f.tokens])).toEqual([
-      ["logo.png", undefined, "binary", undefined],
+      ["logo.png", 7, "binary", undefined],
       ["notes.md", 12, "text", 3],
     ]);
   });
@@ -220,6 +220,17 @@ describe("a profile whose tools run over SSH", () => {
     await expect(files.upload("default", DIR, "text-only", { path: "/home/me/photo.jpg", name: "photo.jpg", size: 4 }, false)).rejects.toThrow(
       "photo.jpg: can't add this file to a project on an SSH profile yet",
     );
+  });
+
+  it("counts a text file past the 512 KiB read-text sends as written, and lists it by path", async () => {
+    const { server, files } = await signedIn(ssh);
+    const long = "a".repeat(600 * 1024);
+    server.files["/home/me/long.md"] = long;
+    await files.upload("default", DIR, "text-only", { path: "/home/me/long.md", name: "long.md", size: long.length }, false);
+    const state = ready(await files.read("default", budget));
+    const listed = state.files.find((f) => f.name === "long.md");
+    expect(listed?.size).toBe(600 * 1024);
+    expect(listed && "tokens" in listed).toBe(false);
   });
 
   it("can't make a folder there, and says so", async () => {

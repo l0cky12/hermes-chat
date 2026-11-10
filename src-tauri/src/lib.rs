@@ -1141,6 +1141,14 @@ async fn context_read_text(state: State<'_, AppState>, server_path: String, size
     project_context::read_text(&*dashboard(&state).await?, &file, size, ssh_profile.as_deref()).await
 }
 
+/// A context file where `ssh_profile`'s tools run: its size there, and its text when it is plain text up to 512 KiB
+/// (ADR 0135).
+#[tauri::command]
+async fn context_ssh_file(state: State<'_, AppState>, server_path: String, ssh_profile: String) -> Result<project_context::SshFile, String> {
+    let file = project_context::ContextPath::parse(&server_path)?;
+    project_context::ssh_file(&*dashboard(&state).await?, &file, &ssh_profile).await
+}
+
 /// Keeps `<main_folder>/context/` out of the Git repository it is in, through that repository's `info/exclude`, the
 /// only file it writes (ADR 0135). `none`: not in a repository.
 #[tauri::command]
@@ -1719,6 +1727,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             context_mkdir,
             context_remove,
             context_read_text,
+            context_ssh_file,
             context_git_exclude,
             hermes_connect_cancel,
             hermes_probe,

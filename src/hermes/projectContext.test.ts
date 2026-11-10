@@ -132,6 +132,13 @@ describe("what a new chat is told", () => {
     for (const r of refs) expect(block).toContain(`@⁠${r}`);
     expect(block).toContain("a@b.c");
   });
+
+  it("leaves alone what Hermes wouldn't read as a reference", () => {
+    const kept = ["@different", "@stagedRollout", "user@file:notes", "/@file:x"];
+    const text = kept.join(" ");
+    const { block } = start(set(file("a.md", text)), texts(["a.md", text]), "full");
+    for (const k of kept) expect(block).toContain(k);
+  });
 });
 
 describe("what an open chat is told before its next message", () => {

@@ -163,6 +163,8 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
         remove: (serverPath) => invoke<void>("context_remove", { serverPath }).catch(asError),
         readText: (serverPath, size, sshProfile) =>
           invoke<string | null>("context_read_text", { serverPath, size, sshProfile: sshProfile ?? null }).then((text) => text ?? undefined, asError),
+        sshFile: (serverPath, sshProfile) =>
+          invoke<{ size: number; text: string | null }>("context_ssh_file", { serverPath, sshProfile }).then(({ size, text }) => (text === null ? { size } : { size, text }), asError),
         gitExclude: (mainFolder, sshProfile) => invoke<GitExclude>("context_git_exclude", { mainFolder, sshProfile: sshProfile ?? null }).catch(asError),
       },
       openDisplay: async (ticket, onData, onClose) => {
