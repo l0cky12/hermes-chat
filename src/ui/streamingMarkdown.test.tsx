@@ -217,7 +217,7 @@ describe("Each delta", () => {
 describe("Code still coming in", () => {
   const code = "fn parse(line: &str) -> Option<u32> {\n    let n: u32 = line.trim().parse().ok()?;\n    Some(n)\n}";
 
-  it("stays plain until its fence closes, then is highlighted, with its language guessed, and left alone", () => {
+  it("stays plain until its fence closes, then is highlighted, with its language guessed after that commit, and left alone", async () => {
     const intro = "Like this:\n\n";
     const { container, rerender } = render(<Markdown text={intro + "```\n" + code.slice(0, 20)} streaming />);
     const codeEl = () => container.querySelector("pre code")!;
@@ -227,7 +227,9 @@ describe("Code still coming in", () => {
     expect(codeEl().querySelector("span")).toBeNull();
     expect(container.querySelector(".code-head span")!.textContent).toBe("");
     rerender(<Markdown text={intro + "```\n" + code + "\n```"} streaming />);
-    expect(codeEl().className).toBe("hljs language-rust");
+    expect(codeEl().className, "the guess waits for the commit that closed the fence to paint").toBe("hljs");
+    expect(codeEl().querySelector("span")).toBeNull();
+    await waitFor(() => expect(codeEl().className).toBe("hljs language-rust"));
     expect(codeEl().querySelector(".hljs-keyword")!.textContent).toBe("fn");
     expect(container.querySelector(".code-head span")!.textContent).toBe("rust");
     const done = codeEl();
