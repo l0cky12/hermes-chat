@@ -203,17 +203,19 @@ describe("Reconnecting", () => {
 
 /**
  * `server`'s pipes, each able to open its socket again on the connection it holds, as src-tauri `hermes_reopen` does.
- * `reopenFails`: the next reopen fails, as it does when the tunnel or the sign-in is gone.
+ * `reopenFails`: the next reopen fails, as it does when the tunnel or the sign-in is gone. `reopenHangs`: the next
+ * reopen waits until it is stopped, as one whose ticket gets no answer does.
  */
 function reopening(server: FakeHermes) {
-  const seen = { opens: 0, reopens: 0, closes: 0, reopenFails: undefined as string | undefined };
+  const seen = { opens: 0, reopens: 0, closes: 0, reopenFails: undefined as string | undefined, reopenHangs: false };
   const kept = (pipe: Pipe): Pipe => ({
     ...pipe,
-    reopen: async (onEvent, profile) => {
+    reopen: async (onEvent, profile, signal) => {
       seen.reopens++;
       const fails = seen.reopenFails;
       seen.reopenFails = undefined;
       if (fails) throw new Error(fails);
+      if (seen.reopenHangs) await new Promise((_, reject) => signal?.addEventListener("abort", () => reject(new Error("Connecting was stopped."))));
       return kept(await server.openPipe(onEvent, profile));
     },
     close: () => {
@@ -298,6 +300,20 @@ describe("Reopening the socket", () => {
     await hermes.close();
     await vi.advanceTimersByTimeAsync(5_000);
     expect(seen).toMatchObject({ reopens: 0, closes: 1 });
+  });
+
+  it("closes the kept connection when the app closes during the reopen", async () => {
+    const server = new FakeHermes();
+    const { seen, open } = reopening(server);
+    const hermes = await connect(open);
+    await vi.advanceTimersByTimeAsync(5_000);
+    seen.reopenHangs = true;
+    server.drop();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(seen.reopens).toBe(1);
+
+    await hermes.close();
+    expect(seen).toMatchObject({ opens: 1, closes: 1 });
   });
 });
 

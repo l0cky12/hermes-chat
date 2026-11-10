@@ -1124,13 +1124,15 @@ export class Hermes {
       if (e.kind === "closed" && !up) this.abortDial?.(new Error(`The connection closed before Hermes was ready: ${e.reason}`));
       else this.handle(e);
     };
-    const reopen = this.socketClosed?.reopen;
+    const kept = this.socketClosed;
     this.socketClosed = undefined;
     try {
-      pipe = reopen
-        ? await reopen(onEvent, profile, stop.signal).catch((e: unknown) => {
-            if (this.closing) throw e;
-            return this.openPipe(onEvent, profile, stop.signal);
+      pipe = kept?.reopen
+        ? await kept.reopen(onEvent, profile, stop.signal).catch(async (e: unknown) => {
+            if (!this.closing) return this.openPipe(onEvent, profile, stop.signal);
+            // Rust has dropped the connection, but only a disconnect also closes the server pages opened over it.
+            await kept.close().catch(() => {});
+            throw e;
           })
         : await this.openPipe(onEvent, profile, stop.signal);
       pipe.attempt?.ready();
