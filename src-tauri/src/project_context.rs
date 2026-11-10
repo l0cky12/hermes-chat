@@ -253,7 +253,8 @@ pub async fn write_text(dashboard: &Dashboard, to: &ContextPath, text: String, o
 
 async fn write_over_ssh(dashboard: &Dashboard, profile: &str, to: &ContextPath, text: &str, overwrite: bool) -> Result<(), String> {
     // `write-text` always replaces, so a taken name is looked for first. A file created in between is still replaced.
-    if !overwrite && !matches!(read(dashboard, Machine::Ssh(profile), to.as_str(), 0).await.map_err(written)?, Read::Missing) {
+    let taken = || async { read(dashboard, Machine::Ssh(profile), to.as_str(), CONTEXT_FILE_MAX_BYTES).await.map(|r| !matches!(r, Read::Missing)) };
+    if !overwrite && taken().await.map_err(written)? {
         return Err(EXISTS.into());
     }
     dashboard.write_agent_text(profile, to.as_str(), text, None).await.map(drop).map_err(written)
