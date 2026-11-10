@@ -7,6 +7,7 @@ Issue #476. One tool call whose preview was a number threw while the transcript 
 - **Each transcript block has its own boundary.** A message, a reply, a thought, a tool call or group, an Approval card and a side question each sit under one. A block that throws while it is drawn shows a small error in its place ("Hermes Chat couldn't show this message", with the error's message) in the style of an error from Hermes. The other messages, the composer, the list and the other chats keep working.
 - **The root boundary stays.** It catches what the transcript's boundaries don't, as ADR 0092 says. `ErrorBoundary` takes a `fallback` for the per-block case, so both share one way of catching.
 - **The error is still reported.** React reports a caught error on the console, so Logs → This app keeps it (ADR 0033).
+- **Bad input stops where it is parsed.** The boundary is the last line, not the fix. The transport drops a frame that isn't a JSON object, reads `params` and an event's `payload` as `{}` when they aren't objects, and keeps a tool call's or a stored row's field only when it has the type the transcript expects, as the Saved copy's `toItem` does. A wrong field never reaches a block.
 
 ## Considered options
 
