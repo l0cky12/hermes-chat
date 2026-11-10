@@ -4,6 +4,7 @@
 import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 let hidden = false;
 let lastFocus: Element | null = null;
@@ -79,12 +80,23 @@ const subscribeFocus = (fn: () => void) => {
 export const useWindowFocused = () => useSyncExternalStore(subscribeFocus, () => document.hasFocus());
 
 /**
- * Marks the page `data-unfocused` while the window doesn't have the keyboard focus, which pauses the endless
- * animations in styles.css: a window left showing behind another app spent a third of a core on a spinner. Called once,
- * at startup.
+ * Marks the page `data-unfocused` while the window doesn't have the focus, which pauses the endless animations in
+ * styles.css. Called once, at startup. The window's word, not `document.hasFocus()`: that turns false while the owner
+ * types in the Preview's page view, which is in this window.
  */
-export function followWindowFocus(doc: Document = document) {
-  const mark = () => doc.documentElement.toggleAttribute("data-unfocused", !doc.hasFocus());
-  subscribeFocus(mark);
-  mark();
+export async function followWindowFocus(): Promise<void> {
+  const mark = (focused: boolean) => document.documentElement.toggleAttribute("data-unfocused", !focused);
+  try {
+    const win = getCurrentWindow();
+    let heard = false;
+    await win.onFocusChanged(({ payload }) => {
+      heard = true;
+      mark(payload);
+    });
+    const now = await win.isFocused();
+    // An event that came while asking is newer than the answer.
+    if (!heard) mark(now);
+  } catch {
+    // Outside the desktop app there is no window to follow, and nothing pauses.
+  }
 }

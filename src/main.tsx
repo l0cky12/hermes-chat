@@ -31,7 +31,7 @@ function RecoveryFailed({ reason }: { reason: string }) {
 
 // Whether the window is hidden to the tray, for the whole app's life (ADR 0034).
 void followWindowVisibility();
-followWindowFocus();
+void followWindowFocus();
 // The docked touch keyboard on Windows, which covers the composer unless the page makes room (ADR 0130).
 void followTouchKeyboard();
 refuseStrayFileDrops();
