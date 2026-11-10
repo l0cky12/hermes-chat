@@ -1184,7 +1184,7 @@ impl Dashboard {
                     StatusCode::UNAUTHORIZED => return Err(TransportError::BadCredentials),
                     StatusCode::TOO_MANY_REQUESTS => return Err(TransportError::RateLimited),
                     // A 422, or a gateway in front, can echo the body back, password and all.
-                    _ => return Err(unexpected_sent(login, &sign_in.headers, password).await),
+                    _ => return Err(unexpected_sent(login, &sign_in.headers, password, None).await),
                 }
                 dashboard.keep_cookies(&login);
                 Ok(dashboard)
@@ -1402,6 +1402,7 @@ impl Dashboard {
             s if s.is_success() && answer_unread => Ok(r#"{"ok":true}"#.to_owned()),
             s if s.is_success() => resp.text().await.map_err(unreachable),
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
+            _ if list => Err(unexpected_sent(resp, &self.hide, "", Some(SESSION_LIST_IDLE_LIMIT)).await),
             _ => Err(unexpected(resp, &self.hide).await),
         }
     }
@@ -2437,12 +2438,13 @@ fn shown_body(status: StatusCode, text: &str, headers: &HeaderMap) -> String {
 /// A failed answer as an error, with the start of its body. Reads only the first few KB, so a huge or endless error
 /// body can't fill memory. `headers`: what the request carried that mustn't be shown (`shown_body`).
 async fn unexpected(resp: reqwest::Response, headers: &HeaderMap) -> TransportError {
-    unexpected_sent(resp, headers, "").await
+    unexpected_sent(resp, headers, "", None).await
 }
 
 /// `unexpected` for a request whose body carried `secret`, such as a password: an error that repeats it anywhere, as
 /// sent or JSON-escaped, is shown as `HIDDEN`. Unlike extra request headers, it doesn't limit what else is shown.
-async fn unexpected_sent(mut resp: reqwest::Response, headers: &HeaderMap, secret: &str) -> TransportError {
+/// `limit`: the body is given up as `Stalled` once that passes without a part of it.
+async fn unexpected_sent(mut resp: reqwest::Response, headers: &HeaderMap, secret: &str, limit: Option<Duration>) -> TransportError {
     const KEEP: usize = 4096;
     let forms = sent_forms(secret);
     let forms = || forms.iter().map(|f| f.as_bytes());
@@ -2460,7 +2462,14 @@ async fn unexpected_sent(mut resp: reqwest::Response, headers: &HeaderMap, secre
     let status = resp.status().as_u16();
     let mut head = Vec::new();
     while head.len() < KEEP {
-        match resp.chunk().await {
+        let part = match limit {
+            Some(limit) => match tokio::time::timeout(limit, resp.chunk()).await {
+                Ok(part) => part,
+                Err(_) => return TransportError::Stalled(limit.as_secs()),
+            },
+            None => resp.chunk().await,
+        };
+        match part {
             Ok(Some(chunk)) => head.extend_from_slice(&chunk),
             _ => break,
         }
