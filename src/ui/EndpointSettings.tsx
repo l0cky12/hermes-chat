@@ -234,10 +234,12 @@ export function EndpointSettings({ api, profile, connected }: { api: EndpointApi
   };
 
   const adding = ui.kind === "adding";
+  // Each input is named "Endpoint …", so it isn't mistaken for the Provider keys' "API key" above it.
   const field = (key: keyof EndpointForm, label: string, props: { placeholder: string; type?: string; hint?: string }) => (
     <SettingRow name={<label htmlFor={`${ids}-${key}`}>{label}</label>} about={label} hint={props.hint}>
       <input
         id={`${ids}-${key}`}
+        aria-label={`Endpoint ${label === "API key" ? label : label.toLowerCase()}`}
         className="pk-input"
         type={props.type ?? "text"}
         autoComplete="off"

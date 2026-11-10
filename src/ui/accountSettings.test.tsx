@@ -135,7 +135,7 @@ describe("Settings → Providers, subscription sign-ins", () => {
 describe("Settings → Providers, custom endpoints", () => {
   const fill = async (user: ReturnType<typeof userEvent.setup>, fields: Partial<Record<"Name" | "Address" | "Model" | "API key", string>>) => {
     for (const [label, value] of Object.entries(fields)) {
-      const input = screen.getByLabelText(label);
+      const input = screen.getByLabelText(`Endpoint ${label === "API key" ? label : label.toLowerCase()}`);
       await user.clear(input);
       if (value) {
         await user.click(input);
@@ -169,7 +169,7 @@ describe("Settings → Providers, custom endpoints", () => {
     expect(row.textContent).toContain("llama3.2, with a key");
     expect(s.accounts.endpoints.default[0].key).toBe("gsk_SECRET_0001");
     expect(onScreen()).not.toContain("gsk_SECRET");
-    expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Endpoint API key") as HTMLInputElement).value).toBe("");
     // Saved through Rust: the window never sent the endpoint or its key through the relay.
     expect(s.restRequests.some((r) => r.path.startsWith("/api/providers/custom-endpoints") && r.method === "POST")).toBe(false);
   });
