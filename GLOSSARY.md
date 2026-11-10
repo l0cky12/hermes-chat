@@ -333,6 +333,14 @@ _Avoid_: onboarding (fine in conversation, not in the app), wizard, first-run (t
 **Provider key**:
 A model provider's API key that the owner gives Hermes, through Setup or Settings → Providers. The provider checks it first. Hermes keeps it in the profile's `.env` on the server, and Hermes Chat never stores it. Settings → Providers lists the shown profile's saved keys by Hermes's redacted preview, replaces a key, and removes one after asking; a removed key leaves the list only once Hermes reads back as not having it (ADR 0095). A subscription sign-in and a custom endpoint aren't Provider keys.
 _Avoid_: token, secret, credential (too broad), login (a subscription sign-in isn't a key)
+
+**Subscription sign-in**:
+A profile's sign-in to a model provider's subscription, such as Nous Portal or ChatGPT, that Hermes keeps on the server in place of an API key. Settings → Providers signs in to a provider whose sign-in Hermes runs as a device code: Hermes gives a code, the provider's page opens in the browser, and the screen shows signed in once Hermes's list says so. A provider whose sign-in is external, such as an Anthropic Account, is signed in on the server's command line. Signing out asks first (ADR 0133).
+_Avoid_: OAuth (the mechanism, not the thing), account (Hermes's word, too broad), login
+
+**Custom endpoint**:
+An OpenAI-compatible server a profile can use as a model provider, such as Ollama, LM Studio, vLLM or Groq, named by its base URL. Hermes checks it by asking it for its models, and reaches it from the server, so `localhost` is the Hermes server. Its API key, if any, goes to the profile's `.env` like a Provider key. Settings → Providers adds, activates as the default, and removes one (ADR 0133).
+_Avoid_: local model (it may be hosted), custom provider (Hermes's older config name)
 **Usage**:
 The tokens a chat's model calls took in and gave out: input, cache read and written, output and its reasoning, and how many calls. A chat's usage is Hermes's own total for every call in it, from any client and across model changes. A reply's usage is shown only for a reply this app watched from start to finish, and is kept as long as its Saved copy.
 _Avoid_: tokens (alone, for the whole breakdown), stats
