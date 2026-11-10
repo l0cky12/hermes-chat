@@ -1846,8 +1846,10 @@ async fn voice_requests_carry_the_gate_headers_too() {
     dashboard.speak("default", "Hello").await.unwrap();
     assert!(dashboard.voice_setup("default").await.unwrap().speak);
     let seen = seen.lock().unwrap();
-    let paths: Vec<&str> = seen.iter().map(|(path, _)| path.as_str()).collect();
-    assert_eq!(paths, ["/auth/password-login", "/api/audio/transcribe", "/api/audio/speak", "/api/audio/transcribe", "/api/audio/speak", "/api/config"]);
+    let mut paths: Vec<&str> = seen.iter().map(|(path, _)| path.as_str()).collect();
+    // The voice set-up's three requests go at once, in any order.
+    paths[3..].sort_unstable();
+    assert_eq!(paths, ["/auth/password-login", "/api/audio/transcribe", "/api/audio/speak", "/api/audio/speak", "/api/audio/transcribe", "/api/config"]);
     assert!(seen.iter().all(|(_, secret)| secret.as_deref() == Some("s3cret")));
 }
 
