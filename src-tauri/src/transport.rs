@@ -3177,21 +3177,23 @@ mod tests {
 
     #[tokio::test]
     async fn a_read_that_keeps_arriving_finishes_however_long_it_takes_in_all() {
-        let url = trickle(10, Duration::from_millis(150), true).await;
-        let limit = Duration::from_secs(1);
+        let url = trickle(16, Duration::from_millis(250), true).await;
+        let http = reqwest::Client::new();
+        let limit = Duration::from_secs(3);
         let started = std::time::Instant::now();
-        let resp = unless_stalled(limit, reqwest::get(url)).await.unwrap();
+        let resp = unless_stalled(limit, http.get(url).send()).await.unwrap();
         let text = text_unless_stalled(resp, limit).await.unwrap();
-        assert_eq!(text, (0..10).map(|i| format!("part{i};")).collect::<String>());
+        assert_eq!(text, (0..16).map(|i| format!("part{i};")).collect::<String>());
         assert!(started.elapsed() > limit, "the whole read took {:?}, longer than the limit", started.elapsed());
     }
 
     #[tokio::test]
     async fn a_read_that_stops_arriving_is_given_up_once_the_limit_passes_without_a_byte() {
         let url = trickle(2, Duration::from_millis(50), false).await;
-        let limit = Duration::from_millis(500);
+        let http = reqwest::Client::new();
+        let limit = Duration::from_secs(1);
         let started = std::time::Instant::now();
-        let resp = unless_stalled(limit, reqwest::get(url)).await.unwrap();
+        let resp = unless_stalled(limit, http.get(url).send()).await.unwrap();
         let err = text_unless_stalled(resp, limit).await.unwrap_err();
         assert!(matches!(err, TransportError::Stalled(_)), "{err:?}");
         assert!(started.elapsed() >= limit + Duration::from_millis(50), "{:?}", started.elapsed());
