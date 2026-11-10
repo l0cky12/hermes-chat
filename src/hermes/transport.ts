@@ -1128,11 +1128,9 @@ export class Hermes {
     this.socketClosed = undefined;
     try {
       pipe = kept?.reopen
-        ? await kept.reopen(onEvent, profile, stop.signal).catch(async (e: unknown) => {
-            if (!this.closing) return this.openPipe(onEvent, profile, stop.signal);
-            // Rust has dropped the connection, but only a disconnect also closes the server pages opened over it.
-            await kept.close().catch(() => {});
-            throw e;
+        ? await kept.reopen(onEvent, profile, stop.signal).catch((e: unknown) => {
+            if (this.closing) throw e;
+            return this.openPipe(onEvent, profile, stop.signal);
           })
         : await this.openPipe(onEvent, profile, stop.signal);
       pipe.attempt?.ready();
@@ -1152,7 +1150,8 @@ export class Hermes {
       if (this.closing) pipe?.attempt?.stopped();
       else pipe?.attempt?.failed(e);
       this.generation++;
-      await pipe?.close().catch(() => {});
+      // A failed reopen has dropped the kept connection in Rust, but only a disconnect also closes its server pages.
+      await (pipe ?? kept)?.close().catch(() => {});
       throw e;
     } finally {
       clearTimeout(timer);
