@@ -458,7 +458,7 @@ export class FakeHermes {
   readonly mcp = new FakeMcp((p) => p === "default" || p in this.otherProfiles);
   /** The profile's Telegram and Discord gateways (fakeGateways.ts, ADR 0073). */
   readonly gateways = new FakeGateways((p) => p === "default" || p in this.otherProfiles);
-  /** Settings → Providers' subscription sign-ins and custom endpoints (ADR 0106). */
+  /** Settings → Providers' subscription sign-ins and custom endpoints (ADR 0133). */
   readonly accounts = new FakeAccounts((p) => p === "default" || p in this.otherProfiles);
   readonly memoryProviders = new FakeMemoryProviders((p) => p === "default" || p in this.otherProfiles || p in this.memory);
   /** The profiles' speech providers, for Settings → Voice (fakeVoiceProviders.ts). */

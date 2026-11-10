@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Settings → Providers' Subscription sign-ins and Custom endpoints on screen (SignInSettings.tsx, EndpointSettings.tsx,
-// ADR 0106), against the fake dashboard's `/api/providers/*` routes: a device-code sign-in from code to signed in, and
+// ADR 0133), against the fake dashboard's `/api/providers/*` routes: a device-code sign-in from code to signed in, and
 // each way it can end; signing out after asking; the endpoint form's checks; adding, making default and removing an
 // endpoint, each confirmed by the list; and a server without the routes. Every key and code here is synthetic.
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";

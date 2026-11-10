@@ -1,4 +1,4 @@
-// Settings → Providers, Subscription sign-ins (ADR 0106): the shown profile's subscription providers on Hermes. A
+// Settings → Providers, Subscription sign-ins (ADR 0133): the shown profile's subscription providers on Hermes. A
 // device-code provider signs in from here: Hermes gives a code, the page to enter it at opens in the browser, and the
 // screen waits on Hermes until the sign-in ends. A provider whose sign-in is `external` shows the command to run on the
 // server. Signed in or out is always what Hermes's list says, read again after each change.

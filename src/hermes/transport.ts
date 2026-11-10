@@ -926,7 +926,7 @@ export class Hermes {
   });
 
   /**
-   * Settings → Providers' subscription sign-ins and custom endpoints (accounts.ts, ADR 0106). Their changes queue with
+   * Settings → Providers' subscription sign-ins and custom endpoints (accounts.ts, ADR 0133). Their changes queue with
    * the key changes, and the model list is read again after each.
    */
   readonly accounts = new AccountsApi({

@@ -14,7 +14,7 @@
 //! Setup uses two more things here: `probe`, which tests a sign-in without keeping it, and
 //! `Dashboard::save_provider_key`, which gives Hermes a model provider's API key, and `Dashboard::remove_provider_key`,
 //! which takes one away (Settings → Providers, ADR 0095). `accounts` reads the subscription sign-ins and custom
-//! endpoints for the same screen, and saves an endpoint with its key (ADR 0106).
+//! endpoints for the same screen, and saves an endpoint with its key (ADR 0133).
 //! Before any password goes out, `read_server` reads the dashboard's public `/api/status` and `identify` checks it is
 //! a Hermes dashboard, and the same one the connection signed in to before (ADR 0120).
 
@@ -114,7 +114,7 @@ pub enum TransportError {
     /// `DELETE /api/env` answered, but `GET /api/env` still lists the key as set (ADR 0095).
     #[error("Hermes still lists the {0} key as set after removing it. It may keep the key somewhere else on the server.")]
     KeyStillSet(String),
-    /// Settings → Providers' Add an endpoint form, refused before anything was sent (ADR 0106).
+    /// Settings → Providers' Add an endpoint form, refused before anything was sent (ADR 0133).
     #[error("{0}")]
     Endpoint(String),
     #[error("Hermes didn't finish checking and saving the endpoint within {0} s. It may have saved it anyway: the list of endpoints shows what Hermes has.")]
@@ -1375,7 +1375,7 @@ impl Dashboard {
     /// ADR 0115), Settings → MCP servers' add, switch, test, sign-in and catalog install (`mcp::relayed`, ADR 0121), and
     /// Settings → Gateways' Telegram and Discord save and status check (`gateway_write`, ADR 0073).
     /// Settings → Providers' two writes that carry nothing secret, starting a sign-in and activating an endpoint
-    /// (`provider_account_write`, ADR 0106).
+    /// (`provider_account_write`, ADR 0133).
     /// `DELETE api/env` is refused whatever the body: a key leaves the server only through
     /// `Dashboard::remove_provider_key`, which checks that it is a model provider's (ADR 0095).
     /// Returns the response body on 2xx.
@@ -1418,7 +1418,7 @@ impl Dashboard {
         if method == Method::DELETE && is_env_route(&routed) {
             return Err(TransportError::NotRelayed(format!("{method} {path}")));
         }
-        // Hermes answers removing an endpoint with the endpoints left, each with its key's preview (ADR 0106).
+        // Hermes answers removing an endpoint with the endpoints left, each with its key's preview (ADR 0133).
         let answer_unread = method == Method::DELETE && routed.starts_with("api/providers/custom-endpoints/");
         let mut req = self.signed(method, url);
         if let Some(body) = body {
@@ -2049,7 +2049,7 @@ fn is_file_route(path: &str) -> bool {
     segs.next() == Some("api") && matches!(segs.next(), Some("files" | "fs"))
 }
 
-/// Settings → Providers' writes through the relay that carry nothing secret (ADR 0106), each without a body:
+/// Settings → Providers' writes through the relay that carry nothing secret (ADR 0133), each without a body:
 /// - `POST api/providers/oauth/<provider>/start` starts a device-code sign-in. Hermes refuses an `external` provider.
 /// - `POST api/providers/custom-endpoints/<id>/activate` makes an endpoint the profile's default model provider, as
 ///   `POST api/model/set` can.

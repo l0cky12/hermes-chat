@@ -435,19 +435,19 @@ async fn signed_in_dashboard(state: &State<'_, AppState>) -> Result<Arc<Dashboar
     }
 }
 
-/// `profile`'s subscription providers and whether each is signed in, without token previews (ADR 0106).
+/// `profile`'s subscription providers and whether each is signed in, without token previews (ADR 0133).
 #[tauri::command]
 async fn hermes_provider_sign_ins(state: State<'_, AppState>, profile: String) -> Result<Vec<transport::ProviderSignIn>, String> {
     signed_in_dashboard(&state).await?.provider_sign_ins(&profile).await.map_err(|e| e.to_string())
 }
 
-/// `profile`'s OpenAI-compatible endpoints, without key previews (ADR 0106).
+/// `profile`'s OpenAI-compatible endpoints, without key previews (ADR 0133).
 #[tauri::command]
 async fn hermes_custom_endpoints(state: State<'_, AppState>, profile: String) -> Result<Vec<transport::CustomEndpoint>, String> {
     signed_in_dashboard(&state).await?.custom_endpoints(&profile).await.map_err(|e| e.to_string())
 }
 
-/// Checks an OpenAI-compatible endpoint and adds it to `profile` (`Dashboard::save_endpoint`, ADR 0106). Its key goes
+/// Checks an OpenAI-compatible endpoint and adds it to `profile` (`Dashboard::save_endpoint`, ADR 0133). Its key goes
 /// to the server and isn't kept on this computer.
 #[tauri::command]
 async fn hermes_save_endpoint(

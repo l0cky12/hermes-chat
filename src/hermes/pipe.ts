@@ -109,9 +109,9 @@ export interface Pipe {
    * window's REST relay refuses `DELETE api/env`, so this is the only way (src-tauri `Dashboard::remove_provider_key`).
    */
   removeProviderKey(profile: string, envVar: string): Promise<void>;
-  /** `profile`'s subscription providers and whether each is signed in, without Hermes's token previews (ADR 0106). */
+  /** `profile`'s subscription providers and whether each is signed in, without Hermes's token previews (ADR 0133). */
   providerSignIns(profile: string): Promise<ProviderSignIn[]>;
-  /** `profile`'s OpenAI-compatible endpoints, without Hermes's key previews (ADR 0106). */
+  /** `profile`'s OpenAI-compatible endpoints, without Hermes's key previews (ADR 0133). */
   customEndpoints(profile: string): Promise<CustomEndpoint[]>;
   /**
    * Has Hermes check an OpenAI-compatible endpoint, then adds it to `profile` with the models it found. A check that

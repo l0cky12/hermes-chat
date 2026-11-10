@@ -1,4 +1,4 @@
-// A fake Hermes's subscription sign-ins and custom endpoints, for tests of Settings → Providers (ADR 0106): the
+// A fake Hermes's subscription sign-ins and custom endpoints, for tests of Settings → Providers (ADR 0133): the
 // `/api/providers/oauth` and `/api/providers/custom-endpoints` routes as the deployed `bf0203a` answers them
 // (`hermes_cli/web_routers/oauth.py`, `config_env.py`), which the stand-in dashboard serves to the real app, and, for
 // component tests, the Rust side's reads and endpoint save, which drop the previews and check before saving

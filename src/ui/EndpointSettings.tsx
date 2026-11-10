@@ -1,4 +1,4 @@
-// Settings → Providers, Custom endpoints (ADR 0106): the shown profile's OpenAI-compatible endpoints on Hermes, such as
+// Settings → Providers, Custom endpoints (ADR 0133): the shown profile's OpenAI-compatible endpoints on Hermes, such as
 // Ollama, LM Studio, vLLM or Groq. Adding one has Hermes check it first (Rust's `hermes_save_endpoint`, which keeps the
 // typed key out of the window's answers); one that doesn't pass is added only when the owner says so. An endpoint can
 // be made the default model provider, or removed. Each change shows what Hermes's list says after it.

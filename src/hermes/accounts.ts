@@ -1,4 +1,4 @@
-// Settings → Providers' subscription sign-ins and custom endpoints (ADR 0106), on Hermes's routes at the deployed
+// Settings → Providers' subscription sign-ins and custom endpoints (ADR 0133), on Hermes's routes at the deployed
 // `bf0203a` (`hermes_cli/web_routers/oauth.py`, `config_env.py`):
 // - Both lists come from Rust (`Pipe.providerSignIns`, `Pipe.customEndpoints`), which drops Hermes's token and key
 //   previews, so no part of a token or key reaches the window.

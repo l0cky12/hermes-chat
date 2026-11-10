@@ -3,7 +3,7 @@
 // computer (AppearanceSettings.tsx). Model: the profile's models on Hermes (ModelSettings.tsx), and Idle compaction on this computer
 // (IdleCompactSettings.tsx). Providers: the profile's model provider API keys on Hermes, listed, added, replaced and removed
 // (ProviderSettings.tsx, ADR 0095), its subscription sign-ins (SignInSettings.tsx) and custom endpoints
-// (EndpointSettings.tsx, ADR 0106). Voice: Dictation, Read aloud and voice
+// (EndpointSettings.tsx, ADR 0133). Voice: Dictation, Read aloud and voice
 // conversations, and the profile's speech providers on Hermes (VoiceProviderSettings.tsx). Toolsets: which tools
 // Hermes offers the model in the profile (ToolsetSettings.tsx). Persona: the profile's SOUL.md on Hermes
 // (PersonaSettings.tsx). Memory: what Hermes remembers for the profile (MemorySettings.tsx). Skills: the profile's
@@ -242,7 +242,7 @@ export function SettingsScreen({
   gateways?: GatewaysApi;
   /** The shown profile's provider API keys on Hermes (ADR 0095); without it there is no Providers tab. */
   providers?: ProviderKeysApi;
-  /** The shown profile's subscription sign-ins and custom endpoints on Hermes, in the Providers tab (ADR 0106). */
+  /** The shown profile's subscription sign-ins and custom endpoints on Hermes, in the Providers tab (ADR 0133). */
   accounts?: SignInApi & EndpointApi;
   /** Opens a page in the browser: an MCP server's or a subscription provider's sign-in. */
   openUrl?: (url: string) => Promise<void> | void;
