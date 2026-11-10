@@ -113,6 +113,7 @@ import { PANE_MIN_WIDTH, SidePanel, type PanelTab } from "./ui/SidePanel";
 import { ScreenTab } from "./ui/Screen";
 import { LinksProvider } from "./ui/previewContext";
 import { tauriLocalFiles, tauriServerPages, tauriWebPages, type LocalFiles, type ServerPages, type WebPages } from "./ui/tauriPreview";
+import { revealInTranscript } from "./ui/scrollAnchor";
 import type { PreviewTarget } from "./hermes/preview";
 import type { Route } from "./hermes/pipe";
 import { tauriTray, type TrayWiring } from "./hermes/tauriTray";
@@ -1877,7 +1878,7 @@ export function Main({
         ? pane?.querySelector<HTMLElement>(".approval:not(.answered)")
         : undefined;
     if (el) {
-      el.scrollIntoView?.({ block: "center" });
+      revealInTranscript(el, "center");
       if (el.tabIndex < 0 && !el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
       el.focus();
       setFocusItem(undefined);

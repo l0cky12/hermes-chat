@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { anchorScroll } from "./scrollAnchor";
+import { anchorScroll, revealInTranscript } from "./scrollAnchor";
 
 // jsdom has no layout: each block gets a top and height here, and `resize` delivers what a ResizeObserver would.
 let observers: { cb: ResizeObserverCallback; watched: Set<Element> }[] = [];
@@ -136,5 +136,39 @@ describe("anchorScroll", () => {
     box(added, -1300, 500);
     resize([added]);
     expect(t.scroller.scrollTop).toBe(1200);
+  });
+});
+
+describe("revealInTranscript", () => {
+  /** Runs queued animation frames one at a time, as the page would. */
+  const frames = () => {
+    const queue: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => queue.push(cb));
+    return { run: () => queue.shift()?.(0), get queued() { return queue.length; } };
+  };
+
+  it("scrolls again each frame until the element holds still", () => {
+    const f = frames();
+    const el = document.createElement("div");
+    // The first scroll does nothing (its block is skipped), then the blocks around it lay out and move it twice.
+    const tops = [900, 300, 340, 290, 290, 290, 290];
+    const scrolls = vi.fn();
+    el.scrollIntoView = scrolls;
+    el.getBoundingClientRect = () => ({ top: tops[Math.min(scrolls.mock.calls.length - 1, tops.length - 1)] }) as DOMRect;
+    revealInTranscript(el, "center");
+    while (f.queued) f.run();
+    expect(scrolls).toHaveBeenCalledTimes(7);
+    expect(scrolls).toHaveBeenLastCalledWith({ block: "center" });
+  });
+
+  it("gives up after a quarter of a second of frames", () => {
+    const f = frames();
+    const el = document.createElement("div");
+    const scrolls = vi.fn();
+    el.scrollIntoView = scrolls;
+    el.getBoundingClientRect = () => ({ top: scrolls.mock.calls.length }) as DOMRect;
+    revealInTranscript(el, "start");
+    while (f.queued) f.run();
+    expect(scrolls).toHaveBeenCalledTimes(15);
   });
 });

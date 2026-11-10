@@ -35,7 +35,7 @@ import type { VoiceSetup } from "../hermes/pipe";
 import { ChatUsageButton, ReplyUsageLine } from "./Usage";
 import { useLinkMenu, useOpenPreview } from "./previewContext";
 import { ShowInChatContext, type ShowInChat } from "./showInChat";
-import { anchorScroll } from "./scrollAnchor";
+import { anchorScroll, revealInTranscript } from "./scrollAnchor";
 import { linkTarget, previewName, toolTargets, withoutBidi } from "../hermes/preview";
 import { type CommandHost, useSlashCommands } from "./SlashCommands";
 import { BranchButton } from "./Branch";
@@ -480,7 +480,7 @@ export function ChatPane({
     const el = at === undefined ? msgs[0] : msgs.find((m) => m.dataset.at !== undefined && Number(m.dataset.at) >= at);
     if (!el) return false;
     stickToBottom.current = false;
-    el.scrollIntoView?.({ block: "start" });
+    revealInTranscript(el, "start");
     el.classList.add("jumped");
     setTimeout(() => el.classList.remove("jumped"), 2500);
     return true;
@@ -542,7 +542,7 @@ export function ChatPane({
     marks.forEach((m, i) => m.classList.toggle("current", i === idx));
     if (scrollToMatch.current && marks[idx]) {
       scrollToMatch.current = false;
-      marks[idx].scrollIntoView({ block: "center" });
+      revealInTranscript(marks[idx], "center");
     }
   });
 
@@ -571,7 +571,7 @@ export function ChatPane({
     }
     if (el) {
       setJumping(undefined);
-      el.scrollIntoView?.({ block: "center" });
+      revealInTranscript(el, "center");
       el.classList.add("jumped");
       el.focus({ preventScroll: true });
       setTimeout(() => el.classList.remove("jumped"), 2500);
@@ -823,7 +823,7 @@ export function ChatPane({
           const id = chat.items.find(isWaiting)?.id;
           const card = id && rootRef.current?.querySelector<HTMLElement>(`.approval[data-item="${CSS.escape(id)}"]`);
           if (!card) return;
-          card.scrollIntoView({ block: "center" });
+          revealInTranscript(card, "center");
           card.focus();
         }}
       />

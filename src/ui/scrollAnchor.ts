@@ -44,3 +44,22 @@ function placeholder(el: Element): number {
   const px = (v: string | undefined) => parseFloat(v ?? "") || 0;
   return px(s.containIntrinsicBlockSize?.replace("auto", "")) + px(s.paddingTop) + px(s.paddingBottom) + px(s.borderTopWidth) + px(s.borderBottomWidth);
 }
+
+/**
+ * Scrolls `el`, in the transcript, into view as scrollIntoView does. WebKitGTK doesn't scroll to an element in a block
+ * `content-visibility` skips, only lays the block out, and the blocks that come into view around it lay out a frame or
+ * two later. So it scrolls again each frame until `el` has held still for three, for a quarter of a second at most.
+ */
+export function revealInTranscript(el: Element, block: ScrollLogicalPosition) {
+  let last: number | undefined;
+  let still = 0;
+  let frames = 0;
+  const step = () => {
+    el.scrollIntoView?.({ block });
+    const top = el.getBoundingClientRect().top;
+    still = top === last ? still + 1 : 0;
+    last = top;
+    if (still < 3 && ++frames < 15) requestAnimationFrame(step);
+  };
+  step();
+}
