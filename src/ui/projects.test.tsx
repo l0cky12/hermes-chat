@@ -48,6 +48,8 @@ function server() {
   s.projects.default = [project("p_budget", "Budget Tracker", ["/srv/budget"])];
   s.serverDirs = new Set(["/srv", "/srv/app", "/srv/app-feature", "/srv/budget"]);
   s.serverFiles = { "/srv/readme.md": "" };
+  // The dashboard's own file routes see the same folders (the project page lists its main folder's context files).
+  for (const dir of s.serverDirs) s.managedFiles.nodes[dir] = { dir: true };
   s.repos = [[{ path: "/srv/app", branch: "main" }, { path: "/srv/app-feature", branch: "feature/login" }]];
   return s;
 }
@@ -71,6 +73,13 @@ const onScreen = () => document.querySelector(".chat-title span")?.textContent;
 async function pick(user: ReturnType<typeof userEvent.setup>, name: string) {
   await user.click(switcher());
   await user.click(await screen.findByRole("option", { name: new RegExp(name) }));
+}
+
+type Part = "Folders" | "Defaults for new chats" | "Rename" | "Delete project";
+/** Opens a part of the project's settings from the project page's ⋯ menu. */
+async function openPart(user: ReturnType<typeof userEvent.setup>, part: Part) {
+  await user.click(screen.getByRole("button", { name: "Project settings" }));
+  await user.click(screen.getByRole("menuitem", { name: part }));
 }
 
 async function putInProject(user: ReturnType<typeof userEvent.setup>, chat: string, name: string) {
@@ -239,6 +248,7 @@ describe("the project screen", () => {
     const { user, hermes } = await launch(s);
     await pick(user, "Budget Tracker");
     await user.click(screen.getByTitle("Project settings for Budget Tracker"));
+    await openPart(user, "Folders");
     const checkFolder = hermes.projects.checkFolder;
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -289,16 +299,17 @@ describe("the project screen", () => {
     open.mockRestore();
   });
 
-  async function openScreen(s = server()) {
+  async function openScreen(s = server(), part?: Part) {
     const app = await launch(s);
     await pick(app.user, "Budget Tracker");
     await app.user.click(screen.getByTitle("Project settings for Budget Tracker"));
     await screen.findByRole("heading", { name: /Budget Tracker/ });
+    if (part) await openPart(app.user, part);
     return { s, ...app };
   }
 
   it("shows each folder's connection and path on the server", async () => {
-    await openScreen();
+    await openScreen(server(), "Folders");
     const folder = screen.getByText("/srv/budget", { selector: ".folder-path" }).closest("li")!;
     expect(within(folder).getByText("ssh://liam@hermes")).toBeTruthy();
     expect(within(folder).getByText("Main folder")).toBeTruthy();
@@ -314,7 +325,7 @@ describe("the project screen", () => {
   });
 
   it("adds a folder only once the server has it, and says why it refused one", async () => {
-    const { s, user } = await openScreen();
+    const { s, user } = await openScreen(server(), "Folders");
     const input = screen.getByRole("textbox", { name: "Add a folder on the server" });
     await user.type(input, "/srv/missing{Enter}");
     expect((await screen.findByRole("alert")).textContent).toBe("There's no folder at /srv/missing on the server.");
@@ -339,7 +350,7 @@ describe("the project screen", () => {
   });
 
   it("takes a folder out of the project and leaves it on the server", async () => {
-    const { s, user } = await openScreen();
+    const { s, user } = await openScreen(server(), "Folders");
     await user.click(screen.getByRole("button", { name: "Remove /srv/budget from the project" }));
     await screen.findByText("No folders yet.");
     expect(s.projects.default[0].folders).toEqual([]);
@@ -348,7 +359,7 @@ describe("the project screen", () => {
 
   it("renames the project in Hermes", async () => {
     const { s, user } = await openScreen();
-    await user.click(screen.getByTitle(/Rename this project/));
+    await openPart(user, "Rename");
     const input = screen.getByRole("textbox", { name: "Project name" });
     await user.clear(input);
     await user.type(input, "Budget{Enter}");
@@ -363,6 +374,7 @@ describe("the project screen", () => {
     await putInProject(app.user, "NAS disks", "Budget Tracker");
     await pick(app.user, "Budget Tracker");
     await app.user.click(screen.getByTitle("Project settings for Budget Tracker"));
+    await openPart(app.user, "Delete project");
     const sessionWrites = () => s.restRequests.filter((r) => r.method !== "GET");
     await app.user.click(screen.getByRole("button", { name: /Delete project/ }));
     expect(screen.getByText(/Its 1 chat stay in Hermes/)).toBeTruthy();
@@ -492,6 +504,7 @@ describe("a project's defaults for new chats", () => {
     const { user } = await launch(s);
     await pick(user, "Budget Tracker");
     await user.click(screen.getByTitle("Project settings for Budget Tracker"));
+    await openPart(user, "Defaults for new chats");
     const box = screen.getByRole("textbox", { name: "Instructions" });
     await user.click(box);
     await user.paste("x".repeat(20_001));
@@ -554,6 +567,7 @@ describe("a project's defaults for new chats", () => {
     const before = s.requests.length;
 
     await user.click(screen.getByTitle("Project settings for Budget Tracker"));
+    await openPart(user, "Defaults for new chats");
     const instructions = screen.getByRole("textbox", { name: "Instructions" });
     await user.type(instructions, "Answer in French.");
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
@@ -595,6 +609,7 @@ describe("a project's defaults for new chats", () => {
     const { user } = await launch(s);
     await pick(user, "Budget Tracker");
     await user.click(screen.getByTitle("Project settings for Budget Tracker"));
+    await openPart(user, "Defaults for new chats");
     await user.type(screen.getByRole("textbox", { name: "Instructions" }), "First");
     await user.selectOptions(screen.getByRole("combobox", { name: "Working folder on the server" }), "/srv/budget");
     await user.click(screen.getByRole("button", { name: "Save defaults" }));
@@ -691,6 +706,7 @@ describe("a project's defaults for new chats", () => {
     const { user } = await launch(s);
     await pick(user, "Budget Tracker");
     await user.click(screen.getByTitle("Project settings for Budget Tracker"));
+    await openPart(user, "Defaults for new chats");
     await user.type(screen.getByRole("textbox", { name: "Instructions" }), "Mine");
     await act(async () => {
       await seed("p_budget", { instructions: "Theirs" });

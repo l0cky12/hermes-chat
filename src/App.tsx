@@ -37,7 +37,7 @@ import { readMethods } from "./hermes/signInMethods";
 import { PreferredRoutes, type RouteHealth, routesOf, sshAddressOf } from "./hermes/routes";
 import { isSetUp, testSignIn, type TestOutcome } from "./hermes/setup";
 import { isOutgoing, isWaiting, type Attachment, type Chat, type ConnectionStatus, type Found } from "./hermes/model";
-import type { ModelCatalog, ModelPick } from "./hermes/models";
+import { shortName, type ModelCatalog, type ModelPick } from "./hermes/models";
 import { ChatList, Rail, leavingNote } from "./ui/Sidebar";
 import { type ChatLink, type ConnectionRefs, checkConnection, connectionKey, connectionLabel, connectionRefs, formatChatLink, locateChat, parseChatLink } from "./hermes/chatLinks";
 import { desktopLinks, type LinkInbox } from "./hermes/tauriLinks";
@@ -86,6 +86,7 @@ import { OutputsIndex, outputsIn, sessionOf, splitPath, type Output } from "./he
 import { STATUS_LABEL, composing, routeLabel } from "./ui/bits";
 import { editStep, isTextField } from "./ui/editKeys";
 import { ProjectScreen, ProjectSwitcher, type ProjectUnread } from "./ui/Projects";
+import { ContextCard } from "./ui/ProjectContext";
 import { ScheduledJobs } from "./ui/ScheduledJobs";
 import { TroubleshootStore, startTroubleshoot } from "./hermes/troubleshoot";
 import { CapabilityGate } from "./ui/Diagnostics";
@@ -1202,6 +1203,11 @@ export function Main({
     return store;
   }, [hermes, scope, projectStores]);
   const proj = useSyncExternalStore(projects.subscribe, projects.getSnapshot);
+  // The project page's composer writes the New chat draft, and its Start chat opens the New chat pane and sends it
+  // from there (`startWith`), so a chat started on the page starts exactly as one started in the pane does.
+  const newChatDraftKey = draftKey(connection, profile, null);
+  const newChatDraft = useSyncExternalStore(savedDrafts.subscribe, () => savedDrafts.get(newChatDraftKey));
+  const [startWith, setStartWith] = useState<{ pane: string; n: number }>();
   // What chats are told of their projects' context files (ADR 0135). A project's capacity follows its default model's
   // context window, read as each message goes.
   const contexts = useMemo(
@@ -2470,6 +2476,8 @@ export function Main({
           favorites={modelFavorites}
           projects={projects}
           contexts={contexts}
+          autoSend={startWith?.pane === p.key ? startWith.n : undefined}
+          onAutoSent={() => setStartWith(undefined)}
           projectNames={listed ? projectNames(chat.id) : shownProject ? [shownProject.name] : undefined}
           snoozedUntil={snoozedNow(chat.id)}
           shownProject={shownProject && { name: shownProject.name, defaults: proj.defaults[shownProject.id], has: !!listed && !!proj.chats[shownProject.id]?.includes(chat.id) }}
@@ -2891,8 +2899,32 @@ export function Main({
                 profile={profile}
                 connection={where}
                 connected={status === "connected"}
-                chats={listed.length}
+                chats={listed.map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, unread: !!c.unread && !c.archived }))}
                 unlisted={(proj.chats[shownProject.id]?.length ?? 0) - listed.length}
+                draft={newChatDraft}
+                onDraft={(text) => savedDrafts.set(newChatDraftKey, text)}
+                onStartChat={() =>
+                  guard(() => {
+                    openChat(null, { fresh: true, keepSettings: true });
+                    setStartWith({ pane: active.key, n: Date.now() });
+                  })
+                }
+                onOpenChat={(id) => openChat(id)}
+                context={
+                  <ContextCard
+                    files={hermes.contextFiles}
+                    remote={hermes.files}
+                    profile={profile}
+                    project={shownProject}
+                    connection={where}
+                    connected={status === "connected"}
+                    model={{
+                      name: proj.defaults[shownProject.id]?.model && shortName(proj.defaults[shownProject.id].model!.model),
+                      window: knownWindow(chats, proj.defaults[shownProject.id]?.model),
+                    }}
+                    onAddFolder={(path) => projects.addFolder(shownProject.id, path)}
+                  />
+                }
                 onRename={(name) => projects.rename(shownProject.id, name)}
                 onDelete={async () => {
                   const { name } = shownProject;
@@ -3380,6 +3412,8 @@ function ChatView({
   favorites,
   projects,
   contexts,
+  autoSend,
+  onAutoSent,
   projectNames,
   snoozedUntil,
   shownProject,
@@ -3434,6 +3468,9 @@ function ChatView({
   projects: ProjectsStore;
   /** What a chat is told of its project's context files as it starts (ADR 0135). */
   contexts: ChatContexts;
+  /** Set, on the New chat pane: send its draft now, as the project page's Start chat asks. A new value asks again. */
+  autoSend?: number;
+  onAutoSent: () => void;
   projectNames?: string[];
   /** When the chat wakes, if it is snoozed. */
   snoozedUntil?: number;
@@ -3615,6 +3652,13 @@ function ChatView({
       // Retain ownership until Rust protects the outbox, as in the single-pane send path.
     }
   };
+  // A message typed on the project page starts its chat here, by the same road as one typed in this composer.
+  useEffect(() => {
+    if (autoSend === undefined || chatId !== null) return;
+    onAutoSent();
+    const text = savedDrafts.get(shownDraft).trim();
+    if (text) void send(text, []);
+  }, [autoSend]);
   // The chat's queue, shared by every pane showing it (ADR 0018). A chat not started yet has none.
   const queue = useSyncExternalStore(hermes.subscribe, () => hermes.getSnapshot().queues[chat.id]);
   const queueApi: QueueApi | undefined = started

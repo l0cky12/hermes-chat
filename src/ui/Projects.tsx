@@ -1,13 +1,14 @@
 // Projects (GLOSSARY.md "Project", ADR 0131): the switcher under the profile's name, which narrows the chat list to one
-// project's chats, and the project screen, where a project is renamed or deleted and its folders added and taken out.
+// project's chats, and the project page (ADR 0135), where a chat is started in the project, its instructions and
+// context files are kept, and it is renamed or deleted and its folders added and taken out.
 // The project and its folders are Hermes's; which chats are in it is Hermes's when it keeps it, and this computer's when
 // it doesn't (MembershipSync.tsx, ADR 0109).
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, Check, ChevronDown, FolderGit2, Folder, FolderKanban, GitBranch, Pencil, Plus, Settings2, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowUp, Check, ChevronDown, Ellipsis, FolderGit2, Folder, FolderKanban, GitBranch, Pencil, Plus, Settings2, Trash2, X } from "lucide-react";
 import { EFFORT_LABEL, shortName, type Effort, type ModelCatalog, type ModelPick } from "../hermes/models";
 import { DefaultsConflict, NewerDefaultsError, cleanDraft, draftProblem, sameDraft, type DefaultsDraft, type ProjectDefaults } from "../hermes/projectDefaults";
 import type { Project, ProjectFolder, Worktree } from "../hermes/projects";
-import { Spinner, composing, useReturnFocus } from "./bits";
+import { Age, Spinner, composing, menuArrows, useDismiss, useReturnFocus } from "./bits";
 import { ModelControls } from "./ModelPicker";
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -267,11 +268,20 @@ function GitNote({ path, facts }: { path: string; facts?: FolderFacts }) {
   );
 }
 
+/** One of the project's chats, as the project page lists it. */
+export type ProjectChat = { id: string; title: string; updatedAt?: number; unread?: boolean };
+
+/** A part of the project's settings, opened from the ⋯ menu. `defaults` is also where the instructions are edited. */
+type Section = "folders" | "defaults" | "delete";
+
+
 /**
- * A project's own screen, over the chat pane like Settings: its name, its folders on the server, how many chats are in
- * it, and Delete. A folder is checked on the server before it is added, and each folder shows the connection it is on
- * and its path there. A folder in a git repository shows its branch, and the repository's other worktrees can be added
- * as folders. Nothing on the server is created: no folder, repository or worktree.
+ * A project's own page, over the chat pane like Settings, laid out as Claude's project page is (ADR 0135). The main
+ * column starts a new chat in the project and lists its chats. Beside it, or below it where there's no room, are the
+ * project's instructions and its context files. The ⋯ menu holds the rest: its folders on the server, its defaults for
+ * new chats, Rename and Delete. A folder is checked on the server before it is added, and each folder shows the
+ * connection it is on and its path there. The only folder this app ever makes is the one for a project's context
+ * files (ProjectContext.tsx); no repository or worktree is made.
  */
 export function ProjectScreen({
   project,
@@ -288,6 +298,11 @@ export function ProjectScreen({
   onClose,
   defaults,
   membership,
+  draft,
+  onDraft,
+  onStartChat,
+  onOpenChat,
+  context,
 }: {
   /** Where the project's membership is kept and how far it is from Hermes (MembershipSync.tsx). */
   membership?: ReactNode;
@@ -298,8 +313,8 @@ export function ProjectScreen({
   /** The connection the folders are on, as the owner typed it. */
   connection?: string;
   connected: boolean;
-  /** The project's chats in the list now. */
-  chats: number;
+  /** The project's chats in the list now, newest first. */
+  chats: ProjectChat[];
   /** The project's chats the list doesn't hold: older than it reaches, or archived or deleted elsewhere. */
   unlisted: number;
   onRename: (name: string) => Promise<unknown>;
@@ -309,6 +324,14 @@ export function ProjectScreen({
   /** Reads what the server has at a folder; reads only. */
   readFolder: (path: string) => Promise<FolderFacts>;
   onClose: () => void;
+  /** The New chat draft, which the page's composer shares with the New chat pane's. */
+  draft: string;
+  onDraft: (text: string) => void;
+  /** Starts a chat in this project with the draft, the way the New chat pane's composer does. */
+  onStartChat: () => void;
+  onOpenChat: (id: string) => void;
+  /** The Context card (ProjectContext.tsx). */
+  context: ReactNode;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(project.name);
@@ -318,6 +341,30 @@ export function ProjectScreen({
   const [folderError, setFolderError] = useState<string>();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [facts, setFacts] = useState<Record<string, FolderFacts>>({});
+  const [menuOpen, setMenuOpen] = useState(false);
+  // The settings section shown, and what in it takes focus as it opens.
+  const [open, setOpen] = useState<{ section: Section; focus: "heading" | "instructions" }>();
+  const moreBox = useRef<HTMLDivElement>(null);
+  const more = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+
+  useDismiss(moreBox, menuOpen, () => setMenuOpen(false));
+  useEffect(() => {
+    if (!open) return;
+    const target = open.focus === "instructions" ? "#defaults-instructions" : `[data-section="${open.section}"] h2`;
+    const el = panel.current?.querySelector<HTMLElement>(target);
+    el?.focus();
+    el?.scrollIntoView({ block: "nearest" });
+  }, [open]);
+  const show = (section: Section, focus: "heading" | "instructions" = "heading") => {
+    setMenuOpen(false);
+    setOpen({ section, focus });
+  };
+  const closeSection = () => {
+    setOpen(undefined);
+    setConfirmDelete(false);
+    more.current?.focus();
+  };
 
   // What the server has at each folder, read again when the folders change or the connection comes back.
   const folderKey = project.folders.map((f) => f.path).join("\n");
@@ -364,6 +411,8 @@ export function ProjectScreen({
     for (const t of facts[f.path]?.worktrees ?? []) if (!inProject.has(t.path)) others.set(t.path, t);
 
   const offline = connected ? undefined : "Connect to Hermes to change this project.";
+  const instructions = defaults.saved?.instructions?.trim();
+  const canStart = connected && !!draft.trim();
 
   return (
     <div className="settings project-screen">
@@ -371,46 +420,98 @@ export function ProjectScreen({
         <button className="back" onClick={onClose}>
           <ArrowLeft size={15} /> Back to chat
         </button>
-        {renaming ? (
-          <div className="project-rename">
-            <input
-              className="row-rename"
-              aria-label="Project name"
-              autoFocus
-              value={name}
-              readOnly={busy === "rename"}
-              onChange={(e) => setName(e.target.value)}
-              onFocus={(e) => e.currentTarget.select()}
-              onKeyDown={(e) => {
-                if (composing(e)) return;
-                if (e.key === "Enter") void rename();
-                else if (e.key === "Escape") {
-                  setName(project.name);
-                  setRenaming(false);
-                  setError(undefined);
-                }
-              }}
-            />
-            <button className="btn" disabled={busy === "rename"} onClick={() => void rename()}>
-              {busy === "rename" ? "Saving…" : "Save"}
-            </button>
-          </div>
-        ) : (
-          <h1 className="project-title">
-            <FolderKanban size={20} /> <span>{project.name}</span>
+        <div className="project-head">
+          {renaming ? (
+            <div className="project-rename">
+              <input
+                className="row-rename"
+                aria-label="Project name"
+                autoFocus
+                value={name}
+                readOnly={busy === "rename"}
+                onChange={(e) => setName(e.target.value)}
+                onFocus={(e) => e.currentTarget.select()}
+                onKeyDown={(e) => {
+                  if (composing(e)) return;
+                  if (e.key === "Enter") void rename();
+                  else if (e.key === "Escape") {
+                    setName(project.name);
+                    setRenaming(false);
+                    setError(undefined);
+                  }
+                }}
+              />
+              <button className="btn" disabled={busy === "rename"} onClick={() => void rename()}>
+                {busy === "rename" ? "Saving…" : "Save"}
+              </button>
+            </div>
+          ) : (
+            <h1 className="project-title">
+              <FolderKanban size={20} /> <span>{project.name}</span>
+            </h1>
+          )}
+          <div className="project-more" ref={moreBox}>
             <button
+              ref={more}
               className="icon-btn"
-              title={offline ?? "Rename this project, in every Hermes client"}
-              disabled={!connected}
-              onClick={() => {
-                setName(project.name);
-                setRenaming(true);
-              }}
+              aria-label="Project settings"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              title="Folders, defaults for new chats, rename and delete"
+              onClick={() => setMenuOpen((o) => !o)}
             >
-              <Pencil size={14} />
+              <Ellipsis size={17} />
             </button>
-          </h1>
-        )}
+            {menuOpen && (
+              <div
+                className="menu project-more-menu"
+                role="menu"
+                aria-label="Project settings"
+                onKeyDown={(e) => {
+                  menuArrows(e);
+                  if (e.key !== "Escape") return;
+                  setMenuOpen(false);
+                  more.current?.focus();
+                }}
+              >
+                <button role="menuitem" className="menu-item" autoFocus onClick={() => show("folders")}>
+                  <span className="menu-icon">
+                    <Folder size={13} />
+                  </span>
+                  Folders
+                </button>
+                <button role="menuitem" className="menu-item" onClick={() => show("defaults")}>
+                  <span className="menu-icon">
+                    <Settings2 size={13} />
+                  </span>
+                  Defaults for new chats
+                </button>
+                <button
+                  role="menuitem"
+                  className="menu-item"
+                  disabled={!connected}
+                  title={offline ?? "Rename this project, in every Hermes client"}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setName(project.name);
+                    setRenaming(true);
+                  }}
+                >
+                  <span className="menu-icon">
+                    <Pencil size={13} />
+                  </span>
+                  Rename
+                </button>
+                <button role="menuitem" className="menu-item danger" onClick={() => show("delete")}>
+                  <span className="menu-icon">
+                    <Trash2 size={13} />
+                  </span>
+                  Delete project
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
         {error && (
           <p className="sign-in-error small" role="alert">
             {error}
@@ -421,132 +522,212 @@ export function ProjectScreen({
           show them too.
         </p>
 
-        <section>
-          <h2>Folders</h2>
-          <p className="muted">
-            Folders on the server this project is about. Hermes Chat adds only folders that are already there, and taking one out of the
-            project leaves it on the server.
-          </p>
-          {project.folders.length ? (
-            <ul className="folder-list">
-              {project.folders.map((f) => (
-                <li key={f.path} className="folder-row">
-                  {facts[f.path]?.worktrees.length ? <FolderGit2 size={16} className="folder-icon" /> : <Folder size={16} className="folder-icon" />}
-                  <div className="folder-main">
-                    <div className="folder-name">
-                      {baseName(f.path)}
-                      {f.primary && <span className="badge">Main folder</span>}
-                    </div>
-                    <div className="folder-where">
-                      <span className="mono folder-conn" title="The connection this folder is on">
-                        {connection ?? "Not connected"}
-                      </span>
-                      <span className="mono folder-path" title="The folder's path on the server">
-                        {f.path}
-                      </span>
-                    </div>
-                    <GitNote path={f.path} facts={facts[f.path]} />
-                  </div>
-                  <button
-                    className="btn"
-                    disabled={!connected || !!busy}
-                    title={offline ?? "Take this folder out of the project. It stays on the server."}
-                    aria-label={`Remove ${f.path} from the project`}
-                    onClick={() => void run(`remove ${f.path}`, () => onRemoveFolder(f.path), setFolderError)}
-                  >
-                    <X size={14} /> Remove
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="empty-hint">No folders yet.</div>
-          )}
-          <div className="folder-add">
-            <label className="field">
-              <span className="field-label">Add a folder on the server</span>
-              <input
-                placeholder="/home/you/code/project"
-                value={path}
-                disabled={!connected}
-                spellCheck={false}
-                onChange={(e) => setPath(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && !composing(e) && path.trim() && void addFolder(path)}
-              />
-            </label>
-            <button className="btn" disabled={!connected || !path.trim() || !!busy} title={offline} onClick={() => void addFolder(path)}>
-              <Plus size={14} /> {busy === `add ${path}` ? "Checking…" : "Add folder"}
-            </button>
-          </div>
-          {folderError && (
-            <div className="field-hint err" role="alert">
-              {folderError}
-            </div>
-          )}
-          {others.size > 0 && (
-            <div className="worktrees">
-              <h3>Other worktrees of these repositories</h3>
-              <p className="muted small">These worktrees are already on the server. Adding one puts it in the project; nothing is created.</p>
-              <ul className="folder-list">
-                {[...others.values()].map((t) => (
-                  <li key={t.path} className="folder-row">
-                    <GitBranch size={15} className="folder-icon" />
-                    <div className="folder-main">
-                      <div className="folder-name">{t.detached ? "detached HEAD" : (t.branch ?? "no branch")}</div>
-                      <div className="folder-where">
-                        <span className="mono folder-conn">{connection}</span>
-                        <span className="mono folder-path">{t.path}</span>
+        <div className="project-settings" ref={panel} hidden={!open} role="region" aria-label="Project settings">
+          <button className="icon-btn project-settings-close" aria-label="Close project settings" title="Close" onClick={closeSection}>
+            <X size={15} />
+          </button>
+          {open?.section === "folders" && (
+            <section data-section="folders">
+              <h2 tabIndex={-1}>Folders</h2>
+              <p className="muted">
+                Folders on the server this project is about. Hermes Chat adds only folders that are already there, and taking one out of the
+                project leaves it on the server. The first is the main folder: new chats start in it, and the project's context files are kept in
+                its <span className="mono">context</span> folder.
+              </p>
+              {project.folders.length ? (
+                <ul className="folder-list">
+                  {project.folders.map((f) => (
+                    <li key={f.path} className="folder-row">
+                      {facts[f.path]?.worktrees.length ? <FolderGit2 size={16} className="folder-icon" /> : <Folder size={16} className="folder-icon" />}
+                      <div className="folder-main">
+                        <div className="folder-name">
+                          {baseName(f.path)}
+                          {f.primary && <span className="badge">Main folder</span>}
+                        </div>
+                        <div className="folder-where">
+                          <span className="mono folder-conn" title="The connection this folder is on">
+                            {connection ?? "Not connected"}
+                          </span>
+                          <span className="mono folder-path" title="The folder's path on the server">
+                            {f.path}
+                          </span>
+                        </div>
+                        <GitNote path={f.path} facts={facts[f.path]} />
                       </div>
-                    </div>
-                    <button className="btn" disabled={!connected || !!busy} aria-label={`Add the worktree ${t.path}`} onClick={() => void addFolder(t.path)}>
-                      <Plus size={14} /> Add
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </section>
-
-        <DefaultsSection {...defaults} folders={project.folders} profile={profile} connection={connection} />
-
-        <section>
-          <h2>Chats</h2>
-          <p className="muted">
-            {chats ? `${chatsText(chats)} in the list.` : "No chats in the list yet."} Put a chat in this project from its right-click menu; a
-            chat started while the list shows this project is put in it too. Deleting the project takes its chats out of it, and keeps them.
-            {unlisted > 0 &&
-              ` ${chatsText(unlisted)} in this project ${unlisted === 1 ? "isn't" : "aren't"} in the list: older than a month, or archived or deleted. Pull older history in Settings, or open the archived chats, to see them.`}
-          </p>
-          {membership}
-        </section>
-
-        <section>
-          <h2>Delete project</h2>
-          <div className="settings-row">
-            <p className="muted">Deletes the project in every Hermes client. Its chats stay in Hermes, and its folders stay on the server.</p>
-            {!confirmDelete ? (
-              <button className="btn" disabled={!connected} title={offline} onClick={() => setConfirmDelete(true)}>
-                <Trash2 size={14} /> Delete project
-              </button>
-            ) : (
-              <div className="confirm" onKeyDown={(e) => e.key === "Escape" && setConfirmDelete(false)}>
-                <span>
-                  Delete {project.name}? {chats + unlisted ? `Its ${chatsText(chats + unlisted)} stay in Hermes and in the list.` : ""} Nothing on the
-                  server is deleted but the project.
-                </span>
-                <div className="confirm-actions">
-                  <button className="btn" autoFocus onClick={() => setConfirmDelete(false)}>
-                    Cancel
-                  </button>
-                  <button className="btn danger" disabled={busy === "delete"} onClick={() => void run("delete", onDelete)}>
-                    {busy === "delete" ? "Deleting…" : "Delete project"}
-                  </button>
-                </div>
+                      <button
+                        className="btn"
+                        disabled={!connected || !!busy}
+                        title={offline ?? "Take this folder out of the project. It stays on the server."}
+                        aria-label={`Remove ${f.path} from the project`}
+                        onClick={() => void run(`remove ${f.path}`, () => onRemoveFolder(f.path), setFolderError)}
+                      >
+                        <X size={14} /> Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="empty-hint">No folders yet.</div>
+              )}
+              <div className="folder-add">
+                <label className="field">
+                  <span className="field-label">Add a folder on the server</span>
+                  <input
+                    placeholder="/home/you/code/project"
+                    value={path}
+                    disabled={!connected}
+                    spellCheck={false}
+                    onChange={(e) => setPath(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && !composing(e) && path.trim() && void addFolder(path)}
+                  />
+                </label>
+                <button className="btn" disabled={!connected || !path.trim() || !!busy} title={offline} onClick={() => void addFolder(path)}>
+                  <Plus size={14} /> {busy === `add ${path}` ? "Checking…" : "Add folder"}
+                </button>
               </div>
-            )}
+              {folderError && (
+                <div className="field-hint err" role="alert">
+                  {folderError}
+                </div>
+              )}
+              {others.size > 0 && (
+                <div className="worktrees">
+                  <h3>Other worktrees of these repositories</h3>
+                  <p className="muted small">These worktrees are already on the server. Adding one puts it in the project; nothing is created.</p>
+                  <ul className="folder-list">
+                    {[...others.values()].map((t) => (
+                      <li key={t.path} className="folder-row">
+                        <GitBranch size={15} className="folder-icon" />
+                        <div className="folder-main">
+                          <div className="folder-name">{t.detached ? "detached HEAD" : (t.branch ?? "no branch")}</div>
+                          <div className="folder-where">
+                            <span className="mono folder-conn">{connection}</span>
+                            <span className="mono folder-path">{t.path}</span>
+                          </div>
+                        </div>
+                        <button className="btn" disabled={!connected || !!busy} aria-label={`Add the worktree ${t.path}`} onClick={() => void addFolder(t.path)}>
+                          <Plus size={14} /> Add
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Kept while closed, so edits that weren't saved are still there when it opens again. */}
+          <div data-section="defaults" hidden={open?.section !== "defaults"}>
+            <DefaultsSection {...defaults} folders={project.folders} profile={profile} connection={connection} />
           </div>
-        </section>
+
+          {open?.section === "delete" && (
+            <section data-section="delete">
+              <h2 tabIndex={-1}>Delete project</h2>
+              <div className="settings-row">
+                <p className="muted">
+                  Deletes the project in every Hermes client. Its chats stay in Hermes, and its folders stay on the server, context files included.
+                </p>
+                {!confirmDelete ? (
+                  <button className="btn" disabled={!connected} title={offline} onClick={() => setConfirmDelete(true)}>
+                    <Trash2 size={14} /> Delete project
+                  </button>
+                ) : (
+                  <div className="confirm" onKeyDown={(e) => e.key === "Escape" && setConfirmDelete(false)}>
+                    <span>
+                      Delete {project.name}? {chats.length + unlisted ? `Its ${chatsText(chats.length + unlisted)} stay in Hermes and in the list.` : ""} Nothing on
+                      the server is deleted but the project.
+                    </span>
+                    <div className="confirm-actions">
+                      <button className="btn" autoFocus onClick={() => setConfirmDelete(false)}>
+                        Cancel
+                      </button>
+                      <button className="btn danger" disabled={busy === "delete"} onClick={() => void run("delete", onDelete)}>
+                        {busy === "delete" ? "Deleting…" : "Delete project"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+        </div>
+
+        <div className="project-columns">
+          <div className="project-main">
+            <form
+              className="project-composer"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (canStart) onStartChat();
+              }}
+            >
+              <textarea
+                aria-label={`Message to start a new chat in ${project.name}`}
+                placeholder={`Start a new chat in ${project.name}`}
+                rows={3}
+                value={draft}
+                onChange={(e) => onDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" || e.shiftKey || composing(e)) return;
+                  e.preventDefault();
+                  if (canStart) onStartChat();
+                }}
+              />
+              <div className="project-composer-foot">
+                <span className="muted small">A chat started here is in this project, and gets its instructions and context files.</span>
+                <button className="btn primary" type="submit" disabled={!canStart} title={connected ? undefined : "Connect to Hermes to start a chat."}>
+                  <ArrowUp size={14} /> Start chat
+                </button>
+              </div>
+            </form>
+
+            <section className="project-chats" aria-labelledby="project-chats-title">
+              <h2 id="project-chats-title">Chats</h2>
+              {chats.length > 0 && (
+                <ul className="project-chat-list">
+                  {chats.map((c) => (
+                    <li key={c.id}>
+                      <button className="project-chat" onClick={() => onOpenChat(c.id)}>
+                        <span className="row-title">{c.title}</span>
+                        {c.unread && <span className="dot" aria-label="Unread" />}
+                        {c.updatedAt !== undefined && (
+                          <span className="muted small">
+                            <Age at={c.updatedAt} />
+                          </span>
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="muted">
+                {chats.length ? `${chatsText(chats.length)} in the list.` : "No chats in the list yet."} Put a chat in this project from its right-click
+                menu; a chat started while the list shows this project is put in it too. Deleting the project takes its chats out of it, and keeps
+                them.
+                {unlisted > 0 &&
+                  ` ${chatsText(unlisted)} in this project ${unlisted === 1 ? "isn't" : "aren't"} in the list: older than a month, or archived or deleted. Pull older history in Settings, or open the archived chats, to see them.`}
+              </p>
+              {membership}
+            </section>
+          </div>
+
+          <aside className="project-side" aria-label="Instructions and context">
+            <section className="project-card" aria-labelledby="project-instructions-title">
+              <div className="project-card-head">
+                <h2 id="project-instructions-title">Instructions</h2>
+                <span className="project-card-actions">
+                  <button className="icon-btn" aria-label="Edit instructions" title="Edit the instructions new chats in this project start with" onClick={() => show("defaults", "instructions")}>
+                    <Pencil size={14} />
+                  </button>
+                </span>
+              </div>
+              {instructions ? <p className="project-instructions">{instructions}</p> : <p className="muted small">None yet. Add some to tell every new chat in this project how to work.</p>}
+              <p className="muted small">Kept on this computer, and sent once as a hidden message when a chat starts.</p>
+            </section>
+            {context}
+          </aside>
+        </div>
       </div>
     </div>
   );
@@ -628,7 +809,9 @@ function DefaultsSection({ saved, folders, profile, connection, catalog, profile
 
   return (
     <section className="project-defaults" aria-labelledby="project-defaults-title">
-      <h2 id="project-defaults-title">Defaults for new chats</h2>
+      <h2 id="project-defaults-title" tabIndex={-1}>
+        Defaults for new chats
+      </h2>
       <p className="muted">
         New chats started while the list shows this project use these. Anything left empty comes from the profile, and a model picked for one
         chat beats the project's. Changing them doesn't change chats that have started. They're kept on this computer only: Hermes has no
