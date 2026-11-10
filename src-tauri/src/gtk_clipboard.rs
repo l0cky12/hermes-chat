@@ -1,4 +1,4 @@
-//! WebKitGTK 2.54.0 and 2.54.1 crash the app when the owner pastes and nothing owns the clipboard (#360, ADR 0103).
+//! WebKitGTK 2.54.0 and 2.54.1 crash the app when the owner pastes and nothing owns the clipboard (#360, ADR 0132).
 //! GTK answers a request for the clipboard's targets with no atoms and a count of -1 then, and those WebKit releases
 //! read -1 as a list of `usize::MAX` atoms. This executable exports its own `gtk_clipboard_request_targets`, which the
 //! dynamic linker gives WebKit in place of GTK's: it asks GTK and passes the answer on with a count of at least 0, as

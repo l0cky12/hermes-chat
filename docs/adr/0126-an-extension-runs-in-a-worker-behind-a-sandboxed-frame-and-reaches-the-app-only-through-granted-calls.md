@@ -70,7 +70,7 @@ A package has a `manifest.json` and one script:
 | --- | --- | --- |
 | `chat.read` | The messages of the call's chat as the transcript shows them: role, text and time. No attachments and no tool output. | While its call is open |
 | `chat.draft` | Text added to the call's chat's Draft. The owner sends it, or doesn't. | While its call is open |
-| `project.read` | The name and folders of the call's chat's project (ADR 0105, projects). | While its call is open |
+| `project.read` | The name and folders of the call's chat's project (ADR 0131, projects). | While its call is open |
 | `storage` | Up to 1 MB of its own JSON, kept separately for each connection and profile (section 8). | Any time. The one exception to the open-call rule. |
 
 With no permission, an extension has its command's argument and nothing else.

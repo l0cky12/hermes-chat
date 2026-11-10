@@ -1,4 +1,4 @@
-// Projects (GLOSSARY.md "Project", ADR 0105): the switcher under the profile's name, which narrows the chat list to one
+// Projects (GLOSSARY.md "Project", ADR 0131): the switcher under the profile's name, which narrows the chat list to one
 // project's chats, and the project screen, where a project is renamed or deleted and its folders added and taken out.
 // The project and its folders are Hermes's; which chats are in it is Hermes's when it keeps it, and this computer's when
 // it doesn't (MembershipSync.tsx, ADR 0109).

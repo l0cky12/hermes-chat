@@ -1,4 +1,4 @@
-// What this computer keeps about projects (ADR 0105): which chats are in each project, which project the chat list
+// What this computer keeps about projects (ADR 0131): which chats are in each project, which project the chat list
 // shows, and the projects as Hermes listed them last, so the list can show them before Hermes is read. Hermes keeps
 // the projects themselves.
 //

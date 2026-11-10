@@ -1491,7 +1491,7 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .shortcut-key { min-width: 132px; justify-content: center; font-family: var(--mono); }
 .shortcut-key.recording { border-color: var(--accent, var(--text)); color: var(--text); }
 .warn-note { color: var(--warn); }
-/* projects (Projects.tsx, ADR 0105): the switcher under the profile's name, and the project screen */
+/* projects (Projects.tsx, ADR 0131): the switcher under the profile's name, and the project screen */
 .sb-project { display: flex; padding: 0 12px 6px 14px; margin-top: -4px; }
 .project-switch { position: relative; min-width: 0; flex: 1; display: flex; align-items: center; gap: 2px; }
 .project-btn {

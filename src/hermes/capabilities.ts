@@ -486,7 +486,7 @@ const SHARED_CHATS_SINCE = [0, 21, 3];
 
 /**
  * Whether Hermes shares a chat between the clients that have it open: each gets every server request, and the first
- * answer settles it, an error included (ADR 0094). `declines_not_shown` came later, so it says so before the version
+ * answer settles it, an error included (ADR 0125). `declines_not_shown` came later, so it says so before the version
  * is read.
  */
 export function sharesChats(f: ServerFacts): boolean {

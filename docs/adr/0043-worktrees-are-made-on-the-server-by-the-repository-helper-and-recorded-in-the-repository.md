@@ -6,7 +6,7 @@ This supersedes ADR 0042, the first design for #82 (merged in #157), which made 
 
 ## Why not the dashboard's worktree routes
 
-Hermes at `f0d9488` (deployed, read over SSH on 2026-11-04) has `POST /api/git/worktree/add` and `/remove` (`hermes_cli/web_routers/git.py` over `hermes_cli/web_git.py`), and `GET /api/git/worktrees`. The project screen already uses the list (ADR 0105). The two writes can't meet #82:
+Hermes at `f0d9488` (deployed, read over SSH on 2026-11-04) has `POST /api/git/worktree/add` and `/remove` (`hermes_cli/web_routers/git.py` over `hermes_cli/web_git.py`), and `GET /api/git/worktrees`. The project screen already uses the list (ADR 0131). The two writes can't meet #82:
 
 - **`add` changes things nobody asked for.** `_ensure_repo` runs `git init` and makes an `Initial commit` in a folder that isn't a repository yet. Asked for the default branch as an "existing branch", it runs `git switch` in the **main checkout**, not in a new worktree. A remote base is fetched first.
 - **What's made isn't what was asked.** `_sanitize_branch` rewrites the branch name silently. `_unique_dir` picks `<repo>/.worktrees/<slug>-2` when the folder exists, so the path can't be shown before. If the branch already exists, the base is ignored and that branch is checked out.
