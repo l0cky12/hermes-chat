@@ -278,6 +278,54 @@ describe("Unread in other profiles", () => {
     });
   });
 
+  describe("a check that finds nothing new", () => {
+    /** Signed in, with a reply running in `work`, checked once; `later` moves the clock past the gap between checks. */
+    async function checkedOnce() {
+      const signed = await signedIn();
+      signed.server.liveSessions = [{ id: "rt-w", session_key: "work-1", status: "working", last_active: Math.floor(Date.now() / 1000) }];
+      await signed.hermes.checkOtherProfiles();
+      let told = 0;
+      signed.hermes.subscribe(() => told++);
+      return { ...signed, told: () => told, later: () => vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 20_000 }) };
+    }
+
+    it("tells no one, and leaves the snapshot as it was", async () => {
+      const { hermes, told, later } = await checkedOnce();
+      const before = hermes.getSnapshot();
+      later();
+      await hermes.checkOtherProfiles();
+      expect(told()).toBe(0);
+      expect(hermes.getSnapshot()).toBe(before);
+    });
+
+    it("tells no one when only the live check runs, as the office's does", async () => {
+      const { hermes, told, later } = await checkedOnce();
+      const before = hermes.getSnapshot();
+      later();
+      await hermes.checkLive();
+      expect(told()).toBe(0);
+      expect(hermes.getSnapshot()).toBe(before);
+    });
+
+    it("tells listeners when a session starts", async () => {
+      const { server, hermes, told, later } = await checkedOnce();
+      server.liveSessions.push({ id: "rt-a", session_key: "aegis-1", status: "waiting", last_active: Math.floor(Date.now() / 1000) });
+      later();
+      await hermes.checkLive();
+      expect(told()).toBeGreaterThan(0);
+      expect(hermes.getSnapshot().live?.sessions.map((s) => s.chatId)).toEqual(["work-1", "aegis-1"]);
+    });
+
+    it("tells listeners when another profile gains an Unread chat", async () => {
+      const { server, hermes, told, later, unreadOf } = await checkedOnce();
+      server.otherProfiles.aegis.push(unreadRow("aegis-2"));
+      later();
+      await hermes.checkOtherProfiles();
+      expect(told()).toBeGreaterThan(0);
+      expect(unreadOf()).toEqual({ work: 2, aegis: 1 });
+    });
+  });
+
   describe("after the connection or profile changes", () => {
     it("drops an answer that arrives after the owner switched profile, and asks nothing more", async () => {
       const { server, hermes, others } = await signedIn();
