@@ -207,9 +207,9 @@ function detailsFor(c: SavedConnection, password: string, headers: SavedHeaders,
  */
 export async function savedSignIn(c: SavedConnection, account: Account): Promise<SignInDetails | undefined> {
   if (c.method === "token") return savedTokenSignIn(c, account);
-  const saved = passwordFor(c, await account.secrets(c).password.load().catch(() => undefined));
+  const [password, headers] = await Promise.all([account.secrets(c).password.load().catch(() => undefined), savedHeaders(c, account)]);
+  const saved = passwordFor(c, password);
   if (!saved) return undefined;
-  const headers = await savedHeaders(c, account);
   const routes = routesWithHeaders(c, headers).map((r) => (saved.routes.has(routeKey(r)) ? r : { ...r, locked: true }));
   return detailsFor(c, saved.password, headers, routes);
 }
@@ -219,9 +219,9 @@ export async function savedSignIn(c: SavedConnection, account: Account): Promise
  * wasn't saved for is `locked`, as with a password.
  */
 async function savedTokenSignIn(c: SavedConnection, account: Account): Promise<SignInDetails | undefined> {
-  const keys = new Set((await account.secrets(c).token.saved().catch(() => undefined)) ?? []);
+  const [saved, headers] = await Promise.all([account.secrets(c).token.saved().catch(() => undefined), savedHeaders(c, account)]);
+  const keys = new Set(saved ?? []);
   if (!routesOf(c).some((r) => keys.has(routeKey(r)))) return undefined;
-  const headers = await savedHeaders(c, account);
   const routes = routesWithHeaders(c, headers).map((r) => (keys.has(routeKey(r)) ? r : { ...r, locked: true }));
   return { ...detailsFor(c, "", headers, routes), savedToken: c.legacy ? null : c.id };
 }

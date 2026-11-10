@@ -129,6 +129,19 @@ describe("The skills the composer offers", () => {
     expect((await hermes().skillCommands())?.offered.map((s) => s.key)).toEqual(["debugging"]);
   });
 
+  it("come from the one catalog read the server commands take, which a change in Settings → Skills reads again", async () => {
+    const { server, hermes } = await ready();
+    const catalogs = () => server.requests.filter((r) => r.method === "commands.catalog").length;
+    const [list, skills] = await Promise.all([hermes().serverCommands(), hermes().skillCommands()]);
+    expect(list.listed.size).toBeGreaterThan(0);
+    expect(skills?.offered.map((s) => s.key)).toEqual(["debugging", "writing"]);
+    expect(catalogs()).toBe(1);
+    await hermes().skills.setEnabled("default", "writing", false);
+    await hermes().skillCommands();
+    await hermes().serverCommands();
+    expect(catalogs()).toBe(2);
+  });
+
   it("are none when Hermes's catalog lists no skills", async () => {
     const { server, hermes } = await ready();
     server.catalogSkills = false;

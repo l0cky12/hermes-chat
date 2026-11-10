@@ -1711,6 +1711,31 @@ async fn reads_the_voice_setup_without_passing_on_any_key() {
 }
 
 #[tokio::test]
+async fn reads_the_voice_setup_with_its_three_requests_at_once() {
+    // Each route answers only once all three have arrived; asked one after another, the first gives up after 5 s and
+    // answers as a server without it would.
+    let all_in = Arc::new(tokio::sync::Barrier::new(3));
+    let answer = |all_in: Arc<tokio::sync::Barrier>, found: Response| async move {
+        match tokio::time::timeout(Duration::from_secs(5), all_in.wait()).await {
+            Ok(_) => found,
+            Err(_) => (StatusCode::NOT_FOUND, Json(json!({"detail": "Not Found"}))).into_response(),
+        }
+    };
+    let refused = || (StatusCode::BAD_REQUEST, Json(json!({"detail": "nothing to do"}))).into_response();
+    let (a, b, c) = (all_in.clone(), all_in.clone(), all_in);
+    let app = Router::new()
+        .route("/auth/password-login", post(login))
+        .route("/api/audio/transcribe", post(move || answer(a, refused())))
+        .route("/api/audio/speak", post(move || answer(b, refused())))
+        .route("/api/config", get(move || answer(c, Json(json!({"stt": {"provider": "groq"}, "tts": {"provider": "openai"}})).into_response())));
+    let dashboard = sign_in_at(&serve(app).await, &sign_in("hunter2")).await.unwrap();
+    let started = std::time::Instant::now();
+    let setup = dashboard.voice_setup("default").await.unwrap();
+    assert!(started.elapsed() < Duration::from_secs(4), "{:?}", started.elapsed());
+    assert_eq!((setup.transcribe, setup.speak, setup.stt_provider.as_deref(), setup.tts_provider.as_deref()), (true, true, Some("groq"), Some("openai")));
+}
+
+#[tokio::test]
 async fn a_server_without_voice_has_neither_route() {
     for profile in ["old", "older"] {
         let setup = signed_in().await.voice_setup(profile).await.unwrap();

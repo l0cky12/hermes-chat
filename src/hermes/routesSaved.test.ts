@@ -138,6 +138,27 @@ describe("The password of a connection with routes", () => {
     expect(saved.routes).toEqual([LAN, WEB, SSH]);
   });
 
+  it("is read from the keyring together with the headers, so a launch waits for one read, not two", async () => {
+    const { a, connections, password, headers } = account();
+    const c = connections.draft(base);
+    await signIn(c, withRoutes(base, [LAN, WEB]), a);
+    const reading: string[] = [];
+    let answer!: () => void;
+    const held = new Promise<void>((r) => (answer = r));
+    for (const [name, k] of [["password", password], ["headers", headers]] as const) {
+      const load = k.load;
+      k.load = async () => {
+        reading.push(name);
+        await held;
+        return load();
+      };
+    }
+    const saved = savedSignIn(connections.get(c.id)!, a);
+    expect(reading).toEqual(["password", "headers"]);
+    answer();
+    expect(await saved).toMatchObject({ password: "hunter2", routes: [LAN, WEB] });
+  });
+
   it("isn't given to a route added since that it wasn't saved for, until it is typed again", async () => {
     const { a, connections, password } = account();
     const c = connections.draft(base);
