@@ -113,8 +113,6 @@ code, pre, kbd { font-family: var(--mono); }
   display: inline-block; animation: spin 0.8s linear infinite; flex: none;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-/* Every endless animation, paused while the window is unfocused (windowState.ts followWindowFocus, #406). A short one,
-   like a toast rising, still plays, so it shows. */
 :root[data-unfocused] :is(.spinner, .conn-dot.connecting, .conn-dot.reconnecting, .thinking span, .rec-dot, .preview-busy svg, .spin) {
   animation-play-state: paused;
 }

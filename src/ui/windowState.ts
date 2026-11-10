@@ -79,23 +79,15 @@ const subscribeFocus = (fn: () => void) => {
 /** The window has the keyboard focus: the owner is in this app, not another one. */
 export const useWindowFocused = () => useSyncExternalStore(subscribeFocus, () => document.hasFocus());
 
-/**
- * Marks the page `data-unfocused` while the window doesn't have the focus, which pauses the endless animations in
- * styles.css. Called once, at startup. The window's word, not `document.hasFocus()`: that turns false while the owner
- * types in the Preview's page view, which is in this window.
- */
+/** Not `document.hasFocus()`: it turns false while the owner types in the Preview's page view, which is in this window. */
 export async function followWindowFocus(): Promise<void> {
   const mark = (focused: boolean) => document.documentElement.toggleAttribute("data-unfocused", !focused);
   try {
     const win = getCurrentWindow();
-    let heard = false;
-    await win.onFocusChanged(({ payload }) => {
-      heard = true;
-      mark(payload);
-    });
-    const now = await win.isFocused();
-    // An event that came while asking is newer than the answer.
-    if (!heard) mark(now);
+    let latest: boolean | undefined;
+    await win.onFocusChanged(({ payload }) => mark((latest = payload)));
+    const asked = await win.isFocused();
+    mark(latest ?? asked);
   } catch {
     // Outside the desktop app there is no window to follow, and nothing pauses.
   }
