@@ -698,7 +698,9 @@ export class Hermes {
   /** The newest stored row each chat is known to have, from its history and the turns sent from here. A message that
    * may have reached Hermes is looked for only past the row its chat had when it went out. */
   private knownRow = new Map<string, number>();
-  private syncing?: Promise<Error | undefined>;
+  /** The list sync under way. `next`, once `detach` has ended it: the next sync to begin, whose outcome it reports. */
+  private syncing?: { done: Promise<Error | undefined>; next?: Promise<Error | undefined> };
+  private abandonedSyncs: ((next: Promise<Error | undefined>) => void)[] = [];
   private syncAgain = false;
   private background = new Set<Promise<unknown>>();
   /** When the shown profile's list last synced on this connection. */
@@ -3462,22 +3464,32 @@ export class Hermes {
     if (this.snapshot.status !== "connected") return Promise.resolve(new Error("Not connected to Hermes.")); // Reconnecting syncs again.
     if (this.syncing) {
       this.syncAgain = true;
-      return this.syncing;
+      return this.syncing.done;
     }
-    this.syncing = (async () => {
+    const current = () => this.syncing === sync;
+    const passes = async (): Promise<Error | undefined> => {
+      let failure: Error | undefined;
       try {
-        let failure: Error | undefined;
         do {
           this.syncAgain = false;
-          failure = await this.syncOnce();
-        } while (this.syncAgain);
-        return failure;
+          failure = await this.syncOnce(current);
+        } while (this.syncAgain && current());
       } finally {
-        this.syncing = undefined;
+        if (current()) this.syncing = undefined;
       }
-    })();
-    this.track(this.syncing);
-    return this.syncing;
+      return sync.next ?? failure;
+    };
+    const sync: { done: Promise<Error | undefined>; next?: Promise<Error | undefined> } = { done: passes() };
+    this.syncing = sync;
+    for (const report of this.abandonedSyncs.splice(0)) report(sync.done);
+    this.track(sync.done);
+    return sync.done;
+  }
+
+  private abandonListSync() {
+    if (this.syncing) this.syncing.next = new Promise((report) => this.abandonedSyncs.push(report));
+    this.syncing = undefined;
+    this.syncAgain = false;
   }
 
   /** Resolves once background work (list syncs, pinning) has finished. Tests wait on it; the app doesn't need to. */
@@ -3844,6 +3856,7 @@ export class Hermes {
     this.kanbanWatch.stop();
     clearTimeout(this.rosterTimer);
     clearInterval(this.heartbeat);
+    this.abandonListSync();
     if (keep && pipe?.reopen) this.socketClosed = pipe;
     // Lets the Rust side end the tunnel.
     else if (pipe) this.droppedClosing = pipe.close().catch(() => {}).finally(() => (this.droppedClosing = undefined));
@@ -4229,8 +4242,9 @@ export class Hermes {
     return title;
   }
 
-  private async syncOnce(): Promise<Error | undefined> {
+  private async syncOnce(current: () => boolean): Promise<Error | undefined> {
     const profile = this.profile;
+    const superseded = () => this.profile !== profile || !current();
     const cutoff = this.snapshot.olderPulled ? -Infinity : Date.now() - LIST_WINDOW_MS;
     this.pinnedSinceListRead.clear();
     this.readSinceListRead.clear();
@@ -4249,11 +4263,11 @@ export class Hermes {
         for (const id of old.botChats) botChats.add(id);
       }
     } catch (e) {
-      if (this.profile === profile) this.update({ syncError: `Couldn't refresh the chat list: ${(e as Error).message}`, ...this.switchFailed(e as Error) });
+      if (superseded()) return undefined;
+      this.update({ syncError: `Couldn't refresh the chat list: ${(e as Error).message}`, ...this.switchFailed(e as Error) });
       return e as Error;
     }
-    // The owner switched profile meanwhile; the switch syncs the new one.
-    if (this.profile !== profile) return undefined;
+    if (superseded()) return undefined;
 
     const known = new Map(this.snapshot.chats.map((c) => [c.id, c]));
     // A chat new to the list brings its outbox, kept on this computer.

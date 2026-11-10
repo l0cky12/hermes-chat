@@ -35,6 +35,8 @@
 // HV_DELAY_MS=<ms> holds each /api/ answer that long, as a distant server's round trip would.
 // HV_FAIL_PATCH=<id>,<id> answers 503 to every edit (PATCH) of those sessions, as a server that fails a write does.
 // HV_MEMORY_URL=<url> is the address `default`'s Honcho gives for its documentation and its API key's "Get one" link.
+// HV_TURNS=<n> adds the bench's two long chats to `default`'s Inbox, `long1` and `long2`, n turns each (bench/fixture.ts
+// makeChat(n, 1) and (n, 2)), so the app can be timed on the chats `bench/run.mjs` renders (bench/app-split).
 // Read-only check of what the server holds (the side-effect proof): `GET /__state` returns sessions, transcripts, and
 // the app's answers to what the stand-in asked it.
 // The same JSON is rewritten to <state-file> after every change, so it survives the bridge being stopped.
@@ -45,6 +47,7 @@ import type { Socket } from "node:net";
 import { FakeHermes, row } from "../../../../src/hermes/fakeHermes";
 import { HONCHO, RETAINDB } from "../../../../src/hermes/fakeMemoryProviders";
 import type { Pipe } from "../../../../src/hermes/pipe";
+import { makeChat } from "../../../../bench/fixture";
 
 const port = Number(process.argv[2] ?? 47990);
 const stateFile = process.argv[3];
@@ -77,6 +80,23 @@ for (let i = 0; i < Number(process.env.HV_LIST ?? 0); i++) {
   server.storeMessage(`list${i + 1}`, { role: "user", text: `${title}?` });
   server.storeMessage(`list${i + 1}`, { role: "assistant", text: "Checked. Nothing to do for now." });
 }
+
+const benchTurns = Number(process.env.HV_TURNS ?? 0);
+if (benchTurns > 0)
+  for (const seed of [1, 2]) {
+    const id = `long${seed}`;
+    server.sessions.push(row(id, seed / 24, { title: `Bench ${seed}, ${benchTurns} turns`, pinned: true, message_count: benchTurns * 2 }));
+    let reasoning: string | undefined;
+    for (const item of makeChat(benchTurns, seed).items) {
+      if (item.kind === "user") server.storeMessage(id, { role: "user", text: item.text });
+      else if (item.kind === "thinking") reasoning = item.text;
+      else if (item.kind === "tool") server.storeMessage(id, { role: "tool", name: item.name, context: item.preview, args: item.args, result: item.result });
+      else if (item.kind === "assistant") {
+        server.storeMessage(id, { role: "assistant", text: item.text, ...(reasoning && { reasoning }) });
+        reasoning = undefined;
+      }
+    }
+  }
 
 for (const id of (process.env.HV_FAIL_PATCH ?? "").split(",").filter(Boolean))
   server.rest[`PATCH /api/sessions/${id}`] = () => {
