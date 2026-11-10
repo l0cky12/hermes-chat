@@ -143,3 +143,22 @@ describe("Opening a listed chat", () => {
     expect(chat().items).toEqual([{ kind: "user", id: "u-0", text: "Hi", outgoing: { state: "failed", reason: "session not found: tg" } }]);
   });
 });
+
+describe("A stored history with fields of the wrong type (#476)", () => {
+  it("keeps only the fields of the type they should be", async () => {
+    const { hermes, chat } = await listed([
+      { role: "user", text: "List the backup folder.", timestamp: 1 },
+      { role: "tool", name: "terminal", context: 5, args: "ls" },
+      { role: "tool", name: { tool: "terminal" }, context: "du -sh /srv/backup", tool_call_id: 7 },
+      { role: "assistant", text: { md: "14 snapshots" } },
+      { role: "assistant", text: "14 snapshots, 212 GiB.", reasoning: 3, timestamp: 2 },
+    ] as never);
+    await hermes.open("tg");
+    expect(chat().items).toEqual([
+      { kind: "user", id: "h-0", text: "List the backup folder.", at: 1000 },
+      { kind: "tool", id: "h-1", name: "terminal", status: "done" },
+      { kind: "tool", id: "h-2", name: "tool", preview: "du -sh /srv/backup", status: "done" },
+      { kind: "assistant", id: "h-4", text: "14 snapshots, 212 GiB.", at: 2000 },
+    ]);
+  });
+});
