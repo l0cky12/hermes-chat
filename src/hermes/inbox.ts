@@ -6,7 +6,7 @@
 import { type ScopeSource, connectionScope } from "./connections";
 import type { Handoff } from "./dispatched";
 import type { Chat, Item, LiveSessions, OtherProfiles, Source } from "./model";
-import { isOutgoing, isWaiting } from "./model";
+import { isOutgoing, isQuestion, isWaiting } from "./model";
 
 /**
  * `running`: a reply is being written, or the chat waits on work it handed off (`waiting`). `approval`: Hermes waits
@@ -100,18 +100,24 @@ export function inboxEntries({ profile, chats, connected, others, live, seen, ha
     else if (handoff?.kind === "waiting") add({ ...base, key: `running ${profile} ${c.id}`, kind: "running", at: c.updatedAt, summary: "Hermes is waiting on work it handed off.", waiting: true });
     if (handoff?.kind === "needsOwner") add({ ...base, key: `handoff ${profile} ${c.id} ${handoff.task.id} ${handoff.task.status}`, kind: "approval", at: 0, taskId: handoff.task.id, summary: handoff.reason });
     for (const i of c.items) {
-      if (i.kind === "approval" && !i.answer && (i.ended || isWaiting(i))) {
+      if (isQuestion(i) && !i.answer && (i.ended || isWaiting(i))) {
         const ended = !isWaiting(i);
+        const approval = i.kind === "approval";
         add({
           ...base,
-          key: `approval ${profile} ${c.id} ${i.requestId}`,
+          // A server request id is the same after a reconnect; an Approval's own id is the one Hermes's queue keeps.
+          key: approval ? `approval ${profile} ${c.id} ${i.requestId}` : `question ${profile} ${c.id} ${i.id}`,
           kind: "approval",
           at: 0,
           itemId: i.id,
           ended,
           alias: `waiting ${profile} ${c.id}`,
           aliasAt: liveAt.get(c.id),
-          summary: ended ? "Hermes stopped waiting for an answer. Nothing is left to approve." : "A command is waiting for your approval.",
+          summary: ended
+            ? `Hermes stopped waiting for an answer. ${approval ? "Nothing is left to approve." : "Nothing is left to answer."}`
+            : approval
+              ? "A command is waiting for your approval."
+              : "Hermes is waiting for your answer to a question.",
         });
       } else if (i.kind === "error" && i.id !== LOAD_ERROR_ID) {
         add(failureEntry({ ...base, itemId: i.id, mark: failureMark(i.text) }));

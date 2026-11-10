@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "./fakeHermes";
 import { connect, type Hermes } from "./transport";
 import { localChatCache } from "./chatCache";
+import { isQuestion, type Item } from "./model";
 
 const nas = { mode: "ssh" as const, sshTarget: "liam@nas", url: "", username: "liam" };
 const running: Hermes[] = [];
@@ -28,6 +29,9 @@ async function replying(server = new FakeHermes()) {
   const locks = () => server.requests.filter((r) => r.method === "clarify.lock").map((r) => r.params);
   return { server, hermes, id, runtime, chat, card, locks };
 }
+
+/** A card's answer from here, if it has one. */
+const answerOf = (i?: Item) => (i && isQuestion(i) ? i.answer : undefined);
 
 const WHICH_LOGS = { question: "Which logs should I clear?", choices: ["Only old ones (Recommended)", "All of them"] };
 const WHEN = { question: "When should I run it?" };
@@ -59,7 +63,7 @@ describe("A clarify", () => {
     await hermes.answerQuestion(chatId, id, { kind: "lock", qid: "q0", answer: "Only old ones" });
     expect(locks()).toEqual([{ request_id: id, question_id: "q0", answer: "Only old ones" }]);
     expect(card()).toMatchObject({ locked: { q0: "Only old ones" } });
-    expect(card()).not.toHaveProperty("answer");
+    expect(answerOf(card())).toBeUndefined();
     expect(server.openRequests.has(id)).toBe(true);
 
     await hermes.answerQuestion(chatId, id, { kind: "lock", qid: "q1", answer: "Tonight" });
@@ -101,7 +105,7 @@ describe("A clarify", () => {
     expect(locks()).toEqual([]);
     expect(server.requests.some((r) => r.method === "request.answer")).toBe(false);
     expect(card()).toMatchObject({ ended: "timeout" });
-    expect(card()).not.toHaveProperty("answer");
+    expect(answerOf(card())).toBeUndefined();
   });
 
   it("says so when a lock can't go, and keeps the question open", async () => {
@@ -111,7 +115,7 @@ describe("A clarify", () => {
     await hermes.answerQuestion(chatId, id, { kind: "lock", qid: "q0", answer: "Now" });
 
     expect(card()).toMatchObject({ locked: {} });
-    expect(card()).not.toHaveProperty("answer");
+    expect(answerOf(card())).toBeUndefined();
     expect(chat().items.at(-1)).toMatchObject({ kind: "error", text: "Couldn't answer Hermes: socket closed" });
   });
 });
@@ -152,7 +156,7 @@ describe("A sudo or secret question", () => {
     const id = server.askSudo(runtime)!;
     await hermes.answerQuestion(chatId, id, { kind: "value", value: "" });
     expect(server.settled).toEqual([]);
-    expect(card("sudo")).not.toHaveProperty("answer");
+    expect(answerOf(card("sudo"))).toBeUndefined();
   });
 
   it("answers in reply to Hermes's request on a Hermes without request.answer", async () => {
@@ -210,7 +214,7 @@ describe("Questions after a reconnect", () => {
 
     expect(chat().items.map((i) => i.kind)).toEqual(["user", "clarify"]);
     expect(card()).toMatchObject({ id, locked: { q0: "All of them" } });
-    expect(card()).not.toHaveProperty("answer");
+    expect(answerOf(card())).toBeUndefined();
 
     await hermes.answerQuestion(chatId, id, { kind: "lock", qid: "q1", answer: "Tonight" });
     expect(locks().map((l) => l.question_id)).toEqual(["q0", "q1"]);
@@ -272,7 +276,7 @@ describe("Questions on a chat another Hermes app also has open", () => {
     await hermes.answerQuestion(chatId, sudo, { kind: "value", value: "hunter2" });
     await hermes.answerQuestion(chatId, clarify, { kind: "lock", qid: "q0", answer: "Now" });
     expect(card("sudo")).toMatchObject({ ended: "expired" });
-    expect(card("sudo")).not.toHaveProperty("answer");
+    expect(answerOf(card("sudo"))).toBeUndefined();
     expect(card()).toMatchObject({ ended: "expired", locked: {} });
     expect(chat().items.some((i) => i.kind === "error")).toBe(false);
   });
@@ -289,7 +293,7 @@ describe("Questions on a chat another Hermes app also has open", () => {
     await hermes.answerQuestion(chatId, id, { kind: "value", value: "hunter2" });
     expect(server.settled).toEqual([]);
     expect(card("sudo")).toMatchObject({ ended: "expired" });
-    expect(card("sudo")).not.toHaveProperty("answer");
+    expect(answerOf(card("sudo"))).toBeUndefined();
     expect(chat().items.some((i) => i.kind === "error")).toBe(false);
   });
 });

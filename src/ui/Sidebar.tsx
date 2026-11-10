@@ -638,12 +638,14 @@ function OtherBadge({ info }: { info?: OtherProfile }) {
 }
 
 /**
- * What the owner leaves behind in `profile` by switching away now, if anything: an Approval waiting, or a reply
- * running. Hermes keeps running the reply; an Approval waits only until Hermes stops waiting (its timeout).
+ * What the owner leaves behind in `profile` by switching away now, if anything: an Approval or another Question
+ * waiting, or a reply running. Hermes keeps running the reply; a Question waits only until Hermes stops waiting (its
+ * timeout).
  */
 export function leavingNote(profile: string, chats: Chat[]): string | undefined {
-  if (chats.some((c) => c.items.some(isWaiting)))
-    return `An approval is waiting in ${profile}. Hermes waits for your answer only until it times out: switch back and open the chat to answer it.`;
+  const asked = chats.flatMap((c) => c.items).find(isWaiting);
+  if (asked)
+    return `${asked.kind === "approval" ? "An approval" : "A question from Hermes"} is waiting in ${profile}. Hermes waits for your answer only until it times out: switch back and open the chat to answer it.`;
   if (chats.some((c) => c.running)) return `A reply is still running in ${profile}. Hermes keeps it going, and it shows here when you switch back.`;
 }
 

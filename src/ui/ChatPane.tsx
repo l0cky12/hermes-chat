@@ -5,11 +5,12 @@ import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRi
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { decodeString } from "micromark-util-decode-string";
-import type { ApprovalChoice, AttachCheck, Attachment, Chat, ChatQueue, ConnectionStatus, Item, OutgoingItem, SideQuestion, Source } from "../hermes/model";
-import { SOURCE_LABEL, isOutgoing, isWaiting } from "../hermes/model";
+import type { ApprovalChoice, AttachCheck, Attachment, Chat, ChatQueue, ConnectionStatus, Item, OutgoingItem, QuestionAnswer, SideQuestion, Source } from "../hermes/model";
+import { SOURCE_LABEL, isOutgoing, isQuestion, isWaiting } from "../hermes/model";
 import type { SkillCall } from "../hermes/skillCommands";
 import type { DeskState, ScreenshotDesk } from "../hermes/screenshots";
 import { ApprovalCard } from "./ApprovalCard";
+import { QuestionCard } from "./QuestionCard";
 import { Menu, PinItem, type ChatPin } from "./ChatMenu";
 import { isBotChat } from "../hermes/bots";
 import { DeleteChatDialog } from "./DeleteChat";
@@ -281,8 +282,8 @@ const savedWhen = (at: number) => new Date(at).toLocaleString(undefined, { dateS
 
 /**
  * `alsoPostsIn`: the Telegram or Discord chat Hermes will also post its replies in. `draft`: the composer's text, kept
- * outside the pane so it survives switching chats. `onAnswer` answers an Approval card. `onSettle`, `onArchive`,
- * `onExport` and `onCopyLink` are left out for a chat not started yet. `notLoaded`: the chat has no Saved copy and can't load until
+ * outside the pane so it survives switching chats. `onAnswer` answers an Approval card, and `onQuestion` any other
+ * Question card. `onSettle`, `onArchive`, `onExport` and `onCopyLink` are left out for a chat not started yet. `notLoaded`: the chat has no Saved copy and can't load until
  * Hermes is connected. `onRetry`, `onEdit` and `onDismiss` act on failed or unconfirmed messages. `modelControls`
  * contains the model picker; `footer` contains the status bar. Only the active pane answers Ctrl+F and takes focus as
  * it opens. Native drops attach to the pane under the pointer. Export, Copy chat link, Settle and Archive are in the header's More menu.
@@ -315,6 +316,7 @@ export function ChatPane({
   onSend,
   onStop,
   onAnswer,
+  onQuestion,
   pin,
   onSettle,
   onArchive,
@@ -370,6 +372,7 @@ export function ChatPane({
   onSend: (text: string, attachments: Attachment[], skill?: SkillCall) => void;
   onStop: () => void;
   onAnswer: (approvalId: string, choice: ApprovalChoice, confirmed?: boolean) => void;
+  onQuestion: (itemId: string, answer: QuestionAnswer) => void;
   /** Pinning the chat to the top of the list (ADR 0085); left out for a chat not started yet. */
   pin?: ChatPin;
   onSettle?: (settled: boolean) => void;
@@ -453,6 +456,9 @@ export function ChatPane({
     (approvalId: string, choice: ApprovalChoice, confirmed?: boolean) => onAnswerRef.current(approvalId, choice, confirmed),
     [],
   );
+  const onQuestionRef = useRef(onQuestion);
+  onQuestionRef.current = onQuestion;
+  const question = useCallback((itemId: string, a: QuestionAnswer) => onQuestionRef.current(itemId, a), []);
   // So do failed messages, one handler for all three actions.
   const outgoingRef = useRef({ retry: onRetry, edit: onEdit, dismiss: onDismiss });
   outgoingRef.current = { retry: onRetry, edit: onEdit, dismiss: onDismiss };
@@ -637,7 +643,7 @@ export function ChatPane({
   // Cards ignore clicks for a moment after the transcript changes, since it may have moved them under the pointer.
   const movedAt = useMemo(() => performance.now(), [chat.items, chat.sideQuestions]);
   const last = chat.items[chat.items.length - 1];
-  const waiting = chat.items.some(isWaiting);
+  const waiting = chat.items.find(isWaiting);
   // Enter queues while a reply runs, while Hermes isn't connected, and while messages are queued already, so a new one
   // never jumps the queue. The composer's hint says which Enter does.
   const queueing = !compare && !!queueApi && (!!chat.running || status !== "connected" || !!queue?.items.length);
@@ -791,8 +797,9 @@ export function ChatPane({
                 live={!!chat.running && b === last}
                 query={finds && mayMatch(b, finds) ? q : ""}
                 offline={status !== "connected" || !!chat.loading}
-                movedAt={b.kind === "approval" ? movedAt : 0}
+                movedAt={b.kind !== "tools" && isQuestion(b) ? movedAt : 0}
                 onAnswer={answer}
+                onQuestion={question}
                 listen={b.kind === "assistant" ? listen : undefined}
                 canRetry={b.kind === "user" && !!b.outgoing && canRetry}
                 onOutgoing={onOutgoing}
@@ -822,7 +829,7 @@ export function ChatPane({
       <SubagentsPanel
         tree={chat.subagents}
         api={subagents}
-        approvalWaiting={waiting}
+        approvalWaiting={waiting?.kind}
         show={showSubagent}
         onGoToApproval={() => {
           const id = chat.items.find(isWaiting)?.id;
@@ -847,7 +854,7 @@ export function ChatPane({
         running={!!chat.running}
         stopping={!!chat.stopping}
         note={STATUS_NOTE[status]}
-        hint={waiting ? "Hermes is waiting for your approval above." : undefined}
+        hint={waiting && (waiting.kind === "approval" ? "Hermes is waiting for your approval above." : "Hermes is waiting for your answer above.")}
         alsoPostsIn={alsoPostsIn}
         text={draft}
         onText={onDraft}
@@ -905,6 +912,7 @@ const BlockView = memo(
     offline,
     movedAt,
     onAnswer,
+    onQuestion,
     listen,
     canRetry,
     onOutgoing,
@@ -923,6 +931,7 @@ const BlockView = memo(
     offline: boolean;
     movedAt: number;
     onAnswer: (approvalId: string, choice: ApprovalChoice, confirmed?: boolean) => void;
+    onQuestion: (itemId: string, answer: QuestionAnswer) => void;
     listen?: Listen;
     canRetry: boolean;
     onOutgoing: (itemId: string, action: OutgoingAction) => void;
@@ -1003,6 +1012,8 @@ const BlockView = memo(
     if (block.kind === "thinking") return <Thought item={block} live={live} query={query} />;
     if (block.kind === "approval")
       return <ApprovalCard item={block} offline={offline} movedAt={movedAt} onAnswer={(c, confirmed) => onAnswer(block.id, c, confirmed)} />;
+    if (block.kind === "clarify" || block.kind === "sudo" || block.kind === "secret")
+      return <QuestionCard item={block} offline={offline} movedAt={movedAt} onAnswer={(a) => onQuestion(block.id, a)} />;
     return <ToolGroup tools={block.tools} />;
   },
   (a, b) =>
@@ -1012,6 +1023,7 @@ const BlockView = memo(
     a.offline === b.offline &&
     a.movedAt === b.movedAt &&
     a.onAnswer === b.onAnswer &&
+    a.onQuestion === b.onQuestion &&
     a.listen?.speaker === b.listen?.speaker &&
     a.listen?.blocked === b.listen?.blocked &&
     a.canRetry === b.canRetry &&

@@ -65,6 +65,7 @@ async function setUp(draft = "", screenshots?: ScreenshotDesk) {
       onSend={onSend}
       onStop={() => {}}
       onAnswer={() => {}}
+      onQuestion={() => {}}
       screenshots={screenshots}
     />,
   );

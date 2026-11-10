@@ -622,7 +622,7 @@ describe("Questions this app doesn't show", () => {
 
   it("turns them down on a Hermes before shared chats, so the agent doesn't wait out the timeout", async () => {
     const { ask, answerTo, chat } = await on("0.21.2", false);
-    for (const method of ["clarify", "sudo", "secret", "preview.read"]) {
+    for (const method of ["vault.unlock_prompt", "vault.code", "theme.pick", "preview.read"]) {
       const id = ask(method);
       expect(answerTo(id)).toEqual({ jsonrpc: "2.0", id, error: { code: -32601, message: `Hermes Chat can't answer ${method} requests yet.` } });
     }
@@ -631,7 +631,7 @@ describe("Questions this app doesn't show", () => {
 
   it("leaves them open for another client on a Hermes that shares chats, and declines window-owned ones with 4404", async () => {
     const { server, ask, answerTo, chat } = await on("0.22.5", true);
-    const open = ["clarify", "sudo", "secret", "vault.unlock_prompt"].map(ask);
+    const open = ["vault.unlock_prompt", "vault.code", "vault.save_login", "theme.pick"].map(ask);
     for (const id of open) expect(answerTo(id)).toBeUndefined();
     expect([...server.openRequests.keys()]).toEqual(open);
     for (const method of ["preview.read", "preview.act", "terminal.read", "window.read", "theme.apply", "tour"]) {
@@ -654,7 +654,7 @@ describe("Questions this app doesn't show", () => {
 
   it("answers none of them on a Hermes that shares chats but doesn't count a 4404 as a decline", async () => {
     const { server, ask, answerTo } = await on("0.21.3", false);
-    const open = ["clarify", "sudo", "preview.read", "tour"].map(ask);
+    const open = ["vault.unlock_prompt", "vault.code", "preview.read", "tour"].map(ask);
     for (const id of open) expect(answerTo(id)).toBeUndefined();
     expect([...server.openRequests.keys()]).toEqual(open);
   });

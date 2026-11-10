@@ -35,6 +35,7 @@ function pane(chat: Chat, onUsage = () => {}) {
       onSend={() => {}}
       onStop={() => {}}
       onAnswer={() => {}}
+      onQuestion={() => {}}
       onUsage={onUsage}
     />,
   );
@@ -198,6 +199,7 @@ describe("A chat's usage", () => {
         onSend={() => {}}
         onStop={() => {}}
         onAnswer={() => {}}
+        onQuestion={() => {}}
       />,
     );
     expect(screen.queryByRole("button", { name: /^Usage for this chat/ })).toBeNull();

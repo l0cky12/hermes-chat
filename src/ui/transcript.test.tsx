@@ -40,6 +40,7 @@ function pane(chat: Chat, findTarget?: FindTarget, onAnswer: Answer = () => {}) 
       onSend={() => {}}
       onStop={() => {}}
       onAnswer={a}
+      onQuestion={() => {}}
     />
   );
   const r = render(el(chat, findTarget));

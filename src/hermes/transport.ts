@@ -29,7 +29,7 @@ import { McpApi } from "./mcp";
 import { GatewaysApi } from "./gateways";
 import { PersonaApi } from "./persona";
 import { ProfileCloneApi } from "./profileClone";
-import { APPROVAL_CHOICES, isBroadGrant, isOutgoing, isWaiting, offeredChoices, sameFields, turnStart, type ApprovalChoice, type ApprovalItem, type AttachCheck, type Attachment, type Chat, type ChatQueue, type ConnectionStatus, type ContextUse, type Found, type Item, type ListedChat, type LiveSession, type LiveSessions, type OtherProfiles, type Outgoing, type OutgoingItem, type Queued, type SavedSend, type SeenFailure, type SessionLive, type SideQuestion, type Source, QUEUE_LIMIT } from "./model";
+import { APPROVAL_CHOICES, isBroadGrant, isOutgoing, isQuestion, isWaiting, offeredChoices, sameFields, turnStart, type ApprovalChoice, type ApprovalItem, type AttachCheck, type ClarifyQuestion, type QuestionAnswer, type QuestionItem, type QuestionKind, type Attachment, type Chat, type ChatQueue, type ConnectionStatus, type ContextUse, type Found, type Item, type ListedChat, type LiveSession, type LiveSessions, type OtherProfiles, type Outgoing, type OutgoingItem, type Queued, type SavedSend, type SeenFailure, type SessionLive, type SideQuestion, type Source, QUEUE_LIMIT } from "./model";
 import { catalogFromServer, fallbackCatalog, isEffort, modelKey, pickFromInfo, type ModelCatalog, type ModelPick } from "./models";
 import { approvalsOf, isApprovalMode, writesFor, type ApprovalPick } from "./approvals";
 import { CheckTimesStore, noOthers, OtherProfilesCheck } from "./otherProfiles";
@@ -201,10 +201,11 @@ export type ChatCache = {
 };
 /** Shows a desktop notification; rejects if it can't. */
 export type Notify = (n: { title: string; body: string }) => Promise<void>;
-/** What notifications say. They never quote a chat's title or messages, or an Approval's command. */
+/** What notifications say. They never quote a chat's title or messages, or what a Question asks. */
 export const NOTICES = {
   finished: { title: "Hermes finished a reply", body: "Open Hermes Chat to read it." },
   approval: { title: "Hermes is asking for approval", body: "A command is waiting for your answer in Hermes Chat." },
+  question: { title: "Hermes has a question", body: "A question is waiting for your answer in Hermes Chat." },
 };
 
 const noCache: ChatCache = {
@@ -322,6 +323,33 @@ type InterruptResult = { status: "interrupted" | "not_interrupted" };
  * `open_requests`. An `approval` one carries `{request_id, command, description, choices, ...}` (research doc §6).
  */
 type ServerRequest = { id: string; method: string; params: Record<string, unknown> };
+
+/**
+ * The Questions the app shows as cards, by the request's method (`tui_gateway/contracts/server_requests.py`). `card`: the
+ * card a request makes, or none when its params don't parse. `skip`: the result a Skip answers with (`ClarifyResult`
+ * without `answers` is cancel-all; an empty `ValueResult` is skipped), none for a kind that can't be skipped. `value`:
+ * the result for a password or secret (`ValueResult`). `notice`: what a desktop notification says. `named`: what the
+ * chat calls it when an answer is lost. An Approval's answer goes by `approval.respond` (`settleApproval`), a Clarify's
+ * one lock at a time by `clarify.lock`, and every other answer by `request.answer` (`settleRequest`). A method not here
+ * is one the app doesn't show (`unshownAnswer`).
+ */
+const QUESTIONS: { [K in QuestionKind]: QuestionSpec<Extract<QuestionItem, { kind: K }>> } = {
+  approval: { card: approvalItem, notice: NOTICES.approval, named: (i) => `“${i.command}”` },
+  clarify: { card: clarifyItem, skip: {}, notice: NOTICES.question, named: () => "Hermes's question" },
+  sudo: { card: sudoItem, skip: { value: "" }, value: (value) => ({ value }), notice: NOTICES.question, named: () => "the sudo password question" },
+  secret: { card: secretItem, skip: { value: "" }, value: (value) => ({ value }), notice: NOTICES.question, named: (i) => `the question for ${i.envVar}` },
+};
+type QuestionSpec<Q extends QuestionItem> = {
+  card: (r: ServerRequest) => Q | undefined;
+  skip?: Record<string, unknown>;
+  value?: (value: string) => Record<string, unknown>;
+  notice: { title: string; body: string };
+  named: (i: Q) => string;
+};
+const isQuestionMethod = (method: string): method is QuestionKind => Object.hasOwn(QUESTIONS, method);
+/** The card for a request the app shows, or none. */
+const questionCard = (r: ServerRequest): QuestionItem | undefined => (isQuestionMethod(r.method) ? QUESTIONS[r.method].card(r) : undefined);
+const specOf = <Q extends QuestionItem>(i: Q) => QUESTIONS[i.kind] as unknown as QuestionSpec<Q>;
 
 /** JSON-RPC "method not found": what Hermes expects from a client that can't handle a request. */
 const NO_SUCH_METHOD = -32601;
@@ -652,9 +680,9 @@ export class Hermes {
   private resumeOnReconnect = new Set<string>();
   /** Requests for a session no chat holds yet: the resume that reattaches it can answer after Hermes writes them. */
   private earlyRequests = new Map<string, ServerRequest[]>();
-  /** Closed Approval cards, answered here or that Hermes stopped waiting on, by request id. A resume replaces the
+  /** Closed Question cards, answered here or that Hermes stopped waiting on, by request id. A resume replaces the
    * chat's cards with what Hermes lists, so this keeps one it lists again from coming back. */
-  private closedApprovals = new Map<string, ApprovalItem>();
+  private closedQuestions = new Map<string, QuestionItem>();
   /** Approvals Hermes has been told are on screen (`approval.received`), by request id. */
   private shownApprovals = new Set<string>();
   /**
@@ -1613,7 +1641,7 @@ export class Hermes {
   private waitingCards(): Map<string, Set<string>> {
     const shown = new Map<string, Set<string>>();
     for (const c of this.snapshot.chats) {
-      const ids = c.items.filter((i) => isWaiting(i) && this.queuedApprovals.has(i.requestId)).map((i) => i.id);
+      const ids = c.items.filter((i) => isWaiting(i) && i.kind === "approval" && this.queuedApprovals.has(i.requestId)).map((i) => i.id);
       if (c.runtimeId && ids.length) shown.set(c.runtimeId, new Set(ids));
     }
     return shown;
@@ -1629,7 +1657,7 @@ export class Hermes {
     const waiting = new Set(rows.map(obj).flatMap((r) => (r?.status === "waiting" ? [r.id] : [])));
     for (const [runtimeId, ids] of shown) {
       const chat = this.snapshot.chats.find((c) => c.runtimeId === runtimeId);
-      if (chat && !waiting.has(runtimeId)) this.patchChat(chat.id, (c) => ({ ...c, items: endWaitingApprovals(c.items, "not waiting", (i) => ids.has(i.id)) }));
+      if (chat && !waiting.has(runtimeId)) this.patchChat(chat.id, (c) => ({ ...c, items: endWaiting(c.items, "not waiting", (i) => ids.has(i.id)) }));
     }
   }
 
@@ -2454,7 +2482,7 @@ export class Hermes {
       return at === undefined ? c : { ...c, items: c.items.slice(0, at) };
     });
     // A branch left with no messages has no Saved copy: the one kept would show the message taken back.
-    const left = this.snapshot.chats.find((c) => c.id === chatId)?.items.some((i) => i.kind !== "error" && i.kind !== "approval" && !isOutgoing(i));
+    const left = this.snapshot.chats.find((c) => c.id === chatId)?.items.some((i) => i.kind !== "error" && !isQuestion(i) && !isOutgoing(i));
     if (left) this.saveTranscript(chatId);
     else this.cache.deleteTranscript(profile, chatId);
     // From here the message is the outbox's: a failed send shows in the branch with Retry, as any message does.
@@ -3199,20 +3227,91 @@ export class Hermes {
    * answer can't go, the chat says so and the card stays waiting.
    */
   async answerApproval(chatId: string, approvalId: string, choice: ApprovalChoice, confirmed = false): Promise<void> {
+    const card = this.snapshot.chats.find((c) => c.id === chatId)?.items.find((i) => i.id === approvalId);
+    if (!card || !isWaiting(card) || card.kind !== "approval" || !offeredChoices(card).includes(choice) || (isBroadGrant(choice) && !confirmed)) return;
+    await this.answerCard(chatId, card, { show: () => ({ answer: choice }), undo: () => ({ answer: undefined }), stale: "resolved" }, (runtimeId) =>
+      this.settleApproval(runtimeId, card, choice),
+    );
+  }
+
+  /**
+   * Answers a waiting Clarify, Sudo password or Secret card for the owner: locks one Clarify answer (`clarify.lock`, the
+   * last lock answers the whole Clarify), sends a password or secret, or skips. A card already answered, or that Hermes
+   * stopped waiting for, is left alone, and so is a question locked already and an empty value, which Hermes would read
+   * as skipped. The value goes to Hermes and nowhere else: the card keeps only that it was answered (ADR 0136).
+   */
+  async answerQuestion(chatId: string, itemId: string, a: QuestionAnswer): Promise<void> {
+    const card = this.snapshot.chats.find((c) => c.id === chatId)?.items.find((i) => i.id === itemId);
+    if (!card || !isWaiting(card) || card.kind === "approval") return;
+    const spec = specOf(card);
+    const reopen = () => ({ answer: undefined });
+    if (a.kind === "skip" && spec.skip) {
+      const result = spec.skip;
+      return this.answerCard(chatId, card, { show: () => ({ answer: "skipped" }), undo: reopen, stale: "expired" }, () => this.settleRequest(card.id, result));
+    }
+    if (a.kind === "value" && spec.value && a.value) {
+      const result = spec.value(a.value);
+      return this.answerCard(chatId, card, { show: () => ({ answer: "answered" }), undo: reopen, stale: "expired" }, () => this.settleRequest(card.id, result));
+    }
+    if (a.kind !== "lock" || card.kind !== "clarify" || !card.questions.some((q) => q.qid === a.qid) || a.qid in card.locked) return;
+    const { qid, answer } = a;
+    const all = (locked: Record<string, unknown>) => card.questions.every((q) => q.qid in locked);
+    const show = (i: typeof card) => {
+      const locked = { ...i.locked, [qid]: answer };
+      return { locked, ...(all(locked) && { answer: "answered" as const }) };
+    };
+    const undo = (i: typeof card) => ({ locked: Object.fromEntries(Object.entries(i.locked).filter(([k]) => k !== qid)), answer: undefined });
+    await this.answerCard(chatId, card, { show, undo, stale: "expired" }, async () => {
+      const res = obj(await this.request("clarify.lock", { request_id: card.id, question_id: qid, answer }));
+      // Hermes answers the Clarify on the last lock, which may be this one though another client locked the rest.
+      if (Array.isArray(res?.remaining) && !res.remaining.length) this.patchCard(chatId, card, () => ({ answer: "answered" }));
+      return res?.status !== "expired";
+    });
+  }
+
+  /**
+   * One answer to a waiting card: shows it on the card at once, then `send`s it. `send` resolves false when Hermes had
+   * stopped waiting, and the card then ends with `stale`. A card from before a drop isn't answered until its chat is
+   * loaded again, which tells whether Hermes still waits on it. If the answer can't go, the chat says so and the card
+   * waits again. The error names only what failed, never the answer.
+   */
+  private async answerCard<Q extends QuestionItem>(
+    chatId: string,
+    card: Q,
+    change: { show: (i: Q) => Partial<Q>; undo: (i: Q) => Partial<Q>; stale: string },
+    send: (runtimeId: string) => Promise<boolean>,
+  ): Promise<void> {
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
-    const card = chat?.items.find((i) => i.id === approvalId);
-    if (!card || !isWaiting(card) || !offeredChoices(card).includes(choice) || (isBroadGrant(choice) && !confirmed)) return;
     if (this.snapshot.status === "connected" && !chat?.runtimeId) return;
-    const close = (change: Partial<ApprovalItem>) =>
-      this.patchChat(chatId, (c) => ({ ...c, items: c.items.map((i) => (i.id === approvalId && i.kind === "approval" ? { ...i, ...change } : i)) }));
-    close({ answer: choice });
+    this.patchCard(chatId, card, change.show);
     try {
       if (!this.pipe || this.snapshot.status !== "connected" || !chat?.runtimeId) throw new Error("Not connected to Hermes.");
-      if (!(await this.settleApproval(chat.runtimeId, card, choice))) close({ answer: undefined, ended: "resolved" });
+      if (!(await send(chat.runtimeId))) this.patchCard(chatId, card, (i) => ({ ...change.undo(i), ended: change.stale }));
     } catch (e) {
-      close({ answer: undefined });
+      this.patchCard(chatId, card, change.undo);
       this.patchChat(chatId, (c) => ({ ...c, items: [...c.items, errorItem(c, `Couldn't answer Hermes: ${(e as Error).message}`)] }));
     }
+  }
+
+  /** Changes a Question card as it is now in the chat. */
+  private patchCard<Q extends QuestionItem>(chatId: string, card: Q, change: (i: Q) => Partial<Q>) {
+    this.patchChat(chatId, (c) => ({ ...c, items: c.items.map((i): Item => (i.id === card.id && i.kind === card.kind ? ({ ...i, ...change(i as Q) } as Item) : i)) }));
+  }
+
+  /**
+   * Answers an open request with `result` by `request.answer`, which says whether Hermes still waited: false when it had
+   * stopped, as when another Hermes client answered first. A Hermes without it gets a response frame to the request, as
+   * the official app sends, which Hermes drops without a word once it has stopped waiting.
+   */
+  private async settleRequest(id: string, result: Record<string, unknown>): Promise<boolean> {
+    try {
+      return obj(await this.request("request.answer", { id, result }))?.status !== "expired";
+    } catch (e) {
+      if (!(e instanceof CapabilityUnsupportedError) && !(e instanceof RpcError && e.code === NO_SUCH_METHOD)) throw e;
+    }
+    if (!this.pipe) throw new Error("Not connected to Hermes.");
+    await this.pipe.send(JSON.stringify({ jsonrpc: "2.0", id, result }));
+    return true;
   }
 
   /**
@@ -3787,40 +3886,38 @@ export class Hermes {
     this.saveTranscript(chatId);
   }
 
-  /** A question from Hermes. An Approval shows as a card in its chat. Other kinds this app can't show yet get `unshownAnswer`. */
+  /** A question from Hermes. One the app shows (`QUESTIONS`) is a card in its chat. Any other gets `unshownAnswer`. */
   private onServerRequest(req: ServerRequest) {
-    if (req.method !== "approval") {
+    if (!questionCard(req)) {
       const error = unshownAnswer(req.method, this.capabilities.getSnapshot().facts);
       if (error) void this.pipe?.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, error })).catch(() => {});
       return;
     }
     const sid = String(req.params.session_id ?? "");
     const chat = this.snapshot.chats.find((c) => c.runtimeId === sid);
-    if (chat) this.showApprovals(chat.id, [req]);
+    if (chat) this.showQuestions(chat.id, [req]);
     else this.earlyRequests.set(sid, [...(this.earlyRequests.get(sid) ?? []), req]);
   }
 
   /**
-   * Adds a card for each Approval request the chat doesn't show yet. A request can be listed more than once. One whose
-   * card was closed stays closed; if the owner had answered it, the answer never reached Hermes, and the chat says so.
+   * Adds a card for each Question the chat doesn't show yet. A request can be listed more than once. One whose card was
+   * closed stays closed; if the owner had answered it, the answer never reached Hermes, and the chat says so.
    */
-  private showApprovals(chatId: string, reqs: ServerRequest[]) {
+  private showQuestions(chatId: string, reqs: ServerRequest[]) {
     const runtimeId = this.snapshot.chats.find((c) => c.id === chatId)?.runtimeId;
-    const fresh = reqs.filter((r) => r.method === "approval" && !this.notified.has(`${runtimeId} ${r.id}`));
-    for (const r of fresh) this.notified.add(`${runtimeId} ${r.id}`);
-    if (fresh.length) this.alert(NOTICES.approval);
+    const cards = reqs.flatMap((r) => questionCard(r) ?? []);
+    const fresh = cards.filter((q) => !this.notified.has(`${runtimeId} ${q.id}`));
+    for (const q of fresh) this.notified.add(`${runtimeId} ${q.id}`);
+    if (fresh.length) this.alert(specOf(fresh[0]).notice);
     this.patchChat(chatId, (c) => {
       const shown = new Set(c.items.map((i) => i.id));
       const items = [...c.items];
-      for (const r of reqs.filter((r) => r.method === "approval" && !shown.has(r.id) && shown.add(r.id))) {
-        const closed = this.closedApprovals.get(r.id);
-        if (!closed) items.push(approvalItem(r));
+      for (const q of cards.filter((q) => !shown.has(q.id) && shown.add(q.id))) {
+        const closed = this.closedQuestions.get(q.id);
+        if (!closed) items.push(q);
         else if (closed.answer)
           items.push(
-            errorItem(
-              { ...c, items },
-              `Your answer to “${closed.command}” didn't reach Hermes before the connection dropped. Hermes stops waiting on its own.`,
-            ),
+            errorItem({ ...c, items }, `Your answer to ${specOf(closed).named(closed)} didn't reach Hermes before the connection dropped. Hermes stops waiting on its own.`),
           );
       }
       return items.length > c.items.length ? { ...c, items } : c;
@@ -3857,7 +3954,7 @@ export class Hermes {
     const ids = [...this.resumeOnReconnect].filter((id) => this.snapshot.chats.some((c) => c.id === id));
     this.resumeOnReconnect.clear();
     for (const id of ids)
-      this.track(this.resume(id).catch(() => this.patchChat(id, (c) => ({ ...c, items: endWaitingApprovals(c.items, "lost") }))));
+      this.track(this.resume(id).catch(() => this.patchChat(id, (c) => ({ ...c, items: endWaiting(c.items, "lost") }))));
   }
 
   /**
@@ -4055,9 +4152,9 @@ export class Hermes {
         const asking = [...(res.open_requests ?? []), ...early];
         // History has no cards. A card that was waiting when the connection dropped either comes back below, or
         // Hermes let go of the session meanwhile and the card stays, closed.
-        const lost = (items: Item[]) => endWaitingApprovals(items.filter((i) => isWaiting(i) && !asking.some((r) => r.id === i.id)), "lost");
+        const lost = (items: Item[]) => endWaiting(items.filter((i) => isWaiting(i) && !asking.some((r) => r.id === i.id)), "lost");
         for (const i of this.snapshot.chats.find((c) => c.id === chatId)?.items ?? [])
-          if (i.kind === "approval" && (i.answer || i.ended)) this.closedApprovals.set(i.id, i);
+          if (isQuestion(i) && (i.answer || i.ended)) this.closedQuestions.set(i.id, i);
         // The Saved copy, if shown, is among the stale items. Messages sent from here that Hermes hasn't confirmed go
         // last, and the history settles any that may have reached it (`reconcile`): read back, it wins.
         this.patchChat(chatId, (c) => ({
@@ -4074,7 +4171,7 @@ export class Hermes {
         }));
         this.saveOutbox(chatId);
         this.saveTranscript(chatId);
-        this.showApprovals(chatId, asking);
+        this.showQuestions(chatId, asking);
         this.track(this.listSubagents(chatId, res.session_id));
         return res.session_id;
       } finally {
@@ -5099,7 +5196,7 @@ function loadQueues(cache: ChatCache, profile: string): Record<string, ChatQueue
 
 /**
  * Why a chat's queue waits once a turn ends this way, or nothing: a reply stopped or failed, or one Hermes asked an
- * Approval in, is for the owner to look at before the next message goes.
+ * Approval or another Question in, is for the owner to look at before the next message goes.
  */
 function pauseAfter(type: string, p: Record<string, unknown>, items: Item[]): string | undefined {
   if (type === "error") return "The last reply ended with an error. Check the chat, then resume.";
@@ -5107,6 +5204,7 @@ function pauseAfter(type: string, p: Record<string, unknown>, items: Item[]): st
   if (p.error || p.status === "error") return "The last reply failed. Check the chat, then resume.";
   const turn = items.slice(turnStart(items));
   if (turn.some((i) => i.kind === "approval")) return "Hermes asked for an Approval in the last reply. Check the chat, then resume.";
+  if (turn.some(isQuestion)) return "Hermes asked you a question in the last reply. Check the chat, then resume.";
   return undefined;
 }
 
@@ -5201,9 +5299,54 @@ function approvalItem(r: ServerRequest): ApprovalItem {
   };
 }
 
+/** A card for a `clarify` request (`ClarifyRequestParams`), with the answers Hermes says it locked; none without a question. */
+function clarifyItem(r: ServerRequest): Extract<QuestionItem, { kind: "clarify" }> | undefined {
+  const questions = (Array.isArray(r.params.questions) ? r.params.questions : []).flatMap((q): ClarifyQuestion[] => {
+    const { qid, question, choices, multi_select } = obj(q) ?? {};
+    if (typeof qid !== "string" || !qid || typeof question !== "string" || !question.trim()) return [];
+    const offered = Array.isArray(choices) ? choices.filter((c): c is string => typeof c === "string" && !!c.trim()) : [];
+    return [{ qid, question, choices: offered, multiSelect: multi_select === true && offered.length > 0 }];
+  });
+  if (!questions.length) return undefined;
+  const answers = obj(r.params.answers) ?? {};
+  const locked = Object.fromEntries(
+    questions.flatMap((q) => (q.qid in answers && (answers[q.qid] === null || typeof answers[q.qid] === "string") ? [[q.qid, answers[q.qid] as string | null]] : [])),
+  );
+  return { kind: "clarify", id: r.id, questions, locked };
+}
+
+/** A card for a `sudo` request (`SudoRequestParams`). */
+function sudoItem(r: ServerRequest): Extract<QuestionItem, { kind: "sudo" }> {
+  return { kind: "sudo", id: r.id, command: typeof r.params.command === "string" ? r.params.command : "" };
+}
+
+/** A card for a `secret` request (`SecretRequestParams`); none without the env var it is for. */
+function secretItem(r: ServerRequest): Extract<QuestionItem, { kind: "secret" }> | undefined {
+  const { env_var: envVar, prompt, metadata } = r.params;
+  if (typeof envVar !== "string" || !envVar || typeof prompt !== "string") return undefined;
+  const skill = obj(metadata)?.skill_name;
+  return { kind: "secret", id: r.id, envVar, prompt, ...(typeof skill === "string" && skill && { skill }) };
+}
+
 /** Closes the waiting cards, or those of them `which` picks, with Hermes's reason. */
-const endWaitingApprovals = (items: Item[], ended: string, which = (_: ApprovalItem) => true) =>
-  items.map((i): Item => (isWaiting(i) && which(i) ? { ...i, ended } : i));
+const endWaiting = (items: Item[], ended: string, which = (_: QuestionItem) => true) => items.map((i): Item => (isWaiting(i) && which(i) ? { ...i, ended } : i));
+
+/**
+ * Closes the waiting cards that `toolId`'s call was running before, once no tool call before them still runs. The call
+ * that asked a question was running when it arrived, so by then it has finished, and Hermes stops waiting. Hermes
+ * withdraws a question it stopped waiting on itself (`request.cancel`) before the call goes on, so a card still waiting
+ * here was answered in another Hermes client, which Hermes tells no other client of (#390). A tool call that started
+ * after a card, and one this app never saw start, close nothing.
+ */
+function endAnsweredElsewhere(items: Item[], toolId: string): Item[] {
+  const at = items.findIndex((i) => i.kind === "tool" && i.id === toolId);
+  if (at < 0) return items;
+  let running = false;
+  return items.map((i, n): Item => {
+    if (i.kind === "tool" && i.status === "running") running = true;
+    return n > at && !running && isWaiting(i) ? { ...i, ended: "resolved" } : i;
+  });
+}
 
 const obj = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined);
 
@@ -5329,17 +5472,20 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: st
     case "tool.complete":
       return {
         ...c,
-        items: items.map((i) =>
-          i.kind === "tool" && i.id === String(p.tool_id)
-            ? {
-                ...i,
-                status: "done",
-                durationS: p.duration_s as number | undefined,
-                // A screenshot inside it stays on the server (ADR 0061).
-                result: toolResultText(p.result),
-                summary: p.summary as string | undefined,
-              }
-            : i,
+        items: endAnsweredElsewhere(
+          items.map((i) =>
+            i.kind === "tool" && i.id === String(p.tool_id)
+              ? {
+                  ...i,
+                  status: "done",
+                  durationS: p.duration_s as number | undefined,
+                  // A screenshot inside it stays on the server (ADR 0061).
+                  result: toolResultText(p.result),
+                  summary: p.summary as string | undefined,
+                }
+              : i,
+          ),
+          String(p.tool_id),
         ),
       };
     // Every second or so while a turn runs.
@@ -5347,11 +5493,14 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: st
       return { ...c, live: withLive(c.live, undefined, p.usage) };
     case "request.cancel":
       // Hermes stopped waiting: timed out, interrupted, or answered in another Hermes client.
-      return { ...c, items: endWaitingApprovals(items, String(p.reason || "withdrawn"), (i) => i.id === p.id) };
+      return { ...c, items: endWaiting(items, String(p.reason || "withdrawn"), (i) => i.id === p.id) };
     case "approval.cancelled": {
       // An interrupt or teardown dropped the session's waiting Approvals: the ones listed, by either id, or all.
       const ids = Array.isArray(p.request_ids) ? p.request_ids : undefined;
-      return { ...c, items: endWaitingApprovals(items, String(p.reason || "withdrawn"), (i) => !ids || ids.includes(i.requestId) || ids.includes(i.id)) };
+      return {
+        ...c,
+        items: endWaiting(items, String(p.reason || "withdrawn"), (i) => i.kind === "approval" && (!ids || ids.includes(i.requestId) || ids.includes(i.id))),
+      };
     }
     case "message.complete": {
       // Providers that don't stream send the whole reply here; a streamed turn repeats text it already sent.
@@ -5368,14 +5517,14 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: st
       if (!answered && typeof p.text === "string" && p.text) items.push({ kind: "assistant", id: nextId(items, "a"), text: p.text });
       const end = { ...c, live: withLive(c.live, undefined, p.usage), running: false, stopping: false, updatedAt: Date.now() };
       // Stopped here or from another Hermes client.
-      if (p.status === "interrupted") return { ...end, items: markInterrupted(endWaitingApprovals(items, "turn ended"), from) };
+      if (p.status === "interrupted") return { ...end, items: markInterrupted(endWaiting(items, "turn ended"), from) };
       const failure = p.error ?? (p.status === "error" ? p.failure_reason ?? "The turn failed." : undefined);
       if (failure) items.push(errorItem({ ...c, items }, String(failure)));
-      return { ...end, items: endRunningTools(endWaitingApprovals(items, "turn ended"), "done") };
+      return { ...end, items: endRunningTools(endWaiting(items, "turn ended"), "done") };
     }
     case "error":
       items.push(errorItem(c, String(p.message ?? "Hermes reported an error.")));
-      return { ...c, items: endWaitingApprovals(items, "turn ended"), running: false, stopping: false };
+      return { ...c, items: endWaiting(items, "turn ended"), running: false, stopping: false };
     default:
       return c;
   }

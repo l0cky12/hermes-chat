@@ -29,7 +29,8 @@ let queueDrag: { chat: string; id: string } | null = null;
 function waitingFor(chat: Chat, status: ConnectionStatus): string {
   if (status !== "connected") return "Waits for Hermes to connect.";
   if (chat.items.some(isOutgoing)) return "Waits until the message above is sent, retried or dismissed.";
-  if (chat.items.some(isWaiting)) return "Waits for your answer to the Approval above.";
+  const asked = chat.items.find(isWaiting);
+  if (asked) return asked.kind === "approval" ? "Waits for your answer to the Approval above." : "Waits for your answer to Hermes's question above.";
   if (chat.running) return "The next one goes when this reply finishes.";
   return "Sending the next one…";
 }

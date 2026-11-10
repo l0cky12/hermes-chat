@@ -75,11 +75,10 @@ export type Item =
       summary?: string;
     }
   /**
-   * An Approval: Hermes asks before running a command it counts as dangerous. `answer`: the owner's, from this app.
-   * `ended`: why Hermes stopped waiting without one: its own reason (`timeout`, `interrupted`, `resolved` when
-   * another Hermes client answered), `turn ended`, or `lost` when Hermes let go of the session while the connection
-   * was down, or the chat couldn't be loaded again. `choices`: the answers Hermes offers, in its order.
-   * `allowSession` / `allowPermanent`: false when Hermes rules out allowing the command for the chat, or always.
+   * An Approval: Hermes asks before running a command it counts as dangerous. Like every Question (`QuestionItem`), it
+   * waits until it has an `answer`, the owner's from this app, or has `ended`. `choices`: the answers Hermes offers, in
+   * its order. `allowSession` / `allowPermanent`: false when Hermes rules out allowing the command for the chat, or
+   * always.
    */
   | {
       kind: "approval";
@@ -93,6 +92,15 @@ export type Item =
       answer?: ApprovalChoice;
       ended?: string;
     }
+  /**
+   * A Clarify: Hermes asks the owner one to five questions. `locked`: the answers Hermes holds, locked one at a time from
+   * here or listed by Hermes after a reconnect, by question id (`null`: skipped).
+   */
+  | { kind: "clarify"; id: string; questions: ClarifyQuestion[]; locked: Record<string, string | null>; answer?: Answered; ended?: string }
+  /** A Sudo password question: the command Hermes wants to run with sudo, as Hermes shows it (redacted). */
+  | { kind: "sudo"; id: string; command: string; answer?: Answered; ended?: string }
+  /** A Secret question: Hermes asks for a value it saves as `envVar` in the profile, for `skill` when it says. */
+  | { kind: "secret"; id: string; envVar: string; prompt: string; skill?: string; answer?: Answered; ended?: string }
   /** `usage`: the tokens a failed turn took before it failed, as for a reply. */
   | { kind: "error"; id: string; text: string; usage?: ReplyUsage };
 
@@ -101,6 +109,30 @@ export const APPROVAL_CHOICES = ["once", "session", "always", "deny"] as const;
 export type ApprovalChoice = (typeof APPROVAL_CHOICES)[number];
 
 export type ApprovalItem = Extract<Item, { kind: "approval" }>;
+
+/**
+ * A Question: Hermes waits in a reply for the owner's answer (GLOSSARY "Question"). Every kind has one lifecycle: it
+ * waits until it has an `answer` (for an Approval, the owner's choice), or until it has `ended`, with why Hermes
+ * stopped waiting: Hermes's own reason (`timeout`, `interrupted`, `resolved` when another Hermes client answered),
+ * `turn ended`, `expired` when Hermes had stopped waiting before the owner's answer reached it, or `lost` when Hermes
+ * let go of the session while the connection was down, or the chat couldn't be loaded again.
+ */
+export const QUESTION_KINDS = ["approval", "clarify", "sudo", "secret"] as const;
+export type QuestionKind = (typeof QUESTION_KINDS)[number];
+export type QuestionItem = Extract<Item, { kind: QuestionKind }>;
+export const isQuestion = (i: Item): i is QuestionItem => (QUESTION_KINDS as readonly string[]).includes(i.kind);
+
+/** How the owner closed a Clarify, Sudo password or Secret question from here: answered, or skipped. */
+export type Answered = "answered" | "skipped";
+
+/** One question of a Clarify. `choices`: what Hermes offers, best first; none for an open question. */
+export type ClarifyQuestion = { qid: string; question: string; choices: string[]; multiSelect: boolean };
+
+/**
+ * What the owner gives a waiting Clarify, Sudo password or Secret question: one Clarify answer to lock, a password or
+ * secret `value`, or Skip. The value is never kept: it goes to Hermes and is dropped (ADR 0136).
+ */
+export type QuestionAnswer = { kind: "lock"; qid: string; answer: string } | { kind: "value"; value: string } | { kind: "skip" };
 
 /** A message sent from here that Hermes hasn't confirmed (`Outgoing`). */
 export type OutgoingItem = Extract<Item, { kind: "user" }> & { outgoing: Outgoing };
@@ -148,8 +180,8 @@ export const offeredChoices = (i: ApprovalItem): ApprovalChoice[] =>
 /** Answers that allow the command beyond this once, so the owner confirms them first. */
 export const isBroadGrant = (c: ApprovalChoice) => c === "session" || c === "always";
 
-/** An Approval Hermes is still waiting on. */
-export const isWaiting = (i: Item): i is ApprovalItem => i.kind === "approval" && !i.answer && !i.ended;
+/** A Question Hermes is still waiting on. */
+export const isWaiting = (i: Item): i is QuestionItem => isQuestion(i) && !i.answer && !i.ended;
 
 export type Chat = {
   /** The stored Hermes session id, as dashboard REST lists it. */

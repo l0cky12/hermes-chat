@@ -3824,6 +3824,7 @@ function ChatView({
       onSend={send}
       onStop={() => void hermes.stop(chat.id)}
       onAnswer={(approvalId, choice, confirmed) => void hermes.answerApproval(chat.id, approvalId, choice, confirmed)}
+      onQuestion={(itemId, answer) => void hermes.answerQuestion(chat.id, itemId, answer)}
       pin={started ? pin : undefined}
       onSettle={started ? onSettle : undefined}
       onExport={started ? onExport : undefined}
