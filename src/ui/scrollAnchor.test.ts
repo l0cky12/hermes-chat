@@ -38,7 +38,7 @@ function transcript(heights: number[], scrollTop = 1000) {
   box(scroller, 100, 600);
   scroller.scrollTop = scrollTop;
   const lay = (hs: number[]) => {
-    let y = 100 - scrollTop;
+    let y = 100 - scroller.scrollTop;
     blocks.forEach((b, i) => {
       box(b, y, hs[i]);
       y += hs[i];
@@ -100,6 +100,27 @@ describe("anchorScroll", () => {
     expect(t.scroller.scrollTop).toBe(900 + 440);
   });
 
+  it("lets new blocks scrolled into the top of the view grow upward, above what was on screen", () => {
+    // Scrolled up by 400: blocks 2 and 3 (840 to 1160) came into view at their placeholder height; block 4 was on screen.
+    const t = transcript([600, 160, 160, 160, 400, 400], 760);
+    vi.spyOn(window, "getComputedStyle").mockImplementation(() => ({ containIntrinsicBlockSize: "auto 160px" }) as CSSStyleDeclaration);
+    anchorScroll(t.scroller, t.list, () => false);
+    resize(t.blocks);
+    t.lay([600, 160, 500, 25, 400, 400]);
+    resize([t.blocks[2], t.blocks[3]]);
+    expect(t.scroller.scrollTop).toBe(760 + 340 - 135);
+  });
+
+  it("lets new blocks scrolled into the bottom of the view grow down, under what was on screen", () => {
+    const t = transcript([400, 400, 160, 160], 300);
+    vi.spyOn(window, "getComputedStyle").mockImplementation(() => ({ containIntrinsicBlockSize: "auto 160px" }) as CSSStyleDeclaration);
+    anchorScroll(t.scroller, t.list, () => false);
+    resize(t.blocks);
+    t.lay([400, 400, 700, 160]);
+    resize([t.blocks[2]]);
+    expect(t.scroller.scrollTop).toBe(300);
+  });
+
   it("leaves a view that follows the bottom to the code that follows it", () => {
     const t = transcript([400, 400, 400]);
     anchorScroll(t.scroller, t.list, () => true);
@@ -123,7 +144,7 @@ describe("anchorScroll", () => {
   });
 
   it("watches blocks added later, and stops when cleaned up", async () => {
-    const t = transcript([400, 400]);
+    const t = transcript([400, 400, 400, 400]);
     const stop = anchorScroll(t.scroller, t.list, () => false);
     const added = t.list.insertBefore(document.createElement("div"), t.blocks[0]);
     await Promise.resolve();

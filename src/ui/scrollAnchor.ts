@@ -9,20 +9,36 @@ export function anchorScroll(scroller: HTMLElement, list: Element, following: ()
   const ro = new ResizeObserver((entries) => {
     // A hidden pane lays its blocks out at no height; what they had stays their height for when it shows again.
     if (!scroller.clientHeight) return;
-    const viewTop = scroller.getBoundingClientRect().top;
-    const changed = entries.map((e) => ({ el: e.target, rect: e.target.getBoundingClientRect() })).sort((a, b) => a.rect.top - b.rect.top);
-    let shift = 0;
-    for (const { el, rect } of changed) {
-      const was = heights.get(el);
-      heights.set(el, rect.height);
-      if (was === undefined) continue;
-      // Where it was before the blocks above it in this pass changed.
-      const top = rect.top - shift;
-      // A block laid out for the first time showed nothing yet, so one reaching above the view grows upward, holding
-      // the blocks under it. Any other change holds only when the whole block was above, so nothing on screen moves.
-      if (Math.abs(was - placeholder(el)) < 0.5 ? top < viewTop : top + was <= viewTop) shift += rect.height - was;
+    const blocks = Array.from(list.children);
+    const changes: { at: number; by: number; first: boolean }[] = [];
+    for (const { target } of entries) {
+      const height = target.getBoundingClientRect().height;
+      const was = heights.get(target);
+      heights.set(target, height);
+      const at = blocks.indexOf(target);
+      if (was !== undefined && height !== was && at >= 0) changes.push({ at, by: height - was, first: Math.abs(was - placeholder(target)) < 0.5 });
     }
-    if (shift && !following()) scroller.scrollTop += shift;
+    if (!changes.length || following()) return;
+    // Where blocks were before these changes: each block, less what the blocks before it grew.
+    const grewBefore = (i: number) => changes.reduce((sum, c) => (c.at < i ? sum + c.by : sum), 0);
+    const top = (i: number) => blocks[i].getBoundingClientRect().top - grewBefore(i);
+    const bottom = (i: number) => blocks[i].getBoundingClientRect().bottom - grewBefore(i + 1);
+    const view = scroller.getBoundingClientRect();
+    let inView = 0;
+    for (let hi = blocks.length; inView < hi; ) {
+      const mid = (inView + hi) >> 1;
+      if (bottom(mid) > view.top) hi = mid;
+      else inView = mid + 1;
+    }
+    if (inView === blocks.length) return;
+    // The view holds still the first block in it that showed something already. A block laid out for the first time
+    // showed nothing, so ones above that block grow upward. When every block in view is new, the first one holds.
+    const firstLaidOut = (i: number) => changes.some((c) => c.at === i && c.first);
+    let anchor = inView;
+    while (anchor < blocks.length && firstLaidOut(anchor) && top(anchor) < view.bottom) anchor++;
+    if (anchor === blocks.length || top(anchor) >= view.bottom) anchor = inView;
+    const shift = grewBefore(anchor);
+    if (shift) scroller.scrollTop += shift;
   });
   for (const child of list.children) ro.observe(child);
   const mo = new MutationObserver((records) => {
