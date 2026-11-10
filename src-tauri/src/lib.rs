@@ -17,6 +17,7 @@ pub mod mcp;
 pub mod media;
 pub mod notify;
 pub mod page_view;
+pub mod project_context;
 pub mod remote;
 pub mod repo_git;
 pub mod saved_password;
@@ -1064,6 +1065,107 @@ async fn fs_save_text(
     transfers.run(id, epoch, work).await
 }
 
+/// A transfer's id as the webview names it: a number, or the same number as a string (the project context commands).
+struct TransferId(u64);
+
+impl<'de> Deserialize<'de> for TransferId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Number(u64),
+            Text(String),
+        }
+        match Raw::deserialize(d)? {
+            Raw::Number(n) => Ok(TransferId(n)),
+            Raw::Text(s) => s.parse().map(TransferId).map_err(|_| serde::de::Error::custom("a transfer id is a whole number")),
+        }
+    }
+}
+
+/// Opens the native Open dialog for files to add to a project's context (ADR 0135). The picked files become attachable
+/// (ADR 0129), so `context_upload` may send them. `[]`: the owner cancelled.
+#[tauri::command]
+async fn context_pick(app: tauri::AppHandle, attachable: State<'_, Attachable>) -> Result<Vec<LocalFile>, String> {
+    let paths = attach_picked_files(app, attachable.clone()).await?;
+    Ok(transport::stat_files(&attachable, &paths).await)
+}
+
+/// Names and sizes of files dropped on a project's Context card (ADR 0135). A path that isn't attachable (ADR 0129)
+/// comes back with an `error` and no size.
+#[tauri::command]
+async fn context_local_files(attachable: State<'_, Attachable>, paths: Vec<String>) -> Result<Vec<LocalFile>, String> {
+    Ok(transport::stat_files(&attachable, &paths).await)
+}
+
+/// Uploads the attached file `local` (up to 30 MB) to `server_path` in a project's context folder (ADR 0135), as
+/// transfer `id`, so `files_cancel` stops it and a closed or replaced connection never sends it (ADR 0023).
+/// `ssh_profile`: the profile's tools run over SSH, so only UTF-8 text up to 8 MiB goes, through `write-text`.
+/// `overwrite` false: rejects with `exists` when a file is already there.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn context_upload(
+    app: tauri::AppHandle,
+    transfers: State<'_, Transfers>,
+    attachable: State<'_, Attachable>,
+    id: TransferId,
+    local: String,
+    server_path: String,
+    overwrite: bool,
+    ssh_profile: Option<String>,
+    on_progress: Channel<TransferProgress>,
+) -> Result<(), String> {
+    let epoch = transfers.epoch();
+    let file = project_context::AttachedFile::check(&attachable, &local)?;
+    let to = project_context::ContextPath::parse(&server_path)?;
+    let work = async move {
+        let dashboard = dashboard_since(&app, epoch).await?;
+        let report = move |done, total| {
+            let _ = on_progress.send(TransferProgress { done, total, dest: server_path.clone() });
+        };
+        project_context::upload(&dashboard, file, &to, overwrite, ssh_profile.as_deref(), report).await
+    };
+    transfers.run(id.0, epoch, work).await
+}
+
+/// Writes `text` as `server_path` in a project's context folder: Add text content (ADR 0135). `overwrite` false:
+/// rejects with `exists` when a file is already there.
+#[tauri::command]
+async fn context_write_text(state: State<'_, AppState>, server_path: String, text: String, overwrite: bool, ssh_profile: Option<String>) -> Result<(), String> {
+    let to = project_context::ContextPath::parse(&server_path)?;
+    project_context::write_text(&*dashboard(&state).await?, &to, text, overwrite, ssh_profile.as_deref()).await
+}
+
+/// Creates a project's context folder `path`, and any missing parents, in managed files (ADR 0135). Returns the path
+/// Hermes created.
+#[tauri::command]
+async fn context_mkdir(state: State<'_, AppState>, path: String) -> Result<String, String> {
+    let dir = project_context::ContextDir::parse(&path)?;
+    project_context::mkdir(&*dashboard(&state).await?, &dir).await
+}
+
+/// Deletes the file `server_path` from a project's context folder in managed files (ADR 0135).
+#[tauri::command]
+async fn context_remove(state: State<'_, AppState>, server_path: String) -> Result<(), String> {
+    let file = project_context::ContextPath::parse(&server_path)?;
+    project_context::remove(&*dashboard(&state).await?, &file).await
+}
+
+/// The text of `server_path` in a project's context folder, `size` bytes as listed, for full-text mode (ADR 0135).
+/// `None`: it holds no text Hermes Chat can read.
+#[tauri::command]
+async fn context_read_text(state: State<'_, AppState>, server_path: String, size: u64, ssh_profile: Option<String>) -> Result<Option<String>, String> {
+    let file = project_context::ContextPath::parse(&server_path)?;
+    project_context::read_text(&*dashboard(&state).await?, &file, size, ssh_profile.as_deref()).await
+}
+
+/// Keeps `<main_folder>/context/` out of the Git repository it is in, through that repository's `info/exclude`, the
+/// only file it writes (ADR 0135). `none`: not in a repository.
+#[tauri::command]
+async fn context_git_exclude(state: State<'_, AppState>, main_folder: String, ssh_profile: Option<String>) -> Result<project_context::GitExclude, String> {
+    project_context::git_exclude(&*dashboard(&state).await?, &main_folder, ssh_profile.as_deref()).await
+}
+
 /// Stops transfer `id`, if it is still running. A download's part file is removed; `dest` is left as it was.
 #[tauri::command]
 fn files_cancel(transfers: State<'_, Transfers>, id: u64) {
@@ -1628,6 +1730,14 @@ pub fn run(screenshot: bool, link: Option<String>) {
             files_save_text,
             fs_save_text,
             files_cancel,
+            context_pick,
+            context_local_files,
+            context_upload,
+            context_write_text,
+            context_mkdir,
+            context_remove,
+            context_read_text,
+            context_git_exclude,
             hermes_connect_cancel,
             hermes_probe,
             hermes_probe_cancel,
