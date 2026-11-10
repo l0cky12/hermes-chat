@@ -198,9 +198,6 @@ async function scroll(px = 120) {
   return { frameMs: stats(frames), over20ms: frames.filter((f) => f > 20).length };
 }
 
-// Two chats side by side, laid out as App lays them out: each pane a tab strip over a `.pane-drop` holding the chat,
-// in `.main-chat`. Both panes render again whenever either chat changes, since the app re-renders on every change to
-// Hermes's snapshot.
 let setPair: (p: [Chat, Chat]) => void = () => {};
 let pair: [Chat, Chat];
 
@@ -279,8 +276,7 @@ async function splitOpen(turns: number) {
 
 /**
  * Streams a reply into both panes at once, as two replies running together: each frame one delta lands in each chat,
- * and both are committed together, as the app hears of streamed deltas once a frame. `updateMs`: each frame's render,
- * commit and forced layout.
+ * and both are committed together. `updateMs`: each frame's render, commit and forced layout.
  */
 async function splitStream(chunk = 4) {
   const reply = makeReply();
