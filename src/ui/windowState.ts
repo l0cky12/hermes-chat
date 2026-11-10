@@ -77,3 +77,14 @@ const subscribeFocus = (fn: () => void) => {
 };
 /** The window has the keyboard focus: the owner is in this app, not another one. */
 export const useWindowFocused = () => useSyncExternalStore(subscribeFocus, () => document.hasFocus());
+
+/**
+ * Marks the page `data-unfocused` while the window doesn't have the keyboard focus, which pauses the endless
+ * animations in styles.css: a window left showing behind another app spent a third of a core on a spinner. Called once,
+ * at startup.
+ */
+export function followWindowFocus(doc: Document = document) {
+  const mark = () => doc.documentElement.toggleAttribute("data-unfocused", !doc.hasFocus());
+  subscribeFocus(mark);
+  mark();
+}

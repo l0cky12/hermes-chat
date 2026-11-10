@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // Following the window's visibility from Rust (windowState.ts, ADR 0034).
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 
 const rust = vi.hoisted(() => ({
   hidden: false,
@@ -20,7 +21,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
 }));
 
-import { followWindowVisibility, setWindowHidden, useWindowHidden } from "./windowState";
+import { followWindowFocus, followWindowVisibility, setWindowHidden, useWindowHidden } from "./windowState";
 import { renderHook, act } from "@testing-library/react";
 
 afterEach(() => {
@@ -61,5 +62,41 @@ describe("The window's visibility", () => {
     search.remove();
     setWindowHidden(false);
     await vi.waitFor(() => expect(document.activeElement).toBe(document.querySelector("[data-composer]")));
+  });
+});
+
+describe("Endless animations", () => {
+  const css: string = readFileSync("src/styles.css", "utf8");
+
+  it("pause while the window is unfocused and play again once it has the focus back", () => {
+    const sheet = document.createElement("style");
+    sheet.textContent = css;
+    document.head.append(sheet);
+    document.body.innerHTML = `<span class="spinner"></span><span class="conn-dot reconnecting"></span><div class="thinking"><span></span></div>`;
+    let focused = true;
+    const hasFocus = vi.spyOn(document, "hasFocus").mockImplementation(() => focused);
+    const states = () => [...document.body.querySelectorAll<HTMLElement>(".spinner, .conn-dot, .thinking span")].map((e) => getComputedStyle(e).animationPlayState);
+    try {
+      followWindowFocus();
+      expect(states()).not.toContain("paused");
+      focused = false;
+      window.dispatchEvent(new Event("blur"));
+      expect(states()).toEqual(["paused", "paused", "paused"]);
+      focused = true;
+      window.dispatchEvent(new Event("focus"));
+      expect(states()).not.toContain("paused");
+    } finally {
+      hasFocus.mockRestore();
+      sheet.remove();
+      document.documentElement.removeAttribute("data-unfocused");
+    }
+  });
+
+  it("are all in the rule that pauses them", () => {
+    const rules = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const endless = [...rules.matchAll(/([^{}@]+)\{[^{}]*\binfinite\b[^{}]*\}/g)].flatMap((m) => m[1].split(",").map((s) => s.trim()));
+    const paused = css.match(/^:root\[data-unfocused\] :is\(([^)]*)\)/m)?.[1].split(",").map((s) => s.trim());
+    expect(endless.length).toBeGreaterThan(0);
+    expect(new Set(paused)).toEqual(new Set(endless));
   });
 });
