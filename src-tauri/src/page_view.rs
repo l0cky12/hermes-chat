@@ -5,10 +5,13 @@
 //! The view isn't Tauri's. Tauri puts its IPC bootstrap and the per-launch invoke key into every webview it makes, and
 //! that key is what keeps the app's own frames from its commands (ADR 0007). This view has no Tauri script, no IPC
 //! handler and none of the app's URI schemes, and its web context is new and ephemeral: the page shares no storage
-//! with the app, and its cookies last only while the app runs.
+//! with the app, and its cookies last only while the app runs. Each server page gets a context of its own: they are all
+//! served at `127.0.0.1`, where cookies don't tell ports apart, so one context would hand each page every other server
+//! page's cookies (`server_page::Jar`).
 //!
 //! The webview names the page and where it shows; Rust checks the address as the pane does (`web_page::web_url`).
 
+use crate::server_page::Jar;
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 
@@ -81,9 +84,11 @@ pub fn open(app: &tauri::AppHandle, key: String, on_event: Channel<PageEvent>) -
     imp::open(app, key, on_event)
 }
 
-pub fn go(app: &tauri::AppHandle, key: String, url: &str) -> Result<(), String> {
+/// Shows `url`, in a view made anew in the cookie jar `url` belongs in when the one shown is in another.
+pub fn go(key: String, url: &str, pages: &crate::server_page::ServerPages) -> Result<(), String> {
     let url = crate::web_page::web_url(url)?;
-    imp::go(app, key, url);
+    let jar = pages.jar(&url);
+    imp::go(&key, url, jar);
     Ok(())
 }
 
@@ -107,7 +112,7 @@ mod imp {
     pub fn open(_: &tauri::AppHandle, _: String, _: Channel<PageEvent>) -> Result<(), String> {
         Err("Pages open in their own view only on Linux.".into())
     }
-    pub fn go(_: &tauri::AppHandle, _: String, _: url::Url) {}
+    pub fn go(_: &str, _: url::Url, _: Option<Jar>) {}
     pub fn reload(_: &tauri::AppHandle, _: String) {}
     pub fn place(_: &tauri::AppHandle, _: String, _: Option<Placement>) {}
     pub fn close(_: &tauri::AppHandle, _: String) {}
@@ -118,6 +123,7 @@ mod imp {
     use super::*;
     use gtk::prelude::*;
     use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
     use std::rc::Rc;
     use tauri::Manager;
     use webkit2gtk::{
@@ -129,7 +135,9 @@ mod imp {
         /// The overlay that holds Tauri's webview and the page's view. Made on first use. The commands that touch it
         /// have no `async`, so Tauri runs them on the main thread, GTK's.
         static OVERLAY: RefCell<Option<gtk::Overlay>> = const { RefCell::new(None) };
-        static CONTEXT: RefCell<Option<webkit2gtk::WebContext>> = const { RefCell::new(None) };
+        /// A context for each server page's jar, and one (`None`) for every other page. Kept while the app runs, so a
+        /// page's cookies outlast its view and its tunnel.
+        static CONTEXTS: RefCell<HashMap<Option<Jar>, webkit2gtk::WebContext>> = RefCell::default();
         static PAGE: RefCell<Option<Page>> = const { RefCell::new(None) };
         /// Where the overlay puts the view, in whole pixels.
         static AT: Cell<(i32, i32, i32, i32)> = const { Cell::new((0, 0, 1, 1)) };
@@ -139,6 +147,9 @@ mod imp {
         key: String,
         view: webkit2gtk::WebView,
         moves: Rc<Moves>,
+        jar: Option<Jar>,
+        /// The last `place`, for a view made anew in another jar.
+        placement: Option<Placement>,
     }
 
     pub(super) struct Moves {
@@ -282,7 +293,7 @@ mod imp {
         view.reload();
     }
 
-    fn shown(key: &str) -> Option<(webkit2gtk::WebView, Rc<Moves>)> {
+    pub(super) fn shown(key: &str) -> Option<(webkit2gtk::WebView, Rc<Moves>)> {
         PAGE.with(|p| p.borrow().as_ref().filter(|p| p.key == key).map(|p| (p.view.clone(), p.moves.clone())))
     }
 
@@ -302,23 +313,48 @@ mod imp {
         overlay.remove(&page.view);
     }
 
-    pub fn open(app: &tauri::AppHandle, key: String, on_event: Channel<PageEvent>) -> Result<(), String> {
-        let overlay = overlay(app).ok_or("Hermes Chat's window has no place for the page.")?;
-        if let Some(before) = PAGE.with(|p| p.take()) {
-            end(&overlay, before);
-        }
-        let context = CONTEXT.with(|c| c.borrow_mut().get_or_insert_with(page_context).clone());
+    fn new_page(overlay: &gtk::Overlay, key: String, jar: Option<Jar>, on_event: Channel<PageEvent>) -> Page {
+        let context = CONTEXTS.with(|c| c.borrow_mut().entry(jar.clone()).or_insert_with(page_context).clone());
         let view = page_webview(&context);
         view.set_no_show_all(true);
         let moves = Moves::new(on_event);
         watch(&view, &moves);
         overlay.add_overlay(&view);
-        PAGE.with(|p| *p.borrow_mut() = Some(Page { key, view, moves }));
+        Page { key, view, moves, jar, placement: None }
+    }
+
+    pub fn open(app: &tauri::AppHandle, key: String, on_event: Channel<PageEvent>) -> Result<(), String> {
+        let overlay = overlay(app).ok_or("Hermes Chat's window has no place for the page.")?;
+        open_in(&overlay, key, on_event);
         Ok(())
     }
 
-    pub fn go(_: &tauri::AppHandle, key: String, url: url::Url) {
-        if let Some((view, moves)) = shown(&key) {
+    pub(super) fn open_in(overlay: &gtk::Overlay, key: String, on_event: Channel<PageEvent>) {
+        if let Some(before) = PAGE.with(|p| p.take()) {
+            end(overlay, before);
+        }
+        let page = new_page(overlay, key, None, on_event);
+        PAGE.with(|p| *p.borrow_mut() = Some(page));
+    }
+
+    /// A view's context is fixed, so a page in another jar gets a new view, where the old one was.
+    fn into_jar(key: &str, jar: &Option<Jar>) {
+        let Some(old) = PAGE.with(|p| p.borrow_mut().take_if(|p| p.key == key && p.jar != *jar)) else { return };
+        let (overlay, events) = (old.view.parent().and_downcast::<gtk::Overlay>(), old.moves.events.borrow().clone());
+        let (Some(overlay), Some(events)) = (overlay, events) else {
+            PAGE.with(|p| *p.borrow_mut() = Some(old));
+            return;
+        };
+        let mut page = new_page(&overlay, old.key.clone(), jar.clone(), events);
+        page.placement = old.placement.clone();
+        end(&overlay, old);
+        show_at(&overlay, &page.view, page.placement.as_ref());
+        PAGE.with(|p| *p.borrow_mut() = Some(page));
+    }
+
+    pub fn go(key: &str, url: url::Url, jar: Option<Jar>) {
+        into_jar(key, &jar);
+        if let Some((view, moves)) = shown(key) {
             go_in(&view, &moves, url);
         }
     }
@@ -330,14 +366,26 @@ mod imp {
     }
 
     pub fn place(_: &tauri::AppHandle, key: String, placement: Option<Placement>) {
-        let (Some(overlay), Some((view, _))) = (OVERLAY.with(|o| o.borrow().clone()), shown(&key)) else { return };
+        let Some(overlay) = OVERLAY.with(|o| o.borrow().clone()) else { return };
+        let shown = PAGE.with(|p| {
+            p.borrow_mut().as_mut().filter(|p| p.key == key).map(|p| {
+                p.placement.clone_from(&placement);
+                p.view.clone()
+            })
+        });
+        if let Some(view) = shown {
+            show_at(&overlay, &view, placement.as_ref());
+        }
+    }
+
+    fn show_at(overlay: &gtk::Overlay, view: &webkit2gtk::WebView, placement: Option<&Placement>) {
         let Some(placement) = placement else {
-            hide(&overlay, &view);
+            hide(overlay, view);
             return;
         };
         AT.with(|at| at.set(pixels(&placement.rect)));
         overlay.queue_resize();
-        let holes = holes_in_page(&placement);
+        let holes = holes_in_page(placement);
         // The overlay's window for the view, which it moves and sizes. On X11 it can be a native window, whose shape
         // the X server clips the page to and passes the pointer through. Elsewhere (Wayland's GTK has no native child
         // windows) the page hides while it has a hole.
@@ -354,7 +402,7 @@ mod imp {
                 view.show();
             }
             None if holes.is_empty() => view.show(),
-            None => hide(&overlay, &view),
+            None => hide(overlay, view),
         }
     }
 
@@ -579,6 +627,89 @@ mod tests {
                 "camera": "NotAllowedError",
             })
         );
+    }
+
+    /// Two server pages are both at `127.0.0.1`, on two ports. Neither gets the other's cookies, nor does any other page,
+    /// and a page opened again on another port has its own back.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "WebKitGTK needs a display, and GTK one thread: DISPLAY=:N cargo test --lib page_view::tests::each_server_page -- --ignored"]
+    fn each_server_page_keeps_its_cookies_to_itself() {
+        use crate::server_page::Jar;
+        use gtk::prelude::*;
+        use std::io::{Read, Write};
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+        use webkit2gtk::WebViewExt;
+        let sent_cookies = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut ports = Vec::new();
+        for _ in 0..2 {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            ports.push(listener.local_addr().unwrap().port());
+            let log = sent_cookies.clone();
+            std::thread::spawn(move || {
+                for mut stream in listener.incoming().flatten() {
+                    let mut request = [0u8; 4096];
+                    let n = stream.read(&mut request).unwrap_or(0);
+                    let request = String::from_utf8_lossy(&request[..n]).into_owned();
+                    let path = request.split_whitespace().nth(1).unwrap_or("/").to_owned();
+                    let cookie = request.lines().find_map(|l| l.strip_prefix("Cookie: ")).unwrap_or("");
+                    log.lock().unwrap().push(format!("{path} {cookie}"));
+                    let set = if path == "/sign-in" { "Set-Cookie: session=a; Path=/; HttpOnly\r\nSet-Cookie: seen=a; Path=/\r\n" } else { "" };
+                    let body = "<script>document.title = 'cookie:' + document.cookie</script>";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n{set}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                }
+            });
+        }
+        let (a, b) = (format!("http://127.0.0.1:{}", ports[0]), format!("http://127.0.0.1:{}", ports[1]));
+
+        gtk::init().expect("a display");
+        let sent = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let into = sent.clone();
+        let channel = Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(text) = body {
+                into.lock().unwrap().push(serde_json::from_str(&text).unwrap());
+            }
+            Ok(())
+        });
+        let overlay = gtk::Overlay::new();
+        let window = gtk::Window::new(gtk::WindowType::Toplevel);
+        window.add(&overlay);
+        window.show_all();
+        imp::open_in(&overlay, "page".into(), channel);
+
+        let (jar_a, jar_b) = (Some(Jar::named("hermes http://localhost:3000")), Some(Jar::named("hermes http://localhost:8080")));
+        let load = |url: String, jar: &Option<Jar>| {
+            sent_cookies.lock().unwrap().clear();
+            imp::go("page", url::Url::parse(&url).unwrap(), jar.clone());
+            let (view, _) = imp::shown("page").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                if let Some(title) = view.title().filter(|t| t.starts_with("cookie:") && !view.is_loading()) {
+                    assert_eq!(overlay.children().len(), 1, "the view in the jar before it is gone");
+                    let asked = sent_cookies.lock().unwrap().iter().rev().find(|r| !r.starts_with("/favicon")).cloned().unwrap();
+                    break (title.trim_start_matches("cookie:").to_owned(), asked);
+                }
+                assert!(Instant::now() < deadline, "{url} never loaded");
+                gtk::main_iteration_do(false);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+
+        assert_eq!(load(format!("{a}/sign-in"), &jar_a), ("seen=a".into(), "/sign-in ".into()), "page A signs in");
+        assert_eq!(load(format!("{b}/"), &jar_b), ("".into(), "/ ".into()), "page B, on another port, gets none of A's cookies");
+        assert_eq!(load(format!("{b}/"), &None), ("".into(), "/ ".into()), "nor does a page that isn't a server page");
+        assert_eq!(
+            load(format!("{b}/"), &jar_a),
+            ("seen=a".into(), "/ session=a; seen=a".into()),
+            "page A, opened again on another port, is still signed in"
+        );
+        let last = sent.lock().unwrap().last().cloned();
+        assert_eq!(last, Some(serde_json::json!({ "kind": "at", "url": format!("{b}/"), "replace": true })), "the page's events follow it to each view");
     }
 
     #[cfg(target_os = "linux")]

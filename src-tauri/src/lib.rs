@@ -1255,8 +1255,8 @@ fn preview_page_open(app: tauri::AppHandle, key: String, on_event: Channel<page_
 
 /// Shows `url` in the Preview's view, going back or forward in the view's own list when that is where it is.
 #[tauri::command]
-fn preview_page_go(app: tauri::AppHandle, key: String, url: String) -> Result<(), String> {
-    page_view::go(&app, key, &url)
+fn preview_page_go(pages: State<'_, Arc<server_page::ServerPages>>, key: String, url: String) -> Result<(), String> {
+    page_view::go(key, &url, &pages)
 }
 
 #[tauri::command]
