@@ -4,6 +4,7 @@
 import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 let hidden = false;
 let lastFocus: Element | null = null;
@@ -77,3 +78,17 @@ const subscribeFocus = (fn: () => void) => {
 };
 /** The window has the keyboard focus: the owner is in this app, not another one. */
 export const useWindowFocused = () => useSyncExternalStore(subscribeFocus, () => document.hasFocus());
+
+/** Not `document.hasFocus()`: it turns false while the owner types in the Preview's page view, which is in this window. */
+export async function followWindowFocus(): Promise<void> {
+  const mark = (focused: boolean) => document.documentElement.toggleAttribute("data-unfocused", !focused);
+  try {
+    const win = getCurrentWindow();
+    let latest: boolean | undefined;
+    await win.onFocusChanged(({ payload }) => mark((latest = payload)));
+    const asked = await win.isFocused();
+    mark(latest ?? asked);
+  } catch {
+    // Outside the desktop app there is no window to follow, and nothing pauses.
+  }
+}

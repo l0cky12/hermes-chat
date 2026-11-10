@@ -113,6 +113,9 @@ code, pre, kbd { font-family: var(--mono); }
   display: inline-block; animation: spin 0.8s linear infinite; flex: none;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+:root[data-unfocused] :is(.spinner, .conn-dot.connecting, .conn-dot.reconnecting, .thinking span, .rec-dot, .preview-busy svg, .spin) {
+  animation-play-state: paused;
+}
 
 /* ---------- source icons ---------- */
 .src { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; flex: none; }
@@ -448,9 +451,8 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 .msg.assistant th { color: var(--muted); font-weight: 500; }
 .cursor {
   display: inline-block; width: 7px; height: 15px; background: var(--text); vertical-align: -2px; margin-left: 2px;
-  animation: blink 1s steps(2) infinite; border-radius: 1px;
+  border-radius: 1px;
 }
-@keyframes blink { 50% { opacity: 0; } }
 .stopped { font-size: calc(12rem / 14); color: var(--faint); margin-top: 4px; }
 .msg-time { display: block; font-size: calc(11.5rem / 14); color: var(--faint); margin-top: 4px; }
 /* Copy, Edit, Regenerate and Read aloud under a message (CopyMessage.tsx, Replay.tsx, Voice.tsx): faint until the message is
