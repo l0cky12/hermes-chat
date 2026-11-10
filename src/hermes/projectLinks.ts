@@ -1,8 +1,8 @@
-// What this computer keeps about projects (ADR 0007): which chats are in each project, which project the chat list
+// What this computer keeps about projects (ADR 0131): which chats are in each project, which project the chat list
 // shows, and the projects as Hermes listed them last, so the list can show them before Hermes is read. Hermes keeps
 // the projects themselves.
 //
-// Which chats are in each project (`chats`) means one of two things (ADR 0033). On a Hermes without a membership store
+// Which chats are in each project (`chats`) means one of two things (ADR 0109). On a Hermes without a membership store
 // it is the owner's grouping, kept only here. Once this computer's grouping has been moved to a Hermes that has one
 // (`synced`), it is Hermes's links as last read, and the owner's changes not yet confirmed are `pending` operations;
 // `recovery` is the grouping as it was here before the move.
@@ -52,7 +52,7 @@ export type ScopeLinks = {
   postponed?: number;
   /**
    * Before the move: links to projects Hermes no longer lists, taken out of `chats` but kept for the move's preview and
-   * recovery copy (ADR 0033). Never shown in the list.
+   * recovery copy (ADR 0109). Never shown in the list.
    */
   setAside?: Record<string, string[]>;
   pending?: MembershipOp[];

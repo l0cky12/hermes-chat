@@ -28,7 +28,7 @@ export type TestOutcome =
   | { ok: true; route: Route; unsecure: boolean; version?: string }
   | { ok: false; stage: Stage; problem: string; detail?: string; fixes: string[]; verdict: Verdict };
 
-/** A failed test in one or two words, as a route's Test reports it (ADR 0056). */
+/** A failed test in one or two words, as a route's Test reports it (ADR 0120). */
 export type Verdict = "timed out" | "refused" | "wrong server" | "sign-in failed" | "unreachable" | "stopped" | "failed";
 
 /** What a failure comes to, in a word or two. */
@@ -155,7 +155,7 @@ export function explain(f: ProbeFailure, d: SignInDetails): TestOutcome & { ok: 
     verdict: verdictOf(f),
   });
   const where = ssh ? sshHost(d.sshTarget) : hostOf(d.url);
-  // Before the password went anywhere (ADR 0056).
+  // Before the password went anywhere (ADR 0120).
   if (/^Wrong server: a different Hermes/.test(m))
     return out(`A different Hermes server answered at ${where}, not the one this connection signed in to before. It wasn't sent the password.`, [
       "On another network, the same LAN address can be another machine. This route is skipped there.",
@@ -339,7 +339,7 @@ export function stageLabel(stage: Stage, mode: SignInDetails["mode"]): string {
   }
 }
 
-// ---------- routes (ADR 0056) ----------
+// ---------- routes (ADR 0120) ----------
 
 /** One route's part of a test: the route, and how it went, once it has. */
 export type RouteTest = { route: RouteDetails; outcome?: TestOutcome; server?: string };

@@ -1,4 +1,4 @@
-// When the office's building draws (ADR 0089's cost rules), in one place: only after something changed, at most
+// When the office's building draws (ADR 0122's cost rules), in one place: only after something changed, at most
 // `maxFps` while something moves, and never while asleep (the window unfocused or hidden). The scene draws only from
 // here, so the frame counter it keeps is every frame the office draws. No three.js: tests run it with a fake clock.
 

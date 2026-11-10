@@ -1,4 +1,4 @@
-// A stand-in Hermes dashboard for screenshots of Voice conversations in the real Tauri app (ADR 0041): sign-in, the WS
+// A stand-in Hermes dashboard for screenshots of Voice conversations in the real Tauri app (ADR 0111): sign-in, the WS
 // ticket, `/api/ws` and dashboard REST answered by the tests' FakeHermes, plus the two audio routes the app uses.
 // Everything is synthetic: chats, transcripts, replies and the reply audio (a generated chime). Loopback only.
 //   npx rolldown docs/screenshots/voice-conversation/bridge.ts --platform node -o /tmp/voice-bridge.mjs

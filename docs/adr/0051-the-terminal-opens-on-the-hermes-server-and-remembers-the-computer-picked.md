@@ -16,7 +16,7 @@ The Terminal tab (ADR 0022, ADR 0039) has two shells: one on the Hermes server t
 - **A localStorage key of its own, like `hermes-chat.terminal-target`.** Rejected: the target is per connection (`terminalTargetKey`), but which computer the owner works on is a display preference of this computer. The prefs document is where those live. It already validates, migrates and backs them up.
 - **Per connection.** Rejected: the local shell is the same on every connection. Being on this computer last isn't something about one server.
 - **Start both shells at once.** Rejected: a local shell nobody asked for, or an ssh that may ask for a passphrase out of sight, is surprising. Each still starts when its side is first shown.
-- **Offer to edit the connection to add an SSH target.** Rejected for now: an SSH target on the connection would switch the sign-in to the SSH tunnel, a much bigger change. The Terminal's own target (ADR 0022) is enough to open a shell there, and the Repository screen reuses it (ADR 0034, `0034-repository-git-runs-a-fixed-helper-over-the-owners-ssh.md`).
+- **Offer to edit the connection to add an SSH target.** Rejected for now: an SSH target on the connection would switch the sign-in to the SSH tunnel, a much bigger change. The Terminal's own target (ADR 0022) is enough to open a shell there, and the Repository screen reuses it (ADR 0110, `0110-repository-git-runs-a-fixed-helper-over-the-owners-ssh.md`).
 
 ## Consequences
 

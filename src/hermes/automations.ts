@@ -1,4 +1,4 @@
-// Automations (GLOSSARY.md "Automation", ADR 0036): Hermes webhook routes that start a task on the server when an
+// Automations (GLOSSARY.md "Automation", ADR 0108): Hermes webhook routes that start a task on the server when an
 // outside service sends an event. Hermes receives, verifies and runs them in its gateway, so they work while Hermes
 // Chat is closed; this app only configures and inspects them, over dashboard REST `/api/webhooks*`.
 //

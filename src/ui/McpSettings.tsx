@@ -1,5 +1,5 @@
-// Settings → MCP servers (ADR 0068): the MCP servers Hermes connects one profile's agent to, picked with the same
-// profile list as Skills and Memory (ADR 0057). Each server's row says how it runs (a command, or a URL), whether it's
+// Settings → MCP servers (ADR 0121): the MCP servers Hermes connects one profile's agent to, picked with the same
+// profile list as Skills and Memory (ADR 0118). Each server's row says how it runs (a command, or a URL), whether it's
 // on, what its last Test found, and whether a plugin provides it. Servers are added from a blank form or Hermes's
 // catalog, edited in a dialog, removed after asking, tested and signed in to (OAuth) on the server. Env values and
 // bearer tokens are write-only: nothing fills them from Hermes, and a blank one keeps what Hermes has. Each change is
@@ -66,7 +66,7 @@ export function McpSettings({
   /** The profile shown; every read and write names it, and answers for another are dropped. */
   profile: string;
   connected: boolean;
-  /** Settings' profile picker (ADR 0057). */
+  /** Settings' profile picker (ADR 0118). */
   picker?: ReactNode;
   /** Opens an OAuth sign-in page in the browser. */
   openUrl: (url: string) => Promise<void> | void;

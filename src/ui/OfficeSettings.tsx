@@ -1,4 +1,4 @@
-// How the agent office shows (ADR 0077, ADR 0089): as a 3D building, as a list, or not at all. Kept in the display preferences
+// How the agent office shows (ADR 0077, ADR 0122): as a 3D building, as a list, or not at all. Kept in the display preferences
 // (uiPrefs.ts), on this computer only. Drawn as a card of rows (ADR 0059).
 import { useSyncExternalStore } from "react";
 import { getUIPrefs, setUIPrefs, subscribe, type OfficeQuality, type OfficeView } from "../hermes/uiPrefs";

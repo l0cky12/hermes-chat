@@ -1,4 +1,4 @@
-// Saved connections (ADR 0049): the Hermes servers this computer can sign in to, each with a name, how it is reached
+// Saved connections (ADR 0112): the Hermes servers this computer can sign in to, each with a name, how it is reached
 // (SSH or URL), its non-secret address and username, and when it was last used. Each has a stable id that never
 // changes, even when its address is edited. Its password and extra request headers are kept in the system keyring
 // under that id (tauriKeyring.ts), and everything this computer keeps for it (drafts, queues, the outbox, Saved
@@ -50,7 +50,7 @@ export type SavedConnection = Address & SignInWay & {
    */
   legacy?: { scope: string[]; address: string };
   /**
-   * The ways to reach the server, tried in order (routes.ts, ADR 0056). Absent on a connection that has only ever had
+   * The ways to reach the server, tried in order (routes.ts, ADR 0120). Absent on a connection that has only ever had
    * one, whose route is its address. When present, the address above is the first route's.
    */
   routes?: SavedRoute[];
@@ -333,7 +333,7 @@ export class Connections {
     this.write({ ...this.doc, connections });
   }
 
-  /** Keeps the server id a route reported for `id`, the first time one does (ADR 0056). */
+  /** Keeps the server id a route reported for `id`, the first time one does (ADR 0120). */
   setServer(id: string, server: string) {
     const c = this.get(id);
     if (c && !c.server && SERVER_ID.test(server)) this.save({ ...c, server });

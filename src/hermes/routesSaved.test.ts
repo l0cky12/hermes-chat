@@ -1,4 +1,4 @@
-// Routes as the connection list and the keyring keep them (ADR 0056).
+// Routes as the connection list and the keyring keep them (ADR 0120).
 import { describe, expect, it } from "vitest";
 import { type Account, type Keyring, savedSignIn, signIn, signInForm } from "./account";
 import { CONNECTIONS_KEY, Connections, addressKey, routesSummary } from "./connections";

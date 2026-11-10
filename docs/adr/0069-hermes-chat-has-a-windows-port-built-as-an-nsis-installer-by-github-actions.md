@@ -8,7 +8,7 @@ Hermes Chat began as a Linux-only app (D-Bus, GTK, X11, WebKitGTK, `std::os::uni
 - **Each platform difference lives in one small seam per module**, not in scattered `cfg` blocks. Pure logic stays ungated and is tested on both platforms.
 - **One instance and `--show`, `--toggle` and chat links**: on Windows the first copy owns a per-user named pipe that later launches send one JSON line to. On Linux it is still the session bus (`remote/bus.rs`, `remote/pipe.rs`).
 - **Tray, notifications**: Tauri's tray shows directly on Windows. Notifications are WinRT toasts under the app id `net.l0cky12.hermes-chat`.
-- **ssh**: Windows OpenSSH has no Unix sockets, so there is no ControlMaster, and the Server page tunnel listens on a loopback port. The Repository helper (ADR 0034) goes on ssh's stdin as one base64 line ahead of the request, because Windows caps a command line at 32,767 characters.
+- **ssh**: Windows OpenSSH has no Unix sockets, so there is no ControlMaster, and the Server page tunnel listens on a loopback port. The Repository helper (ADR 0110) goes on ssh's stdin as one base64 line ahead of the request, because Windows caps a command line at 32,767 characters.
 - **Terminal**: ConPTY through `portable-pty`. The local shell is Windows PowerShell, else `%ComSpec%`.
 - **Screenshots**: a small picker run by Windows PowerShell with Windows Forms. Private folders rely on the default user-profile ACL.
 - **Credentials**: Credential Manager holds at most 2560 bytes, so a long secret is split over `<account>`, `<account>#2`, and so on.

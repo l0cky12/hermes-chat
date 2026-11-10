@@ -18,7 +18,7 @@ import { MethodPicker, TokenField } from "./SignInMethods";
  * `first-run`: nothing is set up on this computer, so there is nowhere to cancel to; Cancel starts over.
  * `sign-in`: opened from the sign-in screen, to add a connection. `reconfigure`: opened from Settings while signed in,
  * to change the connection in use or add a provider key; the connection in use carries on until the change is tested
- * and saved. `add`: adds another saved connection. `edit`: changes a saved connection (ADR 0049). Both start at the
+ * and saved. `add`: adds another saved connection. `edit`: changes a saved connection (ADR 0112). Both start at the
  * Server step.
  */
 export type SetupMode = "first-run" | "sign-in" | "reconfigure" | "add" | "edit";
@@ -50,7 +50,7 @@ export function Onboarding({
   /** The connection's name, when it has one already. Left empty, it is named after its host. */
   initialName?: string;
   probe: Probe;
-  /** Reaches one route without signing in, for each route's Test (ADR 0056). Without it, routes have no Test. */
+  /** Reaches one route without signing in, for each route's Test (ADR 0120). Without it, routes have no Test. */
   reach?: Reach;
   /** The connection in use, once there is one: Settings' own, or the one setup just saved. */
   hermes?: Hermes;
@@ -527,7 +527,7 @@ function retypeLater(kept: Kept = { password: false, headers: true }, what: "pas
 }
 
 /**
- * The owner's extra request headers without the rows left blank; Rust checks the rest (ADR 0006). With routes, each
+ * The owner's extra request headers without the rows left blank; Rust checks the rest (ADR 0104). With routes, each
  * route's, its address completed too (`finishRoutes`).
  */
 export const withHeaders = (d: SignInDetails): SignInDetails =>

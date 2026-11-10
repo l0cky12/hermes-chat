@@ -1,4 +1,4 @@
-// A Voice conversation in the chat pane (ADR 0041): the Start voice conversation button beside Dictation's, and the
+// A Voice conversation in the chat pane (ADR 0111): the Start voice conversation button beside Dictation's, and the
 // panel above the composer while one is on. The conversation itself is conversation.ts.
 import { forwardRef, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { AudioLines, Mic, MicOff, PhoneOff, RotateCcw, Send, Settings2, Square, Trash2, Volume2 } from "lucide-react";
@@ -24,7 +24,7 @@ const pageHidden = () => typeof document !== "undefined" && document.visibilityS
 export const usePageHidden = () => useSyncExternalStore(subscribePage, pageHidden, () => false);
 
 /**
- * Why a conversation that is on must pause now, or undefined (ADR 0041's policy). It pauses rather than carrying on
+ * Why a conversation that is on must pause now, or undefined (ADR 0111's policy). It pauses rather than carrying on
  * whenever the owner can't see it: Hermes disconnected, the window hidden to the tray or minimized, or the pane no
  * longer the focused one (the other pane, Settings, or another screen in front). Nothing resumes it but the owner.
  */

@@ -25,7 +25,7 @@ tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 thiserror = "2"
 url = "2"
-# Already in the tree (through tauri): hashes a Hermes install id before it is kept, to tell servers apart (ADR 0056).
+# Already in the tree (through tauri): hashes a Hermes install id before it is kept, to tell servers apart (ADR 0120).
 sha2 = "0.10"
 # Comes with url; decodes a relayed path the way the dashboard will before routing it.
 percent-encoding = "2"

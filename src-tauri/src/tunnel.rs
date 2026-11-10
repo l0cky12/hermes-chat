@@ -1,7 +1,7 @@
 //! SSH local forward to the dashboard on the server's loopback, using the system `ssh` so the
 //! owner's ~/.ssh/config, agent and keys apply (ADR 0003; research doc §9 "SSH mode").
 //!
-//! The local end is made as a server page's is (ADR 0052, ADR 0098): ssh forwards a Unix socket in a private folder,
+//! The local end is made as a server page's is (ADR 0114, ADR 0098): ssh forwards a Unix socket in a private folder,
 //! and Rust binds `127.0.0.1:0`, keeps the listener and relays each connection to the socket. The port the sign-in
 //! sends the password to is never free for another program to take while ssh signs in.
 
@@ -45,7 +45,7 @@ pub async fn open(target: &str, remote_port: u16) -> Result<Tunnel, TunnelError>
 }
 
 /// `open`, giving up sooner when `quick` is set: ssh's TCP connect after `quick`, and the whole tunnel after twice
-/// that. A connection with several routes uses it, so a route that is down doesn't hold up the next (ADR 0056).
+/// that. A connection with several routes uses it, so a route that is down doesn't hold up the next (ADR 0120).
 pub async fn open_within(target: &str, remote_port: u16, quick: Option<Duration>) -> Result<Tunnel, TunnelError> {
     open_through("ssh", target, remote_port, quick).await
 }

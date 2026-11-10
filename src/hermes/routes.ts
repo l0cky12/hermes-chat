@@ -1,4 +1,4 @@
-// Routes (ADR 0056): one saved connection is one Hermes server, reached by an ordered list of routes. Each route is a
+// Routes (ADR 0120): one saved connection is one Hermes server, reached by an ordered list of routes. Each route is a
 // LAN address, a Tailscale address, a web address (https://, such as one behind Cloudflare Access) or an SSH target.
 // Connecting tries the routes that are on, in order, and uses the first that reaches Hermes and signs in; a connection
 // that drops comes back the same way, so it moves to the next route without losing the chat state. The username and
@@ -25,7 +25,7 @@ export type SavedRoute = { id: string; kind: RouteKind; target: string; off?: bo
 
 /**
  * A route with what signing in over it needs besides the password. `headers`: its extra request headers (web
- * addresses only, ADR 0006). `locked`: the password saved in the keyring wasn't saved for this route, so connecting
+ * addresses only, ADR 0104). `locked`: the password saved in the keyring wasn't saved for this route, so connecting
  * with that saved password skips it; typing the password again unlocks it.
  */
 export type RouteDetails = SavedRoute & { headers?: ExtraHeader[]; locked?: boolean };
@@ -265,7 +265,7 @@ export class RouteHealth {
 }
 
 export type RoutedHooks = {
-  /** The server's id, the first time a route reports one; the connection keeps it (ADR 0056). */
+  /** The server's id, the first time a route reports one; the connection keeps it (ADR 0120). */
   onServer?: (server: string) => void;
   health?: RouteHealth;
   /** Keeps a record of each opening: the routes tried, their steps, how it ended (attempts.ts, #270). */

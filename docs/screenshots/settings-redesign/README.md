@@ -1,4 +1,4 @@
-# Settings sub-navigation screenshots (#187, ADR 0051)
+# Settings sub-navigation screenshots (#187, ADR 0113)
 
 Captured on 2026-11-04 from the running Hermes Chat debug build (WebKitGTK, frontend embedded) on an Xvfb display at 1920 × 1080 with openbox, the window full screen. Nothing was composited or retouched. The app was signed in by URL to the repo's `FakeHermes` stand-in on loopback (`bridge.ts` in this folder), seeded with synthetic profiles, skills, memory entries, memory providers and a persona, so nothing here came from a real server.
 

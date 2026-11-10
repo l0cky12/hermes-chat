@@ -1,5 +1,5 @@
 // Settings → Voice → Speech providers: pick the profile's speech-to-text and text-to-speech provider on Hermes, set the
-// picked one's model, voice and language, and give it an API key. See src/hermes/voiceSettings.ts and ADR 0055.
+// picked one's model, voice and language, and give it an API key. See src/hermes/voiceSettings.ts and ADR 0115.
 // Keys are write-only: Hermes says only whether one is set, a typed one is sent once, and the field is emptied after.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { KeyRound, RotateCcw, Save } from "lucide-react";

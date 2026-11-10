@@ -58,7 +58,7 @@ A separate Codex reviewer used exactly **gpt-6.1-sol / High reasoning** in three
 
 ## Integration with current main
 
-Main merged Server files download/upload/edit while this PR was being prepared. Its transfer cancellation and commands were retained, and this feature's ADR was renumbered to 0025; a later merge of main renumbered it again, to 0049, because main had taken 0025 for the context inspector and 0048 for the chat header. After resolving the mechanical Rust insertion conflict, checks were rerun:
+Main merged Server files download/upload/edit while this PR was being prepared. Its transfer cancellation and commands were retained, and this feature's ADR was renumbered to 0025; a later merge of main renumbered it again, to 0049 (now 0112), because main had taken 0025 for the context inspector and 0048 for the chat header. After resolving the mechanical Rust insertion conflict, checks were rerun:
 
 ```text
 npm run build: passed (2604 modules, existing chunk warning)

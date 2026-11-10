@@ -532,7 +532,7 @@ describe("refusing writes Hermes can't take", () => {
     const t = store(OLD);
     await connectAndCheck(t, 1, Promise.reject(noMethod("client.capabilities")));
     expect(t.caps.refuses({ rpc: "projects.create" })).toBe("projects");
-    // Membership is a store no Hermes has yet (ADR 0033): its absence is expected, so it isn't Projects' write.
+    // Membership is a store no Hermes has yet (ADR 0109): its absence is expected, so it isn't Projects' write.
     expect(t.caps.refuses({ rpc: "projects.membership.apply" })).toBeUndefined();
     expect(t.caps.refuses({ rpc: "learning.edit" })).toBe("memory");
     expect(t.caps.refuses({ rpc: "learning.delete" })).toBe("memory");

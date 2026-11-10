@@ -1,4 +1,4 @@
-//! The Windows touch keyboard over the bottom of the window (ADR 0103). Windows docks it over the window without
+//! The Windows touch keyboard over the bottom of the window (ADR 0130). Windows docks it over the window without
 //! resizing it, and neither WebView2 (`navigator.virtualKeyboard`, `keyboard-inset-*`, `visualViewport`) nor the
 //! input pane API (`IFrameworkInputPane`) tells the app, so the composer stayed under it (#375). TabTip draws the
 //! keyboard in its `IPTip_Main_Window`, which is uncloaked and enabled while the keyboard shows: a thread reads it and

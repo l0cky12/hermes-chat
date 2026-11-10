@@ -1,4 +1,4 @@
-// How agents walk across the building (ADR 0089): out of a room by its door, along the hallway, in by the other room's
+// How agents walk across the building (ADR 0122): out of a room by its door, along the hallway, in by the other room's
 // door, in one to two seconds; in from the front door, and out of it on the way home. Plain numbers from the floor
 // plan, no three.js, so tests decide who walks where.
 import { PLAN, type BuildingRoom, type Character, type Spot } from "../../hermes/officeFloor";

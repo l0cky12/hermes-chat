@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Settings' sub-navigation (ADR 0051): General shows one of four groups beside a sub-nav, a search shows every group,
+// Settings' sub-navigation (ADR 0113): General shows one of four groups beside a sub-nav, a search shows every group,
 // and the Memory tab lists the two memory files and every profile beside the detail.
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

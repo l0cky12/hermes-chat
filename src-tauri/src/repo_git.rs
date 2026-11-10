@@ -1,4 +1,4 @@
-//! The Repository screen's Git operations, run on the Hermes server through the owner's own `ssh` (ADR 0034).
+//! The Repository screen's Git operations, run on the Hermes server through the owner's own `ssh` (ADR 0110).
 //!
 //! The remote command is a constant: `python3 -I -c` with the helper program (repo_git_helper.py) built into the app.
 //! What the screen asks for travels on ssh's stdin as one JSON request, and the helper runs `git` with an argument list

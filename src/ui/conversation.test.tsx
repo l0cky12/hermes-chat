@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Voice conversations through the signed-in app, against a fake Hermes (ADR 0041). The microphone and the audio element
+// Voice conversations through the signed-in app, against a fake Hermes (ADR 0111). The microphone and the audio element
 // are stand-ins (jsdom has neither), fed loud or quiet blocks of samples; everything from the Start button to what
 // Hermes receives and plays is the real code. Each test checks what reached Hermes, what the owner sees, and that the
 // microphone and audio are let go of.
@@ -584,7 +584,7 @@ describe("Where speech to text runs (ADR 0065)", () => {
 
   it("never sends the turn to Hermes when it pauses while this computer transcribes it", async () => {
     const s = await localFirst();
-    // Hiding the window to the tray pauses it (ADR 0041).
+    // Hiding the window to the tray pauses it (ADR 0111).
     act(() => setWindowHidden(true));
     expect(mic.allClosed).toBe(true);
     s.release();

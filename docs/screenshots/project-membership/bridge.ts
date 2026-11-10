@@ -1,6 +1,6 @@
-// A stand-in Hermes dashboard for screenshots of project membership sync (ADR 0033) in the real Tauri app: sign-in, the
+// A stand-in Hermes dashboard for screenshots of project membership sync (ADR 0109) in the real Tauri app: sign-in, the
 // WS ticket, `/api/ws` and dashboard REST, answered by the tests' FakeHermes with synthetic chats. Loopback only. The
-// membership store it can switch on is FakeHermes's version of the contract ADR 0033 proposes; no Hermes has it yet.
+// membership store it can switch on is FakeHermes's version of the contract ADR 0109 proposes; no Hermes has it yet.
 //   npx rolldown docs/screenshots/project-membership/bridge.ts --platform node -o /tmp/membership-bridge.mjs && node /tmp/membership-bridge.mjs 47820
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
@@ -102,7 +102,7 @@ http.on("upgrade", async (req, sock: Socket) => {
 http.listen(port, "127.0.0.1", () => console.log(`fake dashboard on http://127.0.0.1:${port}`));
 
 // Controls, on their own port so they work while the dashboard is "offline":
-//   /store/on, /store/off   the membership store ADR 0033 proposes (off: "method not found", as every Hermes today)
+//   /store/on, /store/off   the membership store ADR 0109 proposes (off: "method not found", as every Hermes today)
 //   /offline/on, /offline/off   drop every connection and refuse new ones, as a dropped network does
 //   /links   the links the server has now
 createServer((req, res) => {

@@ -1,4 +1,4 @@
-// A Voice conversation (ADR 0041): the owner talks, Hermes answers out loud, and it goes round until the owner ends it.
+// A Voice conversation (ADR 0111): the owner talks, Hermes answers out loud, and it goes round until the owner ends it.
 // Each turn is the tested Dictation and Read aloud contracts in a loop: this computer's microphone records until the
 // owner stops speaking (voiceTurns.ts), Hermes transcribes the recording (`POST /api/audio/transcribe`), the text goes
 // to the chat as the owner's message, and Hermes's reply is spoken with the chat's Speaker (`POST /api/audio/speak`).
@@ -212,7 +212,7 @@ export class VoiceConversation {
 
   /**
    * Why the owner can't be talking with it now, or undefined once they can. A reason pauses the conversation; its
-   * clearing resumes nothing (ADR 0041: no automatic restart).
+   * clearing resumes nothing (ADR 0111: no automatic restart).
    */
   setAway(why: string | undefined): void {
     if (why === this.state.away) return;

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// The Repository screen (ADR 0034) against a fake of Rust's `repo_git` command. Its answers have the shapes
+// The Repository screen (ADR 0110) against a fake of Rust's `repo_git` command. Its answers have the shapes
 // repo_git_helper.py gives for real repositories (src-tauri/tests/repo_git.rs).
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

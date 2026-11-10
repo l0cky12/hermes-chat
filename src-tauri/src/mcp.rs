@@ -1,4 +1,4 @@
-//! Settings → MCP servers (ADR 0068), on Hermes's `/api/mcp` routes (`hermes_cli/web_routers/mcp.py` at the deployed
+//! Settings → MCP servers (ADR 0121), on Hermes's `/api/mcp` routes (`hermes_cli/web_routers/mcp.py` at the deployed
 //! `f0d94882`). Two things live here, both pure so they can be tested without a server:
 //!
 //! - `relayed`: which MCP writes the webview's relay passes (`Dashboard::request`), each with the exact body shape

@@ -110,7 +110,7 @@ enum Target {
     Ssh {
         target: String,
     },
-    /// `headers`: extra request headers for a gateway in front of the dashboard, such as Cloudflare Access (ADR 0006).
+    /// `headers`: extra request headers for a gateway in front of the dashboard, such as Cloudflare Access (ADR 0104).
     /// Only a direct connection sends them; the SSH tunnel goes straight to the dashboard.
     Url {
         url: String,
@@ -120,7 +120,7 @@ enum Target {
 }
 
 /// How the connection reached the dashboard, for the webview to show and to decide whether it is Unsecure. `server`:
-/// the server's id (`transport::server_id`), when its status named its install (ADR 0056).
+/// the server's id (`transport::server_id`), when its status named its install (ADR 0120).
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 enum Route {
@@ -156,7 +156,7 @@ impl Route {
     }
 }
 
-/// How long one route of a connection with several may take to answer before the next is tried (ADR 0056).
+/// How long one route of a connection with several may take to answer before the next is tried (ADR 0120).
 const QUICK_REACH: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// `probe`: the connection test running now, so setup can stop it, and a new one replaces it. `connecting`: the
@@ -178,9 +178,9 @@ const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 const CONNECT_STOPPED: &str = "Connecting was stopped.";
 
 /// The dashboard root for `target`, the tunnel that reaches it (SSH only), the route to report, and the extra
-/// request headers to send (URL only, ADR 0006). Failures are the owner's address, headers or SSH (`Stage::Address`).
+/// request headers to send (URL only, ADR 0104). Failures are the owner's address, headers or SSH (`Stage::Address`).
 /// `quick`: give up on an SSH route that doesn't connect within `QUICK_REACH`, for a connection with several routes.
-/// A plain http:// URL is refused unless it stays on this computer, a LAN or Tailscale (ADR 0056).
+/// A plain http:// URL is refused unless it stays on this computer, a LAN or Tailscale (ADR 0120).
 /// `steps`: where opening the connection reports the tunnel or DNS step (`connect_steps`).
 async fn open_target(target: Target, quick: bool, steps: &Steps) -> Result<(url::Url, Option<Tunnel>, Route, reqwest::header::HeaderMap), String> {
     Ok(match target {
@@ -289,7 +289,7 @@ async fn hermes_connect(
 
 /// Opens the tunnel or resolves the URL, checks the dashboard there is Hermes, and the one `expect_server` names, then
 /// signs in and opens `/api/ws`, for `hermes_connect`. `ssh_route`: the connection's SSH target when this route isn't
-/// SSH, for the Preview's server pages (ADR 0056). Each step runs through `steps`, which says when it starts.
+/// SSH, for the Preview's server pages (ADR 0120). Each step runs through `steps`, which says when it starts.
 #[allow(clippy::too_many_arguments)]
 async fn open_connection(
     target: Target,
@@ -372,7 +372,7 @@ async fn hermes_probe(
 }
 
 /// One route reached without signing in, for a route's Test and for checking whether a preferred route is back: the
-/// tunnel or address opened, and `/api/status` answered as the Hermes `expect_server` names (ADR 0056). No password
+/// tunnel or address opened, and `/api/status` answered as the Hermes `expect_server` names (ADR 0120). No password
 /// is sent, and the app's own connection carries on.
 #[derive(Serialize)]
 struct Reached {
@@ -647,7 +647,7 @@ async fn hermes_toolset_guards(state: State<'_, AppState>, profile: String) -> R
     dashboard.toolset_guards(&profile).await.map_err(|e| e.to_string())
 }
 
-/// Settings → MCP servers' edit of one server for `profile` (`Dashboard::mcp_edit`, ADR 0068). The webview sends
+/// Settings → MCP servers' edit of one server for `profile` (`Dashboard::mcp_edit`, ADR 0121). The webview sends
 /// only that server's fields, secrets it didn't retype left out; Rust reads and writes Hermes's whole map.
 #[tauri::command]
 async fn hermes_mcp_edit(state: State<'_, AppState>, profile: String, edit: mcp::Edit) -> Result<(), String> {
@@ -673,7 +673,7 @@ const SIGNED_OUT: &str = "Hermes Chat left the Hermes server, so the tunnel to i
 const SIGNED_IN_ELSEWHERE: &str = "Hermes Chat is now connected to another server, so the tunnel to this one closed.";
 
 /// Opens `url`, a page on the Hermes server's own loopback, through an SSH tunnel to the signed-in connection's SSH
-/// target (server_page.rs, ADR 0052). The webview names only the page and its own `key` for it; Rust parses the page
+/// target (server_page.rs, ADR 0114). The webview names only the page and its own `key` for it; Rust parses the page
 /// again, and picks the target. The tunnel is registered while the connection is locked, so a sign-out or another
 /// sign-in after this closes it, even while ssh is still connecting. `on_event` hears once if it ends without
 /// `preview_server_close`.
@@ -1396,7 +1396,7 @@ fn display_close(displays: State<'_, display::Displays>, id: u64) {
 }
 
 /// One Git operation on the server for the Repository screen: the helper run through `ssh` to `target` (the sign-in's
-/// SSH target, or one the owner gave), with `request` on its stdin (repo_git.rs, ADR 0034).
+/// SSH target, or one the owner gave), with `request` on its stdin (repo_git.rs, ADR 0110).
 #[tauri::command]
 async fn repo_git(target: String, request: repo_git::Request) -> Result<serde_json::Value, repo_git::RepoError> {
     repo_git::run_over_ssh(&target, &request).await
@@ -1453,7 +1453,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             use tauri::Emitter;
             app.state::<Attachable>().load(app.path().app_data_dir()?.join("attachable.json"));
             main_window::build(app.handle())?;
-            // Lifts the page above the docked touch keyboard, which Windows lays over the window (ADR 0103).
+            // Lifts the page above the docked touch keyboard, which Windows lays over the window (ADR 0130).
             #[cfg(windows)]
             if let Some(window) = app.get_webview_window("main") {
                 touch_keyboard::start(window);
@@ -1476,7 +1476,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             // Which package the binary came from, read before anything can upgrade it.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move { handle.state::<update::Updates>().start().await });
-            // The global shortcut was removed (ADR 0033 is superseded); an older version's setting file goes too.
+            // The global shortcut was removed (ADR 0107 is superseded); an older version's setting file goes too.
             summon::forget_old_shortcut(app.handle());
             let handle = app.handle().clone();
             // Requests that came while the app started (main.rs took the bus name first) are handled now.
@@ -1785,7 +1785,7 @@ mod tests {
     }
 
     /// Issue #271: the status read, the sign-in and the ticket share one kept-alive HTTP connection; the WebSocket
-    /// is the only other one. The status read still comes first, before the password or token (ADR 0056).
+    /// is the only other one. The status read still comes first, before the password or token (ADR 0120).
     #[tokio::test]
     async fn a_sign_in_opens_one_http_connection_for_status_sign_in_and_ticket() {
         let password = super::SignInWith::Password { username: "liam".into(), password: "hunter2".into(), provider: None };

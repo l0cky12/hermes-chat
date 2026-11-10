@@ -1,4 +1,4 @@
-// Saved connections on screen (ADR 0049): the recent-connection picker on the sign-in screen and the rail, the
+// Saved connections on screen (ADR 0112): the recent-connection picker on the sign-in screen and the rail, the
 // manager in Settings → General, and the questions asked before switching and removing. Connections are told apart by
 // id; two can share a name, so each always shows its address too.
 import { useEffect, useId, useRef, useState } from "react";

@@ -1,4 +1,4 @@
-// A column of groups beside a Settings tab's content (ADR 0051): the tab shows one group at a time, so no tab scrolls
+// A column of groups beside a Settings tab's content (ADR 0113): the tab shows one group at a time, so no tab scrolls
 // at 1920 × 1080. Items can sit under a label ("External memory"), and arrow keys move between them as the tab strip's do.
 // A `compact` sub-nav, in a narrow window where it's a row above the content, shows only the picked item's label and the
 // others' icons, named by a tip, as the tab strip does (#174); only for items whose icons tell them apart.

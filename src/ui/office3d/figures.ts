@@ -1,4 +1,4 @@
-// The agents as low-poly people (ADR 0089): a shirt in their team's color, a head with hair and, close up, a face, arms
+// The agents as low-poly people (ADR 0122): a shirt in their team's color, a head with hair and, close up, a face, arms
 // and legs, posed for their room, or walking. Each part is one instanced mesh for every character, so forty cost a
 // handful of draw calls. Only a typing character's arms move by themselves, from `animate`, which the pacer calls inside
 // a frame; a walking one is placed again on each frame of its walk.

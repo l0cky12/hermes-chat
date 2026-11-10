@@ -77,7 +77,7 @@
 .hljs-deletion { color: var(--syn-del); background-color: var(--syn-del-bg); }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
-/* The docked Windows touch keyboard covers the window's bottom without resizing it (touchKeyboard.ts, ADR 0103). */
+/* The docked Windows touch keyboard covers the window's bottom without resizing it (touchKeyboard.ts, ADR 0130). */
 #root { height: calc(100% - var(--touch-keyboard, 0px)); }
 body { overflow: hidden; -webkit-font-smoothing: antialiased; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
@@ -910,7 +910,7 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 .field-hint.block { display: block; line-height: 1.5; }
 .field-hint.block svg { vertical-align: -2px; margin-right: 4px; }
 .field-hint code { font-size: calc(11.5rem / 14); color: var(--muted); }
-/* A connection's routes (Routes.tsx, ADR 0056) */
+/* A connection's routes (Routes.tsx, ADR 0120) */
 .routes { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .routes > legend { padding: 0; margin-bottom: 4px; }
 .route-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -1234,7 +1234,7 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .settings-tab:focus-visible { outline: 2px solid var(--line-2); outline-offset: 1px; }
 .settings h3 { font-size: calc(14rem / 14); font-weight: 600; margin: 0; }
 
-/* ---------- a tab's groups beside its content (ADR 0051) ---------- */
+/* ---------- a tab's groups beside its content (ADR 0113) ---------- */
 .settings-split { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 0 28px; align-items: start; }
 .settings-split-body { min-width: 0; }
 .subnav { display: flex; flex-direction: column; gap: 2px; padding: 22px 10px 0 0; border-right: 1px solid var(--line); position: sticky; top: 0; }
@@ -1491,7 +1491,7 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .shortcut-key { min-width: 132px; justify-content: center; font-family: var(--mono); }
 .shortcut-key.recording { border-color: var(--accent, var(--text)); color: var(--text); }
 .warn-note { color: var(--warn); }
-/* projects (Projects.tsx, ADR 0007): the switcher under the profile's name, and the project screen */
+/* projects (Projects.tsx, ADR 0131): the switcher under the profile's name, and the project screen */
 .sb-project { display: flex; padding: 0 12px 6px 14px; margin-top: -4px; }
 .project-switch { position: relative; min-width: 0; flex: 1; display: flex; align-items: center; gap: 2px; }
 .project-btn {
@@ -1981,7 +1981,7 @@ button.provider-row:hover:not(:disabled) { background: var(--hover); }
 .skill-name { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .skill-desc { position: relative; min-width: 0; }
 .skill-desc-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The whole description, under the pointer resting on the line: for a mouse only, as the owner asked (ADR 0051). */
+/* The whole description, under the pointer resting on the line: for a mouse only, as the owner asked (ADR 0113). */
 .skill-desc-tip {
   display: none; position: absolute; left: 0; top: calc(100% + 4px); z-index: 10; width: min(560px, 90cqw); padding: 10px 12px;
   background: var(--raised-3); border: 1px solid var(--line-3); border-radius: 8px; font-size: calc(12.5rem / 14); line-height: 1.5; color: var(--text);
@@ -1989,7 +1989,7 @@ button.provider-row:hover:not(:disabled) { background: var(--hover); }
 }
 @media (hover: hover) { .skill-desc:hover .skill-desc-tip { display: block; } }
 .skill-category { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-/* Which profile Skills, Memory and Persona show (ProfilePicker.tsx, ADR 0057), in place of the profile's name. */
+/* Which profile Skills, Memory and Persona show (ProfilePicker.tsx, ADR 0118), in place of the profile's name. */
 .profile-pick {
   background: var(--raised); border: 1px solid var(--line-2); border-radius: 7px; padding: 2px 6px; outline: none; color: var(--text);
   font-size: calc(12.5rem / 14); max-width: 260px;
@@ -2361,7 +2361,7 @@ label.memory-pick { cursor: pointer; }
   .inbox { width: calc(100vw - 60px); }
 }
 
-/* The agent office (Office.tsx, ADR 0077, ADR 0089): a full view in place of the chat panes, the building or a list. */
+/* The agent office (Office.tsx, ADR 0077, ADR 0122): a full view in place of the chat panes, the building or a list. */
 .office { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
 .office-head { display: flex; align-items: center; gap: 10px; padding: 12px 10px 10px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .office-head .inbox-heading { flex: none; }
@@ -2676,7 +2676,7 @@ label.memory-pick { cursor: pointer; }
 .terminal-host .xterm-scrollable-element .slider { min-width: 0; flex: none; border-radius: 4px; }
 .terminal-foot { flex: none; margin: 0; padding: 8px 22px 12px; font-size: calc(12rem / 14); }
 
-/* ---------- saved connections (Connections.tsx, ADR 0049) ---------- */
+/* ---------- saved connections (Connections.tsx, ADR 0112) ---------- */
 .rail-conns { position: relative; }
 .conn-menu {
   position: absolute; left: calc(100% + 10px); bottom: -6px; width: 340px; z-index: 30; background: var(--raised); border: 1px solid var(--line-2);
@@ -2722,7 +2722,7 @@ label.memory-pick { cursor: pointer; }
 .leave-list { margin: 6px 0 8px; padding-left: 18px; color: var(--text-2); line-height: 1.55; }
 .leave-dialog.conn-remove { width: min(520px, 92vw); }
 
-/* ---------- search filters, tags and Saved filters (ADR 0026) ---------- */
+/* ---------- search filters, tags and Saved filters (ADR 0106) ---------- */
 .palette-filters-btn {
   display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: calc(12rem / 14); color: var(--muted);
   padding: 4px 8px; border-radius: 7px; border: 1px solid var(--line-2);
@@ -2996,7 +2996,7 @@ label.memory-pick { cursor: pointer; }
 .screen-command { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
 .screen-command code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: calc(12rem / 14); background: var(--raised-2); padding: 6px 8px; border-radius: 6px; }
 .screen-command .copy-failed { flex-basis: 100%; font-size: calc(12rem / 14); color: var(--warn); }
-/* Automations (ADR 0036): webhook routes, the example-event preview, and the delivery history. */
+/* Automations (ADR 0108): webhook routes, the example-event preview, and the delivery history. */
 .automations-screen .automation-fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .automations-screen .automation-fieldset legend { padding: 0; margin-bottom: 4px; }
 .automation-events { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px 14px; }
@@ -3057,7 +3057,7 @@ label.memory-pick { cursor: pointer; }
 .snooze-field input[type="number"] { max-width: 90px; }
 .snooze-dialog p.snooze-when { margin: 0; }
 
-/* ---------- project membership sync (MembershipSync.tsx, ADR 0033) ---------- */
+/* ---------- project membership sync (MembershipSync.tsx, ADR 0109) ---------- */
 .dot.warn { background: var(--warn); }
 .menu-hint { flex: none; margin-left: 8px; font-size: calc(11rem / 14); color: var(--warn); }
 .project-attention { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; border-top: 1px solid var(--line); }
@@ -3131,7 +3131,7 @@ p.logs-status { margin: 0 0 8px; line-height: 1.5; }
   .log-row { flex-direction: column; gap: 0; }
 }
 
-/* The Repository screen (Repository.tsx, ADR 0034). It borrows Server files' head, bar, banners and diff lines. */
+/* The Repository screen (Repository.tsx, ADR 0110). It borrows Server files' head, bar, banners and diff lines. */
 .repo-edit-target { width: 22px; height: 22px; }
 .repo-target { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 22px 10px; }
 .repo-target label { font-size: calc(12.5rem / 14); color: var(--muted); }
@@ -3359,7 +3359,7 @@ p.logs-status { margin: 0 0 8px; line-height: 1.5; }
   .wt-chip { max-width: 140px; }
 }
 
-/* ---------- Settings → MCP servers (McpSettings.tsx, ADR 0068) ---------- */
+/* ---------- Settings → MCP servers (McpSettings.tsx, ADR 0121) ---------- */
 .mcp-head-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .mcp-head-actions .btn, .mcp-actions .btn { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; font-size: calc(12.5rem / 14); }
 .mcp-name { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }

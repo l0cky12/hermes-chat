@@ -81,7 +81,7 @@ for (const id of (process.env.HV_FAIL_PATCH ?? "").split(",").filter(Boolean))
     throw new Error(`The dashboard answered 503: {"detail":"Stand-in refuses edits of ${id}"}`);
   };
 
-// Settings → MCP servers (ADR 0068): a second profile, servers of each kind, one from a plugin, Test results and a catalog.
+// Settings → MCP servers (ADR 0121): a second profile, servers of each kind, one from a plugin, Test results and a catalog.
 server.otherProfiles = { work: [] };
 if (process.env.HV_INBOX === "1")
   server.otherProfiles.work = [

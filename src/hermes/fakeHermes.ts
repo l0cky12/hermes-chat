@@ -453,7 +453,7 @@ export class FakeHermes {
   /** The profiles' skills, as Settings → Skills reads and writes them (fakeSkills.ts). */
   readonly skills = new FakeSkills(this.managedFiles);
   /** The profiles' external memory providers, as Settings → Memory → External memory reads and writes them. */
-  /** The profile's MCP servers (fakeMcp.ts, ADR 0068). */
+  /** The profile's MCP servers (fakeMcp.ts, ADR 0121). */
   readonly mcp = new FakeMcp((p) => p === "default" || p in this.otherProfiles);
   /** The profile's Telegram and Discord gateways (fakeGateways.ts, ADR 0073). */
   readonly gateways = new FakeGateways((p) => p === "default" || p in this.otherProfiles);
@@ -544,7 +544,7 @@ export class FakeHermes {
   /** Each profile's projects (`projects.db`), by profile name; a profile the server has but that isn't here has none. */
   projects: Record<string, FakeProject[]> = {};
   /**
-   * True: this server has the membership store ADR 0033 proposes (`projects.membership.*`). No Hermes has it yet, so
+   * True: this server has the membership store ADR 0109 proposes (`projects.membership.*`). No Hermes has it yet, so
    * it is off by default, and the methods answer "method not found" as the deployed `bf0203a` does.
    */
   membershipStore = false;
@@ -1128,7 +1128,7 @@ export class FakeHermes {
         if (links) this.membership[profile] = links.filter((l) => l.project_id !== r.params.id);
         return { projects: list, active_id: null };
       }),
-    // The membership store ADR 0033 proposes. `apply` runs each op in order: refused for a project or (when adding) a
+    // The membership store ADR 0109 proposes. `apply` runs each op in order: refused for a project or (when adding) a
     // chat the profile doesn't have; "unchanged" when the link already is as asked; a conflict when another write
     // changed the link after the op's `base_revision`; otherwise written. A retried op id gets its first answer.
     "projects.membership.list": (r) =>

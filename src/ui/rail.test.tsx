@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// The rail's layout and its tips (ADR 0050, 0055): the daily tools first, then the Server group, and a tip that
+// The rail's layout and its tips (ADR 0050, 0116): the daily tools first, then the Server group, and a tip that
 // shows at once, with the button's name and shortcut, on hover or keyboard focus.
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

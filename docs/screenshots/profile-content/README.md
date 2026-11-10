@@ -1,4 +1,4 @@
-# Skills, Memory and Persona for any profile (ADR 0057)
+# Skills, Memory and Persona for any profile (ADR 0118)
 
 Captured on 2026-11-04 from the running Hermes Chat debug build (WebKitGTK, frontend embedded) built from this branch, on an Xvfb display at 1400 × 900 with openbox. Nothing was composited or retouched.
 

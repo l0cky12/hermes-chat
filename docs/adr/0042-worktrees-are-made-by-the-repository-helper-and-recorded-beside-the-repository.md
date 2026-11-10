@@ -2,7 +2,7 @@
 
 > **Superseded by [ADR 0043](0043-worktrees-are-made-on-the-server-by-the-repository-helper-and-recorded-in-the-repository.md)** (#159). Its helper and screen were replaced. Worktrees it made, its `hermes-chat/worktrees.json` record and its `refs/hermes-chat/recovery/*` refs are left on the server as they are; the Repository screen lists those worktrees as not made by this app.
 
-Parallel coding chats need their own working copies (#82). The Repository screen can now make a Git worktree of the server's repository on a branch of its own, run the repository's setup once, start a chat working in it, list the worktrees with their chats, changes and unpushed commits, and remove one only after a preview, with its changes kept first. Every Git operation runs on the server, in the repository the screen has open, through the Repository screen's helper over the owner's own ssh (ADR 0034). Nothing runs in a checkout on this computer.
+Parallel coding chats need their own working copies (#82). The Repository screen can now make a Git worktree of the server's repository on a branch of its own, run the repository's setup once, start a chat working in it, list the worktrees with their chats, changes and unpushed commits, and remove one only after a preview, with its changes kept first. Every Git operation runs on the server, in the repository the screen has open, through the Repository screen's helper over the owner's own ssh (ADR 0110). Nothing runs in a checkout on this computer.
 
 ## Why not the dashboard's worktree routes
 
@@ -12,7 +12,7 @@ Hermes at `f0d9488` (deployed, read on 2026-11-04) has `POST /api/git/worktree/a
 - **The branch and folder aren't the ones previewed.** The branch name is rewritten (`_sanitize_branch` drops characters), the folder is the first free `slug`, `slug-2`, … (`_unique_dir`), and a repository folder that isn't one yet is `git init`ed with an empty commit (`_ensure_repo`).
 - **It can change the source checkout.** `existingBranch` naming the default branch runs `git switch` in the repository's own checkout.
 - **Removal has no ownership.** `worktree/remove` takes `force` and runs `git worktree remove --force`. Nothing records who made a worktree or which chats use it, and nothing keeps uncommitted work first.
-- **Hooks and the owner's config are off,** as for the other dashboard Git routes (`noninteractive_git_env`, ADR 0034).
+- **Hooks and the owner's config are off,** as for the other dashboard Git routes (`noninteractive_git_env`, ADR 0110).
 - **There is no setup.** Hermes's own worktrees copy `.worktreeinclude` entries (`_copy_worktree_includes`). The dashboard routes don't.
 
 A Hermes route that took an exact folder outside `.worktrees/`, refused to rewrite names, never switched the source checkout, kept an owner and chat list, and removed only after keeping changes would be a better contract than ssh. That is the backend design this records as missing:
@@ -46,7 +46,7 @@ On this computer, `hermes-chat.chat-worktrees` (webview local storage, per conne
 
 ## Consequences
 
-- **Server needs** are those of the Repository screen (ADR 0034): ssh without a prompt, `python3` 3.8+ and `git` 2.31+. `git worktree lock --reason` and `git restore` are both older than that. A bare repository is reported as unsupported. Without ssh to the server there are no worktrees. Starting a chat in one needs Hermes connected, and so does removing one.
+- **Server needs** are those of the Repository screen (ADR 0110): ssh without a prompt, `python3` 3.8+ and `git` 2.31+. `git worktree lock --reason` and `git restore` are both older than that. A bare repository is reported as unsupported. Without ssh to the server there are no worktrees. Starting a chat in one needs Hermes connected, and so does removing one.
 - **The helper is sent compressed.** With the worktree operations, the helper in base64 was over Linux's 128 KiB limit for one argument (`MAX_ARG_STRLEN`), on this computer and in the server's shell. The constant command is now `python3 -I -c 'import base64,zlib;exec(zlib.decompress(base64.b64decode("…")))'`, about 36 KiB. It is still one constant string; nothing in it comes from the owner.
 - **Hermes's own sweep** never sees these worktrees (they're outside `.worktrees/`), and never deletes their branches (the names it deletes are refused). `git worktree prune` skips them while they're locked.
 - **Late answers.** The worktree list is numbered: an older read's answer is dropped. The panel is keyed by target, checkout and connection-and-profile, so an answer for another repository or profile never lands in the one shown. Dialogs drop answers that arrive after they close. The removal preview is read once per dialog (and on Preview again), never because the app redrew, and no preview's answer replaces a removal under way.

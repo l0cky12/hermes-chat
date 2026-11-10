@@ -46,7 +46,7 @@ describe("The chat header", () => {
     expect([...actions.querySelectorAll("button")].map(named)).toEqual(["Open the side panel", "Find in chat", "More"]);
     for (const gone of ["Export…", "Copy chat link", "Settle", "Archive", "Split into two panes"])
       expect(actions.querySelector(`[aria-label="${gone}"], [title="${gone}"]`)).toBeNull();
-    // Splitting is Ctrl+\, a tab's menu or a drag (ADR 0055), so the tab strip has no split buttons either.
+    // Splitting is Ctrl+\, a tab's menu or a drag (ADR 0116), so the tab strip has no split buttons either.
     expect(document.querySelector('.tab-strip [aria-label^="Split into two panes"]')).toBeNull();
     expect(screen.getByRole("button", { name: "Find in chat" }).title).toBe("Find in chat (Ctrl+F)");
 

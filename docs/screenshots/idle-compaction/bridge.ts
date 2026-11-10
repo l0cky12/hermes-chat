@@ -1,4 +1,4 @@
-// A stand-in Hermes dashboard for the Idle compaction screenshots (ADR 0059): sign-in, the WS ticket, `/api/ws` and
+// A stand-in Hermes dashboard for the Idle compaction screenshots (ADR 0119): sign-in, the WS ticket, `/api/ws` and
 // dashboard REST, all answered by the tests' FakeHermes with synthetic chats. Loopback only. Build and run:
 //   npx rolldown docs/screenshots/idle-compaction/bridge.ts --platform node -o /tmp/idle-bridge.mjs && node /tmp/idle-bridge.mjs 47876
 // The chat it serves reports its context window 82% full with a compactor, as the deployed Hermes does through

@@ -1,6 +1,6 @@
 # A relay port serves only programs run by the owner's account
 
-The sign-in tunnel (ADR 0098) and every server-page tunnel (ADR 0052) relay through a TCP listener Rust holds on `127.0.0.1:<ephemeral>`. Until this change, `server_page::serve` accepted every connection. Any program on the computer, under any account, could connect while the app was signed in. It could then reach the dashboard on the server's loopback, or a page's dev server. A dashboard with sign-in off, because it listens only on the server's loopback (`transport.rs`, `GateOff`), is then an unauthenticated Hermes that can run agent tools (#355).
+The sign-in tunnel (ADR 0098) and every server-page tunnel (ADR 0114) relay through a TCP listener Rust holds on `127.0.0.1:<ephemeral>`. Until this change, `server_page::serve` accepted every connection. Any program on the computer, under any account, could connect while the app was signed in. It could then reach the dashboard on the server's loopback, or a page's dev server. A dashboard with sign-in off, because it listens only on the server's loopback (`transport.rs`, `GateOff`), is then an unauthenticated Hermes that can run agent tools (#355).
 
 ## Decisions
 
@@ -21,5 +21,5 @@ The sign-in tunnel (ADR 0098) and every server-page tunnel (ADR 0052) relay thro
 - **Other accounts on Linux can't use the relay.** They can still connect to the port, which the kernel accepts, but the relay closes the connection unanswered. A program run by the owner's account can still use it, as can the webview.
 - **Root is not stopped.** Root can read the app's memory and the owner's SSH keys in any case.
 - **A process in another user namespace** shows in `/proc/net/tcp` as its uid mapped into the app's namespace. That is never the app's own uid unless the namespace maps it there, which only the owner or root can arrange.
-- **Windows and macOS admit every connection.** There, `loopback_peer::runs_as` always says yes and ADR 0098's and ADR 0052's consequences still hold. Issue #378 tracks a Windows check (`GetExtendedTcpTable` and the owning process's SID) and a macOS check.
+- **Windows and macOS admit every connection.** There, `loopback_peer::runs_as` always says yes and ADR 0098's and ADR 0114's consequences still hold. Issue #378 tracks a Windows check (`GetExtendedTcpTable` and the owning process's SID) and a macOS check.
 - **The cost is one read of each table per connection**, in the connection's own task. A page that makes many requests reads them once per connection, not per request.

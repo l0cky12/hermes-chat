@@ -1,5 +1,5 @@
 // Sign-in over SSH (ADR 0003) or straight to a dashboard URL, built from the prototype's first-run screen and its
-// connection form. With more than one saved connection (ADR 0049) the recent-connection picker beside the form picks
+// connection form. With more than one saved connection (ADR 0112) the recent-connection picker beside the form picks
 // which one the form is for; nothing is picked on its own, so with none picked the form waits for the owner. The
 // form offers the sign-in methods the server advertises (ADR 0058); with one, it looks as it always did.
 import { useEffect, useRef, useState } from "react";

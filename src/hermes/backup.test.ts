@@ -492,7 +492,7 @@ describe("reading a backup", () => {
   });
 
   it("backs up a saved connection's data, kept by its id, by its address, and restores it under the id of the connection here", async () => {
-    // Saved connections keep their data by a stable id (connections.ts, ADR 0049); the backup names the address.
+    // Saved connections keep their data by a stable id (connections.ts, ADR 0112); the backup names the address.
     const here = { ...conn, id: "aaaaaaaa-0000-4000-8000-000000000001" };
     const there = { ...conn, id: "bbbbbbbb-0000-4000-8000-000000000002" };
     const from = env();

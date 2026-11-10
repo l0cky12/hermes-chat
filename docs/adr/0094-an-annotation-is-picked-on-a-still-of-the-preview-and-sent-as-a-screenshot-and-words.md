@@ -57,7 +57,7 @@ Styles: color rgb(255,255,255); background-color rgb(37,99,235); font-size 14px;
 Note: make this match the secondary button
 ```
 
-A region drops the Element, Selector and Styles lines and says why. A Server page's view loads the tunnel, `http://127.0.0.1:<port>/<path>` (ADR 0052). The tunnel changes only the host and port (`ServerPage::local_url`). Before an address enters the words or a chip, the scheme, host and port are set back to those of the address the owner opened, and the current path, query and fragment are kept.
+A region drops the Element, Selector and Styles lines and says why. A Server page's view loads the tunnel, `http://127.0.0.1:<port>/<path>` (ADR 0114). The tunnel changes only the host and port (`ServerPage::local_url`). Before an address enters the words or a chip, the scheme, host and port are set back to those of the address the owner opened, and the current path, query and fragment are kept.
 
 The query function collects only these fields:
 

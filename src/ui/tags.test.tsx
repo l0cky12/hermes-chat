@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Tags and Saved filters in the app (ADR 0026): the tag editor, tagging from a chat's menu, the search palette's
+// Tags and Saved filters in the app (ADR 0106): the tag editor, tagging from a chat's menu, the search palette's
 // filters and their chips, saving a filter and reopening it from the list, and a bulk tag edit that changes nothing
 // until it is confirmed.
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";

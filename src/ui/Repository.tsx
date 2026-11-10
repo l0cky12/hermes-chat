@@ -1,4 +1,4 @@
-// The Repository screen: a Git checkout on the Hermes server, reviewed from here (ADR 0034). It reads through the
+// The Repository screen: a Git checkout on the Hermes server, reviewed from here (ADR 0110). It reads through the
 // owner's own ssh, not through the dashboard, so it works while Hermes is away too. It covers the chat panes, as
 // Server files does.
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
@@ -1012,7 +1012,7 @@ function PatchFile({ diff }: { diff: string }) {
 }
 
 /**
- * Push and Create PR, separately (ADR 0034, stage 3). Both show where they go first: the repository, the remote and
+ * Push and Create PR, separately (ADR 0110, stage 3). Both show where they go first: the repository, the remote and
  * its URL, the local and remote branch, the commits, and for a pull request its base. Read again whenever HEAD or
  * the branch moves, and on Refresh.
  */

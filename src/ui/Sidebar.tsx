@@ -1,5 +1,5 @@
 // Icon rail beside a chat list (ADR 0001), ported from the prototype's variants C and A, with the profile's tools in one
-// Server group and tips that show at once (ADR 0050, 0055). Server files and the Terminal live in the side panel only. The list's header is the profile switcher. Settings opens from the
+// Server group and tips that show at once (ADR 0050, 0116). Server files and the Terminal live in the side panel only. The list's header is the profile switcher. Settings opens from the
 // rail's foot. Right-clicking a chat opens its menu (ChatMenu.tsx).
 import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -135,7 +135,7 @@ export function Rail({
       </button>
     ),
   ].filter(Boolean);
-  // Daily tools first, then the profile's tools in one labeled group (ADR 0050, 0055).
+  // Daily tools first, then the profile's tools in one labeled group (ADR 0050, 0116).
   const parts = (
     <>
       <div className="rail-top">

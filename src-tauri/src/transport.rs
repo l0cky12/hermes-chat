@@ -10,12 +10,12 @@
 //! which speech providers the profile uses without passing the rest of its config, keys and all, to the webview
 //! (research doc, "Voice").
 //! A direct connection can carry extra request headers for a gateway in front of the dashboard, such as Cloudflare
-//! Access, on every request and the WebSocket handshake (ADR 0006).
+//! Access, on every request and the WebSocket handshake (ADR 0104).
 //! Setup uses two more things here: `probe`, which tests a sign-in without keeping it, and
 //! `Dashboard::save_provider_key`, which gives Hermes a model provider's API key, and `Dashboard::remove_provider_key`,
 //! which takes one away (Settings → Providers, ADR 0095).
 //! Before any password goes out, `read_server` reads the dashboard's public `/api/status` and `identify` checks it is
-//! a Hermes dashboard, and the same one the connection signed in to before (ADR 0056).
+//! a Hermes dashboard, and the same one the connection signed in to before (ADR 0120).
 
 use crate::connect_steps::{Step, Steps};
 use base64::Engine;
@@ -116,21 +116,21 @@ pub enum TransportError {
     Voice(String),
     #[error("{0}")]
     BadHeader(String),
-    /// Settings → MCP servers' edit, refused before anything was written (ADR 0068).
+    /// Settings → MCP servers' edit, refused before anything was written (ADR 0121).
     #[error("{0}")]
     Mcp(String),
-    /// Settings → MCP servers' edit, after something may have been written: Hermes didn't confirm all of it (ADR 0068).
+    /// Settings → MCP servers' edit, after something may have been written: Hermes didn't confirm all of it (ADR 0121).
     #[error("Not confirmed: {0}")]
     McpUnconfirmed(String),
     #[error("The dashboard sent Hermes Chat on to {0}, another site. Hermes Chat doesn't follow it there, so your extra request headers aren't sent to it. If a gateway such as Cloudflare Access is in front of the dashboard, check the headers it needs.")]
     Redirected(String),
-    /// `/api/status` answered, but not as a Hermes dashboard does (ADR 0056). No password was sent.
+    /// `/api/status` answered, but not as a Hermes dashboard does (ADR 0120). No password was sent.
     #[error("Wrong server: something answered at this address, but it isn't a Hermes dashboard. Hermes Chat didn't send it the password.")]
     NotHermes,
-    /// A Hermes dashboard answered whose install id isn't the one the connection signed in to before (ADR 0056).
+    /// A Hermes dashboard answered whose install id isn't the one the connection signed in to before (ADR 0120).
     #[error("Wrong server: a different Hermes server answered at this address than the one this connection signed in to before. Hermes Chat didn't send it the password.")]
     WrongServer,
-    /// Plain http:// to an address that isn't this computer, a LAN or Tailscale (ADR 0056).
+    /// Plain http:// to an address that isn't this computer, a LAN or Tailscale (ADR 0120).
     #[error("Plain http:// is only used on this computer, a LAN or Tailscale, and {0} is a public address. Use https:// or SSH to reach it.")]
     PlainHttpPublic(String),
     /// Plain http:// to an address in 100.64.0.0/10 that this computer doesn't reach over Tailscale (ADR 0004).
@@ -452,7 +452,7 @@ where
 
 /// Whether `ip` is this computer, a private LAN range, link-local, or Tailscale's IPv6 range (fd7a:115c:a1e0::/48,
 /// which the unique-local fc00::/7 holds). Tailscale's IPv4 range, 100.64.0.0/10, isn't one of them: carrier-grade NAT
-/// uses it too, so a plain http:// route goes there only over Tailscale (`check_plain_http`, ADR 0004 and 0056).
+/// uses it too, so a plain http:// route goes there only over Tailscale (`check_plain_http`, ADR 0004 and 0120).
 pub fn is_local_or_private(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
@@ -467,7 +467,7 @@ pub fn is_local_or_private(ip: IpAddr) -> bool {
 }
 
 /// Refuses a plain http:// dashboard whose host is, or resolves to, anything but this computer, a LAN or Tailscale:
-/// the password would cross the internet, or a carrier's network, unencrypted (ADR 0004 and 0056). https:// goes
+/// the password would cross the internet, or a carrier's network, unencrypted (ADR 0004 and 0120). https:// goes
 /// anywhere.
 pub fn check_plain_http(direct: &DirectUrl) -> Result<(), TransportError> {
     check_plain_http_from(direct, source_toward)
@@ -523,7 +523,7 @@ pub fn server_id(install_id: &str) -> String {
 
 /// Reads an `/api/status` body: it must be a Hermes dashboard's, which always carries its version or its sign-in gate,
 /// and when it names its install and `expect` is set, the install must be that one. The server's id when it names
-/// one. None of this sends the password (ADR 0056).
+/// one. None of this sends the password (ADR 0120).
 pub fn identify(status: &str, expect: Option<&str>) -> Result<Option<String>, TransportError> {
     let v: serde_json::Value = serde_json::from_str(status).map_err(|_| TransportError::NotHermes)?;
     let o = v.as_object().ok_or(TransportError::NotHermes)?;
@@ -539,7 +539,7 @@ pub fn identify(status: &str, expect: Option<&str>) -> Result<Option<String>, Tr
 
 /// `GET /api/status` at `base`, which a Hermes dashboard answers without a sign-in, with the body read inside the
 /// limit too, since a server can send its headers and then stall. Only a 2xx is a status: a Hermes dashboard always
-/// serves it, so anything else gets no password (ADR 0056). A refusal (401, 403), a server error and a redirect to
+/// serves it, so anything else gets no password (ADR 0120). A refusal (401, 403), a server error and a redirect to
 /// another site keep their own errors, as they come from something in front of the dashboard or a dashboard that
 /// is failing; any other answer is `NotHermes`.
 async fn read_status(http: &reqwest::Client, base: &Url, headers: &HeaderMap) -> Result<String, TransportError> {
@@ -564,7 +564,7 @@ pub struct ServerSeen {
     pub server: Option<String>,
 }
 
-/// Reads `/api/status` within `wait` and checks it with `identify`, before anything signs in (ADR 0056). `http`: the
+/// Reads `/api/status` within `wait` and checks it with `identify`, before anything signs in (ADR 0120). `http`: the
 /// route's `client(headers)`, which the sign-in then reuses.
 pub async fn read_server(http: &reqwest::Client, base: &Url, headers: &HeaderMap, expect: Option<&str>, wait: Duration) -> Result<ServerSeen, TransportError> {
     let status = tokio::time::timeout(wait, read_status(http, base, headers))
@@ -574,7 +574,7 @@ pub async fn read_server(http: &reqwest::Client, base: &Url, headers: &HeaderMap
     Ok(ServerSeen { status, server })
 }
 
-/// How long each step of opening one of several routes may take before the next route is tried (ADR 0056). A
+/// How long each step of opening one of several routes may take before the next route is tried (ADR 0120). A
 /// connection with one route has none: only the whole attempt's limit, as before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StepLimits {
@@ -916,7 +916,7 @@ const ATTACHABLE_KEPT: usize = 1000;
 
 /// The local files the owner chose to attach: dropped on the window, picked in the composer's Open dialog, pasted or
 /// captured as a screenshot. Only Rust adds to it, so a script in the webview can't send, stat or preview any other
-/// file (ADR 0100). It is kept on disk, because queued and unsent messages keep their attachments across restarts.
+/// file (ADR 0129). It is kept on disk, because queued and unsent messages keep their attachments across restarts.
 #[derive(Default)]
 pub struct Attachable {
     paths: Mutex<Vec<String>>,
@@ -1361,9 +1361,9 @@ impl Dashboard {
     /// profile, `POST api/skills` (`skill_create_allowed`), Settings → Memory's entry edit for any profile, `PUT
     /// api/learning/node` naming a memory entry (`memory_entry_edit_allowed`), and Import transcripts'
     /// `POST api/sessions/import` whose every session is marked `source: "import"` (`import_body_allowed`, ADR 0031),
-    /// the Automations writes (`webhook_write`, ADR 0036), Settings → Memory's external memory writes
+    /// the Automations writes (`webhook_write`, ADR 0108), Settings → Memory's external memory writes
     /// (`memory_provider_write`, ADR 0045), and Settings → Voice's provider pick and key save (`voice_provider_write`,
-    /// ADR 0055), Settings → MCP servers' add, switch, test, sign-in and catalog install (`mcp::relayed`, ADR 0068), and
+    /// ADR 0115), Settings → MCP servers' add, switch, test, sign-in and catalog install (`mcp::relayed`, ADR 0121), and
     /// Settings → Gateways' Telegram and Discord save and status check (`gateway_write`, ADR 0073).
     /// `DELETE api/env` is refused whatever the body: a key leaves the server only through
     /// `Dashboard::remove_provider_key`, which checks that it is a model provider's (ADR 0095).
@@ -2070,7 +2070,7 @@ pub fn toolset_toggle_allowed(path: &str, body: Option<&str>) -> bool {
     }
 }
 
-/// Settings → Voice's writes under Hermes's toolset routes (ADR 0055, `hermes_cli/web_routers/tools.py`), for the `stt`
+/// Settings → Voice's writes under Hermes's toolset routes (ADR 0115, `hermes_cli/web_routers/tools.py`), for the `stt`
 /// and `tts` toolsets only:
 /// - `PUT api/tools/toolsets/{stt,tts}/provider` with exactly `{"provider": <name>}` picks a provider by the name Hermes
 ///   lists it under (`apply_provider_selection`, which writes `<kind>.provider` and nothing else of the config).
@@ -2142,7 +2142,7 @@ pub fn gateway_write(method: &str, path: &str, body: Option<&str>) -> bool {
     })
 }
 
-/// The Automations writes (ADR 0036, Hermes's `/api/webhooks` routes and the `webhooks/1` contract): `POST
+/// The Automations writes (ADR 0108, Hermes's `/api/webhooks` routes and the `webhooks/1` contract): `POST
 /// api/webhooks` creates a route, `PUT api/webhooks/{name}` edits one, `PUT api/webhooks/{name}/enabled` pauses or
 /// resumes one, and `POST api/webhooks/{name}/deliveries/{id}/retry` retries a failed delivery. The route name is one
 /// segment as Hermes names routes, the delivery id one unreserved segment. Each body is a JSON object with only the
@@ -2241,7 +2241,7 @@ fn skill_dir_name(n: &str) -> bool {
         && b.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'.' || c == b'_' || c == b'-')
 }
 
-/// Whether a `POST api/skills` body is Settings → Skills' copy of a skill into another profile (ADR 0057): exactly
+/// Whether a `POST api/skills` body is Settings → Skills' copy of a skill into another profile (ADR 0118): exactly
 /// `{"name", "content"}` and optionally `"category"`, the name and category each one folder name as Hermes allows
 /// it (`skill_dir_name`), the content a string. The profile goes in the query, never the body. Hermes's own front matter,
 /// size and security checks then apply, and it refuses a name the profile already has.
@@ -2259,7 +2259,7 @@ pub fn skill_create_allowed(body: Option<&str>) -> bool {
     known && name_ok && content_ok && category_ok
 }
 
-/// Whether a `PUT api/learning/node` body replaces one built-in memory entry (ADR 0057): exactly `{"id", "content"}`,
+/// Whether a `PUT api/learning/node` body replaces one built-in memory entry (ADR 0118): exactly `{"id", "content"}`,
 /// the id a memory node as Hermes names it, `memory:<memory|profile>:<index>:<fingerprint>` (`agent/learning_graph.py`
 /// `memory_node_id`, the fingerprint 12 hex digits of SHA-256). Hermes resolves the fingerprint under the memory tool's
 /// lock and refuses a stale one. A skill's id is its name, and skills are edited only through `api/skills/content`,
@@ -2541,7 +2541,7 @@ pub async fn probe_with(base: &Url, sign_in: &SignIn, profile: &str, step: Durat
 }
 
 /// `probe_with`, which also refuses, before the password goes out, a server that isn't the one `expect` names
-/// (`identify`, ADR 0056). `reach`: how long the status read may take, shorter for one of several routes.
+/// (`identify`, ADR 0120). `reach`: how long the status read may take, shorter for one of several routes.
 pub async fn probe_expecting(
     base: &Url,
     sign_in: &SignIn,
@@ -2768,7 +2768,7 @@ impl Dashboard {
 }
 
 impl Dashboard {
-    /// Settings → MCP servers' edit of one server for `profile` (ADR 0068). Hermes's only edit route replaces the whole
+    /// Settings → MCP servers' edit of one server for `profile` (ADR 0121). Hermes's only edit route replaces the whole
     /// `mcp_servers` map (`PUT /api/mcp/servers`), and its list hides env values, so Rust makes the map:
     ///
     /// 1. `GET /api/config?profile=&include_defaults=false` reads the profile's config as written, `${VAR}` references

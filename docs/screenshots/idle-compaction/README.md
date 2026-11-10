@@ -1,4 +1,4 @@
-# Idle compaction (ADR 0059)
+# Idle compaction (ADR 0119)
 
 Captured on 2026-11-04 from the running Tauri debug app (WebKitGTK, frontend embedded) at commit `2f99487`, on an
 Xvfb display at 1280 × 820, with its own `HOME`, XDG folders and D-Bus session, so nothing touched a real profile or

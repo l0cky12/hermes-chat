@@ -1,4 +1,4 @@
-// A stand-in Hermes dashboard for the Inbox click-away and rail screenshots (ADR 0055) in the real Tauri app: sign-in,
+// A stand-in Hermes dashboard for the Inbox click-away and rail screenshots (ADR 0116) in the real Tauri app: sign-in,
 // the WS ticket, `/api/ws` and dashboard REST, all answered by the tests' FakeHermes with synthetic chats, and Unread
 // chats and a waiting Approval in a second profile so the Inbox has entries. Loopback only.
 //   npx rolldown docs/screenshots/inbox-click-away/bridge.ts --platform node -o /tmp/inbox-bridge.mjs && node /tmp/inbox-bridge.mjs 47911

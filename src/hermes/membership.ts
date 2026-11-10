@@ -1,9 +1,9 @@
-// Which chats are in which project, kept by Hermes so every computer shows the same (ADR 0033, #84).
+// Which chats are in which project, kept by Hermes so every computer shows the same (ADR 0109, #84).
 //
 // Hermes at the deployed `bf0203a`, and upstream at `9302ba9e` (2026-11-03), has no record linking a project to its
 // chats: `projects.db` holds projects and folders only, and the official desktop groups chats by their working folder.
 // So this module speaks a proposed contract, `projects.membership.list` and `projects.membership.apply`, written down in
-// ADR 0033. A Hermes without it answers JSON-RPC "method not found", and the app then keeps membership on this computer
+// ADR 0109. A Hermes without it answers JSON-RPC "method not found", and the app then keeps membership on this computer
 // as before (projectLinks.ts). Nothing here guesses at a store Hermes doesn't have.
 //
 // Changes are operations, not copies of the whole list. Each says what the owner wants (`member`) and the membership
@@ -33,7 +33,7 @@ export type MembershipOp = {
 /** One link, as a key. */
 export const linkKey = (l: Link) => `${l.projectId}\n${l.chatId}`;
 
-/** What Hermes answers for one operation (ADR 0033). `rev`: the revision of the link's last change, 0 for never. */
+/** What Hermes answers for one operation (ADR 0109). `rev`: the revision of the link's last change, 0 for never. */
 export type OpStatus = "applied" | "unchanged" | "conflict" | "no_project" | "no_session";
 export type OpResult = { opId: string; status: OpStatus; member: boolean; rev: number };
 

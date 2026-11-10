@@ -1,4 +1,4 @@
-// Settings → MCP servers' reads and writes (mcp.ts, ADR 0068) through the transport, against the fake dashboard's MCP
+// Settings → MCP servers' reads and writes (mcp.ts, ADR 0121) through the transport, against the fake dashboard's MCP
 // routes and Rust's single-server edit (fakeMcp.ts): add, edit, remove, switch, test, sign in and the catalog, each
 // named for its profile, each read back before it counts.
 import { describe, expect, it } from "vitest";

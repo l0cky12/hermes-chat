@@ -10,7 +10,7 @@ import type { ArtifactRef } from "./artifacts";
 export type PreviewTarget =
   /**
    * `on`: for a page on a loopback address (`loopbackOf`), whose loopback it is: the Hermes server's, through an SSH
-   * tunnel (the default, since that is where Hermes runs what it starts), or this computer's (ADR 0052).
+   * tunnel (the default, since that is where Hermes runs what it starts), or this computer's (ADR 0114).
    */
   | { kind: "web"; url: string; on?: PageOn }
   /**
@@ -121,7 +121,7 @@ export function loopbackOf(raw: string): { at: string } | undefined {
 /**
  * What a link points at. `page`: an http(s) page `checkWebUrl` passed, which the Preview and this computer's browser
  * both open. `serverPage`: one on a loopback address, the Hermes server's, which only the Preview's SSH tunnel reaches
- * (ADR 0052). `elsewhere`: anything the Preview won't load (`mailto:`, a relative path, `file:`, credentials, the app's
+ * (ADR 0114). `elsewhere`: anything the Preview won't load (`mailto:`, a relative path, `file:`, credentials, the app's
  * own origin), which opens nowhere and can only be copied. `url` is the checked address that opens; `href` is the
  * link's address as written.
  */

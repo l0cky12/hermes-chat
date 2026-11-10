@@ -1,4 +1,4 @@
-// Tags and Saved filters kept on this computer (tags.ts, ADR 0026): ids that survive renames, names compared without
+// Tags and Saved filters kept on this computer (tags.ts, ADR 0106): ids that survive renames, names compared without
 // case, one compare-and-swap per change, and each connection and profile kept apart.
 import { describe, expect, it } from "vitest";
 import { TagsStore, previewBulk, type TagsFile } from "./tags";

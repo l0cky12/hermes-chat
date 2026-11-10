@@ -797,7 +797,7 @@ async fn relays_the_two_skill_writes_with_exactly_their_fields() {
     let body = json!({"name": "notes", "content": "---\nname: notes\n---\nBody\n"}).to_string();
     let got: Value = serde_json::from_str(&dashboard.request("PUT", "api/skills/content?profile=spare", Some(body)).await.unwrap()).unwrap();
     assert_eq!(got["body"], json!({"name": "notes", "content": "---\nname: notes\n---\nBody\n"}));
-    // A copy into another profile (ADR 0057): the profile in the query, the body as sent.
+    // A copy into another profile (ADR 0118): the profile in the query, the body as sent.
     let body = json!({"name": "notes", "content": "---\nname: notes\n---\nBody\n", "category": "writing"}).to_string();
     let got: Value = serde_json::from_str(&dashboard.request("POST", "api/skills?profile=spare", Some(body)).await.unwrap()).unwrap();
     assert_eq!(got["uri"], json!("/api/skills?profile=spare"));
@@ -830,7 +830,7 @@ async fn relays_a_memory_entry_edit_for_any_profile_and_nothing_else_there() {
 async fn relays_no_other_skill_write() {
     let dashboard = signed_in().await;
     for (method, path, body) in [
-        // Creating a skill other than as a copy's exact fields (ADR 0057), and the hub's routes, which fetch and run
+        // Creating a skill other than as a copy's exact fields (ADR 0118), and the hub's routes, which fetch and run
         // code from elsewhere.
         ("POST", "api/skills", r#"{"name":"x","content":"y","profile":"other"}"#),
         ("POST", "api/skills", r#"{"name":"../x","content":"y"}"#),
@@ -2505,7 +2505,7 @@ async fn saves_an_edits_text_through_the_upload_route() {
     assert_eq!(uploads.lock().unwrap().as_slice(), ["/srv/notes.md"]);
 }
 
-// ── Routes: same-server check and plain http (ADR 0056) ─────────────────────────────────────────────────────────
+// ── Routes: same-server check and plain http (ADR 0120) ─────────────────────────────────────────────────────────
 
 /// A dashboard whose `/api/status` names `install`, counting the sign-ins it got.
 async fn installed(install: &'static str) -> (Url, Arc<Mutex<u32>>) {
@@ -2964,7 +2964,7 @@ async fn live_token_sign_in() {
     println!("live: {methods:?}; signed in as {}; a wrong token: {}", me["user_id"], wrong.message);
 }
 
-// ── one of several routes gives way on a step that stalls (#269, ADR 0056) ──────────────────────────────────
+// ── one of several routes gives way on a step that stalls (#269, ADR 0120) ──────────────────────────────────
 
 /// Step limits short enough for a test.
 const SHORT: StepLimits = StepLimits {
@@ -3090,7 +3090,7 @@ async fn a_connection_with_several_routes_limits_each_step_and_one_with_a_single
     let secs = |l: StepLimits| [l.lookup, l.sign_in, l.ticket, l.socket].map(|d| d.as_secs());
     assert_eq!(transport::StepLimits::of(true).map(secs), Some([5, 10, 10, 10]));
     assert_eq!(transport::StepLimits::of(false), None);
-    // A single route waits on a slow sign-in as long as the whole attempt allows (ADR 0056).
+    // A single route waits on a slow sign-in as long as the whole attempt allows (ADR 0120).
     let slow = stalling_at("/auth/password-login").await;
     assert!(tokio::time::timeout(Duration::from_secs(1), open_route(&slow, None, |_| {})).await.is_err(), "a single route gave up early");
 }

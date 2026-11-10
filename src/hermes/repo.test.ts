@@ -1,4 +1,4 @@
-// The Repository screen's model: grouping a status, reading diffs, and where the screen reads from (ADR 0034).
+// The Repository screen's model: grouping a status, reading diffs, and where the screen reads from (ADR 0110).
 // The statuses and diffs below are what repo_git_helper.py answered for real repositories (src-tauri/tests/repo_git.rs).
 import { describe, expect, it } from "vitest";
 import {

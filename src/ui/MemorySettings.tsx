@@ -4,7 +4,7 @@
 // in another entry; it is never stored on this computer. Memory text is shown as plain text, never rendered.
 //
 // Any profile's memory can be shown (the picker Settings passes in), and in Select mode several entries can be removed
-// at once, each checked against what was read (ADR 0057). Entries can't be copied or moved to another profile: Hermes
+// at once, each checked against what was read (ADR 0118). Entries can't be copied or moved to another profile: Hermes
 // has no call that adds one.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, Check, CheckSquare, Copy, History, Info, RefreshCw, Trash2, Undo2 } from "lucide-react";
@@ -73,7 +73,7 @@ export function MemorySettings({
   status: ConnectionStatus;
   /** Picks the profile shown, in place of its name (Settings' `ProfilePicker`). */
   picker?: ReactNode;
-  /** The file shown, chosen outside (Settings' Memory list, ADR 0051); the owner has already agreed to leave any unsaved edit. */
+  /** The file shown, chosen outside (Settings' Memory list, ADR 0113); the owner has already agreed to leave any unsaved edit. */
   source?: MemorySource;
   /** False: the file tabs are drawn elsewhere (Settings' Memory list), so only Reload shows above the entries. */
   files?: boolean;

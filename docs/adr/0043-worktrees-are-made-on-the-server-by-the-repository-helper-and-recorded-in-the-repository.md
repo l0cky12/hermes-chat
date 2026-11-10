@@ -1,18 +1,18 @@
 # Worktrees are made on the server by the Repository helper, and recorded in the repository
 
-The Repository screen (ADR 0034) has a **Worktrees** view (#82). It lists the repository's worktrees on the server, makes new ones for parallel coding chats, runs their setup once, starts a chat in one, and removes one after a preview that keeps every change first. Every Git operation runs on the Hermes server, through the same constant helper over the owner's own `ssh`, with structured requests and no shell. Nothing runs Git on this computer.
+The Repository screen (ADR 0110) has a **Worktrees** view (#82). It lists the repository's worktrees on the server, makes new ones for parallel coding chats, runs their setup once, starts a chat in one, and removes one after a preview that keeps every change first. Every Git operation runs on the Hermes server, through the same constant helper over the owner's own `ssh`, with structured requests and no shell. Nothing runs Git on this computer.
 
 This supersedes ADR 0042, the first design for #82 (merged in #157), which made worktrees through the same helper but put each one at a fixed `<parent>/<repo>.worktrees/<branch>` and kept its record in another format. Worktrees that design made stay readable by Git and are listed here as not made by this app, so they are never removed, set up or attached to from here: its record (`hermes-chat/worktrees.json`) is left as it is, and its lock reason (`hermes-chat <id>`) isn't this one's.
 
 ## Why not the dashboard's worktree routes
 
-Hermes at `f0d9488` (deployed, read over SSH on 2026-11-04) has `POST /api/git/worktree/add` and `/remove` (`hermes_cli/web_routers/git.py` over `hermes_cli/web_git.py`), and `GET /api/git/worktrees`. The project screen already uses the list (ADR 0007). The two writes can't meet #82:
+Hermes at `f0d9488` (deployed, read over SSH on 2026-11-04) has `POST /api/git/worktree/add` and `/remove` (`hermes_cli/web_routers/git.py` over `hermes_cli/web_git.py`), and `GET /api/git/worktrees`. The project screen already uses the list (ADR 0131). The two writes can't meet #82:
 
 - **`add` changes things nobody asked for.** `_ensure_repo` runs `git init` and makes an `Initial commit` in a folder that isn't a repository yet. Asked for the default branch as an "existing branch", it runs `git switch` in the **main checkout**, not in a new worktree. A remote base is fetched first.
 - **What's made isn't what was asked.** `_sanitize_branch` rewrites the branch name silently. `_unique_dir` picks `<repo>/.worktrees/<slug>-2` when the folder exists, so the path can't be shown before. If the branch already exists, the base is ignored and that branch is checked out.
 - **It lands where Hermes cleans up.** The folder is always `<repo>/.worktrees/…`. Hermes's own sweep (`hermes_cli/worktree_ops._prune_stale_worktrees`, `worktree_sweep.run_sweep`) archives and removes idle trees there, unlocks locks that aren't Hermes's, and `branch -D`s what it removed.
 - **`remove` passes `force` straight through,** with no preview, no preservation, and no check for chats or other users.
-- **Hooks and the owner's config are off,** as for the review routes (ADR 0034).
+- **Hooks and the owner's config are off,** as for the review routes (ADR 0110).
 
 The helper does the same Git operations itself. A dashboard that fixed these would be the better contract: see **Backend gap** below.
 
@@ -161,7 +161,7 @@ Ownership could also move to Hermes's own `worktree_registry` (per profile, toda
 
 ## Consequences
 
-- **What the server needs:** what ADR 0034 needs, and Git 2.36 or newer for worktrees. Older Git says the server isn't supported for worktrees.
+- **What the server needs:** what ADR 0110 needs, and Git 2.36 or newer for worktrees. Older Git says the server isn't supported for worktrees.
 - **Stored on the server, in the repository:**
   - `<git common dir>/hermes-chat/managed-worktrees.json` and `worktrees.lock`, removed with the repository (the lock file is shared with ADR 0042's helper, so the two never change the folder at once);
   - kept changes as `refs/hermes-chat/kept/*` commits, which `git gc` keeps because they are refs.

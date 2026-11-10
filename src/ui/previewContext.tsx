@@ -135,7 +135,7 @@ function LinkMenu({
 
 /**
  * A link in a reply or a previewed Markdown file. An http(s) link opens in the Preview, a loopback one from the Hermes
- * server (ADR 0052); anything else does nothing, since following it would replace Hermes Chat's own window. Same-page
+ * server (ADR 0114); anything else does nothing, since following it would replace Hermes Chat's own window. Same-page
  * `#anchors` still scroll, and keep WebKit's own menu. A link whose address react-markdown emptied (`file:`,
  * `javascript:`) has nothing to open or copy, so it gets no menu, and not WebKit's either: its Open Link would load this
  * window's own page. On a screen that covers the Preview, such as Settings, `click="menu"` opens the link menu instead, so

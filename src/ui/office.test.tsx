@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// The agent office (ADR 0077, ADR 0089), from what a fake Hermes reports through the real transport: the building and
+// The agent office (ADR 0077, ADR 0122), from what a fake Hermes reports through the real transport: the building and
 // the list show the same agents in the same states, named the same way, with the same Open chat, through a reply's
 // run, Approval, failures, completion and a reconnect. Also the agent's card, "+N more", the list a computer without
 // WebGL gets, the keyboard, reduced motion, the full view, and that it draws nothing while hidden. jsdom has no WebGL:

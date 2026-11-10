@@ -20,7 +20,7 @@ function fromBase64(b64: string): Uint8Array {
   return out;
 }
 
-/** An extra request header for a gateway in front of the dashboard, such as Cloudflare Access (ADR 0006). */
+/** An extra request header for a gateway in front of the dashboard, such as Cloudflare Access (ADR 0104). */
 export type ExtraHeader = { name: string; value: string };
 
 /**
@@ -35,11 +35,11 @@ export type SignInDetails = SignInWay & {
   password: string;
   headers?: ExtraHeader[];
   /**
-   * The connection's routes, tried in order (routes.ts, ADR 0056); the address above is then the first route's. Absent
+   * The connection's routes, tried in order (routes.ts, ADR 0120); the address above is then the first route's. Absent
    * on a sign-in with one route, which is its address.
    */
   routes?: RouteDetails[];
-  /** The server every route must reach, once known: a hash of its Hermes install id (ADR 0056). */
+  /** The server every route must reach, once known: a hash of its Hermes install id (ADR 0120). */
   server?: string;
   /** A token typed now (ADR 0058). Rust takes it in the connect or test command and never gives it back. */
   token?: string;

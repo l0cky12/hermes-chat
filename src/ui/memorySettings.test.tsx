@@ -92,7 +92,7 @@ const named = (text: string | RegExp) => (typeof text === "string" ? new RegExp(
 const entry = (text: string | RegExp) => within(screen.getByRole("list", { name: /entries$/ })).getByRole("button", { name: named(text) });
 const editor = () => screen.getByRole<HTMLTextAreaElement>("textbox", { name: /Entry in/ });
 const button = (name: string | RegExp) => screen.getByRole("button", { name });
-/** A memory file's entry in the Memory tab's list beside the detail (ADR 0051). */
+/** A memory file's entry in the Memory tab's list beside the detail (ADR 0113). */
 const file = (name: RegExp) => within(screen.getByRole("navigation", { name: "Memory" })).getByRole("button", { name });
 const current = (name: RegExp) => file(name).getAttribute("aria-current") === "true";
 const learning = (s: FakeHermes, method?: string) => s.requests.filter((r) => (method ? r.method === method : r.method.startsWith("learning.")));

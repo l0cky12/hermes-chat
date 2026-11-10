@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Frames (the preview pane's web pages) may load only http(s) pages, never the app's own tauri: or ipc: origins.
-         Tauri's CSP stays off (tauri.conf.json). See docs/adr/0007 and docs/adr/0100. -->
+         Tauri's CSP stays off (tauri.conf.json). See docs/adr/0007 and docs/adr/0129. -->
     <meta
       http-equiv="Content-Security-Policy"
       content="script-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://api.github.com; frame-src http: https:; object-src 'none'; base-uri 'none'; form-action 'none'"

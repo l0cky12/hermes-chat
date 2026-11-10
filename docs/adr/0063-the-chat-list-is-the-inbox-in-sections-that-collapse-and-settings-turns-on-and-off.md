@@ -29,7 +29,7 @@ Issue #219. The chat list beside the chat (the issue calls it the side panel; GL
 ## Consequences
 
 - **ADR 0050** (the rail): the Inbox button at the rail's top is the Rail inbox; the button, its count and its tip are unchanged.
-- **ADR 0055** (the Side panel and the Inbox closing on a click away): the Side panel is unchanged. "The Inbox" there is the Rail inbox, which still closes on a press outside it.
+- **ADR 0116** (the Side panel and the Inbox closing on a click away): the Side panel is unchanged. "The Inbox" there is the Rail inbox, which still closes on a press outside it.
 - **ADR 0036**: Snoozed is one of six sections, and its collapsed state is now remembered. The top it names is the Inbox.
 - **ADR 0002**: Settled chats are in a collapsible Settled section, not a drawer at the foot.
 - While the Archived section is hidden, archived chats aren't in the list, so a chat archived and then restored in another Hermes client in that time keeps its clear and comes back to Unsettled. Forgetting the clears of chats missing from the list would cover it, but would also forget every clear whenever the list is briefly empty or partial (a first sign-in, a refresh that failed), so it isn't done.

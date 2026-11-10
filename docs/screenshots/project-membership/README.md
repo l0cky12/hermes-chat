@@ -2,7 +2,7 @@
 
 These were captured on 2026-11-03 from the running Hermes Chat debug build (WebKitGTK), built from this branch. They were taken on an Xvfb display at 1280 × 820, which has no window manager, so dialogs have no title bar. Nothing was composited or retouched.
 
-**No real Hermes has a membership store.** The app was signed in by URL to a local stand-in: the repo's `FakeHermes` behind real HTTP and WebSocket on loopback (`bridge.ts` here). Its `projects.membership.*` methods implement the contract that [ADR 0033](../../adr/0033-project-membership-syncs-through-a-proposed-hermes-store.md) proposes. Every chat, project and link is synthetic.
+**No real Hermes has a membership store.** The app was signed in by URL to a local stand-in: the repo's `FakeHermes` behind real HTTP and WebSocket on loopback (`bridge.ts` here). Its `projects.membership.*` methods implement the contract that [ADR 0109](../../adr/0109-project-membership-syncs-through-a-proposed-hermes-store.md) proposes. Every chat, project and link is synthetic.
 
 "Computer A" and "computer B" are two runs of the app, each with its own `XDG_DATA_HOME`, so each has its own local storage. They ran one after the other against the same stand-in server. The changes were made in the app, with the mouse, unless noted otherwise.
 

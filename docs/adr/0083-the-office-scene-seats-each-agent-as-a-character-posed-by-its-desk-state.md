@@ -1,6 +1,6 @@
 # The office scene seats each agent as a character, posed by its desk's state
 
-> **Partly superseded by [ADR 0089](0089-the-office-is-a-3d-building-with-a-floor-per-profile-and-a-room-per-state.md)** (#281). The Scene view, its robots and its shared room are gone; the building draws each agent as a low-poly person in a room for its state. Its rules that carry over: an agent's pose follows its state, a team sits together, only a current agent at work moves, nothing moves for reduced motion, and the building and List give each agent the same accessible name and the same open.
+> **Partly superseded by [ADR 0122](0122-the-office-is-a-3d-building-with-a-floor-per-profile-and-a-room-per-state.md)** (#281). The Scene view, its robots and its shared room are gone; the building draws each agent as a low-poly person in a room for its state. Its rules that carry over: an agent's pose follows its state, a team sits together, only a current agent at work moves, nothing moves for reduced motion, and the building and List give each agent the same accessible name and the same open.
 
 Issue #257, a later stage of #105. The owner wants the agent office drawn as one room where each agent (a chat's reply and each subagent) is a character at a desk, so the picture reads as "these are my agents and this is what each one is doing". ADR 0077 built the office's rooms and its Desks and List views, and left characters for a later stage. This is that stage.
 

@@ -1,4 +1,4 @@
-# Connection routes (ADR 0056, issue #191)
+# Connection routes (ADR 0120, issue #191)
 
 Taken on 2026-11-04 from the real Tauri debug build (WebKitGTK) on an Xvfb display, 1280 × 820, app data and keyring in
 a throwaway folder (`setup/start-app.sh`). The dashboards are two `FakeHermes` stand-ins (`bridge.ts`) on loopback:

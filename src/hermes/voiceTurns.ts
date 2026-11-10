@@ -1,5 +1,5 @@
 // A Voice conversation's turns, the parts that aren't UI: when the owner has finished speaking, whether what Hermes
-// heard is its own reply coming back through the microphone, and why a conversation can't start (ADR 0041).
+// heard is its own reply coming back through the microphone, and why a conversation can't start (ADR 0111).
 //
 // Hermes has no server-side turn detection on the routes this app uses (`POST /api/audio/transcribe` takes a finished
 // recording). Its own voice mode ends a turn where the microphone is, by loudness: `AudioRecorder._track_speech` and

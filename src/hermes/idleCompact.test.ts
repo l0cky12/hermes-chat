@@ -1,4 +1,4 @@
-// Idle compaction (ADR 0059), driven against the fake Hermes: which chats are due, once per idle stretch, one at a
+// Idle compaction (ADR 0119), driven against the fake Hermes: which chats are due, once per idle stretch, one at a
 // time, a send during a compaction waiting for it, and what the owner is told.
 import { describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "./fakeHermes";

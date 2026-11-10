@@ -104,7 +104,7 @@ export function MemoryProviderSettings({
   overview = "table",
 }: {
   api: MemoryProvidersApi;
-  /** The profile to manage, chosen outside (Settings' Memory list, ADR 0051); the owner has already agreed to leave unsaved changes. */
+  /** The profile to manage, chosen outside (Settings' Memory list, ADR 0113); the owner has already agreed to leave unsaved changes. */
   target?: string;
   /** Called with every profile's name once they're read, for a list drawn elsewhere. */
   onProfiles?: (profiles: string[]) => void;

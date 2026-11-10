@@ -71,8 +71,8 @@ import { useLocale } from "../i18n/locale";
 
 type Tab = "general" | "appearance" | "model" | "providers" | "voice" | "toolsets" | "mcp" | "gateways" | "persona" | "memory" | "skills" | "diagnostics";
 /**
- * General's five groups, shown one at a time beside a sub-nav (ADR 0051); a search shows every group's sections at once.
- * Voice moved to its own tab with the speech providers (ADR 0055), so the third group holds screenshots.
+ * General's five groups, shown one at a time beside a sub-nav (ADR 0113); a search shows every group's sections at once.
+ * Voice moved to its own tab with the speech providers (ADR 0115), so the third group holds screenshots.
  */
 type GenGroup = "connection" | "chats" | "launch" | "screenshots" | "storage";
 const GEN_GROUPS: SubNavItem[] = [
@@ -130,8 +130,8 @@ export const signInText = (route?: Route) =>
 
 /**
  * Settings → Persona's wiring: the API, where each profile's edits are kept on this computer (`keyOf`), and where it
- * starts: `where.profile` is the profile in use. Persona lists and picks profiles itself (ADR 0056), and copies the shown
- * SOUL.md to another profile (ADR 0057).
+ * starts: `where.profile` is the profile in use. Persona lists and picks profiles itself (ADR 0117), and copies the shown
+ * SOUL.md to another profile (ADR 0118).
  */
 export type PersonaWiring = { api: PersonaApi; store: PersonaStore; keyOf: (profile: string) => string; where: PersonaWhere };
 
@@ -232,7 +232,7 @@ export function SettingsScreen({
   modelSettings: ModelSettingsApi;
   /** The profile's toolsets on Hermes; without it there is no Toolsets tab. */
   toolsets?: ToolsetsApi;
-  /** Each profile's MCP servers on Hermes (ADR 0068); without it there is no MCP servers tab. */
+  /** Each profile's MCP servers on Hermes (ADR 0121); without it there is no MCP servers tab. */
   mcp?: McpApi;
   /** Each profile's Telegram and Discord gateways on Hermes (ADR 0073); without it there is no Gateways tab. */
   gateways?: GatewaysApi;
@@ -287,7 +287,7 @@ export function SettingsScreen({
   onPersonaDirty?: PersonaDirty;
   /**
    * Every profile on the server (`GET /api/profiles`). With it, Skills and Memory each pick which profile they show, and
-   * skills can be copied between profiles (ADR 0057). Persona lists them itself (ADR 0056).
+   * skills can be copied between profiles (ADR 0118). Persona lists them itself (ADR 0117).
    */
   listProfiles?: () => Promise<string[]>;
   /** Runs `go`, once the owner agrees to leave an unsaved persona, memory or skill edit behind, if there is one. */
@@ -341,9 +341,9 @@ export function SettingsScreen({
   const [memProfiles, setMemProfiles] = useState<string[]>();
   /** Picking a memory file or profile leaves any unsaved memory edit, so it asks first, as switching tabs does. */
   const pickMem = (id: string) => memKey(memSel) !== id && guard(() => setMemSel(memSelOf(id)));
-  // Which profile Skills and Memory each show (ADR 0057): the app's own until the owner picks another, and the app's own
+  // Which profile Skills and Memory each show (ADR 0118): the app's own until the owner picks another, and the app's own
   // again when the app switches profile. Picking one leaves an unsaved edit, so it asks first. Persona picks its own
-  // (PersonaPage, ADR 0056).
+  // (PersonaPage, ADR 0117).
   const [profiles, setProfiles] = useState<string[]>();
   const [shownIn, setShownIn] = useState({ skills: profile, memory: profile, mcp: profile, gateways: profile, of: profile });
   const tabProfile = shownIn.of === profile ? shownIn : { skills: profile, memory: profile, mcp: profile, gateways: profile, of: profile };
@@ -877,7 +877,7 @@ export function SettingsScreen({
           )
         );
       case "diagnostics": {
-        // Server and Logs, one at a time beside a sub-nav, as General's groups are (ADR 0051, 0087). Logs reads Hermes
+        // Server and Logs, one at a time beside a sub-nav, as General's groups are (ADR 0113, 0087). Logs reads Hermes
         // only while it's shown; what it read goes when another group, tab or profile is shown.
         const group: DiagGroup = !capabilities || (diagGroup === "logs" && logs) ? "logs" : "server";
         const body =

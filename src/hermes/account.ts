@@ -1,11 +1,11 @@
-// Signing in and out of a saved connection (connections.ts, ADR 0049). Each connection's dashboard password is kept in
+// Signing in and out of a saved connection (connections.ts, ADR 0112). Each connection's dashboard password is kept in
 // the system keyring under its id, so the app signs in at launch without asking; the rest of the connection is kept in
 // the connection list, so the sign-in screen after Sign out has everything but the password. Its extra request
 // headers, whose values can be secrets, are kept in the keyring too, and stay after Sign out.
 //
 // A secret is only ever given back for the address it was saved for: a password with the mode, target and username
 // it signed in with, headers with their URL. So a sign-in to an edited address whose secrets the keyring couldn't save
-// never sends the old address's secrets to the new one. A connection with several routes (ADR 0056) saves its password
+// never sends the old address's secrets to the new one. A connection with several routes (ADR 0120) saves its password
 // with every route it was typed for, and a route added since, whose secrets weren't saved, is skipped (`locked`)
 // until the password is typed again.
 //
@@ -123,7 +123,7 @@ export async function signIn(
 ): Promise<{ hermes: Hermes; connection: SavedConnection; notSaved?: string; kept: Kept }> {
   const hermes = await account.connect(c, d, signal);
   const { password } = d;
-  // The server the routes reached, once one said: every route must reach it from now on (ADR 0056). Only a connection
+  // The server the routes reached, once one said: every route must reach it from now on (ADR 0120). Only a connection
   // with several routes keeps it.
   const server = d.routes ? (hermes.getSnapshot().route?.server ?? d.server) : undefined;
   const { routes: _routes, server: _server, method: _method, provider: _provider, ...rest } = c;

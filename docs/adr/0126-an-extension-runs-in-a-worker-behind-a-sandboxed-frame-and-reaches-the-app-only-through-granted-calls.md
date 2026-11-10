@@ -70,7 +70,7 @@ A package has a `manifest.json` and one script:
 | --- | --- | --- |
 | `chat.read` | The messages of the call's chat as the transcript shows them: role, text and time. No attachments and no tool output. | While its call is open |
 | `chat.draft` | Text added to the call's chat's Draft. The owner sends it, or doesn't. | While its call is open |
-| `project.read` | The name and folders of the call's chat's project (ADR 0007, projects). | While its call is open |
+| `project.read` | The name and folders of the call's chat's project (ADR 0131, projects). | While its call is open |
 | `storage` | Up to 1 MB of its own JSON, kept separately for each connection and profile (section 8). | Any time. The one exception to the open-call rule. |
 
 With no permission, an extension has its command's argument and nothing else.
@@ -102,7 +102,7 @@ With no permission, an extension has its command's argument and nothing else.
 
 - `view.update` sends a tree of a few node kinds: `heading`, `text`, `list`, `table`, `facts` (label and value pairs), `notice` and `button`. A `button` runs one of the extension's own commands, so a click is an owner's action and opens a call. The tree has caps on node count and depth.
 - `text` is Markdown drawn without raw HTML and without images. Replies render with `react-markdown`, where a remote image loads only after the owner's click (ADR 0099). In an extension's view, a load would be a way to send data out. A link opens only after the owner's click, through the app's link menu and its address check (ADR 0079).
-- **A view opens in the Preview**, as one more kind of item beside web pages, files and tool output (ADR 0007, ADR 0039). The side panel keeps its four tabs, as ADR 0055 and ADR 0066 decided. App components draw the tree, so a view gets the app's keyboard handling, focus, accessible names and narrow layout without extra work from the extension.
+- **A view opens in the Preview**, as one more kind of item beside web pages, files and tool output (ADR 0007, ADR 0039). The side panel keeps its four tabs, as ADR 0116 and ADR 0066 decided. App components draw the tree, so a view gets the app's keyboard handling, focus, accessible names and narrow layout without extra work from the extension.
 
 ### 7. Install, update and compatibility
 
@@ -169,6 +169,6 @@ With no permission, an extension has its command's argument and nothing else.
 5. **Extension secrets.** An extension for an outside service needs an API key and the network. Should Rust keep the key in the keyring and add it to requests for the hosts the manifest names, so the extension never reads it?
 6. **Memory.** Accept the shared web process for stages 3 and 4, as proposed, or require the separate process before install from a file opens?
 7. **Numbers.** The deadlines (5 s and 10 s), the idle stop (5 minutes), the ping (every 10 s, 5 s to answer), the message cap (256 KB, 50 a second), the storage cap (1 MB), the package caps (200 files, 5 MB uncompressed) and the failure limit (3 in 10 minutes) are first guesses.
-8. **Where views show.** In the Preview, as proposed, or in a fifth side-panel tab? A fifth tab reopens ADR 0055 and ADR 0066, which keep the panel to Preview, Terminal, Files and Screen.
+8. **Where views show.** In the Preview, as proposed, or in a fifth side-panel tab? A fifth tab reopens ADR 0116 and ADR 0066, which keep the panel to Preview, Terminal, Files and Screen.
 9. **The first real extension.** Which integration does the owner want first? The contract should fit it before stage 3.
 10. **Windows.** The probe ran only on WebKitGTK. WebView2 is untested (Delivery, step 2).
