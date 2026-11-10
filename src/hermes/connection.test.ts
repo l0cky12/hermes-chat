@@ -239,6 +239,30 @@ describe("Reconnecting", () => {
     expect(hermes.getSnapshot().syncError).toBeUndefined();
   });
 
+  it("keeps older history pulled when its read on the dropped connection fails after the reconnect has listed it", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("recent", 1), row("old", 40)];
+    const { hermes } = await signedIn(server);
+    await hermes.sync();
+    const listRead = server.rest["GET /api/sessions"];
+    let failStale!: (e: Error) => void;
+    server.rest["GET /api/sessions"] = () => new Promise((_, reject) => (failStale = reject));
+    const pulled = hermes.pullOlderHistory();
+    await vi.advanceTimersByTimeAsync(0);
+
+    server.drop();
+    server.rest["GET /api/sessions"] = listRead;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(hermes.getSnapshot().chats.map((c) => c.id).sort()).toEqual(["old", "recent"]);
+
+    failStale(new Error("Hermes stopped answering: nothing came back for 60 s."));
+    await vi.advanceTimersByTimeAsync(0);
+    expect((await pulled).map((c) => c.id)).toEqual(["old"]);
+    expect(hermes.getSnapshot()).toMatchObject({ olderPulled: true, syncError: undefined });
+    await hermes.sync();
+    expect(hermes.getSnapshot().chats.map((c) => c.id).sort()).toEqual(["old", "recent"]);
+  });
+
   it("stays connected while Hermes answers its pings", async () => {
     const { server, status } = await signedIn();
     await vi.advanceTimersByTimeAsync(5 * 60_000);

@@ -4235,7 +4235,8 @@ export class Hermes {
         for (const id of old.botChats) botChats.add(id);
       }
     } catch (e) {
-      if (!superseded()) this.update({ syncError: `Couldn't refresh the chat list: ${(e as Error).message}`, ...this.switchFailed(e as Error) });
+      if (superseded()) return undefined;
+      this.update({ syncError: `Couldn't refresh the chat list: ${(e as Error).message}`, ...this.switchFailed(e as Error) });
       return e as Error;
     }
     if (superseded()) return undefined;
