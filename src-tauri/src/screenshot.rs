@@ -12,7 +12,7 @@
 //!   Forms, both part of Windows.
 //!
 //! Captures are written privately under `$XDG_CACHE_HOME/hermes-chat/captures/<pid>/` (on Windows
-//! `%LOCALAPPDATA%\hermes-chat\captures\<pid>\`). Unsent composer captures are
+//! `%LOCALAPPDATA%\hermes-chat\captures\<pid>\`), with the files pasted into the composer. Unsent composer captures are
 //! removed on abandonment or exit; a screenshot needed by a failed/unknown message stays with its outbox until
 //! accepted, reconciled or dismissed. Crash leftovers without an outbox reference are swept at startup. A file the
 //! portal wrote in a temporary folder is deleted once copied; one it saved anywhere else (some desktops keep a copy in

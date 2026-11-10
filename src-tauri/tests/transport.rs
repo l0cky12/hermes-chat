@@ -1982,14 +1982,28 @@ fn refuses_extra_headers_that_are_malformed_reserved_or_set_twice() {
     }
 }
 
+struct PasteRoot(std::path::PathBuf, hermes_chat::screenshot::Captures);
+impl Drop for PasteRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+fn paste_root(tag: &str) -> PasteRoot {
+    let base = std::env::temp_dir().join(format!("hermes-chat-paste-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let captures = hermes_chat::screenshot::Captures::open(base.join("captures")).unwrap();
+    PasteRoot(base, captures)
+}
+
 #[test]
-fn stages_a_pasted_file_as_a_private_temp_file() {
+fn stages_a_pasted_file_privately_with_the_screenshots() {
+    let root = paste_root("stage");
     let png = b"\x89PNG\r\n\x1a\npasted";
-    let a = transport::stage_clipboard_file("clipboard-2026-11-02T153000.png", png).unwrap();
-    let b = transport::stage_clipboard_file("clipboard-2026-11-02T153000.png", png).unwrap();
+    let a = transport::stage_clipboard_file(&root.1, "clipboard-2026-11-02T153000.png", png).unwrap();
+    let b = transport::stage_clipboard_file(&root.1, "clipboard-2026-11-02T153000.png", png).unwrap();
     for p in [&a, &b] {
         assert!(p.is_absolute(), "{p:?}");
-        assert!(p.starts_with(std::env::temp_dir().join("hermes-chat")), "{p:?}");
+        assert!(root.1.owns(p), "{p:?}");
         assert_eq!(p.file_name().unwrap(), "clipboard-2026-11-02T153000.png");
         assert_eq!(std::fs::read(p).unwrap(), png);
         #[cfg(unix)]
@@ -2005,13 +2019,14 @@ fn stages_a_pasted_file_as_a_private_temp_file() {
     attachable.add([path_of(&a)]);
     let got = tokio::runtime::Runtime::new().unwrap().block_on(transport::stat_files(&attachable, &[path_of(&a)]));
     assert_eq!(got[0].size, Some(png.len() as u64));
-    for p in [a, b] {
-        std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
-    }
+    assert!(root.1.discard(&a));
+    assert!(!a.exists() && !a.parent().unwrap().exists());
+    assert!(b.exists());
 }
 
 #[test]
 fn a_pasted_file_name_stays_a_plain_basename() {
+    let root = paste_root("names");
     for (hostile, want) in [
         ("../../etc/passwd.png", "passwd.png"),
         ("/etc/passwd", "passwd"),
@@ -2025,16 +2040,14 @@ fn a_pasted_file_name_stays_a_plain_basename() {
         ("report.<script>", "report.<script>"),
         ("Résumé 2026.pdf", "Résumé 2026.pdf"),
     ] {
-        let p = transport::stage_clipboard_file(hostile, b"x").unwrap();
+        let p = transport::stage_clipboard_file(&root.1, hostile, b"x").unwrap();
         assert_eq!(p.file_name().unwrap(), want, "{hostile:?}");
         // Still inside its own fresh folder, not somewhere the name pointed.
-        assert_eq!(p.parent().unwrap().parent().unwrap(), std::env::temp_dir().join("hermes-chat"), "{hostile:?}");
-        std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
+        assert_eq!(p.parent().unwrap().parent().unwrap(), root.1.mine(), "{hostile:?}");
     }
-    let long = transport::stage_clipboard_file(&format!("{}.png", "é".repeat(300)), b"x").unwrap();
+    let long = transport::stage_clipboard_file(&root.1, &format!("{}.png", "é".repeat(300)), b"x").unwrap();
     let name = long.file_name().unwrap().to_str().unwrap();
     assert!(name.len() <= 255 && name.ends_with(".png"), "{name}");
-    std::fs::remove_dir_all(long.parent().unwrap()).unwrap();
 }
 
 #[tokio::test]
@@ -3135,4 +3148,187 @@ async fn a_failed_password_sign_in_shows_a_body_that_doesnt_repeat_the_password(
         let err = sign_in_at(&base, &sign_in("hunter2")).await.err().unwrap();
         assert!(matches!(&err, TransportError::Unexpected { status: s, body } if *s == status && body.contains(said)), "{err:?}");
     }
+}
+
+/// Bodies a Settings → Providers stub received, as (path and query, body).
+type Bodies = Arc<Mutex<Vec<(String, Value)>>>;
+
+/// A dashboard with Hermes's sign-in and custom endpoint routes (`oauth.py`, `config_env.py` at `bf0203a`), trimmed.
+/// The endpoint check passes for `http://ollama:11434/v1` and its host root, finds no models at `http://empty:8000/v1`, and turns any
+/// other address down, quoting the key it was sent.
+async fn accounts_stub() -> (Dashboard, Bodies) {
+    let bodies = Bodies::default();
+    let keep = |bodies: Bodies| {
+        move |axum::extract::OriginalUri(uri): axum::extract::OriginalUri, Json(body): Json<Value>| async move {
+            bodies.lock().unwrap().push((uri.to_string(), body.clone()));
+            body
+        }
+    };
+    let validate = {
+        let keep = keep(bodies.clone());
+        move |uri, Json(body): Json<Value>| async move {
+            let body = keep(uri, Json(body)).await;
+            Json(match body["base_url"].as_str() {
+                Some("http://ollama:11434/v1") => {
+                    json!({"ok": true, "reachable": true, "message": "", "models": ["qwen3:8b", "llama3.2"], "resolved_base_url": "http://ollama:11434/v1"})
+                }
+                // The host root, which serves its models only under `/v1`.
+                Some("http://ollama:11434") => {
+                    json!({"ok": true, "reachable": true, "message": "", "models": ["qwen3:8b"], "resolved_base_url": "http://ollama:11434/v1"})
+                }
+                Some("http://empty:8000/v1") => json!({"ok": false, "reachable": true, "message": "No models listed.", "models": []}),
+                _ => {
+                    json!({"ok": false, "reachable": true, "message": format!("The endpoint rejected the API key {}.", body["api_key"].as_str().unwrap_or("")), "models": []})
+                }
+            })
+        }
+    };
+    let save = {
+        let keep = keep(bodies.clone());
+        move |uri, Json(body): Json<Value>| async move {
+            let body = keep(uri, Json(body)).await;
+            if body["api_key"].as_str().is_some_and(|k| k.starts_with("sk-echo")) {
+                return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"detail": [{"msg": "bad", "input": body}]}))).into_response();
+            }
+            Json(json!({"ok": true, "id": body["name"].as_str().unwrap_or_default().to_lowercase()})).into_response()
+        }
+    };
+    let oauth = || async {
+        Json(json!({"providers": [
+            {"id": "nous", "name": "Nous Portal", "flow": "device_code", "cli_command": "hermes auth add nous", "disconnectable": true,
+             "disconnect_hint": null, "status": {"logged_in": true, "token_preview": "tok-SECRET", "expires_at": "2026-12-01T00:00:00+00:00"}},
+            {"id": "anthropic", "name": "Anthropic Account", "flow": "external", "cli_command": "hermes auth add anthropic", "disconnectable": true,
+             "disconnect_hint": null, "status": {"logged_in": false, "token_preview": null}},
+        ]}))
+    };
+    let endpoints = || async {
+        Json(json!({"endpoints": [
+            {"id": "ollama", "name": "Ollama", "base_url": "http://ollama:11434/v1", "model": "qwen3:8b", "has_api_key": true,
+             "api_key_preview": "«redacted:sk-o...SECRET»", "is_current": true, "source": "providers"},
+            {"id": "custom", "name": "Custom", "base_url": "http://x/v1", "model": "m", "has_api_key": false, "is_current": false, "source": "direct-config"},
+        ], "current": {}}))
+    };
+    let app = Router::new()
+        .route("/auth/password-login", post(login))
+        .route("/api/providers/oauth", get(oauth))
+        .route("/api/providers/custom-endpoints", get(endpoints).post(save))
+        .route("/api/providers/custom-endpoints/validate", post(validate))
+        .route("/api/providers/oauth/{id}/start", post(echo_write))
+        .route("/api/providers/custom-endpoints/{id}/activate", post(echo_write))
+        // As `delete_custom_endpoint` answers: the endpoints left, previews and all.
+        .route("/api/providers/custom-endpoints/{id}", axum::routing::delete(endpoints));
+    (sign_in_at(&serve(app).await, &sign_in("hunter2")).await.unwrap(), bodies)
+}
+
+fn endpoint_form(name: &str, base_url: &str, model: &str, key: Option<&str>) -> transport::EndpointForm {
+    transport::EndpointForm { name: name.into(), base_url: base_url.into(), model: model.into(), key: key.map(Into::into) }
+}
+
+#[tokio::test]
+async fn the_sign_in_and_endpoint_lists_reach_the_window_without_previews() {
+    let (dashboard, _) = accounts_stub().await;
+    let sign_ins = dashboard.provider_sign_ins("work").await.unwrap();
+    assert_eq!(
+        sign_ins.iter().map(|s| (s.id.as_str(), s.flow, s.signed_in)).collect::<Vec<_>>(),
+        [("nous", "device_code", true), ("anthropic", "external", false)]
+    );
+    let endpoints = dashboard.custom_endpoints("work").await.unwrap();
+    assert_eq!(endpoints.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["ollama"]);
+    let sent = serde_json::to_string(&(sign_ins, endpoints)).unwrap();
+    assert!(!sent.contains("SECRET"), "{sent}");
+}
+
+#[tokio::test]
+async fn a_missing_sign_in_route_is_a_404_the_window_can_tell() {
+    let app = Router::new().route("/auth/password-login", post(login));
+    let dashboard = sign_in_at(&serve(app).await, &sign_in("hunter2")).await.unwrap();
+    let err = dashboard.provider_sign_ins("default").await.unwrap_err();
+    assert!(matches!(err, TransportError::Unexpected { status: 404, .. }), "{err:?}");
+    assert!(err.to_string().starts_with("The dashboard answered 404"), "{err}");
+}
+
+#[tokio::test]
+async fn an_endpoint_is_checked_then_saved_with_the_models_found() {
+    let (dashboard, bodies) = accounts_stub().await;
+    let saved = dashboard.save_endpoint("work", &endpoint_form("Ollama", "http://ollama:11434/v1/", "", Some(" sk-local ")), false).await.unwrap();
+    assert_eq!(saved, transport::EndpointSave::Saved { id: "ollama".into(), checked: true });
+    let bodies = bodies.lock().unwrap();
+    assert_eq!(bodies[0].0, "/api/providers/custom-endpoints/validate");
+    assert_eq!(bodies[1].0, "/api/providers/custom-endpoints?profile=work");
+    assert_eq!(
+        bodies[1].1,
+        json!({"name": "Ollama", "base_url": "http://ollama:11434/v1", "model": "qwen3:8b", "api_key": "sk-local", "models": ["qwen3:8b", "llama3.2"]})
+    );
+}
+
+#[tokio::test]
+async fn an_endpoint_is_saved_at_the_address_that_served_its_models_and_without_a_key_clears_one() {
+    let (dashboard, bodies) = accounts_stub().await;
+    dashboard.save_endpoint("work", &endpoint_form("Ollama", "http://ollama:11434", "", None), false).await.unwrap();
+    let bodies = bodies.lock().unwrap();
+    assert_eq!(bodies[1].1, json!({"name": "Ollama", "base_url": "http://ollama:11434/v1", "model": "qwen3:8b", "api_key": "", "models": ["qwen3:8b"]}));
+}
+
+#[tokio::test]
+async fn an_endpoint_that_fails_the_check_isnt_saved_unless_asked_and_the_key_isnt_quoted() {
+    let (dashboard, bodies) = accounts_stub().await;
+    let form = endpoint_form("Groq", "https://api.groq.com/openai/v1", "llama-3.3-70b", Some("gsk_secret"));
+    let refused = dashboard.save_endpoint("work", &form, false).await.unwrap();
+    assert_eq!(refused, transport::EndpointSave::CheckFailed { message: "The endpoint rejected the API key (the key).".into() });
+    assert_eq!(bodies.lock().unwrap().len(), 1, "only the check went out");
+    let saved = dashboard.save_endpoint("work", &form, true).await.unwrap();
+    assert_eq!(saved, transport::EndpointSave::Saved { id: "groq".into(), checked: false });
+}
+
+#[tokio::test]
+async fn an_endpoint_without_a_model_needs_one_named_when_hermes_finds_none() {
+    let (dashboard, bodies) = accounts_stub().await;
+    let err = dashboard.save_endpoint("work", &endpoint_form("Empty", "http://empty:8000/v1", "", None), true).await.unwrap_err();
+    assert!(matches!(&err, TransportError::Endpoint(m) if m.contains("model")), "{err:?}");
+    assert_eq!(bodies.lock().unwrap().len(), 1, "nothing was saved");
+    let refused = dashboard.save_endpoint("work", &endpoint_form("", "http://ollama:11434/v1", "", None), false).await.unwrap_err();
+    assert!(matches!(refused, TransportError::Endpoint(_)), "{refused:?}");
+    assert_eq!(bodies.lock().unwrap().len(), 1, "a bad form sends nothing");
+}
+
+#[tokio::test]
+async fn a_refused_endpoint_save_never_shows_the_key() {
+    let (dashboard, _) = accounts_stub().await;
+    let err = dashboard.save_endpoint("work", &endpoint_form("Echo", "http://ollama:11434/v1", "m", Some("sk-echo-123")), false).await.unwrap_err();
+    assert!(matches!(err, TransportError::Unexpected { status: 422, .. }) && !err.to_string().contains("sk-echo"), "{err}");
+}
+
+#[tokio::test]
+async fn an_endpoint_save_that_never_answers_gives_up() {
+    let app =
+        Router::new().route("/auth/password-login", post(login)).route("/api/providers/custom-endpoints/validate", post(std::future::pending::<Response>));
+    let dashboard = sign_in_at(&serve(app).await, &sign_in("hunter2")).await.unwrap();
+    let err = dashboard.save_endpoint_within("work", &endpoint_form("A", "http://a/v1", "m", None), false, Duration::from_millis(300)).await.unwrap_err();
+    assert!(matches!(err, TransportError::EndpointTimedOut(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn the_relay_takes_only_a_bodiless_sign_in_start_and_endpoint_activation() {
+    let (dashboard, _) = accounts_stub().await;
+    dashboard.request("POST", "api/providers/oauth/openai-codex/start?profile=work", None).await.unwrap();
+    dashboard.request("POST", "api/providers/custom-endpoints/local-127.0.0.1%3A8283/activate?profile=work", Some("{}".into())).await.unwrap();
+    for (path, body) in [
+        ("api/providers/oauth/nous/start", Some(r#"{"x":1}"#)),
+        ("api/providers/oauth/Nous/start", None),
+        ("api/providers/oauth/nous/submit", None),
+        ("api/providers/custom-endpoints", Some(r#"{"name":"a","base_url":"http://a","model":"m"}"#)),
+        ("api/providers/custom-endpoints/validate", Some(r#"{"name":"a","base_url":"http://a","model":"m"}"#)),
+        ("api/providers/validate", Some(r#"{"key":"A","value":"b"}"#)),
+        ("api/env/reveal", Some(r#"{"key":"OPENAI_API_KEY"}"#)),
+    ] {
+        let err = dashboard.request("POST", path, body.map(Into::into)).await.unwrap_err();
+        assert!(matches!(err, TransportError::NotRelayed(_)), "POST {path}: {err:?}");
+    }
+}
+
+#[tokio::test]
+async fn removing_an_endpoint_through_the_relay_doesnt_pass_on_the_key_previews_hermes_answers_with() {
+    let (dashboard, _) = accounts_stub().await;
+    let answer = dashboard.request("DELETE", "api/providers/custom-endpoints/ollama?profile=work", None).await.unwrap();
+    assert_eq!(answer, r#"{"ok":true}"#);
 }

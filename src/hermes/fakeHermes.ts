@@ -5,6 +5,7 @@ import type { SavedKey } from "./setup";
 import type { ApprovalMode } from "./model";
 import { FakeMemoryProviders } from "./fakeMemoryProviders";
 import { FakeMcp } from "./fakeMcp";
+import { FakeAccounts } from "./fakeAccounts";
 import { FakeGateways } from "./fakeGateways";
 import { FakeVoiceProviders } from "./fakeVoiceProviders";
 import { FakeSkills } from "./fakeSkills";
@@ -457,6 +458,8 @@ export class FakeHermes {
   readonly mcp = new FakeMcp((p) => p === "default" || p in this.otherProfiles);
   /** The profile's Telegram and Discord gateways (fakeGateways.ts, ADR 0073). */
   readonly gateways = new FakeGateways((p) => p === "default" || p in this.otherProfiles);
+  /** Settings → Providers' subscription sign-ins and custom endpoints (ADR 0133). */
+  readonly accounts = new FakeAccounts((p) => p === "default" || p in this.otherProfiles);
   readonly memoryProviders = new FakeMemoryProviders((p) => p === "default" || p in this.otherProfiles || p in this.memory);
   /** The profiles' speech providers, for Settings → Voice (fakeVoiceProviders.ts). */
   readonly voiceProviders = new FakeVoiceProviders(
@@ -1655,6 +1658,10 @@ export class FakeHermes {
       saveProviderKey: async (profile, envVar, key) => this.saveProviderKey(profile, envVar, key),
       // Mirrors `Dashboard::remove_provider_key`: only a listed provider secret, then it reads unset.
       removeProviderKey: async (profile, envVar) => this.removeProviderKey(profile, envVar),
+      // Mirror `Dashboard::provider_sign_ins`, `custom_endpoints` and `save_endpoint`.
+      providerSignIns: async (profile) => this.accounts.signIns(profile),
+      customEndpoints: async (profile) => this.accounts.list(profile),
+      saveEndpoint: async (profile, form, anyway) => this.accounts.save(profile, form, anyway),
       // Mirrors `Dashboard::get_limited`: any GET the relay takes, refused once the answer passes the limit.
       getLimited: async (pathAndQuery, maxBytes) => {
         const body = await restCall("GET", pathAndQuery);
@@ -1696,6 +1703,7 @@ export class FakeHermes {
       this.memoryProviders.route(req) ??
       this.mcp.route(req) ??
       this.gateways.route(req) ??
+      this.accounts.route(req) ??
       this.voiceProviders.route(req);
     const toolset = /^\/api\/tools\/toolsets(?:\/([^/]+)(\/config)?)?$/.exec(req.path);
     if (!handler && toolset) return JSON.stringify(await this.toolsetRoute(req, toolset[1], !!toolset[2]));
