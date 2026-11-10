@@ -1133,9 +1133,7 @@ while True:
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("fake.py"), FAKE_SSH).unwrap();
             let program = dir.join("ssh");
-            std::fs::write(&program, format!("#!/bin/sh\nexec python3 {}/fake.py {} {mode} \"$@\"\n", dir.display(), dir.display())).unwrap();
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::test_common::write_executable(&program, &format!("#!/bin/sh\nexec python3 {}/fake.py {} {mode} \"$@\"\n", dir.display(), dir.display()));
             Fake { program: program.to_str().unwrap().to_owned(), dir }
         }
 
@@ -1641,9 +1639,7 @@ while True:
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let program = dir.join("ssh");
-        std::fs::write(&program, format!("#!/bin/sh\nyes '{LINE}' | head -c 300000\n")).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_common::write_executable(&program, &format!("#!/bin/sh\nyes '{LINE}' | head -c 300000\n"));
         let out = listening(program.to_str().unwrap(), "liam@hermes").await.expect("a long listing is cut, not failed");
         assert!(out.len() as u64 <= LISTENING_KEPT);
         assert!(out.lines().all(|l| l == LINE), "every line kept is whole");

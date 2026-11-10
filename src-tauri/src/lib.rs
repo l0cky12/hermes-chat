@@ -1630,6 +1630,10 @@ pub fn run(screenshot: bool, link: Option<String>) {
         });
 }
 
+#[cfg(all(test, unix))]
+#[path = "../tests/common/mod.rs"]
+mod test_common;
+
 #[cfg(test)]
 mod tests {
     use super::Transfers;
