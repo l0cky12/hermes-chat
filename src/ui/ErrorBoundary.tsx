@@ -6,9 +6,10 @@ type State = { error?: Error; where?: string };
  * Catches an error thrown while React draws anything below it, so the window shows what went wrong and a way back
  * instead of going blank: without a boundary React unmounts the whole tree (ADR 0092). React reports the error to the
  * console as well, so Logs → This app keeps it. `reload` (the page reload by default) starts the app over; it reconnects
- * from what this computer saved, and drafts are saved as they are typed.
+ * from what this computer saved, and drafts are saved as they are typed. With `fallback`, the error shows as that, in
+ * place of only what is below it, and the rest of the window keeps working (ADR 0137).
  */
-export class ErrorBoundary extends Component<{ children: ReactNode; reload?: () => void }, State> {
+export class ErrorBoundary extends Component<{ children: ReactNode; reload?: () => void; fallback?: (error: Error) => ReactNode }, State> {
   state: State = {};
 
   static getDerivedStateFromError(thrown: unknown): State {
@@ -22,6 +23,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode; reload?: () 
   render() {
     const { error, where } = this.state;
     if (!error) return this.props.children;
+    if (this.props.fallback) return this.props.fallback(error);
     const detail = `${error.stack && error.stack.includes(error.message) ? error.stack : `${error.name}: ${error.message}\n${error.stack ?? ""}`}${where ? `\n\nIn:${where}` : ""}`;
     return (
       <div className="restarting-overlay" role="alert">
