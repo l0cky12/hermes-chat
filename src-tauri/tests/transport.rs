@@ -1079,8 +1079,6 @@ async fn an_expired_sign_in_is_signed_out() {
     assert!(matches!(err, TransportError::SignedOut), "{err:?}");
 }
 
-/// A dashboard whose chat list never answers, and whose skills list and memory provider setup each work for five
-/// minutes before they answer, as they can behind an install.
 async fn slow_stub() -> Dashboard {
     let five_minutes = || async {
         tokio::time::sleep(Duration::from_secs(300)).await;

@@ -3469,6 +3469,11 @@ export class Hermes {
     return syncing;
   }
 
+  private abandonListSync() {
+    this.syncing = undefined;
+    this.syncAgain = false;
+  }
+
   /** Resolves once background work (list syncs, pinning) has finished. Tests wait on it; the app doesn't need to. */
   async idle() {
     while (this.background.size) await Promise.allSettled([...this.background]);
@@ -3824,9 +3829,7 @@ export class Hermes {
     this.kanbanWatch.stop();
     clearTimeout(this.rosterTimer);
     clearInterval(this.heartbeat);
-    // A list read on this connection may never answer; the reconnect syncs again without waiting for it.
-    this.syncing = undefined;
-    this.syncAgain = false;
+    this.abandonListSync();
     // Lets the Rust side end the tunnel.
     if (pipe) this.droppedClosing = pipe.close().catch(() => {}).finally(() => (this.droppedClosing = undefined));
     for (const p of this.pending.values()) p.reject(new ConnectionLostError(`Connection closed: ${reason}`));
@@ -4211,9 +4214,9 @@ export class Hermes {
     return title;
   }
 
-  /** One pass of `syncList`. `current`: whether the pass is still the list's sync, which `detach` ends. */
   private async syncOnce(current: () => boolean): Promise<Error | undefined> {
     const profile = this.profile;
+    const superseded = () => this.profile !== profile || !current();
     const cutoff = this.snapshot.olderPulled ? -Infinity : Date.now() - LIST_WINDOW_MS;
     this.pinnedSinceListRead.clear();
     this.readSinceListRead.clear();
@@ -4232,12 +4235,10 @@ export class Hermes {
         for (const id of old.botChats) botChats.add(id);
       }
     } catch (e) {
-      if (this.profile === profile && current())
-        this.update({ syncError: `Couldn't refresh the chat list: ${(e as Error).message}`, ...this.switchFailed(e as Error) });
+      if (!superseded()) this.update({ syncError: `Couldn't refresh the chat list: ${(e as Error).message}`, ...this.switchFailed(e as Error) });
       return e as Error;
     }
-    // The owner switched profile meanwhile, or the connection dropped; the switch or the reconnect syncs again.
-    if (this.profile !== profile || !current()) return undefined;
+    if (superseded()) return undefined;
 
     const known = new Map(this.snapshot.chats.map((c) => [c.id, c]));
     // A chat new to the list brings its outbox, kept on this computer.
