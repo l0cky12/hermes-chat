@@ -580,6 +580,9 @@ export class Hermes {
   /** The dropped pipe, until the Rust side has closed it. Opening the next one waits, because Rust holds a single
    * connection and closing drops whichever it holds. */
   private droppedClosing?: Promise<void>;
+  /** The pipe whose socket closed while the rest of its connection stays open: the next dial opens just the socket
+   * again on it (`Pipe.reopen`). */
+  private socketClosed?: Pipe;
   private redialing?: Promise<void>;
   private failedTries = 0;
   /** Opened by a launch on what this computer saved (`readSaved`, `openSaved`), and not connected since: once its quick
@@ -588,6 +591,7 @@ export class Hermes {
   private retryTimer?: ReturnType<typeof setTimeout>;
   private heartbeat?: ReturnType<typeof setInterval>;
   private lastHeard = 0;
+  private connectedAt = 0;
   private closing = false;
   /** Chats resumed on a connection that has since dropped: how many of their items the next resume replaces with the
    * stored history. */
@@ -1117,12 +1121,20 @@ export class Hermes {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let readyPayload: Record<string, unknown> = {};
     const profile = this.profile;
+    const onEvent = (e: PipeEvent) => {
+      if (gen !== this.generation) return;
+      if (e.kind === "closed" && !up) this.abortDial?.(new Error(`The connection closed before Hermes was ready: ${e.reason}`));
+      else this.handle(e);
+    };
+    const kept = this.socketClosed;
+    this.socketClosed = undefined;
     try {
-      pipe = await this.openPipe((e) => {
-        if (gen !== this.generation) return;
-        if (e.kind === "closed" && !up) this.abortDial?.(new Error(`The connection closed before Hermes was ready: ${e.reason}`));
-        else this.handle(e);
-      }, profile, stop.signal);
+      pipe = kept?.reopen
+        ? await kept.reopen(onEvent, profile, stop.signal).catch((e: unknown) => {
+            if (this.closing) throw e;
+            return this.openPipe(onEvent, profile, stop.signal);
+          })
+        : await this.openPipe(onEvent, profile, stop.signal);
       pipe.attempt?.ready();
       const payload = await Promise.race([
         ready,
@@ -1140,7 +1152,8 @@ export class Hermes {
       if (this.closing) pipe?.attempt?.stopped();
       else pipe?.attempt?.failed(e);
       this.generation++;
-      await pipe?.close().catch(() => {});
+      // A failed reopen has dropped the kept connection in Rust, but only a disconnect also closes its server pages.
+      await (pipe ?? kept)?.close().catch(() => {});
       throw e;
     } finally {
       clearTimeout(timer);
@@ -1149,7 +1162,7 @@ export class Hermes {
     up = true;
     this.pipe = pipe;
     this.pipeProfile = profile;
-    this.lastHeard = Date.now();
+    this.lastHeard = this.connectedAt = Date.now();
     this.heartbeat = setInterval(() => this.beat(), PING_EVERY_MS);
     this.update({ status: "connected", closedReason: undefined, route: pipe.route, unsecure: isUnsecure(pipe.route) });
     this.kanbanWatch.start();
@@ -3515,6 +3528,9 @@ export class Hermes {
     await this.redialing?.catch(() => {});
     await this.droppedClosing;
     await pipe?.close();
+    const socketClosed = this.socketClosed;
+    this.socketClosed = undefined;
+    await socketClosed?.close();
     // Anything a dial opened after all.
     await this.takePipe()?.close();
   }
@@ -3527,7 +3543,7 @@ export class Hermes {
   }
 
   private handle(e: PipeEvent) {
-    if (e.kind === "closed") return this.dropped(e.reason);
+    if (e.kind === "closed") return this.dropped(e.reason, true);
     this.lastHeard = Date.now();
     let frame: RpcFrame;
     try {
@@ -3823,17 +3839,23 @@ export class Hermes {
       this.track(this.resume(id).catch(() => this.patchChat(id, (c) => ({ ...c, items: endWaitingApprovals(c.items, "lost") }))));
   }
 
-  /** The connection has dropped, and reconnecting starts. */
-  private dropped(reason: string) {
-    this.detach(reason);
-    this.retryLater();
+  /**
+   * The connection has dropped, and reconnecting starts. `socketClosed`: its socket closed, so when its pipe can
+   * reopen, the rest of the connection is kept and the socket opened again at once, though not sooner than the first
+   * retry's wait after it connected.
+   */
+  private dropped(reason: string, socketClosed = false) {
+    this.detach(reason, socketClosed);
+    if (this.socketClosed) this.retryTimer = setTimeout(() => void this.redial(), Math.max(0, this.connectedAt + RETRY_DELAYS_MS[0] - Date.now()));
+    else this.retryLater();
   }
 
   /**
    * Lets go of the connection: requests in flight fail and replies stop running. Closing a connection detaches its
-   * runtime sessions, so each chat resumed on it resumes again when next opened.
+   * runtime sessions, so each chat resumed on it resumes again when next opened. `keep`: the pipe stays open for
+   * `socketClosed`, when it can reopen.
    */
-  private detach(reason: string) {
+  private detach(reason: string, keep = false) {
     const pipe = this.pipe;
     this.pipe = undefined;
     this.heldScreen = undefined;
@@ -3843,8 +3865,9 @@ export class Hermes {
     clearTimeout(this.rosterTimer);
     clearInterval(this.heartbeat);
     this.abandonListSync();
+    if (keep && pipe?.reopen) this.socketClosed = pipe;
     // Lets the Rust side end the tunnel.
-    if (pipe) this.droppedClosing = pipe.close().catch(() => {}).finally(() => (this.droppedClosing = undefined));
+    else if (pipe) this.droppedClosing = pipe.close().catch(() => {}).finally(() => (this.droppedClosing = undefined));
     for (const p of this.pending.values()) p.reject(new ConnectionLostError(`Connection closed: ${reason}`));
     this.pending.clear();
     this.earlyRequests.clear();

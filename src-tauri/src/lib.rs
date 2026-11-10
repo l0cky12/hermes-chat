@@ -251,21 +251,75 @@ async fn hermes_connect(
     *slot = None;
     transfers.stop_all();
     displays.close_all();
-    let attempt = attempt.unwrap_or_default();
-    // Run apart, so `hermes_connect_cancel` can stop it; stopping it drops what it opened, SSH tunnel included.
+    let (connection, route) = as_attempt(&state, attempt.unwrap_or_default(), async move {
+        // Which step it is on, for the record of connection attempts (#270).
+        let steps = Steps::reporting(move |s| drop(on_step.send(s)));
+        let opening = open_connection(target, credential, profile, on_event, expect_server, quick.unwrap_or(false), ssh_route, steps);
+        tokio::time::timeout(CONNECT_TIMEOUT, opening)
+            .await
+            .unwrap_or_else(|_| Err(format!("Hermes didn't finish connecting within {}s.", CONNECT_TIMEOUT.as_secs())))
+    })
+    .await?;
+    // Server pages opened through another SSH target, or for a URL sign-in none, belong to the server left behind.
+    pages.close_other_targets(connection.ssh_target.as_deref(), SIGNED_IN_ELSEWHERE);
+    *slot = Some(connection);
+    Ok(route)
+}
+
+/// How long a reopen's ticket and socket may each take: a closed socket usually means the rest of the connection still
+/// answers, and when it doesn't, opening it all again soon beats waiting.
+const REOPEN_LIMITS: transport::StepLimits = transport::StepLimits { ticket: QUICK_REACH, socket: QUICK_REACH, ..transport::StepLimits::ROUTES };
+
+/// Opens `/api/ws` for `profile` again on the connection held now, after its socket closed. The SSH tunnel and the
+/// sign-in are kept, so this mints a ticket and opens the socket, nothing more. Transfers stop as on any reconnect (ADR
+/// 0023), and so do Screens, whose lease came over the closed socket. Any failure, a stop included, closes the whole
+/// connection, so the webview opens it again from the start with `hermes_connect`.
+#[tauri::command]
+async fn hermes_reopen(
+    state: State<'_, AppState>,
+    transfers: State<'_, Transfers>,
+    displays: State<'_, display::Displays>,
+    profile: String,
+    attempt: String,
+    on_event: Channel<PipeEvent>,
+    on_step: Channel<connect_steps::Started>,
+) -> Result<(), String> {
+    let mut slot = state.0.lock().await;
+    transfers.stop_all();
+    displays.close_all();
+    let Some(conn) = slot.as_mut() else {
+        return Err(transport::TransportError::Closed.to_string());
+    };
+    let dashboard = conn.dashboard.clone();
+    let opened = as_attempt(&state, attempt, async move {
+        let steps = Steps::reporting(move |s| drop(on_step.send(s)));
+        dashboard.open_pipe_within(&profile, move |e| drop(on_event.send(e)), Some(REOPEN_LIMITS), &steps).await.map_err(|e| e.to_string())
+    })
+    .await;
+    match opened {
+        Ok(pipe) => {
+            conn.pipe = Arc::new(pipe);
+            Ok(())
+        }
+        Err(e) => {
+            *slot = None;
+            Err(e)
+        }
+    }
+}
+
+/// Runs `opening` apart as the attempt the webview names `attempt`, so `hermes_connect_cancel` can stop it.
+async fn as_attempt<T: Send + 'static>(
+    state: &AppState,
+    attempt: String,
+    opening: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
+) -> Result<T, String> {
     let task = {
         let mut connecting = state.2.lock().unwrap();
         if connecting.stopped.remove(&attempt) {
             return Err(CONNECT_STOPPED.into());
         }
-        let task = tokio::spawn(async move {
-            // Which step it is on, for the record of connection attempts (#270).
-            let steps = Steps::reporting(move |s| drop(on_step.send(s)));
-            let opening = open_connection(target, credential, profile, on_event, expect_server, quick.unwrap_or(false), ssh_route, steps);
-            tokio::time::timeout(CONNECT_TIMEOUT, opening)
-                .await
-                .unwrap_or_else(|_| Err(format!("Hermes didn't finish connecting within {}s.", CONNECT_TIMEOUT.as_secs())))
-        });
+        let task = tokio::spawn(opening);
         connecting.now = Some((attempt.clone(), task.abort_handle()));
         task
     };
@@ -276,15 +330,11 @@ async fn hermes_connect(
             connecting.now = None;
         }
     }
-    let (connection, route) = match opened {
-        Ok(opened) => opened?,
-        Err(e) if e.is_cancelled() => return Err(CONNECT_STOPPED.into()),
-        Err(e) => return Err(e.to_string()),
-    };
-    // Server pages opened through another SSH target, or for a URL sign-in none, belong to the server left behind.
-    pages.close_other_targets(connection.ssh_target.as_deref(), SIGNED_IN_ELSEWHERE);
-    *slot = Some(connection);
-    Ok(route)
+    match opened {
+        Ok(opened) => opened,
+        Err(e) if e.is_cancelled() => Err(CONNECT_STOPPED.into()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Opens the tunnel or resolves the URL, checks the dashboard there is Hermes, and the one `expect_server` names, then
@@ -1546,6 +1596,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
         .manage(Arc::new(server_page::ServerPages::default()))
         .invoke_handler(tauri::generate_handler![
             hermes_connect,
+            hermes_reopen,
             hermes_send,
             hermes_send_file,
             hermes_stat_files,

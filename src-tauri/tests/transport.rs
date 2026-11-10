@@ -637,6 +637,30 @@ async fn reports_when_the_server_closes_the_socket() {
 }
 
 #[tokio::test]
+async fn the_signed_in_dashboard_opens_the_socket_again_once_hermes_closed_it() {
+    let dashboard = signed_in().await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let pipe = dashboard.open_pipe("default", move |e| drop(tx.send(e))).await.expect("pipe open");
+    next(&mut rx).await;
+    pipe.send(json!({"jsonrpc": "2.0", "id": 1, "method": "bye"}).to_string()).unwrap();
+    assert!(matches!(next(&mut rx).await, PipeEvent::Closed { .. }));
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let pipe = dashboard.open_pipe("work", move |e| drop(tx.send(e))).await.expect("opened again without signing in");
+    assert_eq!(frame(next(&mut rx).await)["params"]["type"], "gateway.ready");
+    pipe.send(json!({"jsonrpc": "2.0", "id": 2, "method": "profile"}).to_string()).unwrap();
+    assert_eq!(frame(next(&mut rx).await)["result"], json!({"profile": "work"}));
+}
+
+#[tokio::test]
+async fn the_socket_does_not_open_again_once_the_sign_in_ended() {
+    let dashboard = signed_in().await;
+    get_json(&dashboard, "api/expire").await;
+    let refused = dashboard.open_pipe("default", |_| {}).await.err().expect("no ticket without a sign-in");
+    assert!(refused.to_string().contains("401"), "{refused}");
+}
+
+#[tokio::test]
 async fn wrong_password_is_bad_credentials() {
     let base = stub().await;
     let err = sign_in_at(&base, &sign_in("nope")).await.err().unwrap();

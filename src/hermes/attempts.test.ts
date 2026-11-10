@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 // @ts-expect-error node:fs has no types in this project; vitest runs in node.
 import { readFileSync } from "node:fs";
 import { AttemptLog, KEEP, STEPS, TEXT_MAX, WITHHELD, addressFree, attemptText, scrubberFor, type Attempt, type AttemptStore } from "./attempts";
 import { FakeHermes } from "./fakeHermes";
+import type { ReopenPipe } from "./pipe";
 import { LogBuffer } from "./logs";
 import { RoutesFailedError, routedPipe, withRoutes, type OpenRoute, type RouteDetails } from "./routes";
 import type { SignInDetails } from "./tauriPipe";
@@ -213,6 +214,42 @@ describe("The record of one connection attempt", () => {
     expect(a.routes[0]).toMatchObject({ id: LAN.id, kind: "lan", error: "Wrong username or password." });
     expect(a.routes[0].steps.at(-1)).toMatchObject({ step: "sign-in" });
     expect(attemptText(a, "x").text).toMatch(/^Failed after .*\. LAN route k3x9q2ab: .*sign-in \d+ ms; stopped at sign-in: Wrong username or password\.$/);
+  });
+
+  it("keeps a socket reopened on the open connection as an attempt of its own, over the same route, with only its ticket and socket", async () => {
+    vi.useFakeTimers();
+    try {
+      const { store, file } = memoryStore();
+      let at = 1_700_000_000_000;
+      let t = 0;
+      const log = new AttemptLog(store, { now: () => (at += 1_000), tick: () => (t += 10) });
+      const r = routes();
+      const reopening: OpenRoute = (d, opts) => async (onEvent, profile, signal) => {
+        const pipe = await r.open(d, opts)(onEvent, profile, signal);
+        const reopen: ReopenPipe = async (onEvent, profile, _signal, onStep) => {
+          onStep?.("ticket");
+          onStep?.("websocket");
+          return { ...(await r.server.openPipe(onEvent, profile)), route: { kind: "url", url: "", addresses: [] }, reopen };
+        };
+        return { ...pipe, reopen };
+      };
+      r.down.set(LAN.id, { at: ["keyring", "resolve"], error: "Can't reach the Hermes dashboard" });
+      const hermes = await connect(routedPipe(details([LAN, SSH]), reopening, { attempts: log }));
+      const route = hermes.getSnapshot().route;
+      expect(route?.via).toMatchObject({ id: SSH.id, index: 1 });
+
+      r.server.drop();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(hermes.getSnapshot()).toMatchObject({ status: "connected", route });
+      await log.settled();
+      const [first, again] = file();
+      expect(first.routes.map((x) => x.id)).toEqual([LAN.id, SSH.id]);
+      expect(again).toMatchObject({ outcome: "connected", routes: [{ id: SSH.id, kind: "ssh" }] });
+      expect(again.routes[0].steps.map((s) => s.step)).toEqual(["ticket", "websocket", "ready"]);
+      await hermes.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("when Hermes never sends gateway.ready, ends at the ready step with that reason", async () => {
