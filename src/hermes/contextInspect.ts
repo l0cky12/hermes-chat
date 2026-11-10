@@ -67,6 +67,9 @@ export type ContextReading = {
 
 const SOURCES = new Set<string>(["provider_usage", "provider_usage_plus_estimate", "local_estimate"]);
 
+/** A category colour the swatch may use. A `url()` would load from anywhere. */
+const SWATCH = /^(?:var\(--[\w-]+\)|#(?:[\da-f]{3,4}|[\da-f]{6}|[\da-f]{8}))$/i;
+
 /** A `session.context_breakdown` answer, as far as it says anything. Malformed rows are left out, never guessed at. */
 export function readingOf(res: unknown, measuredAt: number): ContextReading {
   const r = obj(res) ?? {};
@@ -74,7 +77,7 @@ export function readingOf(res: unknown, measuredAt: number): ContextReading {
     const p = obj(v);
     const tokens = num(p?.tokens);
     return p && typeof p.id === "string" && typeof p.label === "string" && tokens !== undefined
-      ? [{ id: p.id, label: p.label, tokens, ...(typeof p.color === "string" && { color: p.color }) }]
+      ? [{ id: p.id, label: p.label, tokens, ...(typeof p.color === "string" && SWATCH.test(p.color) && { color: p.color }) }]
       : [];
   });
   const files = (Array.isArray(r.context_files) ? r.context_files : []).flatMap((v): ContextFile[] => {

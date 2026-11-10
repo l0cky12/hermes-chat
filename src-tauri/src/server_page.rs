@@ -44,8 +44,6 @@ use url::{Host, Url};
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long the first request through a new tunnel waits for any answer before the page is shown anyway.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long a new https tunnel is watched for ssh closing it, since nothing is sent to a TLS server to make it answer.
-const TLS_PROBE_WAIT: Duration = Duration::from_millis(1500);
 /// The most server pages open at once, so a runaway webview can't start ssh after ssh.
 pub const MAX_OPEN: usize = 8;
 /// How much of what ssh printed is kept, to say why it stopped.
@@ -886,29 +884,44 @@ async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started
 }
 
 /// Whether anything answers through a new tunnel. ssh closing the connection with nothing said means the server
-/// couldn't connect to the port.
+/// couldn't connect to the port. Any bytes back, or no answer within `PROBE_TIMEOUT` (a slow server), count.
 ///
-/// - http: a `HEAD /` goes through; any bytes back, or no answer within `PROBE_TIMEOUT` (a slow server), count.
-/// - https: nothing is sent, since a TLS server may drop plain text without a word. A refused forward is closed within
-///   ssh's round trip; still open after `TLS_PROBE_WAIT` counts as answering.
+/// A TLS server may drop plain text without a word but answers a ClientHello at once, with its ServerHello or an alert.
 async fn answers(mut s: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin, page: &ServerPage) -> bool {
-    let wait = if page.url.scheme() == "https" {
-        TLS_PROBE_WAIT
-    } else {
-        let request = format!("HEAD / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", page.at());
-        if s.write_all(request.as_bytes()).await.is_err() {
-            return false;
-        }
-        PROBE_TIMEOUT
-    };
+    let request =
+        if page.url.scheme() == "https" { client_hello() } else { format!("HEAD / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", page.at()).into_bytes() };
+    if s.write_all(&request).await.is_err() {
+        return false;
+    }
     let mut b = [0u8; 1];
-    match tokio::time::timeout(wait, s.read(&mut b)).await {
+    match tokio::time::timeout(PROBE_TIMEOUT, s.read(&mut b)).await {
         Ok(Ok(0)) => false,
         Ok(Ok(_)) => true,
         // A reset: ssh dropped it as it does for a refused forward.
         Ok(Err(_)) => false,
         Err(_) => true,
     }
+}
+
+/// A TLS record holding a ClientHello for TLS 1.3 or 1.2, with suites, groups and signatures every common TLS library
+/// takes. No server name: the page's host may be an IP address.
+fn client_hello() -> Vec<u8> {
+    fn sized(body: &[u8]) -> Vec<u8> {
+        [&(body.len() as u16).to_be_bytes()[..], body].concat()
+    }
+    let extension = |kind: u16, body: &[u8]| [&kind.to_be_bytes()[..], &sized(body)].concat();
+    let key_share = [&[0x00, 0x1d][..], &sized(&[9; 32])].concat();
+    let extensions = [
+        extension(0x000a, &sized(&[0x00, 0x1d, 0x00, 0x17])),
+        extension(0x000d, &sized(&[0x04, 0x03, 0x08, 0x04, 0x04, 0x01])),
+        extension(0x002b, &[0x04, 0x03, 0x04, 0x03, 0x03]),
+        extension(0x0033, &sized(&key_share)),
+    ]
+    .concat();
+    let suites = [0x13, 0x01, 0x13, 0x02, 0x13, 0x03, 0xc0, 0x2b, 0xc0, 0x2f, 0xc0, 0x2c, 0xc0, 0x30];
+    let hello = [&[0x03, 0x03][..], &[7; 32], &[0], &sized(&suites), &[0x01, 0x00], &sized(&extensions)].concat();
+    let handshake = [&[0x01][..], &(hello.len() as u32).to_be_bytes()[1..], &hello].concat();
+    [&[0x16, 0x03, 0x01][..], &sized(&handshake)].concat()
 }
 
 /// Accepts the frame's connections on `listener` and copies each one to and from ssh's `socket`. Runs until dropped;
@@ -1553,8 +1566,11 @@ while True:
         }
     }
 
-    /// A stand-in for a TLS server: it says nothing until spoken to, and drops plain text without a word, as
-    /// OpenSSL does with an HTTP request.
+    /// A TLS alert record, as a server sends when it can't agree on a handshake.
+    const TLS_ALERT: [u8; 7] = [0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28];
+
+    /// A stand-in for a TLS server: it says nothing until spoken to, answers a ClientHello, and drops plain text without
+    /// a word, as OpenSSL does with an HTTP request.
     #[cfg(unix)]
     async fn tls_like_server() -> u16 {
         let l = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
@@ -1563,12 +1579,28 @@ while True:
             loop {
                 let Ok((mut s, _)) = l.accept().await else { return };
                 tokio::spawn(async move {
-                    let mut buf = [0u8; 64];
-                    let _ = s.read(&mut buf).await;
+                    let mut buf = [0u8; 6];
+                    if s.read_exact(&mut buf).await.is_ok() && buf[0] == 0x16 && buf[5] == 0x01 {
+                        let _ = s.write_all(&TLS_ALERT).await;
+                    }
                 });
             }
         });
         port
+    }
+
+    #[tokio::test]
+    async fn a_tls_server_answers_the_https_probe_without_a_fixed_wait() {
+        let (probe, mut server) = tokio::io::duplex(4096);
+        tokio::spawn(async move {
+            let mut head = [0u8; 6];
+            server.read_exact(&mut head).await.unwrap();
+            assert_eq!((head[0], head[5]), (0x16, 0x01), "a handshake record holding a ClientHello");
+            server.write_all(&TLS_ALERT).await.unwrap();
+        });
+        let start = std::time::Instant::now();
+        assert!(answers(probe, &page("https://localhost:8443/")).await);
+        assert!(start.elapsed() < Duration::from_secs(1), "{:?}", start.elapsed());
     }
 
     #[cfg(unix)]
