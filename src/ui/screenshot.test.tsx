@@ -116,18 +116,21 @@ describe("Taking a screenshot for the composer", () => {
     await user.click(screen.getByRole("button", { name: /Nightly backup/ }));
     const [left, right] = [...document.querySelectorAll<HTMLElement>(".pane")];
     await user.click(within(left).getByRole("button", { name: "Attach a screenshot" }));
-    const first = await rust.land();
+    await rust.land();
     await waitFor(() => expect(left.querySelectorAll(".chip")).toHaveLength(1));
     expect(right.querySelectorAll(".chip")).toHaveLength(0);
     await user.click(within(right).getByRole("button", { name: "Attach a screenshot" }));
-    const second = await rust.land();
+    await rust.land();
     await waitFor(() => expect(right.querySelectorAll(".chip")).toHaveLength(1));
     expect(left.querySelectorAll(".chip")).toHaveLength(1);
     expect(rust.discarded).toEqual([]);
+    // Closing a pane leaves its chat's captures staged in the chat (#443).
     await user.click(within(left).getByRole("button", { name: "Close the left pane" }));
-    await waitFor(() => expect(rust.discarded).toEqual([first]));
     expect(chips()).toHaveLength(1);
-    expect(rust.discarded).not.toContain(second);
+    expect(rust.discarded).toEqual([]);
+    await user.click(screen.getByRole("button", { name: "New chat (Ctrl+N)" }));
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    expect(rust.discarded).toEqual([]);
   });
 
   it("moves a capture to the newly focused pane if attachment validation finishes after focus changes", async () => {
@@ -279,15 +282,6 @@ describe("Taking a screenshot for the composer", () => {
     expect(chips()).toHaveLength(1);
   });
 
-  it("deletes a capture left in the composer when the owner opens another chat", async () => {
-    const { rust, user } = await signedIn();
-    await user.keyboard("{Control>}{Shift>}s{/Shift}{/Control}");
-    const path = await rust.land();
-    await waitFor(() => expect(chips()).toHaveLength(1));
-    await user.click(screen.getByRole("button", { name: /Nightly backup/ }));
-    await waitFor(() => expect(rust.discarded).toEqual([path]));
-  });
-
   it("deletes a capture still staged when the window signs out", async () => {
     const { rust, user, view } = await signedIn();
     await user.keyboard("{Control>}{Shift>}s{/Shift}{/Control}");
@@ -430,6 +424,23 @@ describe("Attachments staged in each chat (#443)", () => {
     await user.click(screen.getByRole("button", { name: "New chat (Ctrl+N)" }));
     await waitFor(() => expect(chips()).toHaveLength(1));
     expect(rust.discarded).not.toContain(path);
+  });
+
+  it("shows a chat's capture in both panes on it, as they share its Draft, and sends it once", async () => {
+    const { server, rust, user, hermes } = await signedIn();
+    await openChat(user, hermes, /Nightly backup/);
+    await user.keyboard("{Control>}\\{/Control}");
+    await settle(hermes);
+    const [left, right] = [...document.querySelectorAll<HTMLElement>(".pane")];
+    await user.click(within(left).getByRole("button", { name: "Attach a screenshot" }));
+    const path = await rust.land();
+    await waitFor(() => expect(left.querySelectorAll(".chip")).toHaveLength(1));
+    expect(right.querySelectorAll(".chip")).toHaveLength(1);
+    await user.type(within(right).getByPlaceholderText("Message Hermes"), "From the right{Enter}");
+    await settle(hermes);
+    await waitFor(() => expect(rust.discarded).toEqual([path]));
+    expect(document.querySelectorAll(".composer .chip")).toHaveLength(0);
+    expect(server.requests.filter((r) => r.method === "image.attach_bytes")).toHaveLength(1);
   });
 
   it("deletes a capture once the owner removes it from its chat, even after switching away and back", async () => {

@@ -35,7 +35,7 @@ export class Previews {
     return this.ready.get(path);
   }
 
-  sync(attachments: Attachment[]) {
+  sync(attachments: readonly Attachment[]) {
     const staged = new Set(attachments.filter((a) => a.kind === "image").map((a) => a.path));
     for (const [path, p] of this.ready)
       if (!staged.has(path)) {

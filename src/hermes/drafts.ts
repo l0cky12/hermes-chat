@@ -1,7 +1,8 @@
 // What the owner has typed in each chat's composer and not sent yet, kept in localStorage per connection, profile
-// and chat, so switching chats or restarting the app doesn't lose it. Text only: attachments stay in the composer
-// until it closes. A sent message Hermes didn't take, or may not have, isn't a draft: it stays in its chat, kept in
-// the chat's outbox (transport.ts `Outgoing`), until the owner retries or dismisses it.
+// and chat, so switching chats or restarting the app doesn't lose it. Text only: the chat's staged attachments are
+// kept beside it by the screenshot desk, under the same key, for this run only (ADR 0135). A sent message Hermes
+// didn't take, or may not have, isn't a draft: it stays in its chat, kept in the chat's outbox (transport.ts
+// `Outgoing`), until the owner retries or dismisses it.
 //
 // Each Draft keeps its own undo history here, in memory only: the webview's history can't be used in the composer,
 // since text the app writes (a slash pick, a Draft shown again on a chat switch, another pane on the same Draft)

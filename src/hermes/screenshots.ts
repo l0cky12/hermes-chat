@@ -1,10 +1,11 @@
-// Screenshots for the composer. Rust takes the capture (src-tauri/src/screenshot.rs) and stages it in a private folder;
-// the desk hands it to the composer on screen, where it waits as an image attachment until the owner sends or removes
-// it. Files pasted into the composer are staged the same way. The desk remembers which staged files are its own, so
-// each one is deleted once it is sent, removed, or left behind (a chat switched away from, or signing out). Nothing
-// here sends anything to Hermes.
+// Screenshots and the files staged in each chat's composer. Rust takes the capture (src-tauri/src/screenshot.rs) and
+// stages it in a private folder; the desk hands it to the composer on screen. Files pasted into the composer are staged
+// the same way. The desk keeps every chat's staged attachments, keyed as its Draft is, so they wait there across chat
+// switches until the owner sends or removes them (ADR 0135). It remembers which staged files are its own, so each one
+// is deleted once nothing needs it any more. Nothing here sends anything to Hermes.
 
 import type { Attachment } from "./model";
+import { stagedFiles } from "./unsaved";
 
 /** Why a capture produced no image, as Rust reports it. */
 export type CaptureFailure = { kind: "cancelled" | "denied" | "unsupported" | "busy" | "failed"; message?: string };
@@ -18,17 +19,29 @@ export type ScreenshotApi = {
 };
 
 /**
- * The composer on screen. `attach` stages the files and resolves to the ones it kept (one too large for Hermes is
- * refused, with its note). `note` shows a line above the composer.
+ * The composer on screen. `key` is its chat's Draft key (drafts.ts `draftKey`), where its captures are staged. `check`
+ * resolves to the files Hermes can take, and shows why it refused any (one too large, say). `note` shows a line above
+ * the composer.
  */
 export type ScreenshotSink = {
-  attach: (paths: string[]) => Promise<string[]>;
-  /** A mounted pane lost capture routing while validation finished; remove its provisional copies before rerouting. */
-  detach?: (paths: string[]) => void;
-  /** Already validated captures returning after an unconfirmed send; works while disconnected. */
-  restore: (attachments: Attachment[]) => void;
+  key: string;
+  check: (paths: string[]) => Promise<Attachment[]>;
   note: (text: string) => void;
 };
+
+/**
+ * Every way a chat's staged attachments change, each chat's under its Draft key. `added`: attached in the composer, or
+ * back from a message Hermes didn't confirm. `sent`: they went with a message, which holds them from then on (`hold`,
+ * `sent`, `finish`). `removed`: the owner took them out. `gone`: the chat was deleted or archived. A file the desk owns
+ * is deleted once it is removed, its chat goes, or its message no longer needs it, unless a chat still holds it; signing
+ * out deletes them all (`dispose`).
+ */
+export type Staging =
+  | { kind: "added"; key: string; attachments: readonly Attachment[] }
+  | { kind: "sent" | "removed"; key: string; paths: readonly string[] }
+  | { kind: "gone"; key: string };
+
+const NONE: readonly Attachment[] = [];
 
 export type DeskState = { capturing: boolean };
 
@@ -59,7 +72,7 @@ export function failureText(e: unknown): string | undefined {
 const RESTORED = "Hermes didn't confirm it got your message, so its files are back here. Send them again, or remove them.";
 
 /** A capture or a note waiting for a composer to show it. */
-type Waiting = { paths: string[]; restored?: Attachment[]; note?: string; remote: boolean };
+type Waiting = { paths: string[]; note?: string; remote: boolean };
 
 export class ScreenshotDesk {
   private state: DeskState = { capturing: false };
@@ -68,6 +81,7 @@ export class ScreenshotDesk {
   private readonly mine = new Set<string>();
   private waiting: Waiting[] = [];
   private readonly sending = new Set<string>();
+  private readonly staged = new Map<string, readonly Attachment[]>();
   private sink?: ScreenshotSink;
   private disposed = false;
 
@@ -105,7 +119,7 @@ export class ScreenshotDesk {
     }
   }
 
-  /** Files Rust staged with the captures from a paste: deleted as captures are, once sent, removed or left behind. */
+  /** Files Rust staged with the captures from a paste: deleted as captures are, once nothing needs them. */
   own(paths: readonly string[]) {
     if (this.disposed) return void paths.forEach((p) => void this.api.discard(p).catch(() => {}));
     for (const p of paths) this.mine.add(p);
@@ -125,35 +139,69 @@ export class ScreenshotDesk {
   private async deliver(w: Waiting): Promise<void> {
     const sink = this.sink;
     if (!sink) return void this.waiting.push(w);
-    if (w.restored) {
-      sink.restore(w.restored.filter((a) => this.mine.has(a.path)));
-    } else if (w.paths.length) {
-      const kept = await sink.attach(w.paths);
-      // The composer went while it checked them (another chat opened, or Settings): they go to the one on screen
-      // now, unless the old one already let them go.
-      if (this.sink !== sink) {
-        sink.detach?.(w.paths);
-        return this.deliver({ ...w, paths: w.paths.filter((p) => this.mine.has(p)) });
-      }
-      this.release(w.paths.filter((p) => !kept.includes(p)));
+    if (w.paths.length) {
+      const kept = await sink.check(w.paths);
+      // The composer went while it checked them (another chat opened, or Settings): they go to the one on screen now,
+      // unless signing out already deleted them.
+      if (this.sink !== sink) return this.deliver({ ...w, paths: w.paths.filter((p) => this.mine.has(p)) });
+      this.change({ kind: "added", key: sink.key, attachments: kept });
+      this.release(w.paths.filter((p) => !kept.some((a) => a.path === p)));
       if (kept.length) this.onAttached?.(w.remote);
     }
     if (w.note) sink.note(w.note);
   }
 
+  /** The attachments staged in the chat whose Draft key is `key`, in the order they were added. */
+  stagedIn = (key: string): readonly Attachment[] => this.staged.get(key) ?? NONE;
+
+  change(e: Staging) {
+    const now = this.stagedIn(e.key);
+    let next: readonly Attachment[];
+    let letGo: readonly string[] = [];
+    switch (e.kind) {
+      case "added":
+        if (this.disposed) return this.release(e.attachments.map((a) => a.path));
+        next = [...now, ...e.attachments.filter((a) => !now.some((x) => x.path === a.path))];
+        break;
+      case "sent":
+        next = now.filter((a) => !e.paths.includes(a.path));
+        break;
+      case "removed":
+        next = now.filter((a) => !e.paths.includes(a.path));
+        letGo = e.paths;
+        break;
+      case "gone":
+        next = NONE;
+        letGo = now.map((a) => a.path);
+        break;
+    }
+    if (next.length === now.length) return this.release(letGo);
+    if (next.length) this.staged.set(e.key, next);
+    else this.staged.delete(e.key);
+    this.stagedChanged();
+    this.release(letGo);
+  }
+
+  private stagedChanged() {
+    stagedFiles.set(this, [...this.staged.values()].flat());
+    for (const fn of [...this.listeners]) fn();
+  }
+
   /**
-   * Puts captures sent with a message Hermes didn't confirm back in the composer on screen, so they aren't lost with
-   * it; others are deleted. `accepted`: Hermes took the message.
+   * Puts captures sent with a message Hermes didn't confirm back in the chat they were sent from (`key`), so they
+   * aren't lost with it; others are deleted. `accepted`: Hermes took the message.
    */
-  sent(attachments: readonly Attachment[], accepted: boolean) {
+  sent(key: string, attachments: readonly Attachment[], accepted: boolean) {
     const paths = attachments.map((a) => a.path);
     for (const p of paths) this.sending.delete(p);
     if (accepted || this.disposed) return this.release(paths);
     const back = attachments.filter((a) => this.mine.has(a.path));
-    if (back.length) void this.deliver({ paths: [], restored: back, remote: false, note: RESTORED });
+    if (!back.length) return;
+    this.change({ kind: "added", key, attachments: back });
+    if (this.sink?.key === key) this.sink.note(RESTORED);
   }
 
-  /** The outbox takes responsibility while sending; closing the composer must not remove its files. */
+  /** The outbox takes responsibility while sending; no chat holds the files any more, and they stay until it lets go. */
   hold(paths: readonly string[]) {
     for (const p of paths) if (this.mine.has(p)) this.sending.add(p);
   }
@@ -164,18 +212,21 @@ export class ScreenshotDesk {
     this.release(paths);
   }
 
-  /** Deletes any of `paths` that are captures: sent, removed from the composer, or left behind. Others are ignored. */
+  /**
+   * Deletes any of `paths` that are captures no message is sending and no chat holds. Others are ignored: a file the
+   * owner picked from their own folders is never deleted.
+   */
   release(paths: readonly string[]) {
-    for (const p of paths) if (!this.sending.has(p) && this.mine.delete(p)) {
-      this.sending.delete(p);
-      void this.api.discard(p).catch(() => {});
-    }
+    const held = new Set([...this.staged.values()].flatMap((files) => files.map((a) => a.path)));
+    for (const p of paths) if (!this.sending.has(p) && !held.has(p) && this.mine.delete(p)) void this.api.discard(p).catch(() => {});
   }
 
   /** The app is signing out or closing: every capture not yet sent is deleted, and one still being taken will be. */
   dispose() {
     this.disposed = true;
     this.waiting = [];
-    this.release([...this.mine].filter((p) => !this.sending.has(p)));
+    this.staged.clear();
+    this.stagedChanged();
+    this.release([...this.mine]);
   }
 }

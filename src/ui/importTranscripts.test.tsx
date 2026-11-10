@@ -212,7 +212,7 @@ describe("Import transcripts", () => {
       <ChatPane
         chat={chat}
         status="connected"
-        draft=""
+        draft="" draftKey="draft"
         onDraft={() => {}}
         onDraftStep={() => undefined}
         onRetry={() => {}}

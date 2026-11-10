@@ -25,7 +25,7 @@ function pane(chat: Chat, onUsage = () => {}) {
     <ChatPane
       chat={chat}
       status="connected"
-      draft=""
+      draft="" draftKey="draft"
       onDraft={() => {}}
       onDraftStep={() => undefined}
       onRetry={() => {}}
@@ -188,7 +188,7 @@ describe("A chat's usage", () => {
       <ChatPane
         chat={chatOf([], { usage: chatUsageOf(stored, 0) })}
         status="connected"
-        draft=""
+        draft="" draftKey="draft"
         onDraft={() => {}}
         onDraftStep={() => undefined}
           onRetry={() => {}}

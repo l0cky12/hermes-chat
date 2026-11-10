@@ -31,7 +31,7 @@ function pane(items: Item[], { status = "connected" as ConnectionStatus, over = 
     <ChatPane
       chat={{ id: "c1", runtimeId: "rt", title: "Logs", source: "app", settled: false, updatedAt: 0, items, ...over }}
       status={status}
-      draft=""
+      draft="" draftKey="draft"
       onDraft={() => {}}
       onDraftStep={() => undefined}
       onRetry={on.retry}

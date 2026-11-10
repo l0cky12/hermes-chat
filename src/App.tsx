@@ -1963,6 +1963,7 @@ export function Main({
     clearChat(id);
     return hermes.delete(id).then((deleted) => {
       if (deleted) {
+        desk?.change({ kind: "gone", key: draftKey(connection, profile, id) });
         projects.forgetChat(id);
         tagChange(() => tagsStore.forgetChat(id));
         snoozeStore.wake(id);
@@ -1979,10 +1980,11 @@ export function Main({
   const setArchived = (id: string, archived: boolean) => {
     const title = chats.find((c) => c.id === id)?.title ?? "";
     if (archived && !archivedListed) clearChat(id);
-    const done = (ok: boolean) =>
-      ok &&
-      stillIn(profile) &&
-      setToast({ text: `${archived ? "Archived" : "Restored"}: ${title}`, undo: archived ? () => setArchived(id, false) : undefined, at: Date.now() });
+    const done = (ok: boolean) => {
+      if (ok && archived) desk?.change({ kind: "gone", key: draftKey(connection, profile, id) });
+      if (ok && stillIn(profile))
+        setToast({ text: `${archived ? "Archived" : "Restored"}: ${title}`, undo: archived ? () => setArchived(id, false) : undefined, at: Date.now() });
+    };
     void (archived ? hermes.archive(id) : hermes.restore(id)).then(done);
   };
 
@@ -3581,7 +3583,7 @@ function ChatView({
     const partner = compare?.partner();
     const both = Promise.all([deliver(text, attachments, skill, false), partner?.(text, attachments, skill, true)]);
     const [own, mirrored] = await (compare ? compare.track(both) : both);
-    if (!own && !mirrored) return screenshots?.sent(attachments, false);
+    if (!own && !mirrored) return screenshots?.sent(shownDraft, attachments, false);
     // The other chat's message holds the files now, and a screenshot goes once that message no longer needs it, so
     // none can come back to this composer with the words.
     if (!own) onToast("This pane's chat couldn't start, so your message went only to the other chat, with its files.");
@@ -3813,6 +3815,7 @@ function ChatView({
       status={status}
       alsoPostsIn={hermes.alsoPostsIn(chat.id)}
       draft={composerText}
+      draftKey={shownDraft}
       onDraft={(text, how) => savedDrafts.set(shownDraft, text, how)}
       onDraftStep={(step) => savedDrafts[step](shownDraft)}
       onRetry={retry}
