@@ -94,6 +94,24 @@ describe("The transcript", () => {
     expect(screen.getByText("3 of 3")).toBeTruthy();
   });
 
+  it("counts the matches a streamed reply adds while find is open, and none once it closes", () => {
+    const asked: Item[] = [{ kind: "user", id: "u-0", text: "Is the lock stale?" }];
+    const { show } = pane(chatOf(asked, { running: true }), { query: "lock", itemId: "u-0", at: 1 });
+    expect(screen.getByText("1 of 1")).toBeTruthy();
+    show(chatOf([...asked, { kind: "assistant", id: "a-1", text: "The lock" }], { running: true }));
+    expect(screen.getByText("1 of 2")).toBeTruthy();
+    show(chatOf([...asked, { kind: "assistant", id: "a-1", text: "The lock is stale; remove the lock." }], { running: true }));
+    expect(screen.getByText("1 of 3")).toBeTruthy();
+    fireEvent.keyDown(screen.getByPlaceholderText("Find in chat"), { key: "Enter" });
+    expect(screen.getByText("2 of 3")).toBeTruthy();
+    expect(document.querySelector("mark.current")?.closest("[data-item]")?.getAttribute("data-item")).toBe("a-1");
+
+    fireEvent.click(screen.getByTitle("Close (Esc)"));
+    expect(document.querySelectorAll("mark.hit")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Find in chat" }));
+    expect(screen.getByText("2 of 3")).toBeTruthy();
+  });
+
   it("answers an Approval card through the handler App passed last", () => {
     const first = vi.fn<Answer>();
     const latest = vi.fn<Answer>();

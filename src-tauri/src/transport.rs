@@ -96,6 +96,8 @@ pub enum TransportError {
     WebSocket(String),
     #[error("The chat connection is closed.")]
     Closed,
+    #[error("Hermes stopped answering: nothing came back for {0} s.")]
+    Stalled(u64),
     #[error("The dashboard sign-in has expired. Sign in again.")]
     SignedOut,
     #[error("Hermes Chat doesn't relay {0}.")]
@@ -1182,7 +1184,7 @@ impl Dashboard {
                     StatusCode::UNAUTHORIZED => return Err(TransportError::BadCredentials),
                     StatusCode::TOO_MANY_REQUESTS => return Err(TransportError::RateLimited),
                     // A 422, or a gateway in front, can echo the body back, password and all.
-                    _ => return Err(unexpected_sent(login, &sign_in.headers, password).await),
+                    _ => return Err(unexpected_sent(login, &sign_in.headers, password, None).await),
                 }
                 dashboard.keep_cookies(&login);
                 Ok(dashboard)
@@ -1386,18 +1388,21 @@ impl Dashboard {
         if method == Method::DELETE && is_env_route(&routed) {
             return Err(TransportError::NotRelayed(format!("{method} {path}")));
         }
+        let list = method == Method::GET && is_session_list(&routed);
         // Hermes answers removing an endpoint with the endpoints left, each with its key's preview (ADR 0133).
         let answer_unread = method == Method::DELETE && routed.starts_with("api/providers/custom-endpoints/");
         let mut req = self.signed(method, url);
         if let Some(body) = body {
             req = req.header(header::CONTENT_TYPE, "application/json").body(body);
         }
-        let resp = req.send().await.map_err(unreachable)?;
+        let resp = if list { unless_stalled(SESSION_LIST_IDLE_LIMIT, req.send()).await? } else { req.send().await.map_err(unreachable)? };
         self.keep_cookies(&resp);
         match resp.status() {
+            s if s.is_success() && list => text_unless_stalled(resp, SESSION_LIST_IDLE_LIMIT).await,
             s if s.is_success() && answer_unread => Ok(r#"{"ok":true}"#.to_owned()),
             s if s.is_success() => resp.text().await.map_err(unreachable),
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
+            _ if list => Err(unexpected_sent(resp, &self.hide, "", Some(SESSION_LIST_IDLE_LIMIT)).await),
             _ => Err(unexpected(resp, &self.hide).await),
         }
     }
@@ -1458,10 +1463,15 @@ impl Dashboard {
     /// provider's model, voice and language (`VOICE_SETTING_KEYS`) are kept from the config.
     pub async fn voice_setup(&self, profile: &str) -> Result<VoiceSetup, TransportError> {
         let has = |a: AudioAnswer| !matches!(a, AudioAnswer::NoRoute);
-        let transcribe = has(self.post_audio("api/audio/transcribe", profile, &json!({"data_url": ""})).await?);
-        let speak = has(self.post_audio("api/audio/speak", profile, &json!({"text": ""})).await?);
         let query = url::form_urlencoded::Serializer::new(String::new()).append_pair("profile", profile).finish();
-        let config: Option<serde_json::Value> = match self.request("GET", &format!("api/config?{query}"), None).await {
+        let (no_recording, no_text, config_path) = (json!({"data_url": ""}), json!({"text": ""}), format!("api/config?{query}"));
+        let (transcribe, speak, config) = tokio::join!(
+            self.post_audio("api/audio/transcribe", profile, &no_recording),
+            self.post_audio("api/audio/speak", profile, &no_text),
+            self.request("GET", &config_path, None),
+        );
+        let (transcribe, speak) = (has(transcribe?), has(speak?));
+        let config: Option<serde_json::Value> = match config {
             Ok(body) => serde_json::from_str(&body).ok(),
             Err(TransportError::SignedOut) => return Err(TransportError::SignedOut),
             Err(_) => None,
@@ -2433,12 +2443,13 @@ fn shown_body(status: StatusCode, text: &str, headers: &HeaderMap) -> String {
 /// A failed answer as an error, with the start of its body. Reads only the first few KB, so a huge or endless error
 /// body can't fill memory. `headers`: what the request carried that mustn't be shown (`shown_body`).
 async fn unexpected(resp: reqwest::Response, headers: &HeaderMap) -> TransportError {
-    unexpected_sent(resp, headers, "").await
+    unexpected_sent(resp, headers, "", None).await
 }
 
 /// `unexpected` for a request whose body carried `secret`, such as a password: an error that repeats it anywhere, as
 /// sent or JSON-escaped, is shown as `HIDDEN`. Unlike extra request headers, it doesn't limit what else is shown.
-async fn unexpected_sent(mut resp: reqwest::Response, headers: &HeaderMap, secret: &str) -> TransportError {
+/// `limit`: the body is given up as `Stalled` once that passes without a part of it.
+async fn unexpected_sent(mut resp: reqwest::Response, headers: &HeaderMap, secret: &str, limit: Option<Duration>) -> TransportError {
     const KEEP: usize = 4096;
     let forms = sent_forms(secret);
     let forms = || forms.iter().map(|f| f.as_bytes());
@@ -2456,7 +2467,14 @@ async fn unexpected_sent(mut resp: reqwest::Response, headers: &HeaderMap, secre
     let status = resp.status().as_u16();
     let mut head = Vec::new();
     while head.len() < KEEP {
-        match resp.chunk().await {
+        let part = match limit {
+            Some(limit) => match tokio::time::timeout(limit, resp.chunk()).await {
+                Ok(part) => part,
+                Err(_) => return TransportError::Stalled(limit.as_secs()),
+            },
+            None => resp.chunk().await,
+        };
+        match part {
             Ok(Some(chunk)) => head.extend_from_slice(&chunk),
             _ => break,
         }
@@ -2601,6 +2619,29 @@ pub async fn probe_expecting(
 /// key the dashboard was sent, into the URL it gives up on.
 fn unreachable(e: reqwest::Error) -> TransportError {
     TransportError::Unreachable(describe(&e.without_url()))
+}
+
+/// Hermes serves `api/sessions` from a read-only query of at most 100 rows, each SQLite read waiting at most 5 s for a
+/// lock (hermes_cli/web_routers/sessions.py; `_READ_BUSY_TIMEOUT_S` in hermes_state.py), so a minute without a byte is a
+/// stall. Other routes may stay silent for minutes and still answer: memory provider setup runs installs of up to
+/// 300 s each (hermes_cli/web_routers/memory_providers.py).
+const SESSION_LIST_IDLE_LIMIT: Duration = Duration::from_secs(60);
+
+fn is_session_list(path: &str) -> bool {
+    let mut segs = path.split('/').filter(|seg| !seg.is_empty());
+    segs.next() == Some("api") && segs.next() == Some("sessions") && segs.next().is_none()
+}
+
+async fn unless_stalled<T>(limit: Duration, step: impl std::future::Future<Output = reqwest::Result<T>>) -> Result<T, TransportError> {
+    tokio::time::timeout(limit, step).await.map_err(|_| TransportError::Stalled(limit.as_secs()))?.map_err(unreachable)
+}
+
+async fn text_unless_stalled(mut resp: reqwest::Response, limit: Duration) -> Result<String, TransportError> {
+    let mut body = Vec::new();
+    while let Some(part) = unless_stalled(limit, resp.chunk()).await? {
+        body.extend_from_slice(&part);
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
 fn describe(e: &reqwest::Error) -> String {
@@ -2878,9 +2919,10 @@ fn agent_text_body(path: &str, text: &str, session: Option<&str>) -> Result<serd
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_text_body, memory_entry_edit_allowed, memory_provider_write, profile_create_allowed, provider_key_name, skill_create_allowed, webhook_write,
-        TransportError,
+        agent_text_body, memory_entry_edit_allowed, memory_provider_write, profile_create_allowed, provider_key_name, skill_create_allowed,
+        text_unless_stalled, unless_stalled, webhook_write, TransportError,
     };
+    use std::time::Duration;
 
     #[test]
     fn an_artifact_save_names_the_chat_whose_sandbox_the_file_is_in() {
@@ -3083,5 +3125,58 @@ mod tests {
         for bad in ["HERMES_DASHBOARD_SESSION_TOKEN", "PATH", "OPENAI_BASE_URL", "openrouter_api_key", "_API_KEY", "A B_KEY", "X\nY_KEY", ""] {
             assert!(!provider_key_name(bad), "{bad}");
         }
+    }
+
+    enum Then {
+        End,
+        GoQuiet,
+    }
+
+    async fn trickle(parts: usize, gap: Duration, then: Then) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 4096];
+            let _ = sock.read(&mut request).await;
+            sock.write_all(b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n").await.unwrap();
+            for i in 0..parts {
+                if i > 0 {
+                    tokio::time::sleep(gap).await;
+                }
+                let part = format!("part{i};");
+                sock.write_all(format!("{:x}\r\n{part}\r\n", part.len()).as_bytes()).await.unwrap();
+            }
+            if let Then::End = then {
+                sock.write_all(b"0\r\n\r\n").await.unwrap();
+            }
+            std::future::pending::<()>().await;
+        });
+        url
+    }
+
+    #[tokio::test]
+    async fn a_read_that_keeps_arriving_finishes_however_long_it_takes_in_all() {
+        let url = trickle(16, Duration::from_millis(250), Then::End).await;
+        let http = reqwest::Client::new();
+        let limit = Duration::from_secs(3);
+        let started = std::time::Instant::now();
+        let resp = unless_stalled(limit, http.get(url).send()).await.unwrap();
+        let text = text_unless_stalled(resp, limit).await.unwrap();
+        assert_eq!(text, (0..16).map(|i| format!("part{i};")).collect::<String>());
+        assert!(started.elapsed() > limit, "the read ended in {:?}, inside the limit, so it shows nothing about the gaps", started.elapsed());
+    }
+
+    #[tokio::test]
+    async fn a_read_that_stops_arriving_is_given_up_once_the_limit_passes_without_a_byte() {
+        let url = trickle(2, Duration::from_millis(50), Then::GoQuiet).await;
+        let http = reqwest::Client::new();
+        let limit = Duration::from_secs(1);
+        let started = std::time::Instant::now();
+        let resp = unless_stalled(limit, http.get(url).send()).await.unwrap();
+        let err = text_unless_stalled(resp, limit).await.unwrap_err();
+        assert!(matches!(err, TransportError::Stalled(_)), "{err:?}");
+        assert!(started.elapsed() >= limit + Duration::from_millis(50), "{:?}", started.elapsed());
     }
 }

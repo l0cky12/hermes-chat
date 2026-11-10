@@ -354,7 +354,21 @@ pub fn args(engine: &Engine, model: &Path, wav: &Path, out: &Path, language: &st
     };
     match engine.kind {
         // `-l auto`: a multilingual model detects the language; an English-only one ignores it. `-np`: results only.
-        Kind::WhisperCpp => vec![s("-m"), p(model), s("-f"), p(wav), s("-l"), s(language), s("-nt"), s("-np"), s("-otxt"), s("-of"), p(&out.join("audio"))],
+        Kind::WhisperCpp => vec![
+            s("-m"),
+            p(model),
+            s("-f"),
+            p(wav),
+            s("-l"),
+            s(language),
+            s("-t"),
+            s(&whisper_cpp_threads().to_string()),
+            s("-nt"),
+            s("-np"),
+            s("-otxt"),
+            s("-of"),
+            p(&out.join("audio")),
+        ],
         Kind::FasterWhisper => {
             lang(vec![p(wav), s("--model_directory"), p(model), s("--output_dir"), p(out), s("--output_format"), s("txt"), s("--verbose"), s("False")])
         }
@@ -373,6 +387,13 @@ pub fn args(engine: &Engine, model: &Path, wav: &Path, out: &Path, language: &st
         ]),
         Kind::Vosk => vec![s("-m"), p(model), s("-i"), p(wav), s("-o"), p(&out.join("audio.txt"))],
     }
+}
+
+const WHISPER_CPP_DEFAULT_THREADS: usize = 4;
+const WHISPER_CPP_MAX_THREADS: usize = 8;
+
+fn whisper_cpp_threads() -> usize {
+    std::thread::available_parallelism().map_or(WHISPER_CPP_DEFAULT_THREADS, |n| n.get().min(WHISPER_CPP_MAX_THREADS))
 }
 
 /// An engine's output as one line of text, without the lines that are only a note in brackets: whisper.cpp's
@@ -1302,12 +1323,14 @@ mod tests {
         let txt = Path::new("/t").join("audio.txt").display().to_string();
         let e = |kind| Engine { kind, binary: "/bin/x".into(), model: Some(m.into()) };
         let strs = |k, l| args(&e(k), m, w, o, l).into_iter().map(|a| a.into_string().unwrap()).collect::<Vec<_>>().join(" ");
-        assert_eq!(strs(Kind::WhisperCpp, "auto"), format!("-m /m/model -f /t/audio.wav -l auto -nt -np -otxt -of {of}"));
+        let t = whisper_cpp_threads();
+        assert!((1..=WHISPER_CPP_MAX_THREADS).contains(&t));
+        assert_eq!(strs(Kind::WhisperCpp, "auto"), format!("-m /m/model -f /t/audio.wav -l auto -t {t} -nt -np -otxt -of {of}"));
         assert_eq!(strs(Kind::FasterWhisper, "auto"), "/t/audio.wav --model_directory /m/model --output_dir /t --output_format txt --verbose False");
         assert_eq!(strs(Kind::OpenaiWhisper, "auto"), "/t/audio.wav --model /m/model --output_dir /t --output_format txt --verbose False --fp16 False");
         assert_eq!(strs(Kind::Vosk, "auto"), format!("-m /m/model -i /t/audio.wav -o {txt}"));
         // A language other than auto goes to each Whisper engine; Vosk's is its model's.
-        assert_eq!(strs(Kind::WhisperCpp, "es"), format!("-m /m/model -f /t/audio.wav -l es -nt -np -otxt -of {of}"));
+        assert_eq!(strs(Kind::WhisperCpp, "es"), format!("-m /m/model -f /t/audio.wav -l es -t {t} -nt -np -otxt -of {of}"));
         assert!(strs(Kind::FasterWhisper, "es").ends_with("--verbose False --language es"));
         assert!(strs(Kind::OpenaiWhisper, "es").ends_with("--fp16 False --language es"));
         assert_eq!(strs(Kind::Vosk, "es"), format!("-m /m/model -i /t/audio.wav -o {txt}"));

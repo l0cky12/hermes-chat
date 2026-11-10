@@ -1079,6 +1079,57 @@ async fn an_expired_sign_in_is_signed_out() {
     assert!(matches!(err, TransportError::SignedOut), "{err:?}");
 }
 
+async fn slow_stub() -> Dashboard {
+    let five_minutes = || async {
+        tokio::time::sleep(Duration::from_secs(300)).await;
+        Json(json!({"ok": true}))
+    };
+    let list = |RawQuery(q): RawQuery| async move {
+        if q.as_deref() != Some("error") {
+            std::future::pending::<()>().await;
+        }
+        let head = futures_util::stream::once(async { Ok::<_, std::io::Error>("{\"detail\": ") });
+        (StatusCode::SERVICE_UNAVAILABLE, axum::body::Body::from_stream(futures_util::StreamExt::chain(head, futures_util::stream::pending()))).into_response()
+    };
+    let app = Router::new()
+        .route("/auth/password-login", post(login))
+        .route("/api/sessions", get(list))
+        .route("/api/skills", get(five_minutes))
+        .route("/api/memory/providers/{name}/setup", post(five_minutes));
+    sign_in_at(&serve(app).await, &sign_in("hunter2")).await.expect("signed in")
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_chat_list_read_hermes_never_answers_fails_after_a_minute_without_a_byte() {
+    let dashboard = slow_stub().await;
+    let started = tokio::time::Instant::now();
+    let read = tokio::time::timeout(Duration::from_secs(3600), dashboard.request("GET", "api/sessions", None)).await;
+    let err = read.expect("the read gave up within the hour").err().unwrap();
+    assert!(matches!(err, TransportError::Stalled(60)), "{err:?}");
+    assert_eq!(started.elapsed().as_secs(), 60);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_chat_list_error_whose_body_stops_arriving_fails_after_a_minute_without_a_byte() {
+    let dashboard = slow_stub().await;
+    let started = tokio::time::Instant::now();
+    let read = tokio::time::timeout(Duration::from_secs(3600), dashboard.request("GET", "api/sessions?error", None)).await;
+    let err = read.expect("the read gave up within the hour").err().unwrap();
+    assert!(matches!(err, TransportError::Stalled(60)), "{err:?}");
+    assert_eq!(started.elapsed().as_secs(), 60);
+}
+
+#[tokio::test(start_paused = true)]
+async fn other_calls_hermes_works_on_for_minutes_still_get_their_answer() {
+    let dashboard = slow_stub().await;
+    let read = dashboard.request("GET", "api/skills", None).await.expect("the read answered");
+    let body = json!({"values": {}}).to_string();
+    let write = dashboard.request("POST", "api/memory/providers/honcho/setup", Some(body)).await.expect("the write answered");
+    for text in [read, write] {
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), json!({"ok": true}));
+    }
+}
+
 #[tokio::test]
 async fn a_failed_rest_call_reports_status_and_body() {
     let dashboard = signed_in().await;
@@ -1711,6 +1762,31 @@ async fn reads_the_voice_setup_without_passing_on_any_key() {
 }
 
 #[tokio::test]
+async fn reads_the_voice_setup_with_its_three_requests_at_once() {
+    // Each route answers only once all three have arrived; asked one after another, the first gives up after 5 s and
+    // answers as a server without it would.
+    let all_in = Arc::new(tokio::sync::Barrier::new(3));
+    let answer = |all_in: Arc<tokio::sync::Barrier>, found: Response| async move {
+        match tokio::time::timeout(Duration::from_secs(5), all_in.wait()).await {
+            Ok(_) => found,
+            Err(_) => (StatusCode::NOT_FOUND, Json(json!({"detail": "Not Found"}))).into_response(),
+        }
+    };
+    let refused = || (StatusCode::BAD_REQUEST, Json(json!({"detail": "nothing to do"}))).into_response();
+    let (a, b, c) = (all_in.clone(), all_in.clone(), all_in);
+    let app = Router::new()
+        .route("/auth/password-login", post(login))
+        .route("/api/audio/transcribe", post(move || answer(a, refused())))
+        .route("/api/audio/speak", post(move || answer(b, refused())))
+        .route("/api/config", get(move || answer(c, Json(json!({"stt": {"provider": "groq"}, "tts": {"provider": "openai"}})).into_response())));
+    let dashboard = sign_in_at(&serve(app).await, &sign_in("hunter2")).await.unwrap();
+    let started = std::time::Instant::now();
+    let setup = dashboard.voice_setup("default").await.unwrap();
+    assert!(started.elapsed() < Duration::from_secs(4), "{:?}", started.elapsed());
+    assert_eq!((setup.transcribe, setup.speak, setup.stt_provider.as_deref(), setup.tts_provider.as_deref()), (true, true, Some("groq"), Some("openai")));
+}
+
+#[tokio::test]
 async fn a_server_without_voice_has_neither_route() {
     for profile in ["old", "older"] {
         let setup = signed_in().await.voice_setup(profile).await.unwrap();
@@ -1821,8 +1897,10 @@ async fn voice_requests_carry_the_gate_headers_too() {
     dashboard.speak("default", "Hello").await.unwrap();
     assert!(dashboard.voice_setup("default").await.unwrap().speak);
     let seen = seen.lock().unwrap();
-    let paths: Vec<&str> = seen.iter().map(|(path, _)| path.as_str()).collect();
-    assert_eq!(paths, ["/auth/password-login", "/api/audio/transcribe", "/api/audio/speak", "/api/audio/transcribe", "/api/audio/speak", "/api/config"]);
+    let mut paths: Vec<&str> = seen.iter().map(|(path, _)| path.as_str()).collect();
+    // The voice set-up's three requests go at once, in any order.
+    paths[3..].sort_unstable();
+    assert_eq!(paths, ["/auth/password-login", "/api/audio/transcribe", "/api/audio/speak", "/api/audio/speak", "/api/audio/transcribe", "/api/config"]);
     assert!(seen.iter().all(|(_, secret)| secret.as_deref() == Some("s3cret")));
 }
 

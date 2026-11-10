@@ -1,7 +1,7 @@
 // Icon rail beside a chat list (ADR 0001), ported from the prototype's variants C and A, with the profile's tools in one
 // Server group and tips that show at once (ADR 0050, 0116). Server files and the Terminal live in the side panel only. The list's header is the profile switcher. Settings opens from the
 // rail's foot. Right-clicking a chat opens its menu (ChatMenu.tsx).
-import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Hourglass, LockOpen, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
 import { waitingLabel, type Handoff } from "../hermes/dispatched";
@@ -355,7 +355,7 @@ function RenameRow({
  * title is saved, and why underneath if it isn't. When Hermes can't use the Text generation model's provider, that
  * note says how to fix it and offers the setting.
  */
-function ChatRow({
+const ChatRow = memo(function ChatRow({
   chat,
   selected,
   alsoShown,
@@ -378,6 +378,8 @@ function ChatRow({
   onStopWaiting,
   section,
   hidden,
+  sleepsUntil,
+  wake,
 }: {
   chat: Chat;
   selected: boolean;
@@ -409,6 +411,9 @@ function ChatRow({
   section?: string;
   /** In a collapsed section: kept, with its rename box or menu, but out of sight. */
   hidden?: boolean;
+  sleepsUntil?: number;
+  /** When the snoozed chat wakes, as the row shows it. */
+  wake?: string;
 }) {
   const l = useLocale();
   const [renaming, setRenaming] = useState(false);
@@ -442,8 +447,6 @@ function ChatRow({
     if (wasRenaming.current && !renaming && (!now || now === document.body)) openButton.current?.focus();
     wasRenaming.current = renaming;
   }, [renaming]);
-  const now = Date.now();
-  const sleepsUntil = snooze?.until !== undefined && snooze.until > now ? snooze.until : undefined;
   if (renaming) return <RenameRow chat={chat} selected={selected} hidden={hidden} onRename={onRename} onDone={() => setRenaming(false)} />;
   return (
     <div
@@ -496,7 +499,7 @@ function ChatRow({
           </span>
         )}
         <span className="row-meta">
-          {sleepsUntil && <span className="row-wake">{wakeLabel(sleepsUntil, now, l.tag)}</span>}
+          {wake && <span className="row-wake">{wake}</span>}
           {handoff?.kind === "needsOwner" && (
             <span className="row-owner" role="img" aria-label={handoff.reason} title={handoff.reason}>
               <CircleAlert size={12} />
@@ -575,7 +578,18 @@ function ChatRow({
       )}
     </div>
   );
+}, sameRowProps);
+
+function sameRowProps(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (a instanceof Set) return b instanceof Set && a.size === b.size && [...a].every((x) => b.has(x));
+  if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((x, i) => sameRowProps(x, b[i]));
+  if (!isPlain(a) || !isPlain(b)) return false;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((k) => Object.hasOwn(b, k) && sameRowProps(a[k], b[k]));
 }
+
+const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && Object.getPrototypeOf(v) === Object.prototype;
 
 const unreadCount = (p: OtherProfile) => `${p.unread}${p.more ? "+" : ""}`;
 const CHECKED_EVERY = `Other profiles are checked every ${CHECK_EVERY_MS / 60_000} minutes`;
@@ -1082,37 +1096,77 @@ export function ChatList({
   useEffect(() => {
     if (selectedIn) setCollapsed(selectedIn, false);
   }, [selectedId]);
-  const row = (c: Chat, section?: SectionKey, hidden?: boolean) => (
-    <ChatRow
-      key={c.id}
-      section={section}
-      hidden={hidden}
-      chat={c}
-      selected={c.id === selectedId}
-      alsoShown={c.id === alsoShownId && c.id !== selectedId}
-      split={split}
-      onOpen={() => onOpen(c.id)}
-      onOpenIn={(side) => onOpenIn(c.id, side)}
-      onOpenTab={() => onOpenTab(c.id)}
-      onSettle={(s) => onSettle(c.id, s)}
-      onArchive={(a) => onArchive(c.id, a)}
-      onAskDelete={(from) => setDeleting({ chat: c, from })}
-      onRename={(title, from) => onRename(c.id, title, from)}
-      onRegenTitle={() => onRegenTitle(c.id)}
-      onCopyLink={onCopyLink && (() => onCopyLink(c))}
-      onTextGenerationSettings={onTextGenerationSettings}
-      projects={projectsOf?.(c.id)}
-      tags={tagsOf?.(c.id)}
-      snooze={
-        onSnooze && onWake && !c.settled && !c.archived
-          ? { until: snoozes[c.id], onSnooze: (until) => onSnooze(c.id, until), onCustom: () => setCustomFor(c), onWake: () => onWake(c.id) }
-          : undefined
-      }
-      pin={onPin && !c.archived ? { pinned: pins[c.id] !== undefined, onPin: (on) => onPin(c.id, on) } : undefined}
-      handoff={handoffs?.get(c.id)}
-      onStopWaiting={onStopWaiting && (() => onStopWaiting(c.id))}
-    />
-  );
+  const l = useLocale();
+  const latest = { chats, onOpen, onOpenIn, onOpenTab, onSettle, onArchive, onRename, onRegenTitle, onCopyLink, onTextGenerationSettings, projectsOf, tagsOf, onPin, onStopWaiting, onSnooze, onWake };
+  const live = useRef(latest);
+  live.current = latest;
+  const handlersFor = (id: string) => {
+    const chat = () => live.current.chats.find((c) => c.id === id);
+    return {
+      open: () => live.current.onOpen(id),
+      openIn: (side: number) => live.current.onOpenIn(id, side),
+      openTab: () => live.current.onOpenTab(id),
+      settle: (settled: boolean) => live.current.onSettle(id, settled),
+      archive: (archived: boolean) => live.current.onArchive(id, archived),
+      askDelete: (from: HTMLElement | null) => {
+        const c = chat();
+        if (c) setDeleting({ chat: c, from });
+      },
+      rename: (title: string, from: string) => live.current.onRename(id, title, from),
+      regenTitle: () => live.current.onRegenTitle(id),
+      copyLink: () => {
+        const c = chat();
+        if (c) live.current.onCopyLink?.(c);
+      },
+      textGenerationSettings: () => live.current.onTextGenerationSettings?.(),
+      toggleProject: (projectId: string, on: boolean) => live.current.projectsOf?.(id)?.onToggle(projectId, on),
+      toggleTag: (tagId: string, on: boolean) => live.current.tagsOf?.(id)?.onToggle(tagId, on),
+      manageTags: () => live.current.tagsOf?.(id)?.onManage(),
+      snooze: (until: number) => live.current.onSnooze?.(id, until),
+      customSnooze: () => setCustomFor(chat()),
+      wake: () => live.current.onWake?.(id),
+      pin: (on: boolean) => live.current.onPin?.(id, on),
+      stopWaiting: () => live.current.onStopWaiting?.(id),
+    };
+  };
+  const handlers = useRef(new Map<string, ReturnType<typeof handlersFor>>()).current;
+  const row = (c: Chat, section?: SectionKey, hidden?: boolean) => {
+    let on = handlers.get(c.id);
+    if (!on) handlers.set(c.id, (on = handlersFor(c.id)));
+    const projects = projectsOf?.(c.id);
+    const tags = tagsOf?.(c.id);
+    const snooze = onSnooze && onWake && !c.settled && !c.archived ? { until: snoozes[c.id], onSnooze: on.snooze, onCustom: on.customSnooze, onWake: on.wake } : undefined;
+    const sleepsUntil = snooze?.until !== undefined && snooze.until > now ? snooze.until : undefined;
+    return (
+      <ChatRow
+        key={c.id}
+        section={section}
+        hidden={hidden}
+        chat={c}
+        selected={c.id === selectedId}
+        alsoShown={c.id === alsoShownId && c.id !== selectedId}
+        split={split}
+        onOpen={on.open}
+        onOpenIn={on.openIn}
+        onOpenTab={on.openTab}
+        onSettle={on.settle}
+        onArchive={on.archive}
+        onAskDelete={on.askDelete}
+        onRename={on.rename}
+        onRegenTitle={on.regenTitle}
+        onCopyLink={onCopyLink && on.copyLink}
+        onTextGenerationSettings={onTextGenerationSettings && on.textGenerationSettings}
+        projects={projects && { ...projects, onToggle: on.toggleProject }}
+        tags={tags && { ...tags, onToggle: on.toggleTag, onManage: on.manageTags }}
+        snooze={snooze}
+        sleepsUntil={sleepsUntil}
+        wake={sleepsUntil === undefined ? undefined : wakeLabel(sleepsUntil, now, l.tag)}
+        pin={onPin && !c.archived ? { pinned: pins[c.id] !== undefined, onPin: on.pin } : undefined}
+        handoff={handoffs?.get(c.id)}
+        onStopWaiting={onStopWaiting && on.stopWaiting}
+      />
+    );
+  };
   // Archived can hold every chat the profile has ever had, so a collapsed one draws no rows (Settled, the drawer, neither).
   const keepsHidden = (k: SectionKey) => k !== "archived";
   // Pinned, Working and Snoozed come and go with what the owner and Hermes do; the others keep their header when empty.

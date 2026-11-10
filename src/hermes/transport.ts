@@ -694,13 +694,15 @@ export class Hermes {
   /** The newest stored row each chat is known to have, from its history and the turns sent from here. A message that
    * may have reached Hermes is looked for only past the row its chat had when it went out. */
   private knownRow = new Map<string, number>();
-  private syncing?: Promise<Error | undefined>;
+  /** The list sync under way. `next`, once `detach` has ended it: the next sync to begin, whose outcome it reports. */
+  private syncing?: { done: Promise<Error | undefined>; next?: Promise<Error | undefined> };
+  private abandonedSyncs: ((next: Promise<Error | undefined>) => void)[] = [];
   private syncAgain = false;
   private background = new Set<Promise<unknown>>();
   /** When the shown profile's list last synced on this connection. */
   private listedAt?: number;
-  /** The server commands listed for a connection and profile (`serverCommands`). */
-  private commandsRead?: { key: string; done: Promise<ServerCommandList> };
+  /** The `commands.catalog` read for a connection and profile at `at` (`catalog`). */
+  private catalogRead?: { key: string; at: number; done: Promise<ServerCommandList> };
   /** The skills the composer offers, read for a connection and profile at `at` (`skillCommands`). */
   private skillsRead?: { key: string; at: number; done: Promise<SkillCommands | undefined> };
   /** The voice set-up read for a connection and profile (`voiceSetup`). */
@@ -1064,7 +1066,7 @@ export class Hermes {
   /** Settings → Skills' reads and writes of a profile's skills (skills.ts). Each call names its profile. */
   readonly skills = new SkillsApi((method, pathAndQuery, body) => {
     // A switch or an edit can change which skills the composer offers, and their descriptions: read them again.
-    if (method !== "GET") this.skillsRead = undefined;
+    if (method !== "GET") this.skillsRead = this.catalogRead = undefined;
     return this.rest(method, pathAndQuery, body);
   });
   /** The Clone profile dialog's profile list, create and delete (profileClone.ts, ADR 0074). Each call names its profiles. */
@@ -1289,20 +1291,28 @@ export class Hermes {
   }
 
   /**
-   * The registry's server commands this Hermes lists for the shown profile (commands.ts). Read once per connection and
-   * profile; a failed read is tried again on the next call.
+   * The registry's server commands this Hermes lists for the shown profile (commands.ts), from the catalog
+   * `skillCommands` shares. Read once per connection and profile; a failed read is tried again on the next call.
    */
   serverCommands(): Promise<ServerCommandList> {
     if (!this.connectedPipe()) return Promise.reject(new Error("Not connected to Hermes."));
+    return this.catalog(Infinity);
+  }
+
+  /**
+   * The shown profile's `commands.catalog`, one read for `serverCommands` and `skillCommands`: read again once older
+   * than `maxAgeMs`, on a new connection or profile, after a change from Settings → Skills, or after a failed read.
+   */
+  private catalog(maxAgeMs: number): Promise<ServerCommandList> {
     const key = `${this.generation}/${this.profile}`;
-    if (this.commandsRead?.key !== key) {
-      const done = listServerCommands((method, params) => this.request(method, params), this.profile);
-      this.commandsRead = { key, done };
-      done.catch(() => {
-        if (this.commandsRead?.done === done) this.commandsRead = undefined;
-      });
-    }
-    return this.commandsRead.done;
+    const read = this.catalogRead;
+    if (read?.key === key && Date.now() - read.at <= maxAgeMs) return read.done;
+    const entry = { key, at: Date.now(), done: listServerCommands((method, params) => this.request(method, params), this.profile) };
+    this.catalogRead = entry;
+    entry.done.catch(() => {
+      if (this.catalogRead === entry) this.catalogRead = undefined;
+    });
+    return entry.done;
   }
 
   /**
@@ -1317,7 +1327,7 @@ export class Hermes {
     const read = this.skillsRead;
     if (read?.key !== key || Date.now() - read.at > SKILL_COMMANDS_FRESH_MS) {
       const profile = this.profile;
-      const done = Promise.all([listServerCommands((method, params) => this.request(method, params), profile), this.skills.list(profile)]).then(
+      const done = Promise.all([this.catalog(SKILL_COMMANDS_FRESH_MS), this.skills.list(profile)]).then(
         ([catalog, view]) => (catalog.skills ? offeredSkills(catalog.skills, view) : undefined),
       );
       const entry = { key, at: Date.now(), done };
@@ -3449,22 +3459,32 @@ export class Hermes {
     if (this.snapshot.status !== "connected") return Promise.resolve(new Error("Not connected to Hermes.")); // Reconnecting syncs again.
     if (this.syncing) {
       this.syncAgain = true;
-      return this.syncing;
+      return this.syncing.done;
     }
-    this.syncing = (async () => {
+    const current = () => this.syncing === sync;
+    const passes = async (): Promise<Error | undefined> => {
+      let failure: Error | undefined;
       try {
-        let failure: Error | undefined;
         do {
           this.syncAgain = false;
-          failure = await this.syncOnce();
-        } while (this.syncAgain);
-        return failure;
+          failure = await this.syncOnce(current);
+        } while (this.syncAgain && current());
       } finally {
-        this.syncing = undefined;
+        if (current()) this.syncing = undefined;
       }
-    })();
-    this.track(this.syncing);
-    return this.syncing;
+      return sync.next ?? failure;
+    };
+    const sync: { done: Promise<Error | undefined>; next?: Promise<Error | undefined> } = { done: passes() };
+    this.syncing = sync;
+    for (const report of this.abandonedSyncs.splice(0)) report(sync.done);
+    this.track(sync.done);
+    return sync.done;
+  }
+
+  private abandonListSync() {
+    if (this.syncing) this.syncing.next = new Promise((report) => this.abandonedSyncs.push(report));
+    this.syncing = undefined;
+    this.syncAgain = false;
   }
 
   /** Resolves once background work (list syncs, pinning) has finished. Tests wait on it; the app doesn't need to. */
@@ -3822,6 +3842,7 @@ export class Hermes {
     this.kanbanWatch.stop();
     clearTimeout(this.rosterTimer);
     clearInterval(this.heartbeat);
+    this.abandonListSync();
     // Lets the Rust side end the tunnel.
     if (pipe) this.droppedClosing = pipe.close().catch(() => {}).finally(() => (this.droppedClosing = undefined));
     for (const p of this.pending.values()) p.reject(new ConnectionLostError(`Connection closed: ${reason}`));
@@ -4206,8 +4227,9 @@ export class Hermes {
     return title;
   }
 
-  private async syncOnce(): Promise<Error | undefined> {
+  private async syncOnce(current: () => boolean): Promise<Error | undefined> {
     const profile = this.profile;
+    const superseded = () => this.profile !== profile || !current();
     const cutoff = this.snapshot.olderPulled ? -Infinity : Date.now() - LIST_WINDOW_MS;
     this.pinnedSinceListRead.clear();
     this.readSinceListRead.clear();
@@ -4226,11 +4248,11 @@ export class Hermes {
         for (const id of old.botChats) botChats.add(id);
       }
     } catch (e) {
-      if (this.profile === profile) this.update({ syncError: `Couldn't refresh the chat list: ${(e as Error).message}`, ...this.switchFailed(e as Error) });
+      if (superseded()) return undefined;
+      this.update({ syncError: `Couldn't refresh the chat list: ${(e as Error).message}`, ...this.switchFailed(e as Error) });
       return e as Error;
     }
-    // The owner switched profile meanwhile; the switch syncs the new one.
-    if (this.profile !== profile) return undefined;
+    if (superseded()) return undefined;
 
     const known = new Map(this.snapshot.chats.map((c) => [c.id, c]));
     // A chat new to the list brings its outbox, kept on this computer.
