@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // A reply streaming in through Markdown (#224): each delta must redo only what it changed, and the finished reply must
 // come out as it always has.
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Markdown } from "./Markdown";
@@ -71,8 +71,11 @@ const whole = (text: string, query = "") => {
   return html;
 };
 
-/** `text` streamed in `step` characters at a time, then finished; the HTML each time, and the last. */
-function streamed(text: string, step: number, query = "") {
+/**
+ * `text` streamed in `step` characters at a time, then finished; the HTML each time, and the last, once the languages
+ * guessed after a delta are in.
+ */
+async function streamed(text: string, step: number, query = "") {
   const { container, rerender, unmount } = render(<Markdown text="" query={query} streaming />);
   const seen: string[] = [];
   for (let i = step; i < text.length + step; i += step) {
@@ -80,6 +83,7 @@ function streamed(text: string, step: number, query = "") {
     seen.push(container.innerHTML);
   }
   rerender(<Markdown text={text} query={query} />);
+  await act(() => new Promise((r) => setTimeout(r)));
   const html = container.innerHTML;
   unmount();
   return { seen, html };
@@ -168,14 +172,14 @@ describe("Splitting a reply into blocks", () => {
 });
 
 describe("A streamed reply, once finished", () => {
-  it("comes out exactly as the same reply rendered in one piece", { timeout: 30_000 }, () => {
+  it("comes out exactly as the same reply rendered in one piece", { timeout: 30_000 }, async () => {
     for (const [name, text] of Object.entries(REPLIES))
-      for (const query of ["", "e"]) expect(streamed(text, 7, query).html, `${name}, query "${query}"`).toBe(whole(text, query));
+      for (const query of ["", "e"]) expect((await streamed(text, 7, query)).html, `${name}, query "${query}"`).toBe(whole(text, query));
   });
 
-  it("matches the one-piece render at every delta too, apart from code still coming in", { timeout: 30_000 }, () => {
+  it("matches the one-piece render at every delta too, apart from code still coming in", { timeout: 30_000 }, async () => {
     const text = REPLIES["lists, loose and tight"] + "\n\n" + REPLIES.table + "\n\n" + REPLIES.links + "\n\n" + REPLIES["inline math"];
-    const { seen } = streamed(text, 5);
+    const { seen } = await streamed(text, 5);
     seen.forEach((html, i) => expect(html, `after ${(i + 1) * 5} characters`).toBe(whole(text.slice(0, (i + 1) * 5))));
   });
 });
