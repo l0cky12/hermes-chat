@@ -524,10 +524,11 @@ export function ChatPane({
   const typed = findOpen ? query : "";
   const q = useDeferredValue(typed);
 
-  // After every render, count the marks and point at the current one. Marks still for an earlier query don't count.
+  // After every render, count the marks and point at the current one. Marks still for an earlier query don't count, and
+  // an empty query has none, so a closed find bar skips the walk over the transcript.
   useLayoutEffect(() => {
     if (q !== typed) return;
-    const marks = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("mark.hit") ?? []);
+    const marks = q ? Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("mark.hit") ?? []) : [];
     setCount(marks.length);
     let idx = Math.min(matchIndex, marks.length - 1);
     // Land once the history is in: it has marks, or it has loaded without any (the match was in a tool call, say).
