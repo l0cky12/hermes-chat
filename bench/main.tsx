@@ -142,7 +142,7 @@ async function streamCode(blocks: number, tagged: boolean, chunk = 12) {
     frameMs: stats(frames),
     over16ms: frames.filter((f) => f > 17).length,
     endMs,
-    highlighted: document.querySelectorAll(`[data-item="a-live"] pre code.hljs`).length,
+    highlighted: document.querySelectorAll(`[data-item="a-live"] pre code:has([class^="hljs-"])`).length,
   };
 }
 
