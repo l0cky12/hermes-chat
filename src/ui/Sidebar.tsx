@@ -18,7 +18,7 @@ import { DeleteChatDialog } from "./DeleteChat";
 import { SettleAllDialog } from "./SettleAll";
 import { CloneProfileDialog } from "./CloneProfile";
 import type { ProfileCloneApi } from "../hermes/profileClone";
-import { ArchiveButton, STATUS_LABEL, SettleButton, SourceIcon, Spinner, ago, composing, routeLabel, useReturnFocus } from "./bits";
+import { Age, ArchiveButton, STATUS_LABEL, SettleButton, SourceIcon, Spinner, ago, composing, routeLabel, useReturnFocus } from "./bits";
 import { useLocale, type Locale } from "../i18n/locale";
 import { viaLabel } from "../hermes/routes";
 import { dragChat, dragChatEnd, rowDragged } from "./Tabs";
@@ -511,7 +511,7 @@ function ChatRow({
           ) : chat.unread ? (
             <span className="dot" title="Unread" />
           ) : (
-            !sleepsUntil && l.fmt.age(chat.updatedAt)
+            !sleepsUntil && <Age at={chat.updatedAt} />
           )}
         </span>
       </button>

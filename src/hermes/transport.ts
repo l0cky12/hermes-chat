@@ -65,7 +65,7 @@ import { agentFsEditIo } from "./artifacts";
 import { splitPath, type OutputsIo, type StoredRow as StoredOutputRow } from "./outputs";
 import type { UsageIo } from "./usageAnalytics";
 import { compactResultOf, compactionsOf, readingOf, type CompactResult, type CompactionHistory, type CompactionRow, type ContextReading } from "./contextInspect";
-import { chatUsageOf, countersOf, newerChatUsage, replyUsage, ZERO_COUNTERS, type ReplyUsage, type UsageCounters } from "./usage";
+import { chatUsageOf, countersOf, newerChatUsage, newerListedUsage, replyUsage, ZERO_COUNTERS, type ReplyUsage, type UsageCounters } from "./usage";
 import { toolResultText } from "./toolResult";
 import { onLost, onRoster, onSubagentEvent, onUnchecked, parseOutput, type SubagentId, type SubagentOutput } from "./subagents";
 import {
@@ -4267,7 +4267,7 @@ export class Hermes {
           updatedAt: Math.max(c?.updatedAt ?? 0, lastActive(r)),
           unread: !!r.unread && !readHere && !onScreen,
           // List rows carry the stored token and cost totals too.
-          usage: newerChatUsage(c?.usage, chatUsageOf(r, Date.now())),
+          usage: newerListedUsage(c?.usage, chatUsageOf(r, Date.now())),
           ...(lineage && { lineage: c?.lineage && sameIds(c.lineage, lineage) ? c.lineage : lineage }),
         };
         return c && sameFields(c, next) ? c : next;
@@ -4281,10 +4281,12 @@ export class Hermes {
       .filter((c) => (c.runtimeId || this.revealed.has(c.id) || this.archiveWanted.has(c.id)) && !listedIds.has(c.id))
       .map((c) => (botChats.has(c.id) && !c.bot ? { ...c, bot: true, title: BOT_CHAT_TITLE } : c));
     const chats = [...onThisConnection, ...listed];
+    // The first read also tells listeners, because `hasListed` turns true with it.
+    const firstRead = this.listedAt === undefined;
     this.listedAt = Date.now();
     const was = this.snapshot;
     const switched = !!was.switching;
-    if (switched || was.syncError !== undefined || chats.length !== was.chats.length || chats.some((c, i) => c !== was.chats[i]))
+    if (firstRead || switched || was.syncError !== undefined || chats.length !== was.chats.length || chats.some((c, i) => c !== was.chats[i]))
       this.update({ chats, syncError: undefined, switching: undefined });
     this.kanbanWatch.chatsListed();
     this.placeRoster();

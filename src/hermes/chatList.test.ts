@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
 import type { Chat } from "./model";
@@ -137,6 +137,22 @@ describe("Chat list sync", () => {
     expect(chat("a")).toBe(a);
   });
 
+  it("says when Usage was read when it is opened, though a list refresh read the same totals earlier", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("a", 0.01, { input_tokens: 1200, output_tokens: 300, api_call_count: 2, estimated_cost_usd: 0.01, cost_status: "estimated" })];
+    const { hermes, chat } = await signedIn(server);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-11-09T21:00:00Z"));
+      await hermes.sync();
+      vi.setSystemTime(new Date("2026-11-09T22:30:00Z"));
+      await hermes.refreshUsage("a");
+      expect(chat("a").usage!.readAt).toBe(Date.parse("2026-11-09T22:30:00Z"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runs one more sync, not one per request, when asked while a sync is running", async () => {
     const { server, hermes } = await signedIn();
     await Promise.all([hermes.sync(), hermes.sync(), hermes.sync()]);
@@ -161,6 +177,21 @@ describe("Chat list sync", () => {
 });
 
 describe("Local chat list cache", () => {
+  it("tells listeners when a relaunch first reads the list, though it matches the saved one", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("a", 1), row("b", 2, { pinned: true })];
+    const cache = memoryCache();
+    const first = await connect(server.openPipe, "default", cache);
+    await first.sync();
+    await first.close();
+    const second = await connect(server.openPipe, "default", cache);
+    expect(ids(second.getSnapshot().chats)).toEqual(["a", "b"]);
+    const heard: boolean[] = [];
+    second.subscribe(() => heard.push(second.hasListed()));
+    await second.sync();
+    expect(heard).toContain(true);
+  });
+
   it("shows the cached list as soon as Hermes is connected", async () => {
     const cached: Chat = { id: "c1", title: "Cached", source: "telegram", settled: true, updatedAt: 1, items: [] };
     const { chats } = await signedIn(new FakeHermes(), memoryCache({ saved: { default: [cached] } }));

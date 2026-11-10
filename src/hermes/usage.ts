@@ -76,12 +76,20 @@ export function replyUsageOf(v: unknown): ReplyUsage | undefined {
 
 /**
  * The newer of two reads of a chat's usage. Hermes's stored counts only ever grow, so a read with fewer model calls than
- * the one shown was taken before it, and loses. A read with the same totals as the one shown keeps the one shown.
+ * the one shown was taken before it, and loses.
  */
 export function newerChatUsage(shown: ChatUsage | undefined, read: ChatUsage | undefined): ChatUsage | undefined {
   if (!read) return shown;
-  if (shown && ((read.calls ?? 0) < (shown.calls ?? 0) || sameTotals(shown, read))) return shown;
+  if (shown && (read.calls ?? 0) < (shown.calls ?? 0)) return shown;
   return read;
+}
+
+/**
+ * `newerChatUsage` for a list refresh, which reads every chat's totals in passing: a read with the same totals keeps the
+ * one shown, with its read time, so a refresh that finds nothing new leaves the chat as it was.
+ */
+export function newerListedUsage(shown: ChatUsage | undefined, read: ChatUsage | undefined): ChatUsage | undefined {
+  return shown && read && sameTotals(shown, read) ? shown : newerChatUsage(shown, read);
 }
 
 function sameTotals(a: ChatUsage, b: ChatUsage): boolean {
