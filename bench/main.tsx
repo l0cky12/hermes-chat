@@ -3,10 +3,12 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
+import { X } from "lucide-react";
 import "../src/styles.css";
 import type { Chat, Item } from "../src/hermes/model";
 import { ChatPane } from "../src/ui/ChatPane";
 import { Split } from "../src/ui/Split";
+import { PaneDrop, TabStrip } from "../src/ui/Tabs";
 import { codeReply, makeChat, makeReply } from "./fixture";
 
 const root = createRoot(document.getElementById("root")!);
@@ -23,6 +25,7 @@ function Host({ initial }: { initial: Chat }) {
           status="connected"
           draft=""
           onDraft={() => {}}
+          onDraftStep={() => undefined}
           onRetry={() => {}}
           onEdit={() => {}}
           onDismiss={() => {}}
@@ -195,8 +198,9 @@ async function scroll(px = 120) {
   return { frameMs: stats(frames), over20ms: frames.filter((f) => f > 20).length };
 }
 
-// Two chats side by side, as App shows them: both panes render again whenever either chat changes, since the app
-// re-renders on every change to Hermes's snapshot.
+// Two chats side by side, laid out as App lays them out: each pane a tab strip over a `.pane-drop` holding the chat,
+// in `.main-chat`. Both panes render again whenever either chat changes, since the app re-renders on every change to
+// Hermes's snapshot.
 let setPair: (p: [Chat, Chat]) => void = () => {};
 let pair: [Chat, Chat];
 
@@ -204,34 +208,58 @@ function SplitHost({ initial }: { initial: [Chat, Chat] }) {
   const [chats, set] = useState(initial);
   setPair = set;
   const pane = (chat: Chat, active: boolean) => (
-    <ChatPane
-      key={chat.id}
-      chat={chat}
-      status="connected"
-      draft=""
-      onDraft={() => {}}
-      undelivered={[]}
-      onRetry={() => {}}
-      onDismiss={() => {}}
-      onAttach={async () => ({ attachments: [], refused: [] })}
-      onSend={() => {}}
-      onStop={() => {}}
-      onAnswer={() => {}}
-      active={active}
-      split
-    />
+    <>
+      <TabStrip
+        pane={chat.id}
+        tabs={[{ id: chat.id, title: chat.title, running: chat.running }]}
+        current={chat.id}
+        onPick={() => {}}
+        onClose={() => {}}
+        onNew={() => {}}
+        preview={() => null}
+        onDropChat={() => {}}
+        menu={() => []}
+        lastClosable
+        controls={
+          <button className="icon-btn" aria-label="Close the pane">
+            <X size={16} />
+          </button>
+        }
+      />
+      <PaneDrop preview={() => null} onDropChat={() => {}}>
+        <ChatPane
+          key={chat.id}
+          chat={chat}
+          status="connected"
+          draft=""
+          onDraft={() => {}}
+          onDraftStep={() => undefined}
+          onRetry={() => {}}
+          onEdit={() => {}}
+          onDismiss={() => {}}
+          onAttach={async () => ({ attachments: [], refused: [] })}
+          onSend={() => {}}
+          onStop={() => {}}
+          onAnswer={() => {}}
+          active={active}
+          split
+        />
+      </PaneDrop>
+    </>
   );
   return (
     <div className="app">
       <main className="main">
-        <Split
-          activeKey="b"
-          onActivate={() => {}}
-          panes={[
-            { key: "a", title: chats[0].title, node: pane(chats[0], false) },
-            { key: "b", title: chats[1].title, node: pane(chats[1], true) },
-          ]}
-        />
+        <div className="main-chat">
+          <Split
+            activeKey="b"
+            onActivate={() => {}}
+            panes={[
+              { key: "a", title: chats[0].title, node: pane(chats[0], false) },
+              { key: "b", title: chats[1].title, node: pane(chats[1], true) },
+            ]}
+          />
+        </div>
       </main>
     </div>
   );
@@ -251,7 +279,8 @@ async function splitOpen(turns: number) {
 
 /**
  * Streams a reply into both panes at once, as two replies running together: each frame one delta lands in each chat,
- * one after the other, and each re-renders both panes. `updateMs`: each delta's render, commit and forced layout.
+ * and both are committed together, as the app hears of streamed deltas once a frame. `updateMs`: each frame's render,
+ * commit and forced layout.
  */
 async function splitStream(chunk = 4) {
   const reply = makeReply();
@@ -270,18 +299,16 @@ async function splitStream(chunk = 4) {
   let last = performance.now();
   for (let i = 0; i < reply.length; i += chunk) {
     const text = reply.slice(i, i + chunk);
-    for (const side of [0, 1] as const) {
-      const list = [...chats[side].items];
+    chats = chats.map((chat) => {
+      const list = [...chat.items];
       const prev = list[list.length - 1];
       if (prev.kind === "assistant") list[list.length - 1] = { ...prev, text: prev.text + text };
       else list.push({ kind: "assistant", id: "a-live", text });
-      const next: [Chat, Chat] = [...chats];
-      next[side] = { ...chats[side], items: list };
-      chats = next;
-      const t0 = performance.now();
-      flushSync(() => setPair(chats));
-      update.push(performance.now() - t0);
-    }
+      return { ...chat, items: list };
+    }) as [Chat, Chat];
+    const t0 = performance.now();
+    flushSync(() => setPair(chats));
+    update.push(performance.now() - t0);
     const now = await frame();
     frames.push(now - last);
     last = now;
