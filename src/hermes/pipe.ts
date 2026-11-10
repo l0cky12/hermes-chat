@@ -4,6 +4,7 @@
 import type { CustomEndpoint, EndpointForm, EndpointSave, ProviderSignIn } from "./accounts";
 import type { AttemptTrace, Step } from "./attempts";
 import type { McpEdit } from "./mcp";
+import type { ContextPipe } from "./projectContextFiles";
 import type { Downloaded, PickedUpload, TransferProgress } from "./remoteFiles";
 import type { SavedKey } from "./setup";
 import type { OpenScreenSocket } from "./screen";
@@ -152,6 +153,11 @@ export interface Pipe {
    */
   fsSaveText(id: number, profile: string, path: string, text: string, session?: string): Promise<string>;
   cancelTransfer(id: number): Promise<void>;
+  /**
+   * A project's context files (src-tauri `context_*`, ADR 0135). Optional: without it, the Context card lists the
+   * files and changes none.
+   */
+  context?: ContextPipe;
   /**
    * Opens the Screen's RFB stream with a ticket from `display.observe` (src-tauri `display_open`, ADR 0039). Rust closes
    * it with the connection. Optional: a pipe without it has no Screen.

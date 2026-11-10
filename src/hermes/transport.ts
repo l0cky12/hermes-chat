@@ -49,9 +49,10 @@ import { readBack, sendImport, type PlannedChat } from "./importTranscripts";
 import { memoryApi, type MemoryApi } from "./memory";
 import { MemoryProvidersApi } from "./memoryProviders";
 import { SkillsApi } from "./skills";
-import { CapabilityStore, CapabilityUnsupportedError, failureOf, isNoRoute, sharesChats, type ServerFacts } from "./capabilities";
+import { CapabilityStore, CapabilityUnsupportedError, failureOf, isNoRoute, sharesChats, specOf, type CapabilityId, type ServerFacts } from "./capabilities";
 import { BOT_CHAT_TITLE, BotChats, BotModeUnsupportedError, isBotChat, isBotChatTitle, rosterOf, type Bot } from "./bots";
 import type { OpenPipe, Pipe, PipeEvent, RestMethod, Route, Speech, Transcript, VoiceSetup } from "./pipe";
+import { projectContextFiles, type ProjectContextFiles } from "./projectContextFiles";
 import { RemoteFilesError, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, SESSION_GONE, previewSupport, remoteFiles, type EditIo, type RemoteFiles } from "./remoteFiles";
 import { isUnsecure } from "./unsecure";
 import { TOKEN_REFUSED } from "./routes";
@@ -848,6 +849,21 @@ export class Hermes {
       return pipe.saveText(id, path, text, overwrite);
     },
     cancel: (id) => this.pipe?.cancelTransfer(id) ?? Promise.resolve(),
+  });
+
+  /**
+   * A project's context files on the server (projectContextFiles.ts, ADR 0135). Reads go while connected; a change
+   * goes through Rust's own commands, and only on a server that has the routes it needs.
+   */
+  readonly contextFiles: ProjectContextFiles = projectContextFiles({
+    get: (pathAndQuery, maxBytes) => this.restGet(pathAndQuery, maxBytes),
+    pipe: () => (this.closing || this.snapshot.status !== "connected" ? undefined : this.pipe?.context),
+    lacks: (ssh) => {
+      const lacking = (id: CapabilityId) => (this.capabilities.get(id).state === "unsupported" ? [`${specOf(id).label}: ${specOf(id).needs}`] : []);
+      return ssh ? lacking("outputs") : lacking("serverFiles");
+    },
+    scope: () => String(this.generation),
+    preview: (entry, asText) => this.files.preview(entry, asText),
   });
 
   /**

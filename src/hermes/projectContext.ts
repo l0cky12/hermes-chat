@@ -10,9 +10,9 @@ export type ContextKind = "text" | "pdf" | "docx" | "binary";
 /**
  * One file in a project's `context` folder. `version` changes when the file does. `tokens`: the room its text takes;
  * missing when it has no readable text, and then chats get its path only. `size` is missing only where the server
- * can't say it (a file on an SSH profile that isn't text).
+ * can't say it (a file on an SSH profile that isn't text). `mime`: the type the server reports, for its preview.
  */
-export type ContextFile = { name: string; path: string; size?: number; version: string; kind: ContextKind; tokens?: number };
+export type ContextFile = { name: string; path: string; size?: number; version: string; kind: ContextKind; tokens?: number; mime?: string };
 
 /** `full`: chats get the files' text. `list`: the files are over capacity, and chats get their paths. */
 export type ContextMode = "full" | "list";
@@ -93,7 +93,7 @@ export function kindByName(name: string, mime?: string): ContextKind | undefined
 }
 
 /** A listed file before its text is known. `kind` undefined: reading it tells whether it is text. */
-export type ListedFile = { name: string; path: string; size?: number; version: string; kind?: ContextKind };
+export type ListedFile = { name: string; path: string; size?: number; version: string; kind?: ContextKind; mime?: string };
 
 /**
  * The context files among a folder's entries, by name. Folders, hidden files and broken links are left out, and so is
@@ -102,7 +102,7 @@ export type ListedFile = { name: string; path: string; size?: number; version: s
 export function listedFiles(entries: readonly RemoteEntry[]): ListedFile[] {
   return entries
     .filter((e) => e.kind === "file" && !e.name.startsWith(".") && !e.linkTarget)
-    .map((e) => ({ name: e.name, path: e.path, size: e.size ?? 0, version: `${e.size ?? 0}:${e.modified ?? 0}`, kind: kindByName(e.name, e.mime) }))
+    .map((e) => ({ name: e.name, path: e.path, size: e.size ?? 0, version: `${e.size ?? 0}:${e.modified ?? 0}`, kind: kindByName(e.name, e.mime), ...(e.mime && { mime: e.mime }) }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -116,7 +116,7 @@ export const needsRead = (f: ListedFile) => f.size === undefined || (f.kind !== 
 export function contextFile(f: ListedFile, text?: string | null): ContextFile {
   const kind = f.kind ?? (typeof text === "string" ? "text" : "binary");
   const size = f.size ?? (typeof text === "string" ? bytesOf(text) : undefined);
-  const base = { name: f.name, path: f.path, version: f.version, kind, ...(size !== undefined && { size }) };
+  const base = { name: f.name, path: f.path, version: f.version, kind, ...(size !== undefined && { size }), ...(f.mime && { mime: f.mime }) };
   if (kind === "binary" || text === null) return base;
   if (kind === "text") return size === undefined ? base : { ...base, tokens: tokensOf(size) };
   return typeof text === "string" ? { ...base, tokens: tokensOf(bytesOf(text)) } : base;

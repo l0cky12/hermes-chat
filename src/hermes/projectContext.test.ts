@@ -44,8 +44,8 @@ describe("what counts as a context file", () => {
       { name: "Brief.pdf", path: `${DIR}/Brief.pdf`, kind: "file", size: 99, modified: 7000, mime: "application/pdf" },
     ]);
     expect(listed).toEqual([
-      { name: "Brief.pdf", path: `${DIR}/Brief.pdf`, size: 99, version: "99:7000", kind: "pdf" },
-      { name: "notes.md", path: `${DIR}/notes.md`, size: 10, version: "10:5000", kind: "text" },
+      { name: "Brief.pdf", path: `${DIR}/Brief.pdf`, size: 99, version: "99:7000", kind: "pdf", mime: "application/pdf" },
+      { name: "notes.md", path: `${DIR}/notes.md`, size: 10, version: "10:5000", kind: "text", mime: "text/markdown" },
     ]);
   });
 
