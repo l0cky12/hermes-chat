@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import type { Chat } from "../hermes/model";
+import { AGE_TICK_MS } from "./bits";
 import { ChatList } from "./Sidebar";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
@@ -93,12 +94,15 @@ it("shows a tag put on meanwhile in a menu that is open", () => {
   expect(within(menu).getByRole("menuitemcheckbox", { name: /infra/ }).getAttribute("aria-checked")).toBe("true");
 });
 
-it("redraws a chat's age when the list renders again minutes later", () => {
-  vi.useFakeTimers({ toFake: ["Date"] });
+it("moves a chat's age on as minutes pass, without drawing its row again", () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   const shown = chats(1);
   const { rerender } = render(list({ chats: shown }));
   expect(rowOf("c0").querySelector(".row-meta")!.textContent).toBe("5m");
-  vi.setSystemTime(Date.now() + 2 * 60_000);
+  const drawn = rowsDrawn;
+  act(() => vi.advanceTimersByTime(2 * AGE_TICK_MS));
+  expect(rowOf("c0").querySelector(".row-meta")!.textContent).toBe("7m");
   rerender(list({ chats: shown }));
   expect(rowOf("c0").querySelector(".row-meta")!.textContent).toBe("7m");
+  expect(rowsDrawn).toBe(drawn);
 });

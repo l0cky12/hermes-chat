@@ -9,6 +9,8 @@
 //   Each read replaces the last, so nothing is counted twice.
 // This app keeps no price list: a cost shows only as Hermes recorded it, labelled the way Hermes labelled it.
 
+import { sameFields } from "./model";
+
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined);
 const obj = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined);
 
@@ -80,6 +82,16 @@ export function newerChatUsage(shown: ChatUsage | undefined, read: ChatUsage | u
   if (!read) return shown;
   if (shown && (read.calls ?? 0) < (shown.calls ?? 0)) return shown;
   return read;
+}
+
+export function newerListedUsage(shown: ChatUsage | undefined, read: ChatUsage | undefined): ChatUsage | undefined {
+  return shown && read && sameTotals(shown, read) ? shown : newerChatUsage(shown, read);
+}
+
+function sameTotals(a: ChatUsage, b: ChatUsage): boolean {
+  const { readAt: _a, cost: costA, ...countsA } = a;
+  const { readAt: _b, cost: costB, ...countsB } = b;
+  return sameFields(countsA, countsB) && sameFields(costA, costB);
 }
 
 /**

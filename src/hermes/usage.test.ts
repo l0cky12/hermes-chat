@@ -1,6 +1,6 @@
 // Reading Hermes's usage counters and stored totals, measuring a reply, and how costs are labelled (usage.ts).
 import { describe, expect, it } from "vitest";
-import { chatUsageOf, costLabel, countersOf, newerChatUsage, replyUsage, replyUsageOf, tokens, totalTokens, usd, ZERO_COUNTERS } from "./usage";
+import { chatUsageOf, costLabel, countersOf, newerChatUsage, newerListedUsage, replyUsage, replyUsageOf, tokens, totalTokens, usd, ZERO_COUNTERS } from "./usage";
 
 /** A stored session row read from the deployed server's `state.db` on 2026-11-02 (three model calls on OpenRouter). */
 const STORED = {
@@ -198,6 +198,21 @@ describe("A chat's stored usage", () => {
     expect(newerChatUsage(newer, older)).toBe(newer);
     expect(newerChatUsage(older, newer)).toBe(newer);
     expect(newerChatUsage(newer, undefined)).toBe(newer);
+  });
+
+  it("takes a later read with the same totals, so its read time is the latest", () => {
+    const shown = chatUsageOf(STORED, 1);
+    const again = chatUsageOf(STORED, 2);
+    expect(newerChatUsage(shown, again)).toBe(again);
+  });
+
+  it("keeps the read shown when a list refresh finds the same totals, and takes one whose cost moved", () => {
+    const shown = chatUsageOf(STORED, 1);
+    expect(newerListedUsage(shown, chatUsageOf(STORED, 2))).toBe(shown);
+    const repriced = chatUsageOf({ ...STORED, estimated_cost_usd: 9 }, 2);
+    expect(newerListedUsage(shown, repriced)).toBe(repriced);
+    const older = chatUsageOf({ ...STORED, api_call_count: 2 }, 2);
+    expect(newerListedUsage(shown, older)).toBe(shown);
   });
 });
 
