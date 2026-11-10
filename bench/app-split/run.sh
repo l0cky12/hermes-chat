@@ -21,10 +21,12 @@ $W press 'Control+\' >/dev/null
 $W wait .divider "" 30000 >/dev/null
 $W click '.row-open[data-chat=long2]' >/dev/null
 $W wait '.pane:last-child .msg.assistant' "" 60000 >/dev/null
-for side in first last; do
-  $W click ".pane:$side-child textarea[data-composer]" >/dev/null
-  $W keys "long reply, $side pane\n" >/dev/null
+for pane in 1 2; do
+  $W press "Control+$pane" >/dev/null
+  $W keys "long reply, pane $pane\n" >/dev/null
 done
+$W wait '.pane:first-child .msg.user' "pane 1" 30000 >/dev/null
+$W wait '.pane:last-child .msg.user' "pane 2" 30000 >/dev/null
 $W wait '.pane:first-child .msg.assistant' "Step 2:" 60000 >/dev/null
 $W wait '.pane:last-child .msg.assistant' "Step 2:" 60000 >/dev/null
 $W eval "$(cat "$HERE/probe.js")" >/dev/null
