@@ -1369,8 +1369,8 @@ function Composer({
     return () => void unlisten.then((stop) => stop());
   }, []);
 
-  // A pasted file, or one dropped on Windows, has no path of its own: Rust saves its bytes to a temp file, which then
-  // attaches like a drop. One too big for Hermes is refused before its bytes are read into the webview.
+  // A pasted file, or one dropped on Windows, has no path of its own: Rust stages its bytes with the screenshots. One
+  // too big for Hermes is refused before its bytes are read into the webview.
   const stageFiles = (incoming: File[] | Promise<File[]>, nameOf = pastedName) => busy(async () => {
     try {
       const files = await incoming;
@@ -1382,7 +1382,9 @@ function Composer({
             invoke<string>("stage_clipboard_file", await f.arrayBuffer(), { headers: { "x-name": encodeURIComponent(nameOf(f)) } }),
           ),
       );
-      await add(paths);
+      screenshots?.own(paths);
+      const kept = await add(paths);
+      screenshots?.release(paths.filter((p) => !kept.includes(p)));
       const notes = tooBig.map((f) => overLimitNote(nameOf(f), f.size, LIMITS.file));
       if (notes.length) setRefused((cur) => (paths.length ? [...cur, ...notes] : notes));
     } catch (e) {

@@ -26,6 +26,12 @@ const BREAKDOWN = {
 };
 
 describe("A context reading", () => {
+  it("keeps a category's colour only when it is a CSS variable or a hex colour", () => {
+    const colors = ["var(--context-usage-system)", "#a78bfa", "#FFF", "url(https://example.com/beacon.png)", "red; background-image: url(x)", "image-set('x.png' 1x)", "var(--x), url(y)"];
+    const r = readingOf({ categories: colors.map((color, i) => ({ id: `c${i}`, label: "Part", tokens: 1, color })) }, 0);
+    expect(r.parts.map((p) => p.color)).toEqual(["var(--context-usage-system)", "#a78bfa", "#FFF", undefined, undefined, undefined, undefined]);
+  });
+
   it("keeps Hermes's total and how it counted it, apart from its estimate by category", () => {
     const r = readingOf(BREAKDOWN, 1_000);
     expect(r).toMatchObject({ measuredAt: 1_000, model: "claude-opus-5-5", used: 46_000, max: 200_000, percent: 23, source: "provider_usage_plus_estimate", built: true, estimatedTotal: 45_726 });
