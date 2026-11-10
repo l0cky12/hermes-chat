@@ -188,7 +188,7 @@ Another take on one turn of a chat, made with Edit under the owner's message or 
 _Avoid_: variant (in the UI), alternative, retry, rerun
 
 **Draft**:
-The text the owner has typed in a chat's composer and not sent. Each chat keeps its own draft, and so does the New chat pane, separately for each connection and profile. A draft is still there after switching chats or restarting the app. Sending or queuing it empties it. A message Hermes doesn't take becomes a Failed message, not a draft again. Only when a new chat can't be started does the text come back into the composer. Attachments aren't kept in a draft.
+The text the owner has typed in a chat's composer and not sent. Each chat keeps its own draft, and so does the New chat pane, separately for each connection and profile. A draft is still there after switching chats or restarting the app. Sending or queuing it empties it. A message Hermes doesn't take becomes a Failed message, not a draft again. Only when a new chat can't be started does the text come back into the composer. Each chat also keeps the attachments staged in its composer, next to its draft, until the owner sends or removes them or the chat is deleted or archived. Unlike the text, they are kept only while the app runs and the owner stays signed in to that connection (ADR 0135).
 _Avoid_: unsent message, saved message
 
 **Queued message**:
@@ -501,8 +501,8 @@ _Avoid_: local time (ambiguous between the server and this computer), display ti
 One view of a chat, its transcript and composer. The app can show two, side by side or one above the other. Each pane
 has its own tabs; a tab dragged to the other pane or to a pane's edge moves there (ADR 0052). The focused pane is the one the
 chat list, Search and keyboard shortcuts target. This focus does not change whether a chat is Active or Settled.
-Two panes of one chat share its Draft, Queued messages and running reply; each has its own scroll, Find and pending
-Attachments.
+Two panes of one chat share its Draft, staged Attachments, Queued messages and running reply; each has its own scroll
+and Find.
 
 **Compare**:
 Two panes whose sends go to both: one message typed in either pane goes to the chat in each, so two models answer it side
@@ -511,7 +511,7 @@ ordinary chat. While either has a reply running or messages queued, sending is r
 the owner stops it, or when either pane shows another chat or closes (ADR 0101).
 
 **Update**:
-A newer version of Hermes Chat itself. For the packaged app, the owner installs it with pacman, and the app never replaces pacman's files. For a standalone build made with an update key, the app installs it, after checking its signature. Either way the new version runs only after the owner restarts the app. Drafts, unsent and uncertain messages, and queues are kept across the restart, for every connection, profile and chat. Files attached in a composer and a second pane aren't. A saved copy that can't be put back is set aside in a file of its own and never put back automatically (ADR 0060).
+A newer version of Hermes Chat itself. For the packaged app, the owner installs it with pacman, and the app never replaces pacman's files. For a standalone build made with an update key, the app installs it, after checking its signature. Either way the new version runs only after the owner restarts the app. Drafts, unsent and uncertain messages, and queues are kept across the restart, for every connection, profile and chat. Files staged in any chat's composer and a second pane aren't. A saved copy that can't be put back is set aside in a file of its own and never put back automatically (ADR 0060).
 _Avoid_: upgrade (pacman's word, for the package step only)
 
 **Release**:
