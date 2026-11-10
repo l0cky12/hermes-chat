@@ -602,20 +602,26 @@ struct Open {
     target: String,
     /// Ends the tunnel, starting or open, with what to tell the webview (`None`: the webview asked).
     stop: oneshot::Sender<Option<String>>,
-    /// Once it is open: its port on this computer, and its page's cookie jar.
-    served: Option<(u16, Jar)>,
+    served: Option<Served>,
 }
 
-/// The cookie jar of a server page in the Preview's view (page_view.rs): one per SSH target and origin on the server.
+struct Served {
+    local_port: u16,
+    jar: Jar,
+}
+
 /// Every server page is served at `127.0.0.1`, and cookies don't tell ports apart, so in one jar each page would get
-/// every other server page's cookies. A page opened again, on another local port, gets its jar back.
+/// every other server page's cookies.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Jar(String);
+pub struct Jar {
+    target: String,
+    origin: url::Origin,
+}
 
 #[cfg(test)]
 impl Jar {
-    pub fn named(name: &str) -> Jar {
-        Jar(name.into())
+    pub fn of(target: &str, url: &str) -> Jar {
+        Jar { target: target.into(), origin: Url::parse(url).unwrap().origin() }
     }
 }
 
@@ -703,7 +709,7 @@ impl ServerPages {
         let local_port = listener.local_addr().map_err(|e| ServerPageError::Io(e.to_string()))?.port();
         let address = end.address();
         if let Some(open) = self.open.lock().unwrap().get_mut(&key) {
-            open.served = Some((local_port, Jar(format!("{target} {}", page.url.origin().ascii_serialization()))));
+            open.served = Some(Served { local_port, jar: Jar { target: target.clone(), origin: page.url.origin() } });
         }
 
         let pages = Arc::clone(self);
@@ -780,13 +786,12 @@ impl ServerPages {
         }
     }
 
-    /// The jar of the open server page served at `url`, or `None` when `url` isn't one.
     pub fn jar(&self, url: &Url) -> Option<Jar> {
         if url.host() != Some(Host::Ipv4(std::net::Ipv4Addr::LOCALHOST)) {
             return None;
         }
         let port = url.port_or_known_default()?;
-        self.open.lock().unwrap().values().find_map(|o| o.served.as_ref().filter(|(p, _)| *p == port)).map(|(_, jar)| jar.clone())
+        self.open.lock().unwrap().values().find_map(|o| o.served.as_ref().filter(|s| s.local_port == port)).map(|s| s.jar.clone())
     }
 
     pub fn len(&self) -> usize {
