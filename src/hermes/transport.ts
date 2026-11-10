@@ -4762,10 +4762,6 @@ export class Hermes {
   }
 }
 
-/**
- * A side question whose item went, as when the chat's items are read again from Hermes with new ids or cut short, takes
- * the item now at that item's place, or the last one, so what comes after still shows below it (ADR 0086).
- */
 /** `next` is built on `was`, so it holds every key `was` does. */
 function sameChat(was: Chat, next: Chat): boolean {
   return (Object.keys(next) as (keyof Chat)[]).every((k) => next[k] === was[k]);
@@ -4775,6 +4771,10 @@ function sameIds(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((id, i) => id === b[i]);
 }
 
+/**
+ * A side question whose item went, as when the chat's items are read again from Hermes with new ids or cut short, takes
+ * the item now at that item's place, or the last one, so what comes after still shows below it (ADR 0086).
+ */
 function keepSidePlaces(before: Chat[], chats: Chat[]): Chat[] {
   return chats.map((c) => {
     const qs = c.sideQuestions;

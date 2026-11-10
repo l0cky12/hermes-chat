@@ -199,6 +199,13 @@ describe("A chat's stored usage", () => {
     expect(newerChatUsage(older, newer)).toBe(newer);
     expect(newerChatUsage(newer, undefined)).toBe(newer);
   });
+
+  it("keeps the read shown when a later read has the same totals, and takes one whose cost moved", () => {
+    const shown = chatUsageOf(STORED, 1);
+    expect(newerChatUsage(shown, chatUsageOf(STORED, 2))).toBe(shown);
+    const repriced = chatUsageOf({ ...STORED, estimated_cost_usd: 9 }, 2);
+    expect(newerChatUsage(shown, repriced)).toBe(repriced);
+  });
 });
 
 describe("Formatting", () => {
