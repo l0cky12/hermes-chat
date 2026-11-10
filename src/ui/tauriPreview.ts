@@ -41,7 +41,7 @@ export type DevServers = {
 export type Rect = { x: number; y: number; width: number; height: number };
 /** Where a native page shows, and the parts of that the app's own layers cover, which the page leaves bare. */
 export type Placement = { rect: Rect; holes: Rect[] };
-export type PageEvent = { kind: "at"; url: ViewUrl; replace: boolean } | { kind: "failed"; message: string } | { kind: "escaped" };
+export type PageEvent = { kind: "at"; url: ViewUrl; replace: boolean } | { kind: "failed"; message: string; url?: ViewUrl } | { kind: "escaped" };
 export type NativePage = { go(url: ViewUrl): void; reload(): void; place(placement: Placement | null): void; close(): void };
 export type NativePages = { open(onEvent: (e: PageEvent) => void): NativePage };
 
