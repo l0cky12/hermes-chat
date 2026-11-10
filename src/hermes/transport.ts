@@ -29,7 +29,7 @@ import { McpApi } from "./mcp";
 import { GatewaysApi } from "./gateways";
 import { PersonaApi } from "./persona";
 import { ProfileCloneApi } from "./profileClone";
-import { APPROVAL_CHOICES, isBroadGrant, isOutgoing, isWaiting, offeredChoices, turnStart, type ApprovalChoice, type ApprovalItem, type AttachCheck, type Attachment, type Chat, type ChatQueue, type ConnectionStatus, type ContextUse, type Found, type Item, type ListedChat, type LiveSession, type LiveSessions, type OtherProfiles, type Outgoing, type OutgoingItem, type Queued, type SavedSend, type SeenFailure, type SessionLive, type SideQuestion, type Source, QUEUE_LIMIT } from "./model";
+import { APPROVAL_CHOICES, isBroadGrant, isOutgoing, isWaiting, offeredChoices, sameFields, turnStart, type ApprovalChoice, type ApprovalItem, type AttachCheck, type Attachment, type Chat, type ChatQueue, type ConnectionStatus, type ContextUse, type Found, type Item, type ListedChat, type LiveSession, type LiveSessions, type OtherProfiles, type Outgoing, type OutgoingItem, type Queued, type SavedSend, type SeenFailure, type SessionLive, type SideQuestion, type Source, QUEUE_LIMIT } from "./model";
 import { catalogFromServer, fallbackCatalog, isEffort, modelKey, pickFromInfo, type ModelCatalog, type ModelPick } from "./models";
 import { approvalsOf, isApprovalMode, writesFor, type ApprovalPick } from "./approvals";
 import { noOthers, OtherProfilesCheck } from "./otherProfiles";
@@ -65,7 +65,7 @@ import { agentFsEditIo } from "./artifacts";
 import { splitPath, type OutputsIo, type StoredRow as StoredOutputRow } from "./outputs";
 import type { UsageIo } from "./usageAnalytics";
 import { compactResultOf, compactionsOf, readingOf, type CompactResult, type CompactionHistory, type CompactionRow, type ContextReading } from "./contextInspect";
-import { chatUsageOf, countersOf, newerChatUsage, replyUsage, ZERO_COUNTERS, type ReplyUsage, type UsageCounters } from "./usage";
+import { chatUsageOf, countersOf, newerChatUsage, newerListedUsage, replyUsage, ZERO_COUNTERS, type ReplyUsage, type UsageCounters } from "./usage";
 import { toolResultText } from "./toolResult";
 import { onLost, onRoster, onSubagentEvent, onUnchecked, parseOutput, type SubagentId, type SubagentOutput } from "./subagents";
 import {
@@ -4275,7 +4275,8 @@ export class Hermes {
         const readHere = this.readWrites.has(r.id) || this.readSinceListRead.has(r.id);
         const onScreen = this.isViewing(r.id);
         if (onScreen && r.unread && !readHere) readOnScreen.add(r.id);
-        return {
+        const lineage = Array.isArray(r._lineage_ids) ? r._lineage_ids.filter((x): x is string => typeof x === "string") : undefined;
+        const next: Chat = {
           items: outbox[r.id] ?? [],
           ...c,
           id: r.id,
@@ -4288,9 +4289,10 @@ export class Hermes {
           updatedAt: Math.max(c?.updatedAt ?? 0, lastActive(r)),
           unread: !!r.unread && !readHere && !onScreen,
           // List rows carry the stored token and cost totals too.
-          usage: newerChatUsage(c?.usage, chatUsageOf(r, Date.now())),
-          ...(Array.isArray(r._lineage_ids) && { lineage: r._lineage_ids.filter((x): x is string => typeof x === "string") }),
+          usage: newerListedUsage(c?.usage, chatUsageOf(r, Date.now())),
+          ...(lineage && { lineage: c?.lineage && sameIds(c.lineage, lineage) ? c.lineage : lineage }),
         };
+        return c && sameFields(c, next) ? c : next;
       });
     // Chats started or resumed on this connection stay even before Hermes stores them (a new chat has no row
     // until its first prompt), and so do chats picked from a search and chats being archived or restored.
@@ -4301,9 +4303,12 @@ export class Hermes {
       .filter((c) => (c.runtimeId || this.revealed.has(c.id) || this.archiveWanted.has(c.id)) && !listedIds.has(c.id))
       .map((c) => (botChats.has(c.id) && !c.bot ? { ...c, bot: true, title: BOT_CHAT_TITLE } : c));
     const chats = [...onThisConnection, ...listed];
+    const wasUnlisted = !this.hasListed();
     this.listedAt = Date.now();
-    const switched = !!this.snapshot.switching;
-    this.update({ chats, syncError: undefined, switching: undefined });
+    const was = this.snapshot;
+    const switched = !!was.switching;
+    if (wasUnlisted || switched || was.syncError !== undefined || chats.length !== was.chats.length || chats.some((c, i) => c !== was.chats[i]))
+      this.update({ chats, syncError: undefined, switching: undefined });
     this.kanbanWatch.chatsListed();
     this.placeRoster();
     for (const chatId of readOnScreen) this.seen(chatId);
@@ -4794,6 +4799,10 @@ export class Hermes {
     clearTimeout(this.notifyDue.timer);
     this.notifyDue = undefined;
   }
+}
+
+function sameIds(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i]);
 }
 
 /**

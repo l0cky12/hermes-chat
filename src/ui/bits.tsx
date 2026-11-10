@@ -1,10 +1,10 @@
 // Small shared UI bits, ported from the prototype.
-import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Archive, ArchiveRestore, Check, Copy, EyeOff, FileInput, Globe, Monitor, RotateCcw, Send, Terminal } from "lucide-react";
 import type { ConnectionStatus, Source } from "../hermes/model";
 import type { Route } from "../hermes/pipe";
 import { SOURCE_LABEL } from "../hermes/model";
-import type { Locale } from "../i18n/locale";
+import { useLocale, type Locale } from "../i18n/locale";
 
 // Approximate brand marks; the real app should use proper icon assets.
 function DiscordGlyph({ size = 12 }: { size?: number }) {
@@ -178,6 +178,35 @@ export function CopyCommand({ command }: { command: string }) {
       )}
     </span>
   );
+}
+
+export const AGE_TICK_MS = 60_000;
+
+const ageClock = (() => {
+  let ticks = 0;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const listeners = new Set<() => void>();
+  return {
+    subscribe(fn: () => void) {
+      listeners.add(fn);
+      timer ??= setInterval(() => {
+        ticks++;
+        for (const l of listeners) l();
+      }, AGE_TICK_MS);
+      return () => {
+        listeners.delete(fn);
+        if (listeners.size) return;
+        clearInterval(timer);
+        timer = undefined;
+      };
+    },
+    ticks: () => ticks,
+  };
+})();
+
+export function Age({ at }: { at: number }) {
+  useSyncExternalStore(ageClock.subscribe, ageClock.ticks);
+  return useLocale().fmt.age(at);
 }
 
 /** How long ago, as a phrase: "just now" (or `justNow`), "5m ago". */

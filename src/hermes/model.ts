@@ -135,6 +135,12 @@ export type ChatQueue = { items: Queued[]; paused?: string; unsaved?: boolean };
 /** The most messages one chat's queue holds. */
 export const QUEUE_LIMIT = 20;
 
+/** Every key either holds has the same value in both, compared by identity; a missing key counts as undefined. */
+export function sameFields<T extends object>(a: T, b: T): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)] as (keyof T)[]);
+  return [...keys].every((k) => a[k] === b[k]);
+}
+
 /** The answers the owner can give an Approval: the ones Hermes offers, less the broader grants it rules out. */
 export const offeredChoices = (i: ApprovalItem): ApprovalChoice[] =>
   i.choices.filter((c) => (c !== "session" || i.allowSession) && (c !== "always" || i.allowPermanent));

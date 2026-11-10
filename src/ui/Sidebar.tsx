@@ -18,7 +18,7 @@ import { DeleteChatDialog } from "./DeleteChat";
 import { SettleAllDialog } from "./SettleAll";
 import { CloneProfileDialog } from "./CloneProfile";
 import type { ProfileCloneApi } from "../hermes/profileClone";
-import { ArchiveButton, STATUS_LABEL, SettleButton, SourceIcon, Spinner, ago, composing, routeLabel, useReturnFocus } from "./bits";
+import { Age, ArchiveButton, STATUS_LABEL, SettleButton, SourceIcon, Spinner, ago, composing, routeLabel, useReturnFocus } from "./bits";
 import { useLocale, type Locale } from "../i18n/locale";
 import { viaLabel } from "../hermes/routes";
 import { dragChat, dragChatEnd, rowDragged } from "./Tabs";
@@ -380,7 +380,6 @@ const ChatRow = memo(function ChatRow({
   hidden,
   sleepsUntil,
   wake,
-  age,
 }: {
   chat: Chat;
   selected: boolean;
@@ -415,7 +414,6 @@ const ChatRow = memo(function ChatRow({
   sleepsUntil?: number;
   /** When the snoozed chat wakes, as the row shows it. */
   wake?: string;
-  age: string;
 }) {
   const l = useLocale();
   const [renaming, setRenaming] = useState(false);
@@ -516,7 +514,7 @@ const ChatRow = memo(function ChatRow({
           ) : chat.unread ? (
             <span className="dot" title="Unread" />
           ) : (
-            !sleepsUntil && age
+            !sleepsUntil && <Age at={chat.updatedAt} />
           )}
         </span>
       </button>
@@ -1163,7 +1161,6 @@ export function ChatList({
         snooze={snooze}
         sleepsUntil={sleepsUntil}
         wake={sleepsUntil === undefined ? undefined : wakeLabel(sleepsUntil, now, l.tag)}
-        age={l.fmt.age(c.updatedAt, now)}
         pin={onPin && !c.archived ? { pinned: pins[c.id] !== undefined, onPin: on.pin } : undefined}
         handoff={handoffs?.get(c.id)}
         onStopWaiting={onStopWaiting && on.stopWaiting}
