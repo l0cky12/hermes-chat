@@ -1,6 +1,6 @@
 // Routes as the connection list and the keyring keep them (ADR 0120).
 import { describe, expect, it } from "vitest";
-import { type Account, type Keyring, savedSignIn, signIn, signInForm } from "./account";
+import { type Account, type Keyring, savedSignIn, savedSignInOrForm, signIn, signInForm } from "./account";
 import { CONNECTIONS_KEY, Connections, addressKey, routesSummary } from "./connections";
 import { FakeHermes } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
@@ -138,7 +138,7 @@ describe("The password of a connection with routes", () => {
     expect(saved.routes).toEqual([LAN, WEB, SSH]);
   });
 
-  it("is read from the keyring together with the headers, so a launch waits for one read, not two", async () => {
+  it("is read from the keyring together with the headers at launch, so a launch waits for one read, not two", async () => {
     const { a, connections, password, headers } = account();
     const c = connections.draft(base);
     await signIn(c, withRoutes(base, [LAN, WEB]), a);
@@ -153,10 +153,30 @@ describe("The password of a connection with routes", () => {
         return load();
       };
     }
-    const saved = savedSignIn(connections.get(c.id)!, a);
+    const read = savedSignInOrForm(connections.get(c.id)!, a);
     expect(reading).toEqual(["password", "headers"]);
     answer();
-    expect(await saved).toMatchObject({ password: "hunter2", routes: [LAN, WEB] });
+    expect(await read).toMatchObject({ saved: { password: "hunter2", routes: [LAN, WEB] } });
+  });
+
+  it("that can't be read (an unlock the owner cancelled) reads the headers once on the way to the sign-in form", async () => {
+    const { a, connections, password, headers } = account();
+    const c = connections.draft(base);
+    await signIn(c, withRoutes(base, [LAN, WEB]), a);
+    password.load = async () => {
+      throw new Error("The system keyring failed: Prompt was dismissed");
+    };
+    const form = await signInForm(connections.get(c.id)!, a);
+    expect([form.password, form.routes]).toEqual(["", [LAN, WEB]]);
+    const load = headers.load;
+    let reads = 0;
+    headers.load = () => (reads++, load());
+    expect(await savedSignInOrForm(connections.get(c.id)!, a)).toEqual({ form });
+    expect(reads).toBe(1);
+    reads = 0;
+    // Asked only for the saved password (Settings → Test connection), the headers entry isn't read at all.
+    expect(await savedSignIn(connections.get(c.id)!, a)).toBeUndefined();
+    expect(reads).toBe(0);
   });
 
   it("isn't given to a route added since that it wasn't saved for, until it is typed again", async () => {

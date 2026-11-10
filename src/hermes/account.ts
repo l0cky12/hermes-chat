@@ -200,30 +200,50 @@ function detailsFor(c: SavedConnection, password: string, headers: SavedHeaders,
   return c.routes && c.server ? { ...d, server: c.server } : d;
 }
 
+/** What the keyring holds for `c`: its saved sign-in, if any, and its extra request headers when they were read. */
+type SavedRead = { saved?: SignInDetails; headers?: SavedHeaders };
+
 /**
  * `c` with its saved password, to sign in without asking. Undefined when no password is saved for any of its routes,
  * or the keyring can't be read, so the owner is asked. A route the password wasn't saved for is `locked`: connecting
  * skips it.
  */
 export async function savedSignIn(c: SavedConnection, account: Account): Promise<SignInDetails | undefined> {
-  if (c.method === "token") return savedTokenSignIn(c, account);
-  const [password, headers] = await Promise.all([account.secrets(c).password.load().catch(() => undefined), savedHeaders(c, account)]);
-  const saved = passwordFor(c, password);
-  if (!saved) return undefined;
-  const routes = routesWithHeaders(c, headers).map((r) => (saved.routes.has(routeKey(r)) ? r : { ...r, locked: true }));
-  return detailsFor(c, saved.password, headers, routes);
+  return (await readSaved(c, account, false)).saved;
 }
 
 /**
- * `c` with its saved token, which Rust loads: undefined when none is saved for any of its routes. A route the token
- * wasn't saved for is `locked`, as with a password.
+ * `c` with its saved sign-in, or the sign-in screen's form when none is saved or the keyring can't be read. Both need
+ * the headers entry, so it is read beside the password or token, once.
  */
-async function savedTokenSignIn(c: SavedConnection, account: Account): Promise<SignInDetails | undefined> {
-  const [saved, headers] = await Promise.all([account.secrets(c).token.saved().catch(() => undefined), savedHeaders(c, account)]);
-  const keys = new Set(saved ?? []);
-  if (!routesOf(c).some((r) => keys.has(routeKey(r)))) return undefined;
-  const routes = routesWithHeaders(c, headers).map((r) => (keys.has(routeKey(r)) ? r : { ...r, locked: true }));
-  return { ...detailsFor(c, "", headers, routes), savedToken: c.legacy ? null : c.id };
+export async function savedSignInOrForm(c: SavedConnection, account: Account): Promise<{ saved: SignInDetails } | { form: SignInDetails }> {
+  const { saved, headers } = await readSaved(c, account, true);
+  return saved ? { saved } : { form: detailsFor(c, "", headers ?? new Map()) };
+}
+
+/**
+ * Reads `c`'s password, or which addresses its token is saved for (Rust loads the token itself), and its headers.
+ * `both`: the headers are read at the same time; otherwise only once a password or token is found, because each read
+ * of a locked keyring can ask the owner to unlock it. A route the password or token wasn't saved for is `locked`.
+ */
+async function readSaved(c: SavedConnection, account: Account, both: boolean): Promise<SavedRead> {
+  const secrets = account.secrets(c);
+  const token = c.method === "token" ? secrets.token.saved().catch(() => undefined) : undefined;
+  const password = c.method === "token" ? undefined : secrets.password.load().catch(() => undefined);
+  const early = both ? savedHeaders(c, account) : undefined;
+  const headers = () => early ?? savedHeaders(c, account);
+  if (token) {
+    const keys = new Set((await token) ?? []);
+    if (!routesOf(c).some((r) => keys.has(routeKey(r)))) return { headers: await early };
+    const h = await headers();
+    const routes = routesWithHeaders(c, h).map((r) => (keys.has(routeKey(r)) ? r : { ...r, locked: true }));
+    return { saved: { ...detailsFor(c, "", h, routes), savedToken: c.legacy ? null : c.id }, headers: h };
+  }
+  const saved = passwordFor(c, await password);
+  if (!saved) return { headers: await early };
+  const h = await headers();
+  const routes = routesWithHeaders(c, h).map((r) => (saved.routes.has(routeKey(r)) ? r : { ...r, locked: true }));
+  return { saved: detailsFor(c, saved.password, h, routes), headers: h };
 }
 
 /** The sign-in screen's details for `c` when it asks: everything saved but the password. */
