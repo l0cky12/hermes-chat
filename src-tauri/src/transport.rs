@@ -1463,10 +1463,15 @@ impl Dashboard {
     /// provider's model, voice and language (`VOICE_SETTING_KEYS`) are kept from the config.
     pub async fn voice_setup(&self, profile: &str) -> Result<VoiceSetup, TransportError> {
         let has = |a: AudioAnswer| !matches!(a, AudioAnswer::NoRoute);
-        let transcribe = has(self.post_audio("api/audio/transcribe", profile, &json!({"data_url": ""})).await?);
-        let speak = has(self.post_audio("api/audio/speak", profile, &json!({"text": ""})).await?);
         let query = url::form_urlencoded::Serializer::new(String::new()).append_pair("profile", profile).finish();
-        let config: Option<serde_json::Value> = match self.request("GET", &format!("api/config?{query}"), None).await {
+        let (no_recording, no_text, config_path) = (json!({"data_url": ""}), json!({"text": ""}), format!("api/config?{query}"));
+        let (transcribe, speak, config) = tokio::join!(
+            self.post_audio("api/audio/transcribe", profile, &no_recording),
+            self.post_audio("api/audio/speak", profile, &no_text),
+            self.request("GET", &config_path, None),
+        );
+        let (transcribe, speak) = (has(transcribe?), has(speak?));
+        let config: Option<serde_json::Value> = match config {
             Ok(body) => serde_json::from_str(&body).ok(),
             Err(TransportError::SignedOut) => return Err(TransportError::SignedOut),
             Err(_) => None,

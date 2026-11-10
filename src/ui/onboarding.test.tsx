@@ -37,6 +37,10 @@ const backend = vi.hoisted(() => ({
   holdKeyringSave: false,
   holdHeadersLoad: false,
   letKeyring: undefined as (() => void) | undefined,
+  /** While set, reading the password fails as when the owner cancels the keyring's unlock prompt. */
+  unlockCancelled: false,
+  /** Every keyring read, by command, in order. */
+  keyringReads: [] as string[],
 }));
 
 const where = (d: SignInDetails) => (d.mode === "ssh" ? `ssh:${d.sshTarget.trim()}` : `url:${d.url.trim()}`);
@@ -114,6 +118,8 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: async (cmd: string, args?: { password?: string }) => {
     if ((cmd === "password_save" && backend.holdKeyringSave) || (cmd === "headers_load" && backend.holdHeadersLoad))
       await new Promise<void>((go) => (backend.letKeyring = go));
+    if (cmd.endsWith("_load")) backend.keyringReads.push(cmd);
+    if (cmd === "password_load" && backend.unlockCancelled) throw "The system keyring failed: Prompt was dismissed";
     if (cmd === "password_load") return backend.keyring ?? null;
     if (cmd === "password_save") {
       if (backend.keyringBroken) throw "The system keyring failed: no Secret Service on the bus";
@@ -160,6 +166,8 @@ beforeEach(() => {
     holdKeyringSave: false,
     holdHeadersLoad: false,
     letKeyring: undefined,
+    unlockCancelled: false,
+    keyringReads: [],
   });
 });
 
@@ -348,6 +356,15 @@ describe("An install set up before", () => {
     expect(await screen.findByText("New chat", { selector: ".chat-title span" })).toBeTruthy();
     expect(dialog()).toBeNull();
     expect(backend.probes).toBe(0);
+  });
+
+  it("asks for the password when the keyring's unlock is cancelled, reading each keyring entry once", async () => {
+    alreadySetUp();
+    backend.unlockCancelled = true;
+    await start();
+    expect(await screen.findByRole("heading", { name: "Connect to hermes" })).toBeTruthy();
+    expect((screen.getByLabelText("Dashboard username") as HTMLInputElement).value).toBe("liam");
+    expect(backend.keyringReads.sort()).toEqual(["headers_load", "password_load"]);
   });
 
   it("signed out, gets the sign-in screen, which can open setup and cancel back", async () => {
