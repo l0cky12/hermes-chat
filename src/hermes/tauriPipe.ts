@@ -4,7 +4,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { CustomEndpoint, EndpointSave, ProviderSignIn } from "./accounts";
 import type { LocalFile, OpenPipe, Pipe, PipeEvent, Route, ToolsetGuards, Transcript, VoiceSetup } from "./pipe";
-import type { LocalFile as ContextLocalFile } from "./projectContext";
 import type { GitExclude } from "./projectContextFiles";
 import type { Downloaded, PickedUpload, TransferProgress } from "./remoteFiles";
 import type { Probe, Probed, ProbeFailure, SavedKey } from "./setup";
@@ -152,12 +151,12 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
       fsSaveText: (id, profile, path, text, session) => invoke<string>("fs_save_text", { id, profile, path, text, session: session ?? null }).catch(asError),
       cancelTransfer: (id) => invoke("files_cancel", { id }),
       context: {
-        pick: () => invoke<ContextLocalFile[]>("context_pick").catch(asError),
-        localFiles: (paths) => invoke<ContextLocalFile[]>("context_local_files", { paths }).catch(asError),
+        pick: () => invoke<LocalFile[]>("context_pick").catch(asError),
+        localFiles: (paths) => invoke<LocalFile[]>("context_local_files", { paths }).catch(asError),
         upload: (id, local, serverPath, overwrite, sshProfile, onProgress) => {
           const channel = new Channel<TransferProgress>();
           channel.onmessage = onProgress;
-          return invoke<void>("context_upload", { id: String(id), local, serverPath, overwrite, sshProfile: sshProfile ?? null, onProgress: channel }).catch(asError);
+          return invoke<void>("context_upload", { id, local, serverPath, overwrite, sshProfile: sshProfile ?? null, onProgress: channel }).catch(asError);
         },
         writeText: (serverPath, text, overwrite, sshProfile) => invoke<void>("context_write_text", { serverPath, text, overwrite, sshProfile: sshProfile ?? null }).catch(asError),
         mkdir: (path) => invoke<string>("context_mkdir", { path }).catch(asError),

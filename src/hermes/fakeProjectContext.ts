@@ -4,7 +4,8 @@
 // refuses: a file the app wasn't given, one over 30 MB, a path that isn't a plain name inside a `context` folder.
 import type { FakeFile, FakeWorktree } from "./fakeHermes";
 import type { FakeServerFiles } from "./fakeServerFiles";
-import { MAX_FILE_BYTES, SSH_MAX_BYTES, SSH_REFUSED, nameProblem, type LocalFile } from "./projectContext";
+import type { LocalFile as PickedFile } from "./pipe";
+import { MAX_FILE_BYTES, SSH_MAX_BYTES, SSH_REFUSED, nameProblem } from "./projectContext";
 import type { ContextPipe, GitExclude } from "./projectContextFiles";
 
 const dirname = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
@@ -42,9 +43,10 @@ export class FakeProjectContext {
 
   constructor(private disks: FakeContextDisks) {}
 
-  private stat(path: string): LocalFile {
+  /** A local file the app was given, or why it can't be read, as Rust answers for one it wasn't. */
+  private stat(path: string): PickedFile {
     const f = this.disks.local()[path];
-    if (f === undefined || (typeof f === "object" && "dir" in f)) throw new Error(`${path} isn't a file the app was given.`);
+    if (f === undefined || (typeof f === "object" && "dir" in f)) return { path, name: basename(path), error: "it isn't a file the app was given" };
     return { path, name: basename(path), size: typeof f === "string" ? f.length : f.size };
   }
 
@@ -82,6 +84,7 @@ export class FakeProjectContext {
       localFiles: async (paths) => paths.map((p) => this.stat(p)),
       upload: async (_id, local, serverPath, overwrite, ssh) => {
         const file = this.stat(local);
+        if (file.size === undefined) throw new Error(`${file.name} can't be sent: ${file.error}.`);
         if (file.size > MAX_FILE_BYTES) throw new Error(`${file.name} is over the 30 MB a context file can be.`);
         const bytes = this.disks.local()[local];
         this.write(serverPath, typeof bytes === "string" ? bytes : "x".repeat(file.size), overwrite, ssh);

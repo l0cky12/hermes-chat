@@ -52,7 +52,9 @@ import { SkillsApi } from "./skills";
 import { CapabilityStore, CapabilityUnsupportedError, failureOf, isNoRoute, sharesChats, specOf, type CapabilityId, type ServerFacts } from "./capabilities";
 import { BOT_CHAT_TITLE, BotChats, BotModeUnsupportedError, isBotChat, isBotChatTitle, rosterOf, type Bot } from "./bots";
 import type { OpenPipe, Pipe, PipeEvent, RestMethod, Route, Speech, Transcript, VoiceSetup } from "./pipe";
-import { projectContextFiles, type ProjectContextFiles } from "./projectContextFiles";
+import { projectContextFiles, type ChatContext, type ProjectContextFiles } from "./projectContextFiles";
+import { withContext } from "./projectContext";
+import { typedText } from "./branch";
 import { RemoteFilesError, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, SESSION_GONE, previewSupport, remoteFiles, type EditIo, type RemoteFiles } from "./remoteFiles";
 import { isUnsecure } from "./unsecure";
 import { TOKEN_REFUSED } from "./routes";
@@ -865,6 +867,12 @@ export class Hermes {
     scope: () => String(this.generation),
     preview: (entry, asText) => this.files.preview(entry, asText),
   });
+  /**
+   * What a message to `chatId` carries below the owner's words: what its projects' context files are now, for a chat
+   * that hasn't been told (projectContextFiles.ts `chatContext`). The app sets it, since which chats are in a project
+   * is kept outside this transport. Asked just before each message goes; `accepted` is called once Hermes took it.
+   */
+  sendContext?: (profile: string, chatId: string) => Promise<ChatContext | undefined> | undefined;
 
   /**
    * How an artifact on the machine where `profile`'s tools run is read and saved (artifacts.ts `agentFsEditIo`, ADR
@@ -1999,17 +2007,19 @@ export class Hermes {
    * what it runs on, for this chat only; left out, it runs on the profile's model. `folder`: the server folder it
    * works in (its session `cwd`), checked by the caller first; Hermes quietly runs a chat in its own folder when it
    * can't use the one asked for, so the chat is refused unless Hermes says it took it. `instructions`: one hidden
-   * message seeded before the owner's first, which the model reads and no Hermes client shows (ADR 0017).
+   * message seeded before the owner's first, which the model reads and no Hermes client shows (ADR 0017). `context`:
+   * a second one after it, with the project's context files (ADR 0135).
    */
-  async newChat(model?: ModelPick, start: { folder?: string; instructions?: string } = {}): Promise<string> {
-    const { folder, instructions } = start;
+  async newChat(model?: ModelPick, start: { folder?: string; instructions?: string; context?: string } = {}): Promise<string> {
+    const { folder, instructions, context } = start;
+    const seeded = [instructions, context].filter((text): text is string => !!text);
     const profile = this.profile;
     const res = (await this.request("session.create", {
       profile,
       source: APP_SOURCE,
       // `cwd_explicit`: a deliberate pick, which beats a profile's configured `terminal.cwd` (`_completion_cwd`).
       ...(folder && { cwd: folder, cwd_explicit: true }),
-      ...(instructions && { messages: [{ role: "user", content: instructions, display_kind: "hidden" }] }),
+      ...(seeded.length && { messages: seeded.map((content) => ({ role: "user", content, display_kind: "hidden" })) }),
       // `SessionCreateParams`: each is this session's own override. `fast` left out keeps the profile's.
       ...(model && {
         model: model.model,
@@ -2024,9 +2034,9 @@ export class Hermes {
     };
     const cwd = (res.info as { cwd?: unknown } | undefined)?.cwd;
     if (folder && cwd !== folder) {
-      // Not this chat: drop the session, and the hidden message Hermes stored with it, so nothing is left behind.
+      // Not this chat: drop the session, and the hidden messages Hermes stored with it, so nothing is left behind.
       void this.request("session.close", { session_id: res.session_id }).catch(() => {});
-      if (instructions)
+      if (seeded.length)
         void this.fencedDelete(res.stored_session_id, profile).catch(() => {});
       throw new Error(`Hermes didn't start it in ${folder}${typeof cwd === "string" && cwd ? `: it would have worked in ${cwd}` : ""}. Nothing was sent.`);
     }
@@ -2945,15 +2955,20 @@ export class Hermes {
         this.setOutgoing(profile, chatId, user.id, (r) =>
           withOutgoing(r, { sent: { prompt: shown ?? prompt, ...(this.knownRow.has(chatId) && { after: this.knownRow.get(chatId) }) } }),
         );
+      let told: ChatContext | undefined;
       // A compaction Hermes hasn't answered yet goes first: the message mustn't land while it rewrites the context.
       const submitting = this.resume(chatId).then((runtimeId) => {
         const go = async () => {
-          if (!skill) return this.submit(runtimeId, text, attachments, goingOut, !!queued);
+          // Read as the message goes, so the chat hears of a file added a moment ago. A read that fails holds nothing up.
+          // A chat in no project is asked nothing, and its message goes without waiting a turn.
+          const asking = this.sendContext?.(profile, chatId);
+          if (asking) told = await asking.catch(() => undefined);
+          if (!skill) return this.submit(runtimeId, text, attachments, goingOut, !!queued, told?.blocks);
           // Hermes builds the skill's text for this session; nothing reaches the chat until it is sent below.
           const ran = await runSkill((method, params) => this.request(method, params), runtimeId, skill);
           shown = ran.display;
           this.setOutgoing(profile, chatId, user.id, (r) => ({ ...r, text: ran.display }));
-          return this.submit(runtimeId, ran.message, attachments, goingOut, !!queued);
+          return this.submit(runtimeId, ran.message, attachments, goingOut, !!queued, told?.blocks);
         };
         const compacting = this.compacting.get(chatId);
         return compacting ? compacting.then(go) : go();
@@ -2972,6 +2987,7 @@ export class Hermes {
         if (this.submitting.get(chatId) === submitting) this.submitting.delete(chatId);
       }
       this.setOutgoing(profile, chatId, user.id, confirmed);
+      told?.accepted(chatId);
       this.noteRows(chatId, [res.user_row_id]);
       // Pin now if Hermes has stored the session; a new chat may not have its row yet, so the end of the turn
       // tries again.
@@ -3999,8 +4015,10 @@ export class Hermes {
    * desktop app does. If anything fails the message isn't sent, and images already queued are taken back so they
    * don't ride along with the next one. `goingOut` hears the prompt just before it goes. `hold`: should a turn still be
    * running there, Hermes holds the message until it ends, instead of redirecting or interrupting it (research doc).
+   * `context`: what the chat is told of its projects' context files, below the prompt where no Hermes client shows it
+   * (ADR 0135). It isn't part of what `goingOut` hears: the history is matched by the owner's words.
    */
-  private async submit(runtimeId: string, text: string, attachments: Attachment[], goingOut: (prompt: string) => void, hold = false) {
+  private async submit(runtimeId: string, text: string, attachments: Attachment[], goingOut: (prompt: string) => void, hold = false, context: readonly string[] = []) {
     const queued: string[] = [];
     const refs: string[] = [];
     try {
@@ -4020,7 +4038,7 @@ export class Hermes {
       }
       const prompt = [refs.join("\n"), text].filter(Boolean).join("\n\n") || (queued.length ? IMAGE_ONLY_PROMPT : "");
       goingOut(prompt);
-      return (await this.request("prompt.submit", { session_id: runtimeId, profile: this.profile, text: prompt, ...(hold && { queued: true }) }).catch((e) => {
+      return (await this.request("prompt.submit", { session_id: runtimeId, profile: this.profile, text: withContext(prompt, context), ...(hold && { queued: true }) }).catch((e) => {
         throw e instanceof ConnectionLostError ? new PromptUnconfirmedError(e.message) : e;
       })) as Submitted;
     } catch (e) {
@@ -5143,7 +5161,8 @@ function arrived(row: OutgoingItem, readBack: ReadBack[]): boolean {
     (m) =>
       m.role === "user" &&
       (sent.after === undefined || m.rowId === undefined || m.rowId > sent.after) &&
-      (m.text.trim() === sent.prompt.trim() || (!!attachments?.length && !!words && m.text.includes(words))),
+      // Hermes stores a message with what it attached below it, which isn't part of what went out as the prompt.
+      (typedText(m.text).trim() === sent.prompt.trim() || (!!attachments?.length && !!words && m.text.includes(words))),
   );
 }
 
@@ -5190,8 +5209,9 @@ function historyItems(messages: TranscriptMessage[]): Item[] {
     if (!m.text?.trim()) return thought;
     const at = storedAt(m.timestamp);
     const rowId = Number.isSafeInteger(m.row_id) ? (m.row_id as number) : undefined;
+    // Below the owner's words Hermes keeps what it attached to them, a project's context files among it (ADR 0135).
     if (m.role === "user")
-      return [{ kind: "user", id, text: m.text, ...(at && { at }), ...(rowId !== undefined && { rowId }), ...(m.display_kind === "steer" && { steer: true }) }];
+      return [{ kind: "user", id, text: typedText(m.text), ...(at && { at }), ...(rowId !== undefined && { rowId }), ...(m.display_kind === "steer" && { steer: true }) }];
     if (m.role === "assistant") return [...thought, { kind: "assistant", id, text: m.text, ...(at && { at }), ...(rowId !== undefined && { rowId }) }];
     return [];
   });

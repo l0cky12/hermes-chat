@@ -28,6 +28,7 @@ import {
   type LocalFile,
   type Told,
 } from "./projectContext";
+import type { LocalFile as PickedFile } from "./pipe";
 import type { Project } from "./projects";
 import { RemoteFilesError, explain, newTransferId, parseListing, type RemoteEntry, type RemoteGet, type RemotePreview, type TransferProgress } from "./remoteFiles";
 
@@ -40,9 +41,9 @@ export type GitExclude = "none" | "added" | "already";
  */
 export type ContextPipe = {
   /** The native Open dialog, for any number of files. Empty when the owner closed it. */
-  pick(): Promise<LocalFile[]>;
-  /** The size of each dropped file, for paths the app was given by a drop. */
-  localFiles(paths: string[]): Promise<LocalFile[]>;
+  pick(): Promise<PickedFile[]>;
+  /** The size of each dropped file, for paths the app was given by a drop; `error` for one it wasn't given. */
+  localFiles(paths: string[]): Promise<PickedFile[]>;
   /** Sends a local file to `serverPath`. Rejects with `exists` when a file is there and `overwrite` is off. */
   upload(id: number, local: string, serverPath: string, overwrite: boolean, sshProfile: string | undefined, onProgress: (p: TransferProgress) => void): Promise<void>;
   writeText(serverPath: string, text: string, overwrite: boolean, sshProfile?: string): Promise<void>;
@@ -68,6 +69,14 @@ export type ContextFilesIo = {
   preview(entry: RemoteEntry, asText: boolean): Promise<RemotePreview>;
 };
 
+/** Local files to add, and the ones that can't be read on this computer, each with why. */
+export type Picked = { files: LocalFile[]; refused: { name: string; why: string }[] };
+
+const picked = (found: PickedFile[]): Picked => ({
+  files: found.flatMap((f) => (f.error === undefined && f.size !== undefined ? [{ path: f.path, name: f.name, size: f.size }] : [])),
+  refused: found.flatMap((f) => (f.error === undefined && f.size !== undefined ? [] : [{ name: f.name, why: `${f.name} wasn't added: ${f.error ?? "this computer couldn't read it"}.` }])),
+});
+
 /** The project as the card needs it. */
 export type ContextProject = Pick<Project, "id" | "name" | "folders">;
 
@@ -92,8 +101,10 @@ export type ProjectContextFiles = {
   read(profile: string, project: ContextProject, opts?: { window?: number; git?: boolean }): Promise<ContextState>;
   /** The text of each of `files` that has any, by path. A file that can't be read now is left out. */
   texts(profile: string, state: Extract<ContextState, { kind: "ready" }>, files: readonly ContextFile[]): Promise<ContextTexts>;
-  pick(): Promise<LocalFile[]>;
-  dropped(paths: string[]): Promise<LocalFile[]>;
+  /** The files the owner picks in the native Open dialog. */
+  pick(): Promise<Picked>;
+  /** The files dropped on the card, by the paths the drop gave. */
+  dropped(paths: string[]): Promise<Picked>;
   /**
    * The folder files go in, made first where it isn't there: for a project with no folder, its folder on the server,
    * which `addFolder` then adds to the project as its main folder.
@@ -285,8 +296,8 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
       }
       return out;
     },
-    pick: () => pipe().pick(),
-    dropped: (paths) => pipe().localFiles(paths),
+    pick: async () => picked(await pipe().pick()),
+    dropped: async (paths) => picked(await pipe().localFiles(paths)),
     async folderFor(target, addFolder) {
       if (target.kind === "ready") {
         if (target.exists) return target.dir;
@@ -463,12 +474,25 @@ export function chatContext(files: ProjectContextFiles, ledger: ContextLedger, p
   const settled = async <T,>(work: Promise<T>) => work.catch(() => undefined);
   return {
     start: async (projectId: string) => gather([await settled(tell(projectId, "start"))]),
-    next: async (chatId: string) => {
+    /** Nothing, at once, for a chat in no project: its message waits for no read. */
+    next: (chatId: string) => {
       const ids = [...projects.projectsOf(chatId)].sort();
       if (!ids.length) return undefined;
-      return gather(await Promise.all(ids.map((id) => settled(tell(id, () => ledger.get(projects.scope, chatId, id))))));
+      return Promise.all(ids.map((id) => settled(tell(id, () => ledger.get(projects.scope, chatId, id))))).then(gather);
     },
   };
 }
 
 export type ChatContexts = ReturnType<typeof chatContext>;
+
+/**
+ * A model's context window, as a chat running on it reported it (`context_max`). Hermes's model list names no window,
+ * so until some chat here has run on the model, none is known.
+ */
+export function knownWindow(
+  chats: readonly { model?: { provider: string; model: string }; live?: { context?: { max: number } } }[],
+  model: { provider: string; model: string } | undefined,
+): number | undefined {
+  if (!model) return undefined;
+  return chats.find((c) => c.model?.provider === model.provider && c.model.model === model.model && c.live?.context)?.live?.context?.max;
+}
