@@ -2,7 +2,7 @@
 // `/api/ws` frames and REST calls. It also reads the files the owner attaches, so their bytes never pass through the
 // webview.
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { LocalFile, OpenPipe, PipeEvent, Route, ToolsetGuards, Transcript, VoiceSetup } from "./pipe";
+import type { LocalFile, OpenPipe, Pipe, PipeEvent, Route, ToolsetGuards, Transcript, VoiceSetup } from "./pipe";
 import type { Downloaded, PickedUpload, TransferProgress } from "./remoteFiles";
 import type { Probe, Probed, ProbeFailure, SavedKey } from "./setup";
 import { routedPipe, type ReachRoute, type RouteDetails, type RoutedHooks } from "./routes";
@@ -107,30 +107,9 @@ export function tauriPipe(d: SignInDetails, hooks?: RoutedHooks): OpenPipe {
 function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boolean; sshRoute?: string; onStep?: (s: Step, at?: number) => void }): OpenPipe {
   const target = targetOf(d);
   return async (onEvent, profile, signal) => {
-    const channel = new Channel<PipeEvent>();
-    channel.onmessage = onEvent;
-    // src-tauri connect_steps.rs `Started`.
-    const steps = new Channel<{ step: Step; at: number }>();
-    steps.onmessage = (s) => opts.onStep?.(s.step, s.at);
-    // Names this opening, so stopping it can't stop a later one (src-tauri `hermes_connect_cancel`).
-    const attempt = crypto.randomUUID();
-    const stop = () => void invoke("hermes_connect_cancel", { attempt }).catch(() => {});
-    signal?.addEventListener("abort", stop, { once: true });
-    if (signal?.aborted) stop();
-    const route = await invoke<Route>("hermes_connect", {
-      target,
-      credential: credentialOf(d),
-      profile,
-      attempt,
-      onEvent: channel,
-      expectServer: opts.expectServer ?? null,
-      quick: opts.quick,
-      sshRoute: opts.sshRoute ?? null,
-      onStep: steps,
-    })
-      .catch(asError)
-      .finally(() => signal?.removeEventListener("abort", stop));
-    return {
+    const args = { target, credential: credentialOf(d), profile, expectServer: opts.expectServer ?? null, quick: opts.quick, sshRoute: opts.sshRoute ?? null };
+    const route = await opening<Route>("hermes_connect", args, onEvent, signal, opts.onStep);
+    const pipe: Pipe = {
       route,
       send: (frame) => invoke("hermes_send", { frame }),
       request: (method, path, body) => invoke<string>("hermes_request", { method, path, body }).catch(asError),
@@ -177,7 +156,30 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
           close: () => void invoke("display_close", { id }).catch(() => {}),
         };
       },
+      reopen: async (onEvent, profile, signal, onStep) => {
+        await opening<void>("hermes_reopen", { profile }, onEvent, signal, onStep);
+        return pipe;
+      },
       close: () => invoke("hermes_disconnect"),
     };
+    return pipe;
   };
+}
+
+/** Runs `command`, which opens `/api/ws`, with `args`: frames go to `onEvent`, each step as it starts to `onStep`, and
+ * aborting `signal` stops it. */
+async function opening<T>(command: string, args: Record<string, unknown>, onEvent: (e: PipeEvent) => void, signal?: AbortSignal, onStep?: (s: Step, at?: number) => void): Promise<T> {
+  const channel = new Channel<PipeEvent>();
+  channel.onmessage = onEvent;
+  // src-tauri connect_steps.rs `Started`.
+  const steps = new Channel<{ step: Step; at: number }>();
+  steps.onmessage = (s) => onStep?.(s.step, s.at);
+  // Names this opening, so stopping it can't stop a later one (src-tauri `hermes_connect_cancel`).
+  const attempt = crypto.randomUUID();
+  const stop = () => void invoke("hermes_connect_cancel", { attempt }).catch(() => {});
+  signal?.addEventListener("abort", stop, { once: true });
+  if (signal?.aborted) stop();
+  return invoke<T>(command, { ...args, attempt, onEvent: channel, onStep: steps })
+    .catch(asError)
+    .finally(() => signal?.removeEventListener("abort", stop));
 }

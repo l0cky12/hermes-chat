@@ -326,13 +326,35 @@ export function routedPipe(d: SignInDetails, open: OpenRoute, hooks: RoutedHooks
         expect = server;
         hooks.onServer?.(server);
       }
-      if (!d.routes || all.length < 2) return pipe;
+      if (!d.routes || all.length < 2) return reopenable(pipe, r);
       const route: Route = { ...pipe.route, via: { id: r.id, kind: r.kind, index: on.indexOf(r), of: on.length } };
-      return { ...pipe, route };
+      return reopenable({ ...pipe, route }, r);
     }
     // Every route turned the token down or couldn't use it: that is the failure, not the routes.
     if (failures.length && failures.every((f) => TOKEN_REFUSED.test(f.message))) throw new Error(failures[0].message);
     throw new RoutesFailedError(failures);
+  }
+
+  /** `pipe`, opened over `r`, whose `reopen` keeps its route and is recorded as an attempt of its own over `r`. */
+  function reopenable(pipe: Pipe, r: RouteDetails): Pipe {
+    const reopen = pipe.reopen;
+    if (!reopen) return pipe;
+    return {
+      ...pipe,
+      reopen: async (onEvent, profile, signal) => {
+        const attempt = hooks.attempts?.begin(d);
+        const trying = attempt?.route(r);
+        try {
+          const again = reopenable({ ...(await reopen(onEvent, profile, signal, trying?.step)), route: pipe.route }, r);
+          return attempt ? { ...again, attempt } : again;
+        } catch (e) {
+          trying?.failed(e);
+          if (signal?.aborted || (e instanceof Error && e.message === STOPPED)) attempt?.stopped();
+          else attempt?.failed(e);
+          throw e;
+        }
+      },
+    };
   }
 }
 

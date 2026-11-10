@@ -1,7 +1,7 @@
 // The pipe under the frontend Hermes transport: JSON-RPC text frames in and out of `/api/ws`, plus
 // signed-in dashboard REST calls, the local files the owner attaches, and the dashboard's audio routes for Dictation
 // and Read aloud. In the app it is the Rust side (tauriPipe.ts); in tests it is FakeHermes.
-import type { AttemptTrace } from "./attempts";
+import type { AttemptTrace, Step } from "./attempts";
 import type { McpEdit } from "./mcp";
 import type { Downloaded, PickedUpload, TransferProgress } from "./remoteFiles";
 import type { SavedKey } from "./setup";
@@ -146,6 +146,12 @@ export interface Pipe {
    * it with the connection. Optional: a pipe without it has no Screen.
    */
   openDisplay?: OpenScreenSocket;
+  /**
+   * Opens `/api/ws` again on this pipe's connection, once its socket closed, keeping the SSH tunnel and the sign-in
+   * (src-tauri `hermes_reopen`). On failure it rejects and the whole connection is closed. Optional: without it, a
+   * dropped pipe is opened again from the start.
+   */
+  reopen?: ReopenPipe;
   close(): Promise<void>;
 }
 
@@ -155,3 +161,6 @@ export interface Pipe {
  * an opening under way, which then rejects; once open, the pipe is closed with `close`.
  */
 export type OpenPipe = (onEvent: (e: PipeEvent) => void, profile: string, signal?: AbortSignal) => Promise<Pipe>;
+
+/** `OpenPipe` over the connection a pipe already holds. `onStep`: told as each step starts (attempts.ts). */
+export type ReopenPipe = (onEvent: (e: PipeEvent) => void, profile: string, signal?: AbortSignal, onStep?: (s: Step, at?: number) => void) => Promise<Pipe>;
