@@ -755,6 +755,14 @@ export class FakeHermes {
         const open_requests = open.map(([id, q]) => ({ id, method: q.method, params: { session_id: sid, ...q.params } }));
         return this.respond(r.id, { session_id: sid, stored_session_id: stored, message_count: messages.length, messages, info: this.sessionInfo, running: true, open_requests });
       }
+      const busy = this.reattachTurns && [...this.inflight].find(([sid, t]) => t.stored === stored && this.turns.has(sid));
+      if (busy) {
+        const [sid, { user, assistant }] = busy;
+        this.runtime.set(sid, stored);
+        const messages = shownHistory(this.transcripts[stored] ?? []);
+        const inflight = { user, assistant, streaming: true };
+        return this.respond(r.id, { session_id: sid, stored_session_id: stored, message_count: messages.length, messages, info: this.sessionInfo, running: true, inflight });
+      }
       const runtimeId = `rt-r${++this.resumed}`;
       this.runtime.set(runtimeId, stored);
       this.runtimeProfile.set(runtimeId, (r.params.profile as string | undefined) || "default");
@@ -834,6 +842,7 @@ export class FakeHermes {
       if (stored) this.storeMessage(stored, { role: "user", text: String(r.params.text), row_id: this.userRowId });
       if (drop === "stored") return this.drop();
       this.turns.add(runtimeId);
+      if (stored) this.inflight.set(runtimeId, { stored, user: String(r.params.text ?? ""), assistant: "" });
       this.stopped.delete(runtimeId);
       this.respond(r.id, { status: "streaming", ...(this.userRowId !== undefined && { user_row_id: this.userRowId }) });
       const prompt = String(r.params.text ?? "");
@@ -2138,12 +2147,29 @@ export class FakeHermes {
 
   /** The runtime sessions with a turn running, as far as this fake has heard: started by a prompt or `message.start`, ended by `message.complete` or `error`. */
   readonly turns = new Set<string>();
+  /**
+   * Whether `session.resume` reattaches a session whose turn still runs, as the deployed `f0d94882` does: the reply
+   * streamed so far comes back as `inflight`, and the turn's later frames go to the new connection
+   * (`_live_session_payload`, `_inflight_snapshot`). Off, the resume starts a new idle runtime.
+   */
+  reattachTurns = false;
+  /** A running turn's prompt and the reply text it has streamed, by runtime session (`inflight_turn`). */
+  private readonly inflight = new Map<string, { stored: string; user: string; assistant: string }>();
   /** The runtime sessions the owner stopped, until their next prompt: the poller starts no wake turn in them (`_notif_claim_turn`). */
   readonly stopped = new Set<string>();
 
   event(sessionId: string, type: string, payload: Record<string, unknown> = {}) {
-    if (type === "message.start") this.turns.add(sessionId);
-    if (type === "message.complete" || type === "error") this.turns.delete(sessionId);
+    if (type === "message.start") {
+      this.turns.add(sessionId);
+      const stored = this.runtime.get(sessionId);
+      if (stored && !this.inflight.has(sessionId)) this.inflight.set(sessionId, { stored, user: "", assistant: "" });
+    }
+    const turn = this.inflight.get(sessionId);
+    if (type === "message.delta" && turn && typeof payload.text === "string") turn.assistant += payload.text;
+    if (type === "message.complete" || type === "error") {
+      this.turns.delete(sessionId);
+      this.inflight.delete(sessionId);
+    }
     this.frame({ jsonrpc: "2.0", method: "event", params: { type, session_id: sessionId, payload } });
   }
 
