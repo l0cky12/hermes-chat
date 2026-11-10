@@ -3,7 +3,7 @@
 // dashboard REST instead, without touching the chat socket. A check only reads lists: it never moves a chat's read
 // watermark. Each check belongs to the connection and profile shown when it started; once either changes, what it
 // finds is dropped and it asks nothing more.
-import type { ListedChat, OtherProfile, OtherProfiles, SavedSend, SeenFailure } from "./model";
+import { sameFields, type CheckTimes, type ListedChat, type OtherProfile, type OtherProfiles, type SavedSend, type SeenFailure } from "./model";
 
 /** How often the app checks the other profiles. What it shows can be this far behind. */
 export const CHECK_EVERY_MS = 120_000;
@@ -31,12 +31,32 @@ export const noOthers: OtherProfiles = { byName: {} };
 
 const sameScope = (a?: Scope, b?: Scope) => !!a && !!b && a.connection === b.connection && a.profile === b.profile;
 
+/** `CheckTimes`, for `useSyncExternalStore`: `get` answers the same object until a time changes. */
+export class CheckTimesStore {
+  private times: CheckTimes = { byProfile: {} };
+  private listeners = new Set<() => void>();
+
+  subscribe = (fn: () => void) => {
+    this.listeners.add(fn);
+    return () => void this.listeners.delete(fn);
+  };
+  get = () => this.times;
+
+  set(patch: Partial<CheckTimes>) {
+    this.times = { ...this.times, ...patch };
+    for (const fn of this.listeners) fn();
+  }
+}
+
 export class OtherProfilesCheck {
   private state: OtherProfiles = noOthers;
   private running?: { scope: Scope; done: Promise<void> };
   private last?: { scope: Scope; at: number };
 
-  constructor(private port: OtherProfilesPort) {}
+  constructor(
+    private port: OtherProfilesPort,
+    private times: CheckTimesStore,
+  ) {}
 
   /**
    * Checks the profiles not shown for Unread chats, a few at a time. A call while a check for the same connection and
@@ -59,9 +79,14 @@ export class OtherProfilesCheck {
    */
   switched(from: string, to: string, fromList?: { unread: number; listedAt: number; chats: ListedChat[] }, failures: SeenFailure[] = []) {
     const { [to]: _shown, ...byName } = this.state.byName;
-    if (fromList) byName[from] = { unread: fromList.unread, more: false, checkedAt: fromList.listedAt, chats: fromList.chats, sends: this.port.sendsIn(from) };
+    const { [to]: _shownAt, ...byProfile } = this.times.get().byProfile;
+    if (fromList) {
+      byName[from] = { unread: fromList.unread, more: false, chats: fromList.chats, sends: this.port.sendsIn(from) };
+      byProfile[from] = fromList.listedAt;
+    }
     // Failures seen there stay until the owner is back in the profile, whatever later checks find.
     if (failures.length) byName[from] = { ...byName[from], failures };
+    this.times.set({ byProfile });
     this.publish({ ...this.state, byName });
   }
 
@@ -77,24 +102,33 @@ export class OtherProfilesCheck {
     if (!current()) return;
     const others = names.filter((n) => n !== scope.profile);
     // Profiles gone from the server leave the results.
-    const byName = Object.fromEntries(others.flatMap((n) => (this.state.byName[n] ? [[n, this.state.byName[n]]] : [])));
-    this.publish({ byName, error: undefined, checkedAt: Date.now() });
-    const due = [...others].sort((a, b) => (byName[a]?.checkedAt ?? -Infinity) - (byName[b]?.checkedAt ?? -Infinity)).slice(0, PER_CHECK);
+    const kept = <T>(all: Record<string, T>) => Object.fromEntries(others.flatMap((n) => (n in all ? [[n, all[n]]] : [])));
+    const byProfile = kept(this.times.get().byProfile);
+    this.times.set({ others: Date.now(), byProfile });
+    this.publish({ byName: kept(this.state.byName), error: undefined });
+    const due = [...others].sort((a, b) => (byProfile[a] ?? -Infinity) - (byProfile[b] ?? -Infinity)).slice(0, PER_CHECK);
     await eachAtMost(due, AT_ONCE, async (name) => {
       if (!current()) return;
       let found: OtherProfile;
+      let readAt: number | undefined;
       try {
         const failures = this.state.byName[name]?.failures;
-        found = { ...(await this.port.unreadIn(name)), sends: this.port.sendsIn(name), checkedAt: Date.now(), ...(failures && { failures }) };
+        found = { ...(await this.port.unreadIn(name)), sends: this.port.sendsIn(name), ...(failures && { failures }) };
+        readAt = Date.now();
       } catch (e) {
         // An earlier answer stays, with the time it was read.
         found = { ...this.state.byName[name], sends: this.port.sendsIn(name), error: (e as Error).message };
       }
-      if (current()) this.publish({ ...this.state, byName: { ...this.state.byName, [name]: found } });
+      if (!current()) return;
+      if (readAt !== undefined) this.times.set({ byProfile: { ...this.times.get().byProfile, [name]: readAt } });
+      const was = this.state.byName[name];
+      this.publish({ ...this.state, byName: { ...this.state.byName, [name]: was && sameProfile(was, found) ? was : found } });
     });
   }
 
+  /** Tells the transport, unless every profile keeps the same answer and the error is the same. */
   private publish(state: OtherProfiles) {
+    if (state.error === this.state.error && sameFields(state.byName, this.state.byName)) return;
     this.state = state;
     this.port.publish(state);
   }
@@ -112,6 +146,16 @@ export function totalUnread(others: OtherProfiles): { unread: number; more: bool
     withUnread: entries.filter(([, p]) => (p.unread ?? 0) > 0).map(([n]) => n),
     failed: entries.filter(([, p]) => p.error).map(([n]) => n),
   };
+}
+
+/** Every field the same, a list of rows compared row by row. */
+function sameProfile(a: OtherProfile, b: OtherProfile): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)] as (keyof OtherProfile)[]);
+  return [...keys].every((k) => {
+    const x = a[k];
+    const y = b[k];
+    return x === y || (Array.isArray(x) && Array.isArray(y) && x.length === y.length && x.every((r: object, i) => sameFields(r, y[i])));
+  });
 }
 
 /** Runs `fn` over `items`, at most `n` at a time. */

@@ -207,11 +207,13 @@ describe("The inbox", () => {
     const { server, hermes } = await signedIn();
     server.liveSessions = [{ id: "rt-x", session_key: "work-busy", status: "working", last_active: nowS() }];
     await hermes.checkOtherProfiles();
+    const answered = hermes.checkTimes.get().live;
     server.handlers["session.active_list"] = (r) => server.fail(r.id, 5000, "store busy");
     vi.useFakeTimers({ now: Date.now() + 20_000 });
     await hermes.checkOtherProfiles();
 
-    expect(hermes.getSnapshot().live).toMatchObject({ error: "store busy", checkedAt: expect.any(Number) });
+    expect(hermes.getSnapshot().live).toMatchObject({ error: "store busy" });
+    expect(hermes.checkTimes.get().live).toBe(answered);
     expect(inbox(hermes).entries.map(brief)).toEqual(["completed work/work-done", "running work/work-busy stale"]);
   });
 

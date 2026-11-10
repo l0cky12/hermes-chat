@@ -3,6 +3,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import type { Chat } from "../hermes/model";
+import { CheckTimesStore } from "../hermes/otherProfiles";
 import { LocaleContext, localeFor, type LanguageId } from "../i18n/locale";
 import { AGE_TICK_MS } from "./bits";
 import { ChatList } from "./Sidebar";
@@ -26,6 +27,7 @@ function shown(language: LanguageId, updatedAt = Date.now() - 5 * 60_000 - 5_000
         profile="default"
         status="connected"
         others={{ byName: {} }}
+        checkTimes={new CheckTimesStore()}
         chats={[chat]}
         selectedId={null}
         onOpen={() => {}}

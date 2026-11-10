@@ -76,6 +76,20 @@ describe("The inbox", () => {
     expect(inbox().textContent).toMatch(/Checked profiles just now, running work just now\./);
   });
 
+  it("says it checked just now after a check that found nothing new", async () => {
+    const { hermes, user, openInbox } = await launch();
+    openInbox();
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 180_000 });
+    try {
+      await user.click(filter(/^Completed/));
+      expect(inbox().textContent).toMatch(/Checked profiles 3m ago, running work 3m ago\./);
+      await act(async () => void (await hermes.checkOtherProfiles()));
+      expect(inbox().textContent).toMatch(/Checked profiles just now, running work just now\./);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("takes the Office's place when opened from the tray, as the rail's tools replace each other", async () => {
     const { user, openInbox } = await launch();
     await user.click(screen.getByRole("button", { name: "Office" }));
