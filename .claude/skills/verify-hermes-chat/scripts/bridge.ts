@@ -28,6 +28,8 @@
 //   `POST /__ask?chat=<chat id>&method=<method>` with a JSON body of params asks the app something, as a Hermes tool's
 //   server request does (`preview.act`, `preview.read`), in that chat's live session (a test's control). It answers
 //   the request's id; the app's answer shows in `/__state` under `answers`.
+//   `POST /__changed[?n=<count>&gap=<ms>]` broadcasts `sessions.changed` n times (default 1), gap ms apart, as Hermes's
+//   change watcher does when another process writes the session store (a test's control).
 // HV_INBOX=1 gives the `work` profile two Unread chats for the Rail inbox: one last active 3 days ago, one an hour ago.
 // HV_LIST=<n> adds n Active, read chats to `default`, one an hour apart, so its Inbox is longer than the list panel.
 // HV_DELAY_MS=<ms> holds each /api/ answer that long, as a distant server's round trip would.
@@ -268,7 +270,7 @@ function readFrames(sock: Socket, onText: (t: string) => void) {
 
 const http = createServer(async (req, res) => {
   const url = new URL(req.url!, "http://x");
-  console.log(new Date().toISOString(), req.method, url.pathname);
+  console.log(new Date().toISOString(), req.method, url.pathname + url.search);
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
   const body = Buffer.concat(chunks).toString() || undefined;
@@ -301,6 +303,15 @@ const http = createServer(async (req, res) => {
     const moved = server.kanban.move(id, url.searchParams.get("status") ?? "done");
     save();
     return moved ? json(200, { ok: true, task: server.kanban.find(id) }) : json(404, { detail: `No stand-in task ${id}` });
+  }
+  if (url.pathname === "/__changed" && req.method === "POST") {
+    const n = Number(url.searchParams.get("n") ?? 1);
+    const gap = Number(url.searchParams.get("gap") ?? 0);
+    for (let i = 0; i < n; i++) {
+      if (i && gap) await new Promise((r) => setTimeout(r, gap));
+      server.broadcast("sessions.changed");
+    }
+    return json(200, { ok: true, sent: n });
   }
   if (url.pathname === "/__ask" && req.method === "POST") {
     const runtime = server.runtimeIdOf(url.searchParams.get("chat") ?? "");
