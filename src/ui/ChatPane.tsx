@@ -89,10 +89,9 @@ function toBlocks(items: Item[], side: SideQuestion[] = []): (Block | SideBlock)
 }
 
 /**
- * Whether find-in-chat can mark a match of `finds` in `block`. Only a block that can gets the query, so a new query
- * renders those blocks again and leaves the others' memo alone (#450). A reply is also tried as its Markdown shows it,
- * with escapes and character references decoded: `fish &amp; chips` shows as `fish & chips`. A reply with footnotes
- * always can: they show numbers and a label its text doesn't hold.
+ * A reply is tried as written and as its Markdown shows it, with escapes and character references decoded:
+ * `fish &amp; chips` shows as `fish & chips`. A reply with footnotes always passes: they show numbers and a label its
+ * text doesn't hold.
  */
 function mayMatch(block: Block, finds: RegExp) {
   if (block.kind === "assistant")
