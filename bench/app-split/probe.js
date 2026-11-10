@@ -14,7 +14,7 @@
   const stats = (xs) => {
     const s = [...xs].sort((a, b) => a - b);
     const q = (p) => Math.round(s[Math.min(s.length - 1, Math.floor(p * s.length))] * 10) / 10;
-    return s.length ? { n: s.length, p50: q(0.5), p95: q(0.95), max: q(1) } : { n: 0 };
+    return s.length ? { n: s.length, p50: q(0.5), p95: q(0.95), max: q(1), total: Math.round(s.reduce((a, b) => a + b, 0)), over50: s.filter((x) => x > 50).length } : { n: 0 };
   };
   let run;
   const start = () => {
