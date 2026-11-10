@@ -825,7 +825,7 @@ function PageView({
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [page, setPage] = useState<NativePage>();
-  const [state, setState] = useState<"loading" | "shown" | { message: string }>("loading");
+  const [state, setState] = useState<"loading" | "shown" | { message: string; url?: string }>("loading");
   const [slow, setSlow] = useState(false);
   const viewAt = useRef<ViewUrl>(undefined);
   const sentThrough = useRef<Tunnel>(undefined);
@@ -840,7 +840,7 @@ function PageView({
         viewAt.current = e.url;
         setState("shown");
         latest.current.onStep({ kind: "arrived", target: fromView(e.url, sentThrough.current), replace: e.replace });
-      } else if (e.kind === "failed") setState({ message: e.message });
+      } else if (e.kind === "failed") setState({ message: e.message, url: e.url && fromView(e.url, sentThrough.current).url });
       else if (e.kind === "escaped") box.current?.focus();
     });
     setPage(made);
@@ -888,9 +888,11 @@ function PageView({
             <div className="preview-state preview-error preview-loading" role="alert">
               <AlertTriangle size={18} />
               <div>
-                <div className="preview-state-title">Couldn't load {hostOf(here.url)}</div>
+                <div className="preview-state-title">Couldn't load {hostOf(state.url ?? here.url)}</div>
                 <div>{state.message}</div>
-                <div>Check the address, or Reload to try again.</div>
+                <div>
+                  {src === viewAt.current && state.url && state.url !== here.url ? "Reload shows the page in the address box again." : "Check the address, or Reload to try again."}
+                </div>
               </div>
             </div>
           ) : (

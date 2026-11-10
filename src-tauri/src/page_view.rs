@@ -40,8 +40,14 @@ pub enum PageEvent {
     /// (replaceState, location.replace). Otherwise the page moved by itself. Only addresses `web_page::web_url` passes
     /// are sent.
     At { url: String, replace: bool },
-    /// It couldn't load, or its web process ended. The view hides; the pane says why.
-    Failed { message: String },
+    /// It couldn't load, or its web process ended. The view hides; the pane says why. `url`: the address that failed
+    /// to load, when WebKit names one `web_page::web_url` passes. A link followed inside the page can fail while the
+    /// view keeps the page it was on.
+    Failed {
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+    },
     /// The owner pressed Escape in the page, and the page didn't use it. The keyboard is back with the app, so the
     /// next Escape reaches the Preview as it would anywhere else in the app.
     Escaped,
@@ -231,7 +237,7 @@ mod imp {
             }
         });
         let m = moves.clone();
-        view.connect_load_failed(move |view, _, _, error| {
+        view.connect_load_failed(move |view, _, failing, error| {
             // Cancelled: another load replaced it, and that one's report follows; or the page stopped, and none does.
             if error.matches(NetworkError::Cancelled) {
                 if !view.is_loading() {
@@ -243,16 +249,17 @@ mod imp {
             // Interrupted: the response was a download, which stops. A page already shown stays, as in a browser.
             if error.matches(PolicyError::FrameLoadInterruptedByPolicyChange) {
                 if !m.answered.get() {
-                    m.send(PageEvent::Failed { message: "It's a file to download, and the Preview doesn't save files.".into() });
+                    m.send(PageEvent::Failed { message: "It's a file to download, and the Preview doesn't save files.".into(), url: None });
                 }
                 return true;
             }
-            m.send(PageEvent::Failed { message: error.message().to_owned() });
+            let url = Some(failing.to_owned()).filter(|u| crate::web_page::web_url(u).is_ok());
+            m.send(PageEvent::Failed { message: error.message().to_owned(), url });
             true
         });
         let m = moves.clone();
         view.connect_web_process_terminated(move |_, _| {
-            m.send(PageEvent::Failed { message: "The page stopped: WebKit's process for it ended.".into() });
+            m.send(PageEvent::Failed { message: "The page stopped: WebKit's process for it ended.".into(), url: None });
         });
     }
 
@@ -491,7 +498,14 @@ mod tests {
     fn placement_reads_the_webviews_json() {
         let p: Placement = serde_json::from_str(r#"{"rect":{"x":1,"y":2,"width":3,"height":4}}"#).unwrap();
         assert_eq!(p, Placement { rect: rect(1.0, 2.0, 3.0, 4.0), holes: vec![] });
-        assert_eq!(serde_json::to_value(PageEvent::Failed { message: "m".into() }).unwrap(), serde_json::json!({ "kind": "failed", "message": "m" }));
+        assert_eq!(
+            serde_json::to_value(PageEvent::Failed { message: "m".into(), url: None }).unwrap(),
+            serde_json::json!({ "kind": "failed", "message": "m" })
+        );
+        assert_eq!(
+            serde_json::to_value(PageEvent::Failed { message: "m".into(), url: Some("http://127.0.0.1:41234/b".into()) }).unwrap(),
+            serde_json::json!({ "kind": "failed", "message": "m", "url": "http://127.0.0.1:41234/b" })
+        );
         assert_eq!(serde_json::to_value(PageEvent::Escaped).unwrap(), serde_json::json!({ "kind": "escaped" }));
         assert_eq!(
             serde_json::to_value(PageEvent::At { url: "http://127.0.0.1:41234/a".into(), replace: true }).unwrap(),

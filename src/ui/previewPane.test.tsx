@@ -541,6 +541,33 @@ describe("Web pages in the Preview's own view, on Linux (issue #254)", () => {
     expect(alert.textContent).toContain("Name or service not known");
   });
 
+  it("names the link that failed, not the page the view still holds, and Reload shows that page again", async () => {
+    const { view, user } = await openWeb(GOOGLE);
+    await act(async () => view.land(1));
+    await act(async () => view.say(1, { kind: "failed", message: "Could not connect: Connection refused", url: "https://down.example/x" as ViewUrl }));
+    const alert = within(pane()).getByRole("alert");
+    expect(alert.textContent).toContain("Couldn't load down.example");
+    expect(alert.textContent).toContain("Reload shows the page in the address box again.");
+    expect(address().value).toBe(GOOGLE);
+
+    await user.click(button("Reload"));
+    expect(view.asked.at(-1)).toEqual([1, "reload"]);
+    await act(async () => view.say(1, at(GOOGLE, true)));
+    expect(within(pane()).queryByRole("alert")).toBeNull();
+  });
+
+  it("offers to try a typed address again when it fails at the address it redirected to", async () => {
+    const { view, user } = await openWeb(GOOGLE);
+    await act(async () => view.land(1));
+    await user.clear(address());
+    await user.type(address(), "http://down.example/{Enter}");
+    await act(async () => view.say(1, { kind: "failed", message: "Could not connect: Connection refused", url: "https://down.example/" as ViewUrl }));
+    expect(within(pane()).getByRole("alert").textContent).toContain("Check the address, or Reload to try again.");
+
+    await user.click(button("Reload"));
+    expect(view.asked.at(-1)).toEqual([1, "go http://down.example/"]);
+  });
+
   it("reloads the page in the same view, keeping it shown, and ends the view when the Preview goes out of sight", async () => {
     const { view, user } = await openWeb(GOOGLE);
     await act(async () => view.land(1));
