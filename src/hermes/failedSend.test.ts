@@ -15,15 +15,21 @@ const TEXT = "Rotate the nginx logs,\n  then restart it ✓";
 const ROTATE = "/home/liam/rotate.sh";
 
 let store: Map<string, string>;
+/** While set, writes to localStorage throw, as when it is full. */
+let full = false;
 beforeEach(() => {
   store = new Map();
+  full = false;
   vi.stubGlobal("localStorage", {
     get length() {
       return store.size;
     },
     key: (i: number) => [...store.keys()][i] ?? null,
     getItem: (k: string) => store.get(k) ?? null,
-    setItem: (k: string, v: string) => void store.set(k, v),
+    setItem: (k: string, v: string) => {
+      if (full) throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+      store.set(k, v);
+    },
     removeItem: (k: string) => void store.delete(k),
   });
   vi.useFakeTimers();
@@ -379,6 +385,23 @@ describe("The outbox on this computer", () => {
     // Clear local cache deletes the lists and Saved copies; the owner's unsent words stay, as drafts do.
     after.clearCache();
     expect(kept()).toMatchObject([{ text: TEXT }]);
+  });
+
+  it("a failed message storage refused is kept in memory across a profile switch and back", async () => {
+    const { server, hermes, chat } = await ready();
+    server.otherProfiles = { work: [] };
+    full = true;
+    server.rejectPrompt = { code: 4009, message: "session busy" };
+    await hermes().send("c1", TEXT);
+
+    await hermes().switchProfile("work");
+    await hermes().switchProfile("default");
+    await hermes().open("c1");
+    expect(chat().items.at(-1)).toMatchObject({ text: TEXT, outgoing: { state: "failed", reason: "session busy" } });
+    // Once storage takes a write again, letting it go is saved as usual.
+    full = false;
+    hermes().dismiss("c1", chat().items.at(-1)!.id);
+    expect(localChatCache(nas).loadOutbox("default")).toEqual({});
   });
 
   it("Retry sends the same words and files again, as a new message", async () => {
