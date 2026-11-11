@@ -1,6 +1,6 @@
 // What the owner has typed in each chat's composer and not sent yet, kept in localStorage per connection, profile
 // and chat, so switching chats or restarting the app doesn't lose it. Text only: the chat's staged attachments are
-// kept beside it by the screenshot desk, under the same key, for this run only (ADR 0135). A sent message Hermes
+// kept beside it by the screenshot desk, under the same key, for this run only (ADR 0139). A sent message Hermes
 // didn't take, or may not have, isn't a draft: it stays in its chat, kept in the chat's outbox (transport.ts
 // `Outgoing`), until the owner retries or dismisses it.
 //

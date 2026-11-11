@@ -1273,7 +1273,7 @@ function Composer({
   followUp?: FollowUpHost;
   compare?: Comparing;
 }) {
-  // The chat's staged attachments, kept by the desk under its Draft key so they outlive this composer (ADR 0135).
+  // The chat's staged attachments, kept by the desk under its Draft key so they outlive this composer (ADR 0139).
   const attachments = useSyncExternalStore(screenshots?.subscribe ?? noDesk, () => screenshots?.stagedIn(draftKey) ?? NO_FILES);
   const focused = useRef(autoFocus);
   focused.current = autoFocus;

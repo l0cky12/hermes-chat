@@ -1,7 +1,7 @@
 // Screenshots and the files staged in each chat's composer. Rust takes the capture (src-tauri/src/screenshot.rs) and
 // stages it in a private folder; the desk hands it to the composer on screen. Files pasted into the composer are staged
 // the same way. The desk keeps every chat's staged attachments, keyed as its Draft is, so they wait there across chat
-// switches until the owner sends or removes them (ADR 0135). It remembers which staged files are its own, so each one
+// switches until the owner sends or removes them (ADR 0139). It remembers which staged files are its own, so each one
 // is deleted once nothing needs it any more. Nothing here sends anything to Hermes.
 
 import type { Attachment } from "./model";
