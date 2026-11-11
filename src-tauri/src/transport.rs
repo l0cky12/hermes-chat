@@ -3157,8 +3157,8 @@ fn agent_text_body(path: &str, text: &str, session: Option<&str>) -> Result<serd
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_text_body, memory_entry_edit_allowed, memory_provider_write, profile_create_allowed, profile_describe_auto, profile_field_write, provider_key_name, skill_create_allowed,
-        text_unless_stalled, unless_stalled, webhook_write, TransportError,
+        agent_text_body, memory_entry_edit_allowed, memory_provider_write, profile_create_allowed, profile_describe_auto, profile_field_write,
+        provider_key_name, skill_create_allowed, text_unless_stalled, unless_stalled, webhook_write, TransportError,
     };
     use std::time::Duration;
 
