@@ -1,6 +1,8 @@
 //! Tauri's updater, the verifier this app ships (`tauri-plugin-updater`), against a release served from this computer.
 //! The artifact was signed by `tauri signer sign` with two throwaway keys, deleted after signing. Only their public
 //! halves and the signatures are here (docs/releases.md, "The verification tests").
+//! Linux only: these install an AppImage by replacing the file, where Windows's updater runs an NSIS installer.
+#![cfg(target_os = "linux")]
 
 mod common;
 
@@ -291,7 +293,6 @@ async fn a_staged_release_installs() {
     std::fs::remove_dir_all(appimage.parent().unwrap()).unwrap();
 }
 
-#[cfg(target_os = "linux")]
 mod owned_by_a_package {
     use super::*;
     use hermes_chat::update::{Progress, Updates};
