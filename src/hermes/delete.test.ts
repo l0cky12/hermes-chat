@@ -251,3 +251,27 @@ describe("The Delete question", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 });
+
+describe("A copied profile, whose chats keep the ids they had", () => {
+  it("lists its own copy of a chat deleted, or being archived, in the profile it was copied from, and gets none of that one's pins", async () => {
+    const { server, hermes } = await listed(row("a", 1), row("b", 2), row("c", 3, { pinned: true }));
+    server.otherProfiles = { work: [row("a", 1), row("b", 2), row("c", 3, { pinned: true })] };
+    const shown = () => hermes.getSnapshot().chats.filter((c) => !c.archived).map((c) => c.id).sort();
+    expect(await hermes.delete("a")).toBe(true);
+    const answer = hold(server, "PATCH /api/sessions/b");
+    const archiving = hermes.archive("b");
+    // A Settle whose write fails stays wanted, to be written again.
+    server.rest["PATCH /api/sessions/c"] = () => Promise.reject(new Error("The dashboard answered 503"));
+    await hermes.settle("c");
+    delete server.rest["PATCH /api/sessions/c"];
+    expect(shown()).toEqual(["c"]);
+
+    await hermes.switchProfile("work");
+    await hermes.sync();
+    expect(shown()).toEqual(["a", "b", "c"]);
+    expect(hermes.getSnapshot().chats.find((c) => c.id === "c")).toMatchObject({ settled: false });
+    expect(server.restRequests.filter((r) => r.method === "PATCH" && new URLSearchParams(r.query).get("profile") === "work")).toEqual([]);
+    answer();
+    await archiving;
+  });
+});
