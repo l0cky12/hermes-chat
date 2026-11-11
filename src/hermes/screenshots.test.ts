@@ -74,11 +74,7 @@ describe("Screenshot desk", () => {
     expect(desk.getSnapshot()).toEqual({ capturing: false });
     expect(rust.discarded).toEqual([]);
 
-    // A capture a chat holds isn't deleted by a release; removing it is. Anything that isn't a capture is never
-    // deleted, and a capture is deleted once.
-    desk.release(["/run/user/1000/hermes-chat/captures/1/0/shot.png"]);
-    await tick();
-    expect(rust.discarded).toEqual([]);
+    // Anything that isn't a capture is never deleted, and a capture is deleted once.
     desk.change({ kind: "removed", key: "chat-a", paths: ["/home/liam/Pictures/rack.png", "/run/user/1000/hermes-chat/captures/1/0/shot.png"] });
     desk.change({ kind: "removed", key: "chat-a", paths: ["/run/user/1000/hermes-chat/captures/1/0/shot.png"] });
     await tick();
@@ -250,17 +246,14 @@ describe("Each chat's staged attachments", () => {
     expect(stagedFiles.getSnapshot()).toEqual(others);
   });
 
-  it("deletes a file sent from one chat only once no other chat holds it", async () => {
+  it("stages a file it owns in one chat at a time, and one the owner picked from their folders in any", async () => {
     const rust = fakeApi();
     const desk = new ScreenshotDesk(rust.api);
     desk.own(["/c/1/0/a.png"]);
-    desk.change({ kind: "added", key: "chat-a", attachments: [file("/c/1/0/a.png")] });
-    desk.change({ kind: "added", key: "chat-b", attachments: [file("/c/1/0/a.png")] });
-    desk.hold(["/c/1/0/a.png"]);
-    desk.change({ kind: "sent", key: "chat-a", paths: ["/c/1/0/a.png"] });
-    desk.finish(["/c/1/0/a.png"]);
-    await tick();
-    expect(rust.discarded).toEqual([]);
+    desk.change({ kind: "added", key: "chat-a", attachments: [file("/c/1/0/a.png"), file("/home/liam/notes.txt")] });
+    desk.change({ kind: "added", key: "chat-b", attachments: [file("/c/1/0/a.png"), file("/home/liam/notes.txt")] });
+    expect(desk.stagedIn("chat-a").map((a) => a.path)).toEqual(["/home/liam/notes.txt"]);
+    expect(desk.stagedIn("chat-b").map((a) => a.path)).toEqual(["/c/1/0/a.png", "/home/liam/notes.txt"]);
     desk.change({ kind: "removed", key: "chat-b", paths: ["/c/1/0/a.png"] });
     await tick();
     expect(rust.discarded).toEqual(["/c/1/0/a.png"]);

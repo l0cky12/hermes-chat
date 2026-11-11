@@ -15,6 +15,11 @@ import { Main, type Screenshots } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
+const dialog = vi.hoisted(() => ({ picked: [] as string[] }));
+vi.mock("@tauri-apps/api/core", async (actual) => {
+  const core = await actual<typeof import("@tauri-apps/api/core")>();
+  return { ...core, invoke: async (cmd: string, ...rest: never[]) => (cmd === "attach_picked_files" ? dialog.picked : core.invoke(cmd, ...rest)) };
+});
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -26,6 +31,7 @@ afterEach(() => {
   for (const stop of stopOutboxes.splice(0)) stop();
   localStorage.clear();
   vi.unstubAllGlobals();
+  dialog.picked = [];
 });
 
 const MiB = 1024 * 1024;
@@ -454,6 +460,31 @@ describe("Attachments staged in each chat (#443)", () => {
     await user.click(screen.getByRole("button", { name: "Remove" }));
     expect(chips()).toHaveLength(0);
     expect(rust.discarded).toEqual([path]);
+  });
+
+  it("moves a capture the owner picks from the captures folder into the chat they pick it in, so no chip outlives its file", async () => {
+    const { server, hermes, rust, user } = await signedIn();
+    await openChat(user, hermes, /Nightly backup/);
+    await user.click(screen.getByRole("button", { name: "Attach a screenshot" }));
+    const path = await rust.land();
+    await waitFor(() => expect(chips()).toHaveLength(1));
+
+    await openChat(user, hermes, /NAS disks/);
+    dialog.picked = [path];
+    await user.click(screen.getByRole("button", { name: "Attach files" }));
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    await user.type(composer(), "Same dialog here{Enter}");
+    await settle(hermes);
+    // Hermes confirmed it, so Rust lets go of the file with the outbox row.
+    await waitFor(() => expect(server.files[path]).toBeUndefined());
+    expect(server.requests.filter((r) => r.method === "image.attach_bytes")).toHaveLength(1);
+
+    for (const title of [/NAS disks/, /Nightly backup/]) {
+      await openChat(user, hermes, title);
+      const missing = chips().map((c) => c.textContent).filter((text) => !Object.keys(server.files).some((p) => text?.includes(p.split("/").pop()!)));
+      expect(missing).toEqual([]);
+    }
+    expect(chips()).toHaveLength(0);
   });
 
   it("deletes a chat's captures when the chat is deleted", async () => {
