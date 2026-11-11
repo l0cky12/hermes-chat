@@ -19,7 +19,7 @@ impl Backlog {
     /// budget is still taken when nothing waits, so a single big paste goes. False: refused, and nothing counted.
     pub fn take(&self, len: usize) -> bool {
         let more = |waiting: usize| (waiting == 0 || waiting.saturating_add(len) <= self.budget).then(|| waiting.saturating_add(len));
-        self.waiting.fetch_update(Ordering::SeqCst, Ordering::SeqCst, more).is_ok()
+        self.waiting.try_update(Ordering::SeqCst, Ordering::SeqCst, more).is_ok()
     }
 
     /// `len` bytes counted by `take` have been written.

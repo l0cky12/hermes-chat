@@ -1126,6 +1126,7 @@ Object.defineProperty(document.getElementById('save'), 'innerText', {{ get() {{ 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use crate::lock::Locked;
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
