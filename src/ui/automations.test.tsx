@@ -10,6 +10,13 @@ import { Main } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
+// jsdom has no Worker: filter patterns go to fake workers, which never answer one starting `(a+)+`, as a real one stuck on it
+// wouldn't.
+vi.mock("../hermes/patternRunner", async (original) => {
+  const m = await original<typeof import("../hermes/patternRunner")>();
+  const { fakePatternWorkers } = await import("../hermes/fakePatternWorker");
+  return { ...m, appPatterns: m.patternRunner(fakePatternWorkers((p) => p.startsWith("(a+)+")).spawn) };
+});
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -96,6 +103,37 @@ describe("the Automations screen", () => {
     expect(JSON.stringify(localStorage)).not.toContain(secret);
     await user.click(screen.getByRole("button", { name: /I've put it in GitHub/ }));
     expect(screen.queryByText(secret)).toBeNull();
+  });
+
+  it("tests a filter's pattern off the window's thread, and says plainly when one takes too long (#490)", async () => {
+    const { user } = await launch();
+    await user.click(screen.getByRole("button", { name: /New automation/ }));
+    const form = within(document.querySelector<HTMLElement>(".automation-form")!);
+    const enter = async (field: HTMLElement, text: string) => {
+      await user.clear(field);
+      await user.paste(text);
+    };
+    await user.click(form.getByRole("button", { name: /Add a filter/ }));
+    await enter(form.getByRole("combobox", { name: "Filter 1 field" }), "issue.title");
+    await user.selectOptions(form.getByRole("combobox", { name: "Filter 1 test" }), "regex");
+    const value = form.getByRole("textbox", { name: "Filter 1 value" });
+    const row = () => form.getByText(/^issue\.title matches pattern/).closest("li")!;
+    await enter(value, "^\\[fixture\\] Crash");
+    await waitFor(() => expect(form.getByText(/Hermes would start a task with this prompt/)).toBeTruthy());
+    expect(row().className).toBe("pass");
+
+    await enter(value, "(a+)+$");
+    await waitFor(() => expect(form.getByText(/A pattern takes too long to test on this event/)).toBeTruthy());
+    expect(form.getByText(/Hermes may stall on it too/)).toBeTruthy();
+    expect(form.getByText("The preview can't tell whether Hermes would start a task.")).toBeTruthy();
+    expect(row().className).toBe("too-slow");
+    expect(document.querySelector(".automation-rendered")).toBeNull();
+
+    // The stuck worker was replaced: the next pattern is still tested.
+    await enter(value, "^Nothing");
+    await waitFor(() => expect(form.getByText(/would record it as filtered out/)).toBeTruthy());
+    expect(row().className).toBe("fail");
+    expect(form.queryByText(/takes too long/)).toBeNull();
   });
 
   it("shows the delivery history with states, a link to the task's chat, and a retry that asks first", async () => {

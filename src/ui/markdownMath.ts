@@ -7,7 +7,7 @@ import { mathFromMarkdown } from "mdast-util-math";
 import type { Extension as FromMarkdownExtension } from "mdast-util-from-markdown";
 import type { Parent } from "mdast";
 import type { InlineMath } from "mdast-util-math";
-import type { Code, Construct, Effects, Extension, State } from "micromark-util-types";
+import type { Code, Construct, Effects, Extension, State, TokenizeContext } from "micromark-util-types";
 import type { Processor } from "unified";
 
 const DOLLAR = 36;
@@ -47,11 +47,22 @@ const closeBracket = { construct: closing("\\]"), afterBlank: true };
 type Close = typeof closeDollar;
 
 /**
+ * Per paragraph (micromark tokenizes each one's text in a context of its own), where a formula of each kind first ran
+ * to the paragraph's end unclosed. One of that kind starting later scans the same text from the same state, only
+ * stricter about closing at once, so it can't close either. Not scanning again keeps `$a $a $a …` linear (#490).
+ */
+const unclosedFrom = new WeakMap<TokenizeContext, Map<Close, number>>();
+
+/**
  * A formula's source after its opening delimiter, up to `close`: its lines, as `mathTextData` and line endings, which
  * mdast-util-math collects into the node's value. A backslash takes the character after it along, so `\$` in `$…$` and
  * `\\` before a `)` don't end the formula. A formula can't be empty, nor run past the paragraph it starts in.
  */
-function formula(effects: Effects, ok: State, nok: State, close: Close): State {
+function formula(context: TokenizeContext, effects: Effects, ok: State, nok: State, close: Close): State {
+  const from = context.now().offset;
+  let unclosed = unclosedFrom.get(context);
+  if (!unclosed) unclosedFrom.set(context, (unclosed = new Map()));
+  if (from > (unclosed.get(close) ?? Infinity)) return nok;
   const first = close === closeParen || close === closeBracket ? BACKSLASH : DOLLAR;
   let empty = true;
   let previous: Code = null;
@@ -81,7 +92,10 @@ function formula(effects: Effects, ok: State, nok: State, close: Close): State {
     return code === BACKSLASH ? escaped : inside;
   };
   const inside: State = (code) => {
-    if (code === null) return nok(code);
+    if (code === null) {
+      if (from < (unclosed.get(close) ?? Infinity)) unclosed.set(close, from);
+      return nok(code);
+    }
     if (lineEnding(code)) {
       data(false);
       effects.enter("lineEnding");
@@ -111,11 +125,11 @@ const dollarMath: Construct = {
       if (code === DOLLAR) {
         effects.consume(code);
         effects.exit("mathTextSequence");
-        return formula(effects, ok, nok, closeDollars);
+        return formula(this, effects, ok, nok, closeDollars);
       }
       if (blank(code)) return nok(code);
       effects.exit("mathTextSequence");
-      return formula(effects, ok, nok, closeDollar)(code);
+      return formula(this, effects, ok, nok, closeDollar)(code);
     };
     return (code) => {
       effects.enter("mathText");
@@ -135,7 +149,7 @@ const backslashMath: Construct = {
       if (code !== 40 && code !== 91) return nok(code);
       effects.consume(code);
       effects.exit("mathTextSequence");
-      return formula(effects, ok, nok, code === 40 ? closeParen : closeBracket);
+      return formula(this, effects, ok, nok, code === 40 ? closeParen : closeBracket);
     };
     return (code) => {
       effects.enter("mathText");

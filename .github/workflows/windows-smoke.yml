@@ -2,8 +2,9 @@ name: windows-smoke
 
 # A real sign-in and send on Windows (ADR 0069, #308): builds the app as windows.yml does (plus WebView2's DevTools port in
 # the window config), starts the stand-in Hermes dashboard, attaches msedgedriver to the app's WebView2 and drives the
-# verify skill's sign-in and send recipes through wd.mjs. Screenshots, the page's errors, the WebView2 console log, the
-# driver log and the stand-in's request log are uploaded as artifacts. Started by hand: about ten minutes on a warm cache.
+# verify skill's sign-in and send recipes through wd.mjs, then checks that a page in the Preview can't call the app's
+# commands (#466). Screenshots, the page's errors, the WebView2 console log, the driver log, the stand-in's request log
+# and the Preview probe's log are uploaded as artifacts. Started by hand: about ten minutes on a warm cache.
 
 on:
   workflow_dispatch:

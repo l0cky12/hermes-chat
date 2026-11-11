@@ -251,3 +251,74 @@ describe("The Delete question", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 });
+
+describe("A copied profile, whose chats keep the ids they had", () => {
+  it("lists its own copy of a chat deleted, or being archived, in the profile it was copied from, and gets none of that one's pins", async () => {
+    const { server, hermes } = await listed(row("a", 1), row("b", 2), row("c", 3, { pinned: true }));
+    server.otherProfiles = { work: [row("a", 1), row("b", 2), row("c", 3, { pinned: true })] };
+    const shown = () => hermes.getSnapshot().chats.filter((c) => !c.archived).map((c) => c.id).sort();
+    expect(await hermes.delete("a")).toBe(true);
+    const answer = hold(server, "PATCH /api/sessions/b");
+    const archiving = hermes.archive("b");
+    // A Settle whose write fails stays wanted, to be written again.
+    server.rest["PATCH /api/sessions/c"] = () => Promise.reject(new Error("The dashboard answered 503"));
+    await hermes.settle("c");
+    delete server.rest["PATCH /api/sessions/c"];
+    expect(shown()).toEqual(["c"]);
+
+    await hermes.switchProfile("work");
+    await hermes.sync();
+    expect(shown()).toEqual(["a", "b", "c"]);
+    expect(hermes.getSnapshot().chats.find((c) => c.id === "c")).toMatchObject({ settled: false });
+    expect(server.restRequests.filter((r) => r.method === "PATCH" && new URLSearchParams(r.query).get("profile") === "work")).toEqual([]);
+    answer();
+    await archiving;
+  });
+
+  it("a pin write that ends after the owner switched to the copy says nothing there", async () => {
+    const { server, hermes } = await listed(row("c", 1, { pinned: true }));
+    server.otherProfiles = { work: [row("c", 1, { pinned: true })] };
+    const answer = hold(server, "PATCH /api/sessions/c", () => Promise.reject(new Error("The dashboard answered 503")));
+    const settling = hermes.settle("c");
+    await hermes.switchProfile("work");
+    await hermes.sync();
+    answer();
+    await settling;
+    expect(hermes.getSnapshot().syncError).toBeUndefined();
+    expect(hermes.getSnapshot().chats.find((c) => c.id === "c")).toMatchObject({ settled: false });
+  });
+
+  it("a send cut off by switching to the copy leaves the copy's chat as it is", async () => {
+    const { server, hermes } = await listed(row("c", 1, { pinned: false }));
+    server.otherProfiles = { work: [row("c", 1, { pinned: true })] };
+    // The copy's list is kept on this computer from a visit before.
+    await hermes.switchProfile("work");
+    await hermes.sync();
+    await hermes.switchProfile("default");
+    await hermes.sync();
+    await hermes.open("c");
+    server.handlers["prompt.submit"] = () => {};
+    const sending = hermes.send("c", "Check the disks");
+    while (!server.requests.some((r) => r.method === "prompt.submit")) await tick();
+    await hermes.switchProfile("work");
+    expect(await sending).toMatchObject({ delivery: "unknown" });
+    expect(hermes.getSnapshot().chats.find((c) => c.id === "c")).toMatchObject({ settled: false });
+    expect(hermes.getSnapshot().chats.find((c) => c.id === "c")?.running).toBeFalsy();
+  });
+
+  it("a chat still loading when the owner switches to the copy leaves no load error on the copy's chat", async () => {
+    const { server, hermes } = await listed(row("c", 1));
+    server.otherProfiles = { work: [row("c", 1)] };
+    // The copy's list is kept on this computer from a visit before.
+    await hermes.switchProfile("work");
+    await hermes.sync();
+    await hermes.switchProfile("default");
+    await hermes.sync();
+    server.handlers["session.resume"] = () => {};
+    const opening = hermes.open("c");
+    while (!server.requests.some((r) => r.method === "session.resume")) await tick();
+    await hermes.switchProfile("work");
+    await opening;
+    expect(hermes.getSnapshot().chats.find((c) => c.id === "c")?.items).toEqual([]);
+  });
+});
