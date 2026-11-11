@@ -54,7 +54,7 @@ async function expectSoon(ok: () => boolean, ms = 3000) {
 
 const leaves = (value: unknown): unknown[] => (value !== null && typeof value === "object" ? Object.values(value).flatMap(leaves) : [value]);
 
-const writesSent =(server: FakeHermes) => server.restRequests.filter((r: RestRequest) => r.method !== "GET");
+const writesSent = (server: FakeHermes) => server.restRequests.filter((r: RestRequest) => r.method !== "GET");
 const rpcSent = (server: FakeHermes, method: string) => server.requests.filter((r) => r.method === method);
 
 describe("capabilities over the transport", () => {
