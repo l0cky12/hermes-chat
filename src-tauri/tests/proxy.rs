@@ -1,5 +1,4 @@
-//! The dashboard client goes straight to the dashboard even when the environment names a proxy (#479). Its own test
-//! binary, because the proxy variables are read for the whole process.
+//! Its own test binary, because the proxy variables are read for the whole process.
 
 use hermes_chat::transport;
 use reqwest::header::HeaderMap;
@@ -8,7 +7,6 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-/// A listener that writes down the first bytes of every connection and answers each with an empty 200.
 async fn recording() -> (u16, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -43,7 +41,6 @@ async fn a_proxy_in_the_environment_never_sees_a_dashboard_request() {
     }
     let http = transport::client(&HeaderMap::new()).unwrap();
 
-    // The SSH route: the sign-in tunnel's local end.
     let sign_in = http
         .post(format!("http://127.0.0.1:{dashboard_port}/api/auth/password-login"))
         .body(r#"{"username":"liam","password":"correct-horse-battery-staple"}"#)
@@ -55,7 +52,6 @@ async fn a_proxy_in_the_environment_never_sees_a_dashboard_request() {
     assert!(to_proxy.is_empty(), "the proxy saw the sign-in: {to_proxy:?}");
     assert!(dashboard.lock().unwrap().iter().any(|r| r.contains("correct-horse-battery-staple")), "the tunnel got the sign-in");
 
-    // A URL route: its socket never goes through a proxy, so its requests don't either.
     let _ = http.get("http://hermes.invalid/api/status").timeout(Duration::from_secs(5)).send().await;
 
     let seen = proxy.lock().unwrap().clone();

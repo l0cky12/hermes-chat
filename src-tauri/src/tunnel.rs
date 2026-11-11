@@ -72,7 +72,7 @@ async fn open_through(program: &str, target: &str, remote_port: u16, quick: Opti
             "-N",
             "-o",
             "BatchMode=yes",
-            // With the owner's ControlMaster, the forward would live in their shared connection and outlive this ssh.
+            // Else the owner's ControlPath joins their shared connection, whose ControlPersist keeps the forward after this ssh.
             "-o",
             "ControlMaster=no",
             "-o",
@@ -101,14 +101,13 @@ async fn open_through(program: &str, target: &str, remote_port: u16, quick: Opti
 
     let address = end.address(&child).map_err(|e| TunnelError::Spawn(e.to_string()))?;
     let stderr = Stderr::default();
-    if let Some(e) = child.stderr.take() {
-        stderr.drain(e);
-    }
+    let drained = child.stderr.take().map(|e| stderr.drain(e));
     let deadline = tokio::time::Instant::now() + ready_within;
     loop {
         if child.try_wait().map_err(|e| TunnelError::Spawn(e.to_string()))?.is_some() {
-            // Let the drain catch ssh's last words.
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            if let Some(drained) = drained {
+                let _ = tokio::time::timeout(Duration::from_secs(1), drained).await;
+            }
             return Err(TunnelError::Ssh(stderr.text()));
         }
         match server_page::connect(&address).await {
@@ -160,11 +159,9 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
-    /// A stand-in for ssh: it writes its arguments to `<dir>/args`, one per line, and the local end it was told to
-    /// listen on (`-L <listen>:<host>:<port>`) to `<dir>/listen`, takes a second to "sign in", then listens there and
-    /// forwards each connection to `<host>:<port>` here. As real ssh with `ExitOnForwardFailure=yes`, it exits 255 if
-    /// it can't listen. With `<dir>/chatty`, it prints 128 KiB to stderr for each connection before forwarding it, as
-    /// ssh with `LogLevel DEBUG` does over a busy tunnel.
+    /// A stand-in for ssh: it writes the local end it was told to listen on (`-L <listen>:<host>:<port>`) to
+    /// `<dir>/listen`, takes a second to "sign in", then listens there and forwards each connection to `<host>:<port>`
+    /// here. As real ssh with `ExitOnForwardFailure=yes`, it exits 255 if it can't listen.
     #[cfg(unix)]
     const FAKE_SSH: &str = r#"
 import os, socket, sys, threading, time
@@ -316,6 +313,18 @@ fn main() {
             self
         }
 
+        /// From now on it prints 128 KiB to stderr for each connection before forwarding it.
+        #[cfg(unix)]
+        fn chatty(self) -> FakeSsh {
+            std::fs::write(self.dir.join("chatty"), "").unwrap();
+            self
+        }
+
+        #[cfg(unix)]
+        fn args(&self) -> Vec<String> {
+            std::fs::read_to_string(self.dir.join("args")).unwrap().lines().map(str::to_owned).collect()
+        }
+
         async fn listen(&self) -> String {
             for _ in 0..200 {
                 if let Ok(listen) = std::fs::read_to_string(self.dir.join("listen")) {
@@ -404,7 +413,6 @@ fn main() {
         SignIn { opened, dashboard, stolen }
     }
 
-    /// Posts the password to the tunnel on `port` and waits up to five seconds for an answer.
     async fn post_password(port: u16) {
         let body = format!(r#"{{"username":"liam","password":"{PASSWORD}"}}"#);
         let mut s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
@@ -446,31 +454,26 @@ fn main() {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_chatty_ssh_keeps_forwarding() {
-        let ssh = FakeSsh::new("chatty");
-        std::fs::write(ssh.dir.join("chatty"), "").unwrap();
+        let ssh = FakeSsh::new("chatty").chatty();
         let signed = sign_in(&ssh, false).await;
         signed.opened.expect("the tunnel opens");
         assert!(signed.dashboard.iter().any(|r| r.contains(PASSWORD)), "the sign-in reached the dashboard through a chatty ssh");
     }
 
-    /// With the owner's `ControlMaster auto`, the forward would be set up in their shared connection and outlive the
-    /// tunnel's ssh, as ADR 0114 says for server pages (#479). The first value ssh reads for an option wins, so options
-    /// on the command line come before the owner's config.
+    /// The first value ssh reads for an option wins, so options on the command line come before the owner's config.
     #[cfg(unix)]
     #[tokio::test]
     async fn the_tunnels_ssh_never_shares_the_owners_connection() {
         let ssh = FakeSsh::new("control-master");
         let signed = sign_in(&ssh, false).await;
         signed.opened.expect("the tunnel opens");
-        let args = std::fs::read_to_string(ssh.dir.join("args")).unwrap();
-        let args: Vec<&str> = args.lines().collect();
+        let args = ssh.args();
         let target = args.iter().position(|a| *a == "--").expect("the target comes after --");
         for option in ["ControlMaster=no", "ControlPath=none"] {
-            assert!(args[..target].windows(2).any(|w| w == ["-o", option]), "ssh got -o {option}: {args:?}");
+            assert!(args[..target].windows(2).any(|w| w[0] == "-o" && w[1] == option), "ssh got -o {option}: {args:?}");
         }
     }
 
-    /// The processes whose command line names `needle`.
     #[cfg(target_os = "linux")]
     fn running_with(needle: &str) -> Vec<String> {
         let Ok(procs) = std::fs::read_dir("/proc") else { return Vec::new() };
@@ -481,13 +484,9 @@ fn main() {
             .collect()
     }
 
-    /// A real ssh and sshd, with the owner's config free to turn on `ControlMaster auto` and `ControlPersist`:
-    /// `HERMES_TEST_SSH` runs ssh (a wrapper that adds `-F <config>` is fine), and `HERMES_TEST_SSH_TARGET` is a host
-    /// it signs in to without a prompt. The sign-in reaches the dashboard, and no ssh is left holding the tunnel's
-    /// forward once it closes (#479).
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    #[ignore = "needs a real ssh and sshd: set HERMES_TEST_SSH and HERMES_TEST_SSH_TARGET"]
+    #[ignore = "needs a real ssh (HERMES_TEST_SSH, a wrapper adding -F <config> is fine) and a host it signs in to without a prompt (HERMES_TEST_SSH_TARGET); its config may turn on ControlMaster auto and ControlPersist"]
     async fn through_a_real_ssh_the_sign_in_works_and_nothing_outlives_the_tunnel() {
         let ssh = std::env::var("HERMES_TEST_SSH").expect("HERMES_TEST_SSH");
         let target = std::env::var("HERMES_TEST_SSH_TARGET").expect("HERMES_TEST_SSH_TARGET");

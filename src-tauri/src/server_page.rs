@@ -564,7 +564,7 @@ mod job {
 pub(crate) struct Stderr(Arc<Mutex<Vec<u8>>>);
 
 impl Stderr {
-    pub(crate) fn drain(&self, mut from: tokio::process::ChildStderr) {
+    pub(crate) fn drain(&self, mut from: tokio::process::ChildStderr) -> tokio::task::JoinHandle<()> {
         let kept = self.0.clone();
         tokio::spawn(async move {
             let mut buf = [0u8; 1024];
@@ -577,7 +577,7 @@ impl Stderr {
                 let over = k.len().saturating_sub(STDERR_KEPT);
                 k.drain(..over);
             }
-        });
+        })
     }
 
     pub(crate) fn text(&self) -> String {

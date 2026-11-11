@@ -175,8 +175,7 @@ struct Connecting {
     stopped: std::collections::VecDeque<String>,
 }
 
-/// The most attempts stopped before they began kept. A stop can also come just after its attempt finished, and then
-/// nothing ever takes it out.
+/// The most attempts stopped before they began kept.
 const STOPPED_KEPT: usize = 256;
 
 /// How long opening a connection may take, all steps together, so a server that stops answering midway can't keep
@@ -270,17 +269,15 @@ async fn hermes_connect(
     })
     .await;
     match opened {
-        Ok((connection, route)) => {
+        Attempt::StoppedFirst => Err(CONNECT_STOPPED.into()),
+        Attempt::Ran(Ok((connection, route))) => {
             // Server pages opened through another SSH target, or for a URL sign-in none, belong to the server left behind.
             pages.close_other_targets(connection.ssh_target.as_deref(), SIGNED_IN_ELSEWHERE);
             *slot = Some(connection);
             Ok(route)
         }
-        Err(e) => {
-            // An attempt stopped before it began left the connection, and its pages, as they were.
-            if slot.is_none() {
-                pages.close_all(SIGNED_OUT);
-            }
+        Attempt::Ran(Err(e)) => {
+            pages.close_all(SIGNED_OUT);
             Err(e)
         }
     }
@@ -293,8 +290,9 @@ const REOPEN_LIMITS: transport::StepLimits = transport::StepLimits { ticket: QUI
 /// Opens `/api/ws` for `profile` again on the connection held now, after its socket closed. The SSH tunnel and the
 /// sign-in are kept, so this mints a ticket and opens the socket, nothing more. Transfers stop as on any reconnect (ADR
 /// 0023), and so do Screens, whose lease came over the closed socket. Any failure, a stop included, closes the whole
-/// connection, so the webview opens it again from the start with `hermes_connect`.
+/// connection and its server pages, so the webview opens it again from the start with `hermes_connect`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn hermes_reopen(
     state: State<'_, AppState>,
     transfers: State<'_, Transfers>,
@@ -317,6 +315,10 @@ async fn hermes_reopen(
         dashboard.open_pipe_within(&profile, move |e| drop(on_event.send(e)), Some(REOPEN_LIMITS), &steps).await.map_err(|e| e.to_string())
     })
     .await;
+    let opened = match opened {
+        Attempt::StoppedFirst => Err(CONNECT_STOPPED.into()),
+        Attempt::Ran(opened) => opened,
+    };
     match opened {
         Ok(pipe) => {
             conn.pipe = Arc::new(pipe);
@@ -330,19 +332,24 @@ async fn hermes_reopen(
     }
 }
 
-/// Runs `opening` apart as the attempt the webview names `attempt`, so `hermes_connect_cancel` can stop it. `begin`
-/// runs first, unless the attempt was stopped before it began.
+/// How an attempt `as_attempt` was given went: stopped by `hermes_connect_cancel` before it began, or run.
+enum Attempt<T> {
+    StoppedFirst,
+    Ran(Result<T, String>),
+}
+
+/// Runs `begin`, then `opening` apart, as the attempt the webview names `attempt`, so `hermes_connect_cancel` can stop it.
 async fn as_attempt<T: Send + 'static>(
     state: &AppState,
     attempt: String,
     begin: impl FnOnce(),
     opening: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
-) -> Result<T, String> {
+) -> Attempt<T> {
     let task = {
         let mut connecting = state.2.lock().unwrap();
         if let Some(i) = connecting.stopped.iter().position(|a| *a == attempt) {
             connecting.stopped.remove(i);
-            return Err(CONNECT_STOPPED.into());
+            return Attempt::StoppedFirst;
         }
         begin();
         let task = tokio::spawn(opening);
@@ -356,11 +363,11 @@ async fn as_attempt<T: Send + 'static>(
             connecting.now = None;
         }
     }
-    match opened {
+    Attempt::Ran(match opened {
         Ok(opened) => opened,
         Err(e) if e.is_cancelled() => Err(CONNECT_STOPPED.into()),
         Err(e) => Err(e.to_string()),
-    }
+    })
 }
 
 /// Opens the tunnel or resolves the URL, checks the dashboard there is Hermes, and the one `expect_server` names, then
@@ -2081,8 +2088,6 @@ mod tests {
         .await
     }
 
-    /// #480: attempt B waits behind A for the connection, and the webview stops it meanwhile. A signs in. B then
-    /// gives up without touching A's connection, which the webview now uses.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_connect_stopped_before_it_began_leaves_the_live_connection_alone() {
         use tauri::Manager;
@@ -2099,7 +2104,6 @@ mod tests {
         assert_eq!(pages.len(), 1, "the server page is still open");
     }
 
-    /// #480: a sign-in that fails leaves the app signed out, so the server pages it had go with it (server_page.rs).
     #[tokio::test(flavor = "multi_thread")]
     async fn a_failed_connect_closes_the_server_pages() {
         use tauri::Manager;
@@ -2118,7 +2122,6 @@ mod tests {
         assert!(pages.is_empty(), "the server pages closed with the sign-in");
     }
 
-    /// #480: a reopen that fails, a stop included, drops the connection, so its server pages close too.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_failed_reopen_closes_the_server_pages() {
         use tauri::Manager;
@@ -2146,8 +2149,6 @@ mod tests {
         assert!(pages.is_empty(), "the server pages closed with the connection");
     }
 
-    /// #480: the webview can stop an attempt just after it finished. That stop has nothing left to stop, and the
-    /// names of such stops aren't kept without end.
     #[tokio::test(flavor = "multi_thread")]
     async fn stops_that_came_too_late_are_not_kept_without_end() {
         use tauri::Manager;
