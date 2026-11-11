@@ -26,6 +26,7 @@ import { useModal } from "./modal";
 import { FileEditor } from "./FileEditor";
 import { EDIT_MAX_BYTES } from "../hermes/textEdit";
 import { errorText } from "../hermes/values";
+import { shownName, shownPath } from "../hermes/outputs";
 
 /** A file's preview, from the click until its contents are read. `ask`: its type is unknown, and it may be text. */
 export type Preview =
@@ -86,9 +87,9 @@ export function FileBrowser({
   // The file open in the editor, and what the last save said.
   const [editing, setEditing] = useState<RemoteEntry>();
   const [saved, setSaved] = useState<string>();
-  const shownPath = useRef<string | undefined>(undefined);
+  const listedPath = useRef<string | undefined>(undefined);
   const uploadButton = useRef<HTMLButtonElement>(null);
-  shownPath.current = listing?.path;
+  listedPath.current = listing?.path;
   // Only the latest listing and preview asked for land; an older answer arriving late is dropped.
   const listSeq = useRef(0);
   const previewSeq = useRef(0);
@@ -185,7 +186,7 @@ export function FileBrowser({
     const { picked, listing: at } = uploading;
     setUploading(undefined);
     // The folder is listed again once Hermes answers, when it is still the one on screen.
-    void files.upload(at, picked, collision).catch((e) => setPickError(errorOf(e).message)).finally(() => shownPath.current === at.path && load(at.path, true));
+    void files.upload(at, picked, collision).catch((e) => setPickError(errorOf(e).message)).finally(() => listedPath.current === at.path && load(at.path, true));
   };
 
   const onListKey = (e: KeyboardEvent) => {
@@ -243,12 +244,12 @@ export function FileBrowser({
                     </span>
                   )}
                   {i === trail.length - 1 ? (
-                    <span aria-current="page" className="mono" title={listing.path}>
-                      {c.label}
+                    <span aria-current="page" className="mono" title={shownPath(listing.path)}>
+                      {shownPath(c.label)}
                     </span>
                   ) : (
-                    <button className="mono" disabled={!connected} title={c.path} onClick={() => load(c.path)}>
-                      {c.label}
+                    <button className="mono" disabled={!connected} title={shownPath(c.path)} onClick={() => load(c.path)}>
+                      {shownPath(c.label)}
                     </button>
                   )}
                 </li>
@@ -307,7 +308,7 @@ export function FileBrowser({
           <span>
             {error.path ? (
               <>
-                Couldn't open <span className="mono">{error.path}</span>:{" "}
+                Couldn't open <span className="mono">{shownPath(error.path)}</span>:{" "}
               </>
             ) : (
               "Couldn't list the starting folder: "
@@ -359,14 +360,14 @@ export function FileBrowser({
                       <td className="files-name">
                         <button
                           disabled={!connected || entry.kind === "broken-link"}
-                          title={entry.linkTarget ? `${entry.name} → ${entry.linkTarget}` : entry.path}
+                          title={entry.linkTarget ? `${shownName(entry.name)} → ${shownPath(entry.linkTarget)}` : shownPath(entry.path)}
                           onClick={() => open(entry)}
                         >
                           <EntryIcon entry={entry} />
-                          <span className="files-label">{entry.name}</span>
+                          <span className="files-label">{shownName(entry.name)}</span>
                           {entry.linkTarget && (
                             <span className="files-link muted">
-                              <Link2 size={12} aria-label="Symbolic link to" /> <span className="mono">{entry.linkTarget}</span>
+                              <Link2 size={12} aria-label="Symbolic link to" /> <span className="mono">{shownPath(entry.linkTarget)}</span>
                             </span>
                           )}
                         </button>
@@ -576,7 +577,7 @@ function Transfers({ files }: { files: RemoteFiles }) {
                   ) : (
                     <Download size={14} aria-hidden />
                   )}
-                  <span className="files-transfer-name">{t.name}</span>
+                  <span className="files-transfer-name">{shownName(t.name)}</span>
                   <span className="muted small">
                     {t.state === "picking"
                       ? "Choosing where to save it…"
@@ -606,24 +607,24 @@ function Transfers({ files }: { files: RemoteFiles }) {
                         From this computer: <span className="mono">{t.localName}</span>
                       </span>
                       <span>
-                        To the server: <span className="mono">{t.serverPath}</span>
+                        To the server: <span className="mono">{shownPath(t.serverPath)}</span>
                       </span>
                     </>
                   ) : (
                     <>
                       <span>
-                        From the server: <span className="mono">{t.serverPath}</span>
+                        From the server: <span className="mono">{shownPath(t.serverPath)}</span>
                       </span>
                       {t.dest && (
                         <span>
-                          To this computer: <span className="mono">{t.dest}</span>
+                          To this computer: <span className="mono">{shownPath(t.dest)}</span>
                         </span>
                       )}
                     </>
                   )}
                 </div>
                 {t.state === "running" && (
-                  <progress className="files-progress" max={100} value={pct} aria-label={`${up ? "Uploading" : "Downloading"} ${t.name}`} aria-valuetext={pct !== undefined ? `${pct}%` : `${fmtSize(t.done)}`} />
+                  <progress className="files-progress" max={100} value={pct} aria-label={`${up ? "Uploading" : "Downloading"} ${shownName(t.name)}`} aria-valuetext={pct !== undefined ? `${pct}%` : `${fmtSize(t.done)}`} />
                 )}
                 {t.error && (
                   <p className="files-transfer-error" role="alert">
@@ -636,7 +637,7 @@ function Transfers({ files }: { files: RemoteFiles }) {
                   Cancel
                 </button>
               ) : (
-                <button className="icon-btn" aria-label={`Dismiss ${t.name}`} title="Dismiss" onClick={() => files.dismiss(t.id)}>
+                <button className="icon-btn" aria-label={`Dismiss ${shownName(t.name)}`} title="Dismiss" onClick={() => files.dismiss(t.id)}>
                   <X size={14} />
                 </button>
               )}
@@ -672,9 +673,9 @@ export function PreviewPane({
   const why = files?.cantDownload(entry);
   const cantDownload = why ?? (connected ? undefined : "Hermes isn't connected.");
   return (
-    <aside className="files-preview" aria-label={`Preview of ${entry.name}`}>
+    <aside className="files-preview" aria-label={`Preview of ${shownName(entry.name)}`}>
       <div className="files-preview-head">
-        <h2 title={entry.name}>{entry.name}</h2>
+        <h2 title={shownName(entry.name)}>{shownName(entry.name)}</h2>
         <div className="files-preview-actions">
           {onEdit && result?.kind === "text" && result.size <= EDIT_MAX_BYTES && (
             <button className="btn" disabled={!connected} title="Edit this text file and save it back to the server" onClick={onEdit}>
@@ -694,7 +695,7 @@ export function PreviewPane({
       {entry.kind === "file" && why && <p className="files-preview-note muted small">{why}</p>}
       <dl className="files-meta">
         <dt>Path</dt>
-        <dd className="mono">{result?.path ?? entry.path}</dd>
+        <dd className="mono">{shownPath(result?.path ?? entry.path)}</dd>
         {entry.linkTarget && (
           <>
             <dt>Link</dt>

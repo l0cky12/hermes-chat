@@ -145,7 +145,11 @@ const components: Components = {
       {children}
     </PreviewLink>
   ),
-  img: ({ src, alt, title }) => <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} title={title} />,
+  // Keyed by address: a click loads one image, and Markdown whose text changes under it can put another in its place (#488).
+  img: ({ src, alt, title }) => {
+    const address = typeof src === "string" ? src : undefined;
+    return <MarkdownImage key={address} src={address} alt={alt} title={title} />;
+  },
 };
 
 /**
