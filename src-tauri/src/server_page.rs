@@ -1044,24 +1044,37 @@ async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started
     if end.named_in(&said) {
         return Err(ServerPageError::Ssh(said));
     }
-    let (listener, ipv6) = listen().await.map_err(|e| ServerPageError::Io(e.to_string()))?;
+    let (listener, ipv6) = listen(cfg!(windows)).await.map_err(|e| ServerPageError::Io(e.to_string()))?;
     Ok(Started { child, end, address, stderr, listener, ipv6 })
 }
 
-/// The tunnel's listeners: on `127.0.0.1`, and on `[::1]` at the same port. A page's name under `localhost`
-/// (`Jar::host`) resolves to both, so a program that listened on `[::1]` at the port would otherwise get the frame's
-/// requests and cookies (ADR 0143). The second is `None` when this computer has no `::1`, where nothing can listen.
-async fn listen() -> std::io::Result<(TcpListener, Option<TcpListener>)> {
+/// The tunnel's listeners: on `127.0.0.1`, and with `ipv6` on `[::1]` at the same port. On Windows a page's name under
+/// `localhost` (`Jar::host`) resolves to both, so a program that listened on `[::1]` at the port would otherwise get the
+/// frame's requests and cookies (ADR 0143). The second is `None` without `ipv6`, and when this computer has no `::1`,
+/// where nothing can listen. Any other failure there tries another port, since something may hold that one.
+async fn listen(ipv6: bool) -> std::io::Result<(TcpListener, Option<TcpListener>)> {
     for _ in 0..16 {
         let ipv4 = TcpListener::bind(("127.0.0.1", 0)).await?;
+        if !ipv6 {
+            return Ok((ipv4, None));
+        }
         let port = ipv4.local_addr()?.port();
         match TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)).await {
             Ok(ipv6) => return Ok((ipv4, Some(ipv6))),
-            Err(e) if e.kind() == std::io::ErrorKind::AddrNotAvailable => return Ok((ipv4, None)),
+            Err(e) if no_ipv6(&e) => return Ok((ipv4, None)),
             Err(_) => continue,
         }
     }
     Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "no port was free on both 127.0.0.1 and [::1]"))
+}
+
+/// Whether binding `[::1]` failed because this computer has no IPv6 or no `::1`.
+fn no_ipv6(e: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    const NO_FAMILY: i32 = libc::EAFNOSUPPORT;
+    #[cfg(windows)]
+    const NO_FAMILY: i32 = windows_sys::Win32::Networking::WinSock::WSAEAFNOSUPPORT;
+    e.kind() == std::io::ErrorKind::AddrNotAvailable || e.raw_os_error() == Some(NO_FAMILY)
 }
 
 /// Whether anything answers through a new tunnel. ssh closing the connection with nothing said means the server
@@ -1187,7 +1200,7 @@ mod tests {
     #[cfg(any(target_os = "linux", windows))]
     #[tokio::test]
     async fn the_tunnel_listens_on_both_loopbacks_at_one_port_and_relays_both() {
-        let (ipv4, ipv6) = listen().await.unwrap();
+        let (ipv4, ipv6) = listen(true).await.unwrap();
         let ipv6 = ipv6.expect("this computer has ::1");
         let port = ipv4.local_addr().unwrap().port();
         assert_eq!(ipv6.local_addr().unwrap(), (std::net::Ipv6Addr::LOCALHOST, port).into());
@@ -1205,6 +1218,20 @@ mod tests {
         }
         ipv4.abort();
         ipv6.abort();
+    }
+
+    #[tokio::test]
+    async fn a_computer_without_ipv6_gets_the_ipv4_listener_alone() {
+        #[cfg(unix)]
+        let no_family = libc::EAFNOSUPPORT;
+        #[cfg(windows)]
+        let no_family = windows_sys::Win32::Networking::WinSock::WSAEAFNOSUPPORT;
+        assert!(no_ipv6(&std::io::Error::from_raw_os_error(no_family)), "IPv6 is off");
+        assert!(no_ipv6(&std::io::ErrorKind::AddrNotAvailable.into()), "no ::1");
+        assert!(!no_ipv6(&std::io::ErrorKind::AddrInUse.into()), "something holds [::1] at the port: try another");
+        assert!(!no_ipv6(&std::io::ErrorKind::PermissionDenied.into()));
+        let (_, ipv6) = listen(false).await.unwrap();
+        assert!(ipv6.is_none(), "Linux serves its pages at 127.0.0.1 alone");
     }
 
     #[test]
