@@ -2696,7 +2696,12 @@ export class FakeHermes {
   }
 
   private frame(f: unknown) {
-    this.onEvent?.({ kind: "frame", text: JSON.stringify(f) });
+    this.raw(JSON.stringify(f));
+  }
+
+  /** Sends the client one frame as it is, so a test can send a malformed or out-of-spec one. */
+  raw(text: string) {
+    this.onEvent?.({ kind: "frame", text });
   }
 }
 

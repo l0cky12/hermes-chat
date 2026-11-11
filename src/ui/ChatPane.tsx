@@ -20,6 +20,7 @@ import { SubagentsPanel, type SubagentsApi } from "./Subagents";
 import type { SubagentId } from "../hermes/subagents";
 import { SideQuestionPair } from "./SideQuestions";
 import { Markdown } from "./Markdown";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { SourceIcon, Spinner, StoredTime, composing, escapeRe, highlight } from "./bits";
 import { caretAfter, editStep, inputKind, type EditStep } from "./editKeys";
 import type { EditKind } from "../hermes/editHistory";
@@ -787,33 +788,34 @@ export function ChatPane({
               </ul>
             </div>
           )}
-          {blocks.map((b) =>
-            b.kind === "side" ? (
-              <SideQuestionPair key={b.id} question={b.question} onDismiss={onDismissSideQuestion} />
-            ) : (
-              <BlockView
-                key={b.id}
-                block={b}
-                live={!!chat.running && b === last}
-                query={finds && mayMatch(b, finds) ? q : ""}
-                offline={status !== "connected" || !!chat.loading}
-                movedAt={b.kind !== "tools" && isQuestion(b) ? movedAt : 0}
-                onAnswer={answer}
-                onQuestion={question}
-                listen={b.kind === "assistant" ? listen : undefined}
-                canRetry={b.kind === "user" && !!b.outgoing && canRetry}
-                onOutgoing={onOutgoing}
-                onBranch={branch && (b.kind === "user" || b.kind === "assistant") ? onBranch : undefined}
-                branchBlocked={branch && (b.kind === "user" || b.kind === "assistant") ? branch.blocked : undefined}
-                onReplay={replay && ((b.kind === "user" && turns.ofUser.has(b.id)) || (b.kind === "assistant" && turns.regenerable.has(b.id))) ? onReplay : undefined}
-                replayBlocked={replay && (b.kind === "user" || b.kind === "assistant") ? replay.blocked : undefined}
-                versions={turns.anchor.has(b.id) ? variants?.byTurn.get(turns.anchor.get(b.id)!) : undefined}
-                chatId={chat.id}
-                turn={turns.anchor.get(b.id)}
-                onPickVariant={onPickVariant}
-              />
-            ),
-          )}
+          {blocks.map((b) => (
+            <ErrorBoundary key={b.id} fallback={(error) => <UndrawnMessage id={b.id} error={error} />}>
+              {b.kind === "side" ? (
+                <SideQuestionPair question={b.question} onDismiss={onDismissSideQuestion} />
+              ) : (
+                <BlockView
+                  block={b}
+                  live={!!chat.running && b === last}
+                  query={finds && mayMatch(b, finds) ? q : ""}
+                  offline={status !== "connected" || !!chat.loading}
+                  movedAt={b.kind !== "tools" && isQuestion(b) ? movedAt : 0}
+                  onAnswer={answer}
+                  onQuestion={question}
+                  listen={b.kind === "assistant" ? listen : undefined}
+                  canRetry={b.kind === "user" && !!b.outgoing && canRetry}
+                  onOutgoing={onOutgoing}
+                  onBranch={branch && (b.kind === "user" || b.kind === "assistant") ? onBranch : undefined}
+                  branchBlocked={branch && (b.kind === "user" || b.kind === "assistant") ? branch.blocked : undefined}
+                  onReplay={replay && ((b.kind === "user" && turns.ofUser.has(b.id)) || (b.kind === "assistant" && turns.regenerable.has(b.id))) ? onReplay : undefined}
+                  replayBlocked={replay && (b.kind === "user" || b.kind === "assistant") ? replay.blocked : undefined}
+                  versions={turns.anchor.has(b.id) ? variants?.byTurn.get(turns.anchor.get(b.id)!) : undefined}
+                  chatId={chat.id}
+                  turn={turns.anchor.get(b.id)}
+                  onPickVariant={onPickVariant}
+                />
+              )}
+            </ErrorBoundary>
+          ))}
           {/* A reply waiting on the owner isn't thinking, and streamed thinking shows its own row. */}
           {chat.running && last?.kind !== "assistant" && last?.kind !== "thinking" && !(last && isWaiting(last)) && (
             <div className="msg assistant thinking">
@@ -1037,6 +1039,15 @@ const BlockView = memo(
     a.turn === b.turn &&
     a.onPickVariant === b.onPickVariant,
 );
+
+/** A block that threw while it was drawn, in its place, so the rest of the chat keeps working (ADR 0137). */
+function UndrawnMessage({ id, error }: { id: string; error: Error }) {
+  return (
+    <div className="msg error" role="alert" data-item={id}>
+      Hermes Chat couldn't show this message: {error.message || error.name}
+    </div>
+  );
+}
 
 /**
  * Under a message Hermes didn't take, or may not have: why, and Retry, which sends the same words and files again as a

@@ -320,3 +320,90 @@ describe("Hermes transport", () => {
     expect(server.requests.length).toBe(sent);
   });
 });
+
+describe("A malformed frame from the server (#476)", () => {
+  const event = (session_id: string, type: string, payload: unknown) => JSON.stringify({ jsonrpc: "2.0", method: "event", params: { type, session_id, payload } });
+
+  it.each(["null", "[]", "[1,2]", "5", '"event"', "true", '{"jsonrpc":"2.0","method":"event","params":null}', '{"jsonrpc":"2.0","method":"event","params":[1]}'])(
+    "is dropped: %s",
+    async (text) => {
+      const { server, hermes, chat, runtime } = await signedIn();
+      const id = await hermes.newChat();
+      expect(() => server.raw(text)).not.toThrow();
+      await hermes.send(id, "Still there?");
+      server.event(runtime(id), "message.start");
+      server.event(runtime(id), "message.complete", { text: "Yes.", status: "complete" });
+      expect(chat(id).items.map((i) => i.kind)).toEqual(["user", "assistant"]);
+      expect(chat(id).running).toBe(false);
+    },
+  );
+
+  it("ends the turn on a message.complete whose payload is null", async () => {
+    const { server, hermes, chat, runtime } = await signedIn();
+    const id = await hermes.newChat();
+    await hermes.send(id, "Anything?");
+    server.event(runtime(id), "message.start");
+    expect(chat(id).running).toBe(true);
+    expect(() => server.raw(event(runtime(id), "message.complete", null))).not.toThrow();
+    expect(chat(id).running).toBe(false);
+  });
+
+  it("connects when gateway.ready's payload is null", async () => {
+    const server = new FakeHermes();
+    server.readyPayload = null as never;
+    const hermes = await connect(server.openPipe);
+    expect(hermes.getSnapshot().status).toBe("connected");
+  });
+
+  it("keeps only the tool fields of the type they should be", async () => {
+    const { server, hermes, chat, runtime } = await signedIn();
+    const id = await hermes.newChat();
+    await hermes.send(id, "List the backups");
+    server.event(runtime(id), "message.start");
+    server.raw(event(runtime(id), "tool.start", { tool_id: "t1", name: { tool: "terminal" }, args: "ls", preview: 5 }));
+    server.raw(event(runtime(id), "tool.complete", { tool_id: "t1", summary: { lines: 3 }, duration_s: "2.5", result: "a\nb\nc" }));
+    expect(chat(id).items.at(-1)).toEqual({ kind: "tool", id: "t1", callId: "t1", name: "tool", status: "done", result: "a\nb\nc" });
+  });
+});
+
+describe("A frame field that can't be made text (#476)", () => {
+  const evil = { toString: null };
+  const event = (session_id: string, type: string, payload: unknown) => JSON.stringify({ jsonrpc: "2.0", method: "event", params: { type, session_id, payload } });
+
+  it.each([
+    ["tool.start", { tool_id: evil, name: "terminal" }],
+    ["tool.complete", { tool_id: evil }],
+    ["request.cancel", { id: "a1", reason: evil }],
+    ["btw.complete", { task_id: evil, text: "x" }],
+    ["error", { message: evil }],
+    ["message.complete", { status: "error", error: evil }],
+  ])("doesn't throw: %s", async (type, payload) => {
+    const { server, hermes, chat, runtime } = await signedIn();
+    const id = await hermes.newChat();
+    await hermes.send(id, "Go");
+    server.event(runtime(id), "message.start");
+    expect(() => server.raw(event(runtime(id), type, payload))).not.toThrow();
+    server.event(runtime(id), "message.complete", { text: "Done.", status: "complete" });
+    expect(chat(id).running).toBe(false);
+  });
+
+  it("keeps a tool's own `toString` fields in its arguments and result", async () => {
+    const { server, hermes, chat, runtime } = await signedIn();
+    const id = await hermes.newChat();
+    await hermes.send(id, "Go");
+    server.event(runtime(id), "message.start");
+    server.raw(event(runtime(id), "tool.start", { tool_id: "t1", name: "read", args: { toString: "keep me" } }));
+    server.raw(event(runtime(id), "tool.complete", { tool_id: "t1", result: { toString: "keep me too", other: 1 } }));
+    const tool = chat(id).items.at(-1);
+    expect(tool).toMatchObject({ kind: "tool", args: { toString: "keep me" } });
+    expect(tool?.kind === "tool" && tool.result).toContain("keep me too");
+  });
+
+  it("doesn't throw on an approval request whose command can't be made text", async () => {
+    const { server, hermes, runtime } = await signedIn();
+    const id = await hermes.newChat();
+    await hermes.send(id, "Go");
+    const frame = { jsonrpc: "2.0", id: "r1", method: "approval", params: { session_id: runtime(id), request_id: evil, command: evil, choices: ["once", "deny"] } };
+    expect(() => server.raw(JSON.stringify(frame))).not.toThrow();
+  });
+});
