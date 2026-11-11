@@ -6,11 +6,11 @@
 //! sends the password to is never free for another program to take while ssh signs in. On Windows ssh listens on a
 //! loopback port instead, and each connection to it is checked to reach ssh before anything is sent (ADR 0138).
 
-use crate::server_page::{self, LocalEnd, Stderr};
+use crate::server_page::{self, LocalEnd, Ssh, Stderr};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -31,7 +31,7 @@ pub enum TunnelError {
 
 /// A running `ssh -N -L` and the relay to it on `local_port`. Dropping it kills ssh and closes the relay.
 pub struct Tunnel {
-    _child: Child,
+    _ssh: Ssh,
     _end: LocalEnd,
     relay: tokio::task::AbortHandle,
     pub local_port: u16,
@@ -63,41 +63,44 @@ async fn open_through(program: &str, target: &str, remote_port: u16, quick: Opti
     let end = LocalEnd::new().map_err(|e| TunnelError::Spawn(format!("{}: {e}", LocalEnd::COULDNT)))?;
     let ready_within = quick.map_or(READY_TIMEOUT, |q| q * 2);
     let connect_timeout = quick.map(|q| format!("ConnectTimeout={}", q.as_secs().max(1)));
-    let mut child = background(program);
+    let mut command = background(program);
     if let Some(option) = &connect_timeout {
-        child.args(["-o", option]);
+        command.args(["-o", option]);
     }
-    let mut child = child
-        .args([
-            "-N",
-            "-o",
-            "BatchMode=yes",
-            // Else the owner's ControlPath joins their shared connection, whose ControlPersist keeps the forward after this ssh.
-            "-o",
-            "ControlMaster=no",
-            "-o",
-            "ControlPath=none",
-            "-o",
-            "ExitOnForwardFailure=yes",
-            "-o",
-            "ServerAliveInterval=15",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            "StreamLocalBindMask=0177",
-            "-o",
-            "StreamLocalBindUnlink=yes",
-            "-L",
-            &format!("{}:127.0.0.1:{remote_port}", end.listen()),
-            "--",
-            target,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| TunnelError::Spawn(e.to_string()))?;
+    let mut child = Ssh::start(
+        command
+            .args([
+                "-N",
+                "-o",
+                "BatchMode=yes",
+                // Else the owner's ControlPath joins their shared connection, whose ControlPersist keeps the forward after this ssh.
+                "-o",
+                "ControlMaster=no",
+                "-o",
+                "ControlPath=none",
+                // Nor fork to the background, leaving this process to exit and the forward running.
+                "-o",
+                "ForkAfterAuthentication=no",
+                "-o",
+                "ExitOnForwardFailure=yes",
+                "-o",
+                "ServerAliveInterval=15",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                "-o",
+                "StreamLocalBindMask=0177",
+                "-o",
+                "StreamLocalBindUnlink=yes",
+                "-L",
+                &format!("{}:127.0.0.1:{remote_port}", end.listen()),
+                "--",
+                target,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped()),
+    )
+    .map_err(|e| TunnelError::Spawn(e.to_string()))?;
 
     let address = end.address(&child).map_err(|e| TunnelError::Spawn(e.to_string()))?;
     let stderr = Stderr::default();
@@ -123,7 +126,7 @@ async fn open_through(program: &str, target: &str, remote_port: u16, quick: Opti
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| TunnelError::Spawn(e.to_string()))?;
     let local_port = listener.local_addr().map_err(|e| TunnelError::Spawn(e.to_string()))?.port();
     let relay = tokio::spawn(server_page::serve(listener, address)).abort_handle();
-    Ok(Tunnel { _child: child, _end: end, relay, local_port })
+    Ok(Tunnel { _ssh: child, _end: end, relay, local_port })
 }
 
 /// Options every `ssh` this app starts gets on this platform. Windows's OpenSSH can't share connections

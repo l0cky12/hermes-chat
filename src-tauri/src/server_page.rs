@@ -470,7 +470,7 @@ fn spawner() -> std::sync::mpsc::Sender<Job> {
 /// `ssh` with `args`: stdin closed, stdout to `stdout`, stderr kept. It is killed when dropped, and, through
 /// `PR_SET_PDEATHSIG`, when the app ends, since it is started from `spawner`'s thread.
 #[cfg(unix)]
-async fn spawn_ssh(program: &str, args: &[OsString], stdout: Stdio) -> Result<Child, ServerPageError> {
+async fn spawn_ssh(program: &str, args: &[OsString], stdout: Stdio) -> Result<Ssh, ServerPageError> {
     let mut command = Command::new(program);
     command.args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).kill_on_drop(true);
     let parent = std::process::id() as libc::pid_t;
@@ -496,66 +496,167 @@ async fn spawn_ssh(program: &str, args: &[OsString], stdout: Stdio) -> Result<Ch
             let _ = tx.send(command.spawn());
         }))
         .map_err(|_| ServerPageError::Spawn("the ssh spawner thread is gone".into()))?;
-    rx.await.map_err(|_| ServerPageError::Spawn("the ssh spawner thread is gone".into()))?.map_err(|e| ServerPageError::Spawn(e.to_string()))
+    let child = rx.await.map_err(|_| ServerPageError::Spawn("the ssh spawner thread is gone".into()))?.map_err(|e| ServerPageError::Spawn(e.to_string()))?;
+    Ok(Ssh { child })
 }
 
 #[cfg(windows)]
-async fn spawn_ssh(program: &str, args: &[OsString], stdout: Stdio) -> Result<Child, ServerPageError> {
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+async fn spawn_ssh(program: &str, args: &[OsString], stdout: Stdio) -> Result<Ssh, ServerPageError> {
     let mut command = Command::new(program);
-    command.args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).kill_on_drop(true).creation_flags(CREATE_NO_WINDOW);
-    let child = command.spawn().map_err(|e| ServerPageError::Spawn(e.to_string()))?;
-    if let Some(handle) = child.raw_handle() {
-        job::ends_with_app(handle).map_err(|e| ServerPageError::Spawn(format!("couldn't tie ssh to Hermes Chat: {e}")))?;
+    command.args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped());
+    Ssh::start(&mut command).map_err(|e| ServerPageError::Spawn(e.to_string()))
+}
+
+/// A running ssh, ended when dropped. On Windows that includes every process ssh started, such as the real ssh.exe
+/// behind a Scoop or Chocolatey shim, which killing the shim alone would leave holding the forward.
+pub(crate) struct Ssh {
+    child: Child,
+    #[cfg(windows)]
+    _job: job::Own,
+}
+
+impl Ssh {
+    /// Starts `command`. On Windows it starts suspended, goes into the app's job, so it ends with the app, and into a
+    /// job of its own, so it ends with this `Ssh`, and only then runs: nothing it starts can be outside both.
+    #[cfg(windows)]
+    pub(crate) fn start(command: &mut Command) -> std::io::Result<Ssh> {
+        const CREATE_SUSPENDED: u32 = 0x0000_0004;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let child = command.kill_on_drop(true).creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED).spawn()?;
+        let (Some(handle), Some(pid)) = (child.raw_handle(), child.id()) else {
+            return Err(std::io::Error::other("ssh exited as it started"));
+        };
+        job::ends_with_app(handle)?;
+        let own = job::Own::new()?;
+        own.add(handle)?;
+        job::resume(pid)?;
+        Ok(Ssh { child, _job: own })
     }
-    Ok(child)
+
+    #[cfg(unix)]
+    pub(crate) fn start(command: &mut Command) -> std::io::Result<Ssh> {
+        Ok(Ssh { child: command.kill_on_drop(true).spawn()? })
+    }
+}
+
+impl std::ops::Deref for Ssh {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        &self.child
+    }
+}
+
+impl std::ops::DerefMut for Ssh {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.child
+    }
 }
 
 #[cfg(windows)]
 mod job {
     use std::sync::OnceLock;
-    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32};
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
+    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
-    /// A job that kills what is in it once its last handle closes. Its handle is never closed, so Windows closes it
-    /// when this process ends, crashed or not.
-    fn the_job() -> std::io::Result<HANDLE> {
-        static JOB: OnceLock<Result<usize, i32>> = OnceLock::new();
-        let made = JOB.get_or_init(|| {
-            // SAFETY: plain Win32 calls; the limits struct outlives the call that reads it.
-            unsafe {
-                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-                if job.is_null() {
-                    return Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(0));
-                }
-                let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                let set = SetInformationJobObject(
-                    job,
-                    JobObjectExtendedLimitInformation,
-                    &limits as *const _ as *const core::ffi::c_void,
-                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                );
-                if set == 0 {
-                    return Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(0));
-                }
-                Ok(job as usize)
+    /// A new job that kills what is in it once its last handle closes.
+    fn killing_job() -> std::io::Result<HANDLE> {
+        // SAFETY: plain Win32 calls; the limits struct outlives the call that reads it.
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return Err(std::io::Error::last_os_error());
             }
-        });
-        made.map(|h| h as HANDLE).map_err(std::io::Error::from_raw_os_error)
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let set = SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as *const core::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if set == 0 {
+                let e = std::io::Error::last_os_error();
+                CloseHandle(job);
+                return Err(e);
+            }
+            Ok(job)
+        }
     }
 
-    /// Puts the process `handle` in the job, so it ends with this app.
-    pub fn ends_with_app(handle: std::os::windows::io::RawHandle) -> std::io::Result<()> {
-        let job = the_job()?;
-        // SAFETY: `handle` is a live process handle the caller's Child owns.
-        if unsafe { AssignProcessToJobObject(job, handle as HANDLE) } == 0 {
+    fn add(job: HANDLE, process: std::os::windows::io::RawHandle) -> std::io::Result<()> {
+        // SAFETY: `process` is a live process handle the caller's Child owns.
+        if unsafe { AssignProcessToJobObject(job, process as HANDLE) } == 0 {
             return Err(std::io::Error::last_os_error());
         }
         Ok(())
+    }
+
+    /// The app's job. Its handle is never closed, so Windows closes it when this process ends, crashed or not.
+    fn the_job() -> std::io::Result<HANDLE> {
+        static JOB: OnceLock<Result<usize, i32>> = OnceLock::new();
+        let made = JOB.get_or_init(|| killing_job().map(|job| job as usize).map_err(|e| e.raw_os_error().unwrap_or(0)));
+        made.map(|h| h as HANDLE).map_err(std::io::Error::from_raw_os_error)
+    }
+
+    /// Puts the process `handle` in the app's job, so it ends with this app.
+    pub fn ends_with_app(handle: std::os::windows::io::RawHandle) -> std::io::Result<()> {
+        add(the_job()?, handle)
+    }
+
+    /// A job of one process's own, nested in the app's. Dropping it ends that process and everything it started.
+    pub struct Own(usize);
+
+    impl Own {
+        pub fn new() -> std::io::Result<Own> {
+            killing_job().map(|job| Own(job as usize))
+        }
+
+        pub fn add(&self, process: std::os::windows::io::RawHandle) -> std::io::Result<()> {
+            add(self.0 as HANDLE, process)
+        }
+    }
+
+    impl Drop for Own {
+        fn drop(&mut self) {
+            // SAFETY: the job handle `new` made, closed once.
+            unsafe { CloseHandle(self.0 as HANDLE) };
+        }
+    }
+
+    /// Lets process `pid`, started suspended, run.
+    pub fn resume(pid: u32) -> std::io::Result<()> {
+        let mut resumed = false;
+        // SAFETY: plain Win32 calls on handles opened and closed here; `entry` is sized as Thread32First asks.
+        unsafe {
+            let threads = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            if threads == INVALID_HANDLE_VALUE {
+                return Err(std::io::Error::last_os_error());
+            }
+            let mut entry: THREADENTRY32 = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+            let mut more = Thread32First(threads, &mut entry) != 0;
+            while more {
+                if entry.th32OwnerProcessID == pid {
+                    let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
+                    if !thread.is_null() {
+                        resumed |= ResumeThread(thread) != u32::MAX;
+                        CloseHandle(thread);
+                    }
+                }
+                more = Thread32Next(threads, &mut entry) != 0;
+            }
+            CloseHandle(threads);
+        }
+        if resumed {
+            Ok(())
+        } else {
+            Err(std::io::Error::other("couldn't let ssh run after putting it in its job"))
+        }
     }
 }
 
@@ -661,7 +762,7 @@ fn key_ok(key: &str) -> bool {
 
 /// What `start` made, handed to the task that keeps the tunnel.
 struct Started {
-    child: Child,
+    child: Ssh,
     end: LocalEnd,
     address: Address,
     stderr: Stderr,
