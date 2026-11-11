@@ -101,7 +101,7 @@ export function Split({ panes, activeKey, onActivate, covered = false, dir = "ro
   useEffect(() => () => void (dragging.current?.frame && cancelAnimationFrame(dragging.current.frame)), []);
 
   return (
-    <div ref={box} aria-hidden={covered || undefined} inert={covered || undefined} className={`panes ${covered ? "covered" : ""} ${split ? "split" : ""} ${row ? "" : "stacked"} ${narrow ? "narrow" : ""} ${resizing ? "resizing" : ""}`}>
+    <div ref={box} aria-hidden={covered || undefined} inert={covered || undefined} className={`panes ${covered ? "covered" : ""} ${split ? "split" : ""} ${row ? "" : "stacked"} ${narrow ? "narrow" : ""}`}>
       {narrow && (
         <div className="pane-switch" role="tablist" aria-label="Panes">
           {panes.map((p, i) => (
@@ -135,7 +135,7 @@ export function Split({ panes, activeKey, onActivate, covered = false, dir = "ro
             <Fragment key={p.key}>
               {i === 1 && !narrow && (
                 <div
-                  className="divider"
+                  className={`divider ${resizing ? "dragging" : ""}`}
                   role="separator"
                   aria-orientation={row ? "vertical" : "horizontal"}
                   aria-label="Resize the panes"
@@ -190,6 +190,7 @@ export function Split({ panes, activeKey, onActivate, covered = false, dir = "ro
             </Fragment>
           );
         })}
+        {resizing && <div className="drag-shield" />}
         {ghost !== null && <div className="divider-ghost" style={{ [row ? "left" : "top"]: `calc(${ghost * 100}% - 1px)` }} />}
       </div>
     </div>

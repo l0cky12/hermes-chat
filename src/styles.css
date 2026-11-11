@@ -325,9 +325,11 @@ kbd {
 .pane.hidden { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
 .divider { flex: none; width: 6px; cursor: col-resize; position: relative; touch-action: none; z-index: 6; }
 .divider::after { content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--line-2); transition: background 0.12s; }
-.divider:hover::after, .divider:focus-visible::after, .panes.resizing .divider::after { background: var(--accent); width: 2px; }
+.divider:hover::after, .divider:focus-visible::after, .divider.dragging::after { background: var(--accent); width: 2px; }
 .divider:focus-visible { outline: none; }
-.panes.resizing { cursor: col-resize; user-select: none; }
+/* Over the panes while the divider drags, for its cursor. A class on the panes would restyle every message in them,
+   which took 800 ms in a long chat (#428). */
+.drag-shield { position: absolute; inset: 0; z-index: 5; cursor: col-resize; user-select: none; }
 .divider-ghost { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); z-index: 7; pointer-events: none; }
 .pane-switch { display: flex; gap: 4px; padding: 6px 8px 0; border-bottom: 1px solid var(--line); flex: none; }
 .pane-tab {
@@ -344,8 +346,8 @@ kbd {
 .panes.stacked .pane { min-height: 0; }
 .panes.stacked .divider { width: auto; height: 6px; cursor: row-resize; }
 .panes.stacked .divider::after { top: 2px; bottom: auto; left: 0; right: 0; width: auto; height: 1px; }
-.panes.stacked .divider:hover::after, .panes.stacked .divider:focus-visible::after, .panes.stacked.resizing .divider::after { width: auto; height: 2px; }
-.panes.stacked.resizing { cursor: row-resize; }
+.panes.stacked .divider:hover::after, .panes.stacked .divider:focus-visible::after, .panes.stacked .divider.dragging::after { width: auto; height: 2px; }
+.panes.stacked .drag-shield { cursor: row-resize; }
 .panes.stacked .divider-ghost { top: auto; bottom: auto; left: 0; right: 0; width: auto; height: 2px; }
 /* ---------- chat tabs (Tabs.tsx) ---------- */
 .tab-strip { flex: none; display: flex; align-items: flex-end; gap: 2px; padding: 4px 6px 0; border-bottom: 1px solid var(--line); min-width: 0; }
