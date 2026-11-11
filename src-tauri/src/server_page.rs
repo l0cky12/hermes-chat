@@ -797,6 +797,7 @@ struct Started {
     address: Address,
     stderr: Stderr,
     listener: TcpListener,
+    ipv6: Option<TcpListener>,
 }
 
 impl ServerPages {
@@ -841,7 +842,7 @@ impl ServerPages {
             started = start(program, &target, &page) => started,
             why = &mut stopped => Err(ServerPageError::Closed(why.unwrap_or(None))),
         };
-        let Started { mut child, end, address, stderr, listener } = match started {
+        let Started { mut child, end, address, stderr, listener, ipv6 } = match started {
             Ok(s) => s,
             Err(e) => {
                 self.open.lock().unwrap().remove(&key);
@@ -861,7 +862,22 @@ impl ServerPages {
             // Everything the tunnel holds lives in this task: ending it drops the listener, the copies, ssh (killed on
             // drop) and the socket's folder.
             let _end = end;
-            let serving = serve(listener, address, Peers::Account(loopback_peer::this_account()));
+            let peers = Peers::Account(loopback_peer::this_account());
+            let on_ipv6 = {
+                let address = address.clone();
+                async move {
+                    match ipv6 {
+                        Some(ipv6) => serve(ipv6, address, peers).await,
+                        None => std::future::pending().await,
+                    }
+                }
+            };
+            let serving = async move {
+                tokio::select! {
+                    () = serve(listener, address, peers) => {}
+                    () = on_ipv6 => {}
+                }
+            };
             tokio::pin!(serving);
             let why = tokio::select! {
                 status = child.wait() => {
@@ -1028,8 +1044,24 @@ async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started
     if end.named_in(&said) {
         return Err(ServerPageError::Ssh(said));
     }
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| ServerPageError::Io(e.to_string()))?;
-    Ok(Started { child, end, address, stderr, listener })
+    let (listener, ipv6) = listen().await.map_err(|e| ServerPageError::Io(e.to_string()))?;
+    Ok(Started { child, end, address, stderr, listener, ipv6 })
+}
+
+/// The tunnel's listeners: on `127.0.0.1`, and on `[::1]` at the same port. A page's name under `localhost`
+/// (`Jar::host`) resolves to both, so a program that listened on `[::1]` at the port would otherwise get the frame's
+/// requests and cookies (ADR 0143). The second is `None` when this computer has no `::1`, where nothing can listen.
+async fn listen() -> std::io::Result<(TcpListener, Option<TcpListener>)> {
+    for _ in 0..16 {
+        let ipv4 = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let port = ipv4.local_addr()?.port();
+        match TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)).await {
+            Ok(ipv6) => return Ok((ipv4, Some(ipv6))),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrNotAvailable => return Ok((ipv4, None)),
+            Err(_) => continue,
+        }
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "no port was free on both 127.0.0.1 and [::1]"))
 }
 
 /// Whether anything answers through a new tunnel. ssh closing the connection with nothing said means the server
@@ -1150,6 +1182,29 @@ mod tests {
         let host = Jar::of("hermes", "http://localhost:3000").host();
         assert_eq!(page("http://localhost:3000/a").local_url(&host, 41234).as_str(), format!("http://{host}:41234/a"));
         assert_eq!(page("http://0.0.0.0:8000").at(), "0.0.0.0:8000");
+    }
+
+    #[cfg(any(target_os = "linux", windows))]
+    #[tokio::test]
+    async fn the_tunnel_listens_on_both_loopbacks_at_one_port_and_relays_both() {
+        let (ipv4, ipv6) = listen().await.unwrap();
+        let ipv6 = ipv6.expect("this computer has ::1");
+        let port = ipv4.local_addr().unwrap().port();
+        assert_eq!(ipv6.local_addr().unwrap(), (std::net::Ipv6Addr::LOCALHOST, port).into());
+        assert!(TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)).await.is_err(), "no other program can listen at [::1] on the port");
+
+        let (address, _end) = ssh_answering("the page").await;
+        let peers = Peers::Account(loopback_peer::this_account());
+        let (ipv4, ipv6) = (tokio::spawn(serve(ipv4, address.clone(), peers)), tokio::spawn(serve(ipv6, address, peers)));
+        for host in ["127.0.0.1", "[::1]"] {
+            let mut s = tokio::net::TcpStream::connect(format!("{host}:{port}")).await.unwrap();
+            s.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await.unwrap();
+            let mut got = String::new();
+            s.read_to_string(&mut got).await.unwrap();
+            assert!(got.ends_with("the page"), "this account's program is relayed on {host}: {got:?}");
+        }
+        ipv4.abort();
+        ipv6.abort();
     }
 
     #[test]
@@ -1862,6 +1917,15 @@ while True:
     /// The relay's port, in front of a stand-in for ssh's end that answers every request with `body`, serving programs
     /// run by `account`. The second value keeps the stand-in's end open.
     async fn relay_for(body: &'static str, account: loopback_peer::Account) -> (u16, impl Sized) {
+        let (address, end) = ssh_answering(body).await;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(serve(listener, address, Peers::Account(account)));
+        (port, end)
+    }
+
+    /// A stand-in for ssh's end of a tunnel, answering every request with `body`.
+    async fn ssh_answering(body: &'static str) -> (Address, impl Sized) {
         #[cfg(unix)]
         let (ssh, address, end) = {
             let dir = SocketDir::new().unwrap();
@@ -1885,10 +1949,7 @@ while True:
                 });
             }
         });
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(serve(listener, address, Peers::Account(account)));
-        (port, end)
+        (address, end)
     }
 
     /// An account this test never runs as.

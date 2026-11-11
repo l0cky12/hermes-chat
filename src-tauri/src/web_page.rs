@@ -47,10 +47,10 @@ pub fn web_url(raw: &str) -> Result<Url, String> {
 pub async fn check(url: &str, user_agent: &str) -> Result<Framing, String> {
     let url = web_url(url)?;
     let mut http = reqwest::Client::builder().timeout(CHECK_TIMEOUT);
-    // Every name under `localhost` is loopback (RFC 6761), as the frame's webview resolves it, but not every system
-    // resolver agrees, or tries 127.0.0.1, where a server page's tunnel listens (server_page::Jar::host).
+    // Every name under `localhost` is this computer's loopback (RFC 6761), as the frame's webview resolves it and as
+    // a server page's name is (server_page::Jar::host). Not every system resolver agrees, and no proxy reaches it.
     if let Some(name) = url.host_str().filter(|h| h.ends_with(".localhost")) {
-        http = http.resolve_to_addrs(name, &[(Ipv4Addr::LOCALHOST, 0).into(), (Ipv6Addr::LOCALHOST, 0).into()]);
+        http = http.resolve_to_addrs(name, &[(Ipv4Addr::LOCALHOST, 0).into(), (Ipv6Addr::LOCALHOST, 0).into()]).no_proxy();
     }
     let http = http.build().map_err(|e| e.to_string())?;
     let mut req = http
