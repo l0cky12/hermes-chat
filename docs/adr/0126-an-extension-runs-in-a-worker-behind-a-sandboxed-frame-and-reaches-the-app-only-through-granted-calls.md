@@ -1,6 +1,6 @@
 # An extension runs in a worker behind a sandboxed frame, and reaches the app only through calls the owner granted
 
-> **Proposed** (#100). Nothing here is built. The owner settles the open questions at the end before the first implementation PR.
+> **Proposed** (#100). Nothing here is built. The owner settles the open questions at the end. Each Delivery step waits only for the open questions it depends on, and step 3's manifest parser needs only questions 1 and 7.
 
 Issue #100 asks for a way to add optional integrations without adding privileged code to the app each time. Today every feature is app code, and app code has every power the app has. The app's webview can call all 101 Rust commands in `invoke_handler` (`src-tauri/src/lib.rs`), and no capability limits which ones. Among them, `password_load` returns the saved password, `hermes_send_file` reads any local path the webview names, and `terminal_open_local` starts a shell. So the question this ADR answers is where an extension's code runs so that it has none of these powers, and what it gets instead.
 
@@ -26,6 +26,8 @@ T1 and the last row decide where the code goes. Code in a frame's realm can free
 
 The probe puts each worker's source inside the frame's `srcdoc`. The design must not, as review round 1 showed on the same WebKitGTK. A source that contains `</script><meta http-equiv=refresh content=0;url=…>` closes the shim's script element, and the refresh navigates the frame to that address. T4's CSP doesn't stop it, because a refresh isn't a fetch or a script. So no byte of a package may reach an HTML parser (section 1).
 
+The probe's frames also showed that WebKitGTK 2.54.2 shares Cache Storage across opaque-origin frames. A frame that wrote to `caches` could be read from another frame, even after the first was removed. PR #327's review round 3 reproduced this. So the prelude must close `caches` as well (section 1).
+
 ## Decisions
 
 ### 1. The extension's code runs in a worker behind a sandboxed frame
@@ -33,7 +35,7 @@ The probe puts each worker's source inside the frame's `srcdoc`. The design must
 - Each running extension has one host frame: an `<iframe sandbox="allow-scripts">` whose `srcdoc` the app writes. The sandbox has no `allow-same-origin`, so the frame's origin is opaque. ADR 0007's argument then holds for it: the frame can't read the parent's globals, so it can't learn the invoke key.
 - The `srcdoc` is the same for every extension. It is T4's CSP, with the shim's SHA-256 hash in place of `'unsafe-inline'`, and a shim of a few lines. No part of a package is ever in it.
 - **The app makes the channel.** Once the frame has loaded, the app creates a `MessageChannel` and posts one port to the frame's window, with the extension's source as a string. The shim takes only the first message whose `source` is `parent`, so another frame in the app's page can't hand it a port first. It makes a `blob:` of a fixed prelude followed by the source, starts one dedicated worker from it, and passes the worker the port. Then it ignores every other message. The prelude replaces `Worker` and `SharedWorker` on the worker's global before the extension's code runs, so the extension can't start a nested worker. T4 shows a nested worker starts under the CSP, and review round 2 showed that the replacement stops it on WebKitGTK 2.54.2. The shim never runs extension code, so nothing in the frame's realm can navigate the frame or hold the main thread.
-- The extension's code runs only in that worker: off the main thread (T2), with no network or `eval` (T4) and no origin storage. The port is its only channel to the app.
+- The extension's code runs only in that worker: off the main thread (T2), with no network or `eval` (T4) and no origin storage and no Cache Storage. The prelude replaces `caches` with a non-configurable getter that throws, on the prototype that defines it, so the extension can't reach it. The port is its only channel to the app.
 - The app takes calls only from its end of the port. It never takes a port or a call from a `message` event on `window`. On Windows, web pages in the Preview are frames that can post such events (ADR 0007). On Linux they are in a separate view with no channel to the app (ADR 0081), but the rule is the same on both.
 
 ### 2. The contract is a manifest and JSON-RPC over the port
@@ -55,7 +57,7 @@ A package has a `manifest.json` and one script:
 }
 ```
 
-- The app parses the manifest once, at install, into an `ExtensionManifest`. An `id` that isn't dot-separated parts of lower-case letters, digits and hyphens, at most 64 characters, refuses the install. So does an id with a part that Windows reserves for a device (`con`, `prn`, `aux`, `nul`, `com1` to `com9`, `lpt1` to `lpt9`), since the app ships for Windows too (ADR 0069). So an id is always one safe folder name. A `main` that isn't one relative path to a regular file in the package refuses the install. So does an unknown key, a permission that isn't in section 3's table, a command name with anything but lower-case letters, digits and hyphens, or a version that isn't semver refuses the install with the reason.
+- The app parses the manifest once, at install, into an `ExtensionManifest`. An `id` that isn't dot-separated parts of lower-case letters, digits and hyphens, at most 64 characters, refuses the install. So does an id with a part that Windows reserves for a device (`con`, `prn`, `aux`, `nul`, `com1` to `com9`, `lpt1` to `lpt9`), since the app ships for Windows too (ADR 0069). The app compares the stem of each part, the text before its first dot, so `nul.txt` is refused too. So an id is always one safe folder name. A `main` that isn't one relative path to a regular file in the package refuses the install. The device-name rule applies to each path part of `main`, again by the stem before the first dot, and a part that ends in a dot is refused. So does an unknown key, a permission that isn't in section 3's table, a command name with anything but lower-case letters, digits and hyphens, or a version that isn't semver refuses the install with the reason. A `version` with build metadata (`+build`) or an upper-case letter is refused too, because precedence ignores build metadata and the version becomes a folder name (section 7). A `needs` id that isn't a `CapabilityId`, and a `manifest` value the app doesn't read, are refused. Field lengths and counts have caps, and open question 7 lists them.
 - Calls are JSON-RPC 2.0 messages of plain JSON. The app checks each message against its method's shape, as `capabilities.ts` checks Hermes's answers.
 - The app calls `activate {api, previousVersion}`, `command.run {call, name, arg}`, `view.render {call, id}` and `deactivate`.
 - The extension calls one method for each permission (section 3), `view.update {id, tree}` and `log {level, text}`.
@@ -70,7 +72,7 @@ A package has a `manifest.json` and one script:
 | --- | --- | --- |
 | `chat.read` | The messages of the call's chat as the transcript shows them: role, text and time. No attachments and no tool output. | While its call is open |
 | `chat.draft` | Text added to the call's chat's Draft. The owner sends it, or doesn't. | While its call is open |
-| `project.read` | The name and folders of the call's chat's project (ADR 0131, projects). | While its call is open |
+| `project.read` | The name and folders of every project the call's chat is in (ADR 0131, projects). A chat can be in several, because the app keys chats by project (`src/hermes/projectLinks.ts`). | While its call is open |
 | `storage` | Up to 1 MB of its own JSON, kept separately for each connection and profile (section 8). | Any time. The one exception to the open-call rule. |
 
 With no permission, an extension has its command's argument and nothing else.
