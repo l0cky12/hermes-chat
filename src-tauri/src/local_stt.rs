@@ -986,14 +986,18 @@ pub fn local_stt_cancel_download(downloads: Managed<'_, Downloads>) {
 }
 
 /// Deletes a downloaded model size from the models folder. Only those five files can be deleted this way; a model
-/// found elsewhere or picked in a dialog is never deleted.
+/// found elsewhere or picked in a dialog is never deleted. The file is deleted off the main thread.
 #[tauri::command]
-pub fn local_stt_delete(app: AppHandle, downloads: Managed<'_, Downloads>, name: String) -> Result<Models, String> {
-    let info = model_info(&name).ok_or_else(|| format!("There's no Whisper model called {name}."))?;
+pub async fn local_stt_delete(app: AppHandle, name: String) -> Result<Models, String> {
+    tokio::task::spawn_blocking(move || delete_model(&app, &app.state::<Downloads>(), &name)).await.map_err(|e| e.to_string())?
+}
+
+fn delete_model(app: &AppHandle, downloads: &Downloads, name: &str) -> Result<Models, String> {
+    let info = model_info(name).ok_or_else(|| format!("There's no Whisper model called {name}."))?;
     if downloads.now().is_some_and(|d| d.name == name) {
         return Err(format!("The {name} model is still downloading. Cancel it first."));
     }
-    let dir = models_dir(&app)?;
+    let dir = models_dir(app)?;
     let path = dir.join(info.file_name());
     match std::fs::remove_file(&path) {
         Ok(()) => {}

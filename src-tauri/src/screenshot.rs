@@ -1019,7 +1019,12 @@ impl Captures {
 
     /// Deletes a staged capture and its folder. Anything else is left alone; returns whether it was one.
     pub fn discard(&self, path: &Path) -> bool {
-        if !self.owns(path) || !self.real_storage_dir(&self.mine) || self.retained.lock().unwrap().contains(path) {
+        if !self.owns(path) || !self.real_storage_dir(&self.mine) {
+            return false;
+        }
+        // Held while deleting, so an outbox sync on another thread can't keep this path between the check and the delete.
+        let retained = self.retained.lock().unwrap();
+        if retained.contains(path) {
             return false;
         }
         if let Some(dir) = path.parent().filter(|dir| self.real_storage_dir(dir)) {

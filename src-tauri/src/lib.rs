@@ -650,12 +650,16 @@ async fn screenshot_capture(
     Ok(capture)
 }
 
-/// Deletes a staged screenshot: removed from the composer, or its message sent. Paths that aren't one are ignored.
+/// Deletes a staged screenshot: removed from the composer, or its message sent. Paths that aren't one are ignored. The
+/// folder is deleted off the main thread.
 #[tauri::command]
-fn screenshot_discard(state: State<'_, Screenshots>, path: String) {
-    if let Some(c) = &*state.captures.lock().unwrap() {
-        c.discard(std::path::Path::new(&path));
-    }
+async fn screenshot_discard(app: tauri::AppHandle, path: String) {
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Some(c) = &*app.state::<Screenshots>().captures.lock().unwrap() {
+            c.discard(std::path::Path::new(&path));
+        }
+    })
+    .await;
 }
 
 /// How screenshots are taken on this desktop, for Settings.
@@ -664,13 +668,17 @@ async fn screenshot_support() -> screenshot::Support {
     tokio::task::spawn_blocking(screenshot::support).await.unwrap_or_else(|e| screenshot::Support { ok: false, summary: e.to_string() })
 }
 
-/// The renderer supplies all persisted outboxes at startup and whenever they change, before cleanup.
+/// The renderer supplies all persisted outboxes at startup and whenever they change, before cleanup. The folders are
+/// swept off the main thread.
 #[tauri::command]
-fn screenshot_sync_outbox(app: tauri::AppHandle, state: State<'_, Screenshots>, paths: Vec<String>) -> Result<(), screenshot::CaptureError> {
-    // Also those of drafts an update's restart couldn't put back (update.rs).
-    let saved = update::saved_attachment_paths(&app);
-    state.captures()?.retain_outbox(paths.into_iter().map(std::path::PathBuf::from).chain(saved));
-    Ok(())
+async fn screenshot_sync_outbox(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), screenshot::CaptureError> {
+    let sync = move || {
+        // Also those of drafts an update's restart couldn't put back (update.rs).
+        let saved = update::saved_attachment_paths(&app);
+        app.state::<Screenshots>().captures()?.retain_outbox(paths.into_iter().map(std::path::PathBuf::from).chain(saved));
+        Ok(())
+    };
+    tokio::task::spawn_blocking(sync).await.map_err(|e| screenshot::CaptureError::Failed(e.to_string()))?
 }
 
 /// Peeking leaves the request pending if the signed-in window goes away before handling it.
