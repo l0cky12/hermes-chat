@@ -1099,7 +1099,7 @@ async fn read_capped(path: &str, max_bytes: u64) -> Result<Vec<u8>, TransportErr
     // Read at most one byte past the limit, so a file that grew can't fill memory.
     let mut bytes = Vec::with_capacity(size as usize);
     let file = tokio::fs::File::open(path).await.map_err(|e| TransportError::File(e.to_string()))?;
-    file.take(max_bytes + 1).read_to_end(&mut bytes).await.map_err(|e| TransportError::File(e.to_string()))?;
+    file.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes).await.map_err(|e| TransportError::File(e.to_string()))?;
     if bytes.len() as u64 > max_bytes {
         return Err(too_large(bytes.len() as u64));
     }
@@ -1122,6 +1122,10 @@ pub enum PipeEvent {
     Closed { reason: String },
 }
 
+/// The most a file attached to a chat message may be, whatever limit the webview names: the most it attaches
+/// (src/hermes/transport.ts `LIMITS.file.bytes`).
+const ATTACHMENT_MAX_BYTES: u64 = 256 * MIB;
+
 /// A frame for the pipe task to write, and who hears once it has been written.
 struct Outgoing {
     text: String,
@@ -1139,12 +1143,13 @@ impl Pipe {
         self.outgoing.send(Outgoing { text, written: None }).map_err(|_| TransportError::Closed)
     }
 
-    /// Queue one frame: `head`, the file at `path` as base64, then `tail`. Refuses a file over `max_bytes` without
+    /// Queue one frame: `head`, the file at `path` as base64, then `tail`. Refuses a file over `max_bytes` (at most
+    /// `ATTACHMENT_MAX_BYTES`) without
     /// sending anything; the size is checked again after reading, in case it grew. The frame may take minutes to write
     /// on a slow uplink, so `Written` says when it has gone, and the webview can tell a long upload from a silent
     /// Hermes (#469). Wait on it without holding the `Pipe`: dropping the pipe must still stop the write.
     pub async fn send_file(&self, head: &str, path: &str, tail: &str, max_bytes: u64) -> Result<Written, TransportError> {
-        let bytes = read_capped(path, max_bytes).await?;
+        let bytes = read_capped(path, max_bytes.min(ATTACHMENT_MAX_BYTES)).await?;
         let mut text = String::with_capacity(head.len() + bytes.len().div_ceil(3) * 4 + tail.len());
         text.push_str(head);
         base64::engine::general_purpose::STANDARD.encode_string(&bytes, &mut text);
@@ -1666,11 +1671,11 @@ impl Dashboard {
     }
 
     /// A dashboard REST `GET` under `api/` whose answer may be big, such as a server file's contents from
-    /// `api/files/read`. It stops reading, and refuses the answer, once it passes `max_bytes`, so a file that grew
-    /// since it was listed can't fill memory. Returns the response body on 2xx.
+    /// `api/files/read`. It stops reading, and refuses the answer, once it passes `max_bytes` (at most
+    /// `RELAY_MAX_BYTES`), so a file that grew since it was listed can't fill memory. Returns the response body on 2xx.
     pub async fn get_limited(&self, path_and_query: &str, max_bytes: u64) -> Result<String, TransportError> {
         let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
-        let body = self.send_limited(Method::GET, path, query, None, max_bytes).await?;
+        let body = self.send_limited(Method::GET, path, query, None, max_bytes.min(RELAY_MAX_BYTES)).await?;
         String::from_utf8(body).map_err(|_| TransportError::Unexpected { status: 200, body: "the answer isn't UTF-8 text".into() })
     }
 
@@ -2843,6 +2848,11 @@ fn is_session_list(path: &str) -> bool {
     segs.next() == Some("api") && segs.next() == Some("sessions") && segs.next().is_none()
 }
 
+/// The most read of one relayed answer: the most Outputs reads of one chat in all (src/hermes/outputs.ts
+/// `CHAT_MAX_BYTES`). The biggest the webview asks of `get_limited` is about 13.4 MiB, a 10 MiB image preview as
+/// base64 JSON (src/hermes/remoteFiles.ts).
+const RELAY_MAX_BYTES: u64 = 64 * MIB;
+
 async fn unless_stalled<T>(limit: Duration, step: impl std::future::Future<Output = reqwest::Result<T>>) -> Result<T, TransportError> {
     tokio::time::timeout(limit, step).await.map_err(|_| TransportError::Stalled(limit.as_secs()))?.map_err(unreachable)
 }
@@ -3508,5 +3518,88 @@ mod tests {
         assert_eq!(super::read_file_prefix(&file, 150_001).unwrap(), &whole[..150_001]);
         assert_eq!(super::read_file_prefix(&file, 1 << 20).unwrap(), whole);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A pipe to a WebSocket server that reads every frame and hands its text to the returned channel.
+    async fn reading_pipe() -> (super::Pipe, tokio::sync::mpsc::UnboundedReceiver<String>) {
+        use futures_util::StreamExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (frames, heard) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default().max_frame_size(None).max_message_size(None);
+            let mut ws = tokio_tungstenite::accept_async_with_config(sock, Some(config)).await.unwrap();
+            while let Some(Ok(msg)) = ws.next().await {
+                if let super::Message::Text(text) = msg {
+                    let _ = frames.send(text.to_string());
+                }
+            }
+        });
+        let ws = super::open_pipe_socket(super::IntoClientRequest::into_client_request(format!("ws://{addr}/api/ws")).unwrap()).await.unwrap();
+        (super::run_pipe(ws, |_| {}, super::HeaderMap::new()), heard)
+    }
+
+    /// The webview names the most a file may be. Rust holds it to the most the webview ever attaches, 256 MiB
+    /// (src/hermes/transport.ts `LIMITS.file.bytes`), and a limit past any size can't wrap round to nothing.
+    #[tokio::test]
+    async fn an_attachment_limit_past_any_size_is_held_to_the_attachment_limit() {
+        let (pipe, mut frames) = reading_pipe().await;
+        let path = temp_file("attach-unlimited", b"abc");
+        match pipe.send_file("[", &path.to_string_lossy(), "]", u64::MAX).await {
+            Ok(written) => written.wait().await.unwrap(),
+            Err(e) => panic!("{e:?}"),
+        }
+        assert_eq!(tokio::time::timeout(Duration::from_secs(5), frames.recv()).await.unwrap().unwrap(), "[YWJj]");
+
+        let big = temp_file("attach-too-big", b"");
+        std::fs::File::options().write(true).open(&big).unwrap().set_len(256 * 1024 * 1024 + 1).unwrap();
+        match pipe.send_file("[", &big.to_string_lossy(), "]", u64::MAX).await {
+            Err(TransportError::FileTooLarge { max, .. }) => assert_eq!(max, 256 * 1024 * 1024),
+            Err(e) => panic!("{e:?}"),
+            Ok(_) => panic!("a file over 256 MiB was sent"),
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&big);
+    }
+
+    /// A server that answers one request with `head` and then sends nothing more, keeping the connection open.
+    async fn answers_then_waits(head: String) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 4096];
+            let _ = sock.read(&mut request).await;
+            sock.write_all(head.as_bytes()).await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        url
+    }
+
+    fn dashboard_at(base: &str) -> super::Dashboard {
+        super::Dashboard {
+            http: reqwest::Client::new(),
+            base: url::Url::parse(base).unwrap(),
+            cookies: Default::default(),
+            headers: super::HeaderMap::new(),
+            hide: super::HeaderMap::new(),
+            token: false,
+        }
+    }
+
+    /// The webview's limit for a big answer is held to the relay's 64 MiB, the most Outputs reads of one chat in all
+    /// (src/hermes/outputs.ts `CHAT_MAX_BYTES`): an answer announcing more is refused before any of it is read.
+    #[tokio::test]
+    async fn a_limited_get_past_any_size_is_held_to_the_relay_limit() {
+        let relay_max: u64 = 64 * 1024 * 1024;
+        let url = answers_then_waits(format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n", relay_max + 1)).await;
+        let dashboard = dashboard_at(&url);
+        match tokio::time::timeout(Duration::from_secs(5), dashboard.get_limited("api/files/read?path=/big", u64::MAX)).await {
+            Ok(Err(TransportError::FileTooLarge { size, max })) => assert_eq!((size, max), (relay_max + 1, relay_max)),
+            Ok(other) => panic!("{other:?}"),
+            Err(_) => panic!("still reading an answer announced past the relay limit"),
+        }
     }
 }

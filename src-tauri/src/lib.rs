@@ -1404,7 +1404,7 @@ fn read_transcript(path: &std::path::Path, max_bytes: u64) -> Result<String, Str
         return Err(too_big());
     }
     let mut bytes = Vec::new();
-    file.take(max_bytes + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    file.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     if bytes.len() as u64 > max_bytes {
         return Err(too_big());
     }
