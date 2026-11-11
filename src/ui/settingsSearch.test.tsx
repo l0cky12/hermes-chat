@@ -12,7 +12,6 @@ import { SettingsScreen } from "./Settings";
 import { HIGHLIGHT_NAME, applySearch, queryWords, textMatches } from "./settingsSearch";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 /** A stand-in for the WebView's CSS highlight registry, which jsdom lacks. */
 const highlights = new Map<string, { ranges: Range[] }>();

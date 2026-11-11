@@ -13,7 +13,6 @@ import { appearanceStore } from "./appearance";
 import { SettingsScreen } from "./Settings";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 const highlights = new Map<string, { ranges: Range[] }>();
 class FakeHighlight {

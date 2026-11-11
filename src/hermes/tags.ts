@@ -12,6 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toFilter, tidyFilter, type ChatFilter } from "./chatFilter";
 import { storageDefaultsFile, type DefaultsFile } from "./projectDefaults";
 import { migrateUIPrefs as migrateDoc, type UIPrefsDoc, type UIPrefsMigrations } from "./uiPrefs";
+import { errorText } from "./values";
 
 export const TAGS_KEY = "hermes-chat.tags";
 export const TAGS_VERSION = 1;
@@ -241,7 +242,7 @@ export class TagsStore {
   }
 
   private async swapIn(fn: (s: ScopeTags) => ScopeTags): Promise<void> {
-    const failed = (e: unknown) => new Error(`Couldn't save on this computer, so nothing changed: ${e instanceof Error ? e.message : String(e)}`);
+    const failed = (e: unknown) => new Error(`Couldn't save on this computer, so nothing changed: ${errorText(e)}`);
     let raw: string | null;
     try {
       raw = await this.file.read();

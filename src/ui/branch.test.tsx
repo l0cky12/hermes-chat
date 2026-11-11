@@ -9,7 +9,6 @@ import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -79,7 +78,7 @@ describe("Branch from here", () => {
   });
 
   it("keeps separate Drafts for the original and the branch", async () => {
-    const { s, user } = await launch();
+    const { user } = await launch();
     const composer = () => screen.getByPlaceholderText("Message Hermes") as HTMLTextAreaElement;
     await user.type(composer(), "draft in the original");
     await user.click(branchButtons()[0]);

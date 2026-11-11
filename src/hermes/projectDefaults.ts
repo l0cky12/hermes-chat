@@ -12,6 +12,7 @@
 // that has started.
 import { invoke } from "@tauri-apps/api/core";
 import { findOption, isEffort, shortName, type Effort, type ModelCatalog, type ModelPick } from "./models";
+import { errorText, isObj } from "./values";
 
 /**
  * One project's defaults as this computer keeps them. `rev` counts the saves, so a save made from a screen opened
@@ -25,7 +26,6 @@ export type DefaultsDraft = Omit<ProjectDefaults, "rev">;
 /** The longest instructions kept. They go to the model with every new chat's first message, so a novel is a mistake. */
 export const INSTRUCTIONS_MAX = 20_000;
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() && v.length <= max ? v : undefined);
 
 /** A stored model pick, checked; undefined if it isn't one. */
@@ -238,7 +238,7 @@ export function defaultsDoc(file: DefaultsFile): DefaultsDoc {
         });
       } catch (e) {
         if (e instanceof DefaultsConflict || e instanceof NewerDefaultsError) throw e;
-        throw new Error(`This computer couldn't keep them: ${e instanceof Error ? e.message : String(e)}`);
+        throw new Error(`This computer couldn't keep them: ${errorText(e)}`);
       }
     },
     forget: (scope, id) =>

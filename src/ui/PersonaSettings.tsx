@@ -14,6 +14,7 @@ import { asReadBack, certainlyUnwritten, PersonaError, sameSoul, soulNotes, type
 import { LeavePersona } from "./LeavePersona";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
 import { EARLIER_KEPT, type EarlierSoul, type PersonaDraft, type PersonaStore } from "../hermes/personaStore";
+import { errorText } from "../hermes/values";
 
 /** Where SOUL.md is, as the screen names it. */
 export type PersonaWhere = {
@@ -83,13 +84,14 @@ export function PersonaPage({
       const profiles = await api.profiles();
       if (alive.current) setListed(profiles.map((p) => p.name));
     } catch (e) {
-      if (alive.current) setListProblem(messageOf(e));
+      if (alive.current) setListProblem(errorText(e));
     }
   }, [api]);
 
   // Listed once connected; a list that failed for want of a connection is tried again once it is back.
   useEffect(() => {
     if (connected && !listed) void list();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected]);
 
   const pick = (profile: string) => {
@@ -172,7 +174,6 @@ type Conflict = { server: Soul; written: boolean };
 /** A question asked in place before something that would drop text or write something unusual. */
 type Ask = "reload" | "empty" | "overwrite";
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const chars = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "character" : "characters"}`;
 const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const when = (at: number) => {
@@ -270,6 +271,7 @@ export function PersonaSettings({
     return () => {
       current = false;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [earlierSave]);
 
   const loaded = load.state === "loaded" ? load : undefined;
@@ -290,6 +292,7 @@ export function PersonaSettings({
   useEffect(() => {
     if (!loaded || recover) return;
     setKept(store.setDraft(storeKey, dirty ? { text, base: loaded.base, at: now() } : undefined));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [text, dirty, loaded?.base, recover]);
 
   const read = useCallback(
@@ -312,13 +315,14 @@ export function PersonaSettings({
         then?.(soul);
       } catch (e) {
         if (!alive.current || mine !== seq.current) return;
-        const problem = e instanceof PersonaError ? e : new PersonaError("error", messageOf(e));
+        const problem = e instanceof PersonaError ? e : new PersonaError("error", errorText(e));
         setLoad((l) => (l.state === "loaded" ? l : { state: "problem", problem }));
         if (wasLoaded.current) setNotice({ kind: "failed", message: `Couldn't reload: ${problem.message}` });
       } finally {
         if (alive.current && mine === seq.current) setReloading(false);
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
     [api, profile],
   );
 
@@ -326,6 +330,7 @@ export function PersonaSettings({
   useEffect(() => {
     if (!connected) return;
     if (load.state !== "loaded") void read();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected]);
 
   // A kept edit that matches what Hermes has now is nothing to restore.
@@ -334,6 +339,7 @@ export function PersonaSettings({
       setRecover(undefined);
       store.setDraft(storeKey, undefined);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [loaded?.server, recover]);
 
   const reload = () => {
@@ -406,7 +412,7 @@ export function PersonaSettings({
       }
     } catch (e) {
       if (!alive.current) return;
-      setNotice({ kind: "failed", message: `${messageOf(e)} Your changes are still here${kept ? ", and kept on this computer" : ""}.` });
+      setNotice({ kind: "failed", message: `${errorText(e)} Your changes are still here${kept ? ", and kept on this computer" : ""}.` });
     } finally {
       if (alive.current) setSaving(false);
     }
@@ -472,7 +478,7 @@ export function PersonaSettings({
       const soul = await api.read(to);
       if (alive.current) setCopyAsk((a) => (a?.to === to ? { to, target: soul } : a));
     } catch (e) {
-      if (alive.current) setCopyAsk((a) => (a?.to === to ? { to, problem: messageOf(e) } : a));
+      if (alive.current) setCopyAsk((a) => (a?.to === to ? { to, problem: errorText(e) } : a));
     }
   };
 
@@ -537,7 +543,7 @@ export function PersonaSettings({
               : { ok: false, text: `Hermes may have written the copy, but reading ${to}'s SOUL.md back failed: ${r.problem.message}` },
       );
     } catch (e) {
-      if (alive.current) setCopyNotice({ ok: false, text: `Nothing was copied: ${messageOf(e)}` });
+      if (alive.current) setCopyNotice({ ok: false, text: `Nothing was copied: ${errorText(e)}` });
     } finally {
       if (alive.current) setCopying(false);
     }

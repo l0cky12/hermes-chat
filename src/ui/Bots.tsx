@@ -82,6 +82,7 @@ export function Bots({
     void read();
     const every = setInterval(() => void read(), BOTS_REFRESH_MS);
     return () => clearInterval(every);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected, load, unsupported]);
 
   useEffect(() => {

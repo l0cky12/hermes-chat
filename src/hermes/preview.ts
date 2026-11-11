@@ -5,8 +5,9 @@
 // frame (ADR 0007). Everything shown is untrusted: nothing here turns it into HTML the app itself renders.
 import type { Item } from "./model";
 import { RestError, sessionNotFound } from "./pipe";
-import { SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, type RemotePreview } from "./remoteFiles";
+import { IMAGE_DATA_URL, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, type RemotePreview } from "./remoteFiles";
 import type { ArtifactRef } from "./artifacts";
+import { errorText } from "./values";
 
 export type PreviewTarget =
   /**
@@ -45,16 +46,11 @@ export type FileView =
  */
 export type Framing = { kind: "refused"; by: string } | { kind: "unreachable"; message: string } | { kind: "notRefused" };
 
-/** The most text Hermes's `read-text` returns, and the most Rust reads of a Local file (`_FS_TEXT_PREVIEW_MAX_BYTES`). */
-export const TEXT_PREVIEW_BYTES = 512 * 1024;
-
 const IMAGE_NAME = /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i;
 /** The images a local preview reads: the ones Rust's `read_preview` takes. */
 const LOCAL_IMAGE_NAME = /\.(png|jpe?g|gif|webp|bmp)$/i;
 const MARKDOWN_NAME = /\.(md|markdown|mdx)$/i;
 const HTML_NAME = /\.x?html?$/i;
-/** `data:` URLs the pane shows as images. SVG in an `<img>` runs no scripts. */
-const IMAGE_DATA_URL = /^data:image\/(png|jpeg|gif|webp|bmp|svg\+xml|x-icon|vnd\.microsoft\.icon);base64,[A-Za-z0-9+/=]*$/;
 
 /**
  * Text from a tool, with its bidi embedding, override and isolate controls made visible as `\uFFFD`: they can make a
@@ -338,7 +334,7 @@ type ReadText = { binary?: boolean; byteSize?: number; language?: string; mimeTy
 
 /** A failed dashboard request in the owner's words. */
 function serverFileError(e: unknown): Error {
-  const message = e instanceof Error ? e.message : String(e);
+  const message = errorText(e);
   if (message === "Not connected to Hermes.") return new Error("Files on the server can't be read while Hermes Chat isn't connected.");
   if (!(e instanceof RestError)) return new Error(message);
   let detail = e.body.trim();
@@ -431,9 +427,13 @@ export function sandboxedHtml(html: string): string {
   return `<meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer">${html}`;
 }
 
-/** A Markdown code fence longer than any run of backticks in `text`, so the file can't close it early. */
+/**
+ * A Markdown code fence longer than any run of backticks in `text`, so the file can't close it early. A `language` that
+ * isn't a plain name like `c++` or `objective-c` is left off: the server sends it, and a newline in it would end the
+ * fence's first line.
+ */
 export function fenced(text: string, language: string): string {
   const longest = Math.max(2, ...Array.from(text.matchAll(/`+/g), (m) => m[0].length));
   const fence = "`".repeat(longest + 1);
-  return `${fence}${language}\n${text}\n${fence}`;
+  return `${fence}${/^[\w+-]+$/.test(language) ? language : ""}\n${text}\n${fence}`;
 }

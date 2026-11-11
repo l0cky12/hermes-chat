@@ -1356,7 +1356,7 @@ async fn stats_files_to_attach() {
                 path: path_of(&dir.join("gone.txt")),
                 name: "gone.txt".into(),
                 size: None,
-                error: Some("No such file or directory (os error 2)".into()),
+                error: Some(std::io::Error::from_raw_os_error(2).to_string()),
             },
             LocalFile { path: path_of(&elsewhere), name: "id_ed25519".into(), size: None, error: Some("it wasn't attached in this app".into()) },
         ]
@@ -1410,7 +1410,7 @@ async fn reports_a_file_that_is_gone() {
     let (pipe, mut rx) = open_stub().await;
     next(&mut rx).await;
     let err = pipe.send_file("", &path_of(&dir.join("gone.txt")), "", 1024).await.err().unwrap();
-    assert_eq!(err.to_string(), "No such file or directory (os error 2)");
+    assert_eq!(err.to_string(), std::io::Error::from_raw_os_error(2).to_string());
 }
 
 #[tokio::test]
@@ -1505,7 +1505,7 @@ async fn previews_only_images() {
 async fn refuses_to_preview_a_missing_or_oversized_image() {
     let dir = scratch("preview-refused");
     let err = preview(&path_of(&dir.join("gone.png"))).await.err().unwrap();
-    assert_eq!(err.to_string(), "No such file or directory (os error 2)");
+    assert_eq!(err.to_string(), std::io::Error::from_raw_os_error(2).to_string());
 
     let big = dir.join("big.png");
     let f = std::fs::File::create(&big).unwrap();
@@ -2160,7 +2160,8 @@ fn a_pasted_file_name_stays_a_plain_basename() {
         ("rack\n\u{7}photo.JPG", "rackphoto.JPG"),
         (".bashrc", "bashrc"),
         ("notes.tar.gz", "notes.tar.gz"),
-        ("report.<script>", "report.<script>"),
+        ("report.<script>", "report.script"),
+        ("what? \"really\": a|b*.txt", "what really ab.txt"),
         ("Résumé 2026.pdf", "Résumé 2026.pdf"),
     ] {
         let p = transport::stage_clipboard_file(&root.1, hostile, b"x").unwrap();

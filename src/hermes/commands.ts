@@ -3,6 +3,7 @@
 // typed is forwarded to Hermes as a command unless it is in this list; any other text starting with "/" is sent as an
 // ordinary message.
 import { catalogSkills } from "./skillCommands";
+import { isObj } from "./values";
 
 /**
  * `local`: an action of this app, which may write to Hermes through the same calls its buttons use. `server`: a command
@@ -81,7 +82,6 @@ export type Rpc = (method: string, params: Record<string, unknown>) => Promise<u
 export type CommandResult = { kind: "output"; text: string } | { kind: "send"; message: string; notice?: string };
 
 const NO_SUCH_METHOD = -32601;
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /**
  * The registry's server commands Hermes lists (`listed`); those a quick or plugin command of the same name replaces

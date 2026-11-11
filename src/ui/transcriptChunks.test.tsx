@@ -8,7 +8,6 @@ import { ChatPane, type FindTarget } from "./ChatPane";
 import { chunkBlocks } from "./transcriptChunks";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 const sideRenders = vi.hoisted(() => [] as string[]);
 vi.mock("./SideQuestions", async (actual) => {

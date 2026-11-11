@@ -229,23 +229,16 @@ pub fn extra_headers(headers: &[ExtraHeader]) -> Result<HeaderMap, TransportErro
 /// attempt, from the route's extra `headers`, and shared by `read_server` and `Dashboard::sign_in`, so the sign-in
 /// and its ticket reuse the connection the status read opened (#271). It carries no credential itself.
 pub fn client(headers: &HeaderMap) -> Result<reqwest::Client, TransportError> {
-    client_kept_to_origin(headers, true)
-}
-
-/// `client`, with redirects kept to the dashboard's origin even without extra headers when `always` is set, as for a
-/// request that carries a provider key.
-fn client_kept_to_origin(headers: &HeaderMap, always: bool) -> Result<reqwest::Client, TransportError> {
-    let mut http = reqwest::Client::builder()
+    reqwest::Client::builder()
         .default_headers(headers.clone())
         .no_proxy()
+        .redirect(redirect::Policy::custom(same_origin_redirects))
         .connect_timeout(CONNECT_LIMIT)
         .tcp_keepalive(KEEPALIVE_IDLE)
         .tcp_keepalive_interval(KEEPALIVE_INTERVAL)
-        .tcp_keepalive_retries(KEEPALIVE_RETRIES);
-    if always || !headers.is_empty() {
-        http = http.redirect(redirect::Policy::custom(same_origin_redirects));
-    }
-    http.build().map_err(unreachable)
+        .tcp_keepalive_retries(KEEPALIVE_RETRIES)
+        .build()
+        .map_err(unreachable)
 }
 
 /// How long opening a connection to the dashboard may take before the call fails.
@@ -857,7 +850,11 @@ fn open_local_text(path: &str) -> Result<std::fs::File, TransportError> {
     if !std::path::Path::new(path).is_absolute() {
         return Err(TransportError::File("it isn't a full path".into()));
     }
-    let file = local_fs::open_no_follow(std::path::Path::new(path)).map_err(|e| TransportError::File(e.to_string()))?;
+    let file = local_fs::open_no_follow(std::path::Path::new(path)).map_err(|e| {
+        // Windows can't open a folder as a file, and says only "Access is denied".
+        let folder = std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir());
+        TransportError::File(if folder { "it's a folder".into() } else { e.to_string() })
+    })?;
     let meta = file.metadata().map_err(|e| TransportError::File(e.to_string()))?;
     if !meta.is_file() {
         return Err(TransportError::File(if meta.is_dir() { "it's a folder" } else { "it isn't a regular file" }.into()));
@@ -1063,11 +1060,11 @@ mod local_fs {
     }
 }
 
-/// `name` as a plain file name: no folders, control characters or leading dots, a sane length, and its extension
-/// only when it looks like one (Hermes and the previews go by it).
+/// `name` as a plain file name: no folders, control characters, characters Windows refuses in a name (`<>:"|?*`) or
+/// leading dots, a sane length, and its extension only when it looks like one (Hermes and the previews go by it).
 fn safe_name(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
-    let base: String = base.chars().filter(|c| !c.is_control()).collect();
+    let base: String = base.chars().filter(|c| !c.is_control() && !"<>:\"|?*".contains(*c)).collect();
     let base = base.trim().trim_start_matches('.');
     let (stem, ext) = match base.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() && (1..=8).contains(&e.len()) && e.chars().all(|c| c.is_ascii_alphanumeric()) => (s, e),
@@ -2937,7 +2934,7 @@ impl Dashboard {
             return Err(TransportError::KeyRejected("Paste the key on one line, without spaces around it.".into()));
         }
         // The key never follows a redirect to another site, extra headers or not.
-        let http = client_kept_to_origin(&self.headers, true)?;
+        let http = client(&self.headers)?;
         require_provider_secret(&self.read_env(&http, profile).await?, key)?;
 
         let body = json!({"key": key, "value": value}).to_string();
@@ -2975,7 +2972,7 @@ impl Dashboard {
         if !provider_key_name(key) {
             return Err(TransportError::NotRelayed(format!("{key}: not a model provider's key")));
         }
-        let http = client_kept_to_origin(&self.headers, true)?;
+        let http = client(&self.headers)?;
         require_provider_secret(&self.read_env(&http, profile).await?, key)?;
 
         let body = json!({"key": key}).to_string();
@@ -3031,7 +3028,7 @@ impl Dashboard {
     ///
     /// Nothing read goes back to the webview, and no error quotes a secret the map or the token held.
     pub async fn mcp_edit(&self, profile: &str, edit: &crate::mcp::Edit) -> Result<(), TransportError> {
-        let http = client_kept_to_origin(&self.headers, true)?;
+        let http = client(&self.headers)?;
         let scoped = |path: &str, raw: bool| {
             let mut url = endpoint(&self.base, path);
             url.query_pairs_mut().append_pair("profile", profile);

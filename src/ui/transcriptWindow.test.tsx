@@ -9,7 +9,6 @@ import { useShowInChat } from "./showInChat";
 import { chunkBlocks } from "./transcriptChunks";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 const VIEW = 600;
 const GAP = 22;
