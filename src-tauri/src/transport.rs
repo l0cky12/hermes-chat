@@ -865,19 +865,22 @@ fn open_local_text(path: &str) -> Result<std::fs::File, TransportError> {
     Ok(file)
 }
 
+/// The first `max` bytes of `file`, read a chunk at a time, so a small file costs its size and not the limit.
 fn read_file_prefix(file: &std::fs::File, max: u64) -> Result<Vec<u8>, TransportError> {
-    let mut bytes = vec![0; max as usize];
-    let mut len = 0;
+    const CHUNK: u64 = 64 * 1024;
+    let size = file.metadata().map_err(|e| TransportError::File(e.to_string()))?.len();
+    let mut bytes = Vec::with_capacity(size.min(max) as usize);
+    let mut chunk = vec![0; CHUNK.min(max) as usize];
     // Positional reads keep concurrent reloads from sharing or advancing the retained handle's offset.
-    while len < bytes.len() {
-        match local_fs::read_at(file, &mut bytes[len..], len as u64) {
+    while (bytes.len() as u64) < max {
+        let want = CHUNK.min(max - bytes.len() as u64) as usize;
+        match local_fs::read_at(file, &mut chunk[..want], bytes.len() as u64) {
             Ok(0) => break,
-            Ok(n) => len += n,
+            Ok(n) => bytes.extend_from_slice(&chunk[..n]),
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(TransportError::File(e.to_string())),
         }
     }
-    bytes.truncate(len);
     Ok(bytes)
 }
 
@@ -3478,6 +3481,32 @@ mod tests {
         drop(pipe);
         let ended = tokio::time::timeout(Duration::from_secs(5), written.wait()).await.expect("the write went on after the pipe was dropped");
         assert!(matches!(ended, Err(TransportError::Closed)), "{ended:?}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn temp_file(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("hermes-transport-{name}-{}", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// A picked image is read up to the 25 MiB preview limit; a small one mustn't cost the whole limit in memory.
+    #[test]
+    fn reading_the_start_of_a_small_file_holds_only_what_it_read() {
+        let path = temp_file("prefix-small", b"hello");
+        let bytes = super::read_file_prefix(&std::fs::File::open(&path).unwrap(), super::PREVIEW_MAX_BYTES + 1).unwrap();
+        assert_eq!(bytes, b"hello");
+        assert!(bytes.capacity() < 64 * 1024, "{} bytes held for a 5-byte file", bytes.capacity());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reading_the_start_of_a_file_stops_at_the_limit() {
+        let whole: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+        let path = temp_file("prefix-cut", &whole);
+        let file = std::fs::File::open(&path).unwrap();
+        assert_eq!(super::read_file_prefix(&file, 150_001).unwrap(), &whole[..150_001]);
+        assert_eq!(super::read_file_prefix(&file, 1 << 20).unwrap(), whole);
         let _ = std::fs::remove_file(&path);
     }
 }
