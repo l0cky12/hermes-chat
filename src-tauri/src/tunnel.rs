@@ -239,6 +239,7 @@ fn main() {
         let status = process::Command::new(dir.join("ssh.exe")).args(&args).status().unwrap();
         process::exit(status.code().unwrap_or(1));
     }
+    fs::write(dir.join("pid"), process::id().to_string()).unwrap();
     let spec = &args[args.iter().position(|a| a == "-L").unwrap() + 1];
     let mut parts = spec.rsplitn(3, ':');
     let (port, host, listen) = (parts.next().unwrap(), parts.next().unwrap(), parts.next().unwrap().to_owned());
@@ -463,13 +464,13 @@ fn main() {
     /// The first value ssh reads for an option wins, so options on the command line come before the owner's config.
     #[cfg(unix)]
     #[tokio::test]
-    async fn the_tunnels_ssh_never_shares_the_owners_connection() {
+    async fn the_tunnels_ssh_takes_no_owner_option_that_would_outlive_it() {
         let ssh = FakeSsh::new("control-master");
         let signed = sign_in(&ssh, false).await;
         signed.opened.expect("the tunnel opens");
         let args = ssh.args();
         let target = args.iter().position(|a| *a == "--").expect("the target comes after --");
-        for option in ["ControlMaster=no", "ControlPath=none"] {
+        for option in ["ControlMaster=no", "ControlPath=none", "ForkAfterAuthentication=no"] {
             assert!(args[..target].windows(2).any(|w| w[0] == "-o" && w[1] == option), "ssh got -o {option}: {args:?}");
         }
     }
@@ -512,10 +513,23 @@ fn main() {
     /// Scoop and Chocolatey put a shim named ssh.exe on PATH that runs the real ssh.exe as its child.
     #[cfg(windows)]
     #[tokio::test]
-    async fn the_sign_in_reaches_the_dashboard_through_an_ssh_a_shim_starts() {
+    async fn the_sign_in_reaches_the_dashboard_through_an_ssh_a_shim_starts_and_both_end_with_the_tunnel() {
         let ssh = FakeSsh::new("shim").through_shim();
         let signed = sign_in(&ssh, false).await;
-        signed.opened.expect("the tunnel opens");
+        let tunnel = signed.opened.expect("the tunnel opens");
         assert!(signed.dashboard.iter().any(|r| r.contains(PASSWORD)), "the sign-in reached the dashboard through ssh");
+
+        let pid = std::fs::read_to_string(ssh.dir.join("pid")).unwrap();
+        let running = || {
+            let out = std::process::Command::new("tasklist").args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"]).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).contains(&format!("\"{pid}\""))
+        };
+        assert!(running(), "the real ssh behind the shim runs while the tunnel is open");
+        drop(tunnel);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while running() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(!running(), "the real ssh behind the shim ended with the tunnel");
     }
 }
