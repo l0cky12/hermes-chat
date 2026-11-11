@@ -264,6 +264,7 @@ describe("A message that can't be drawn (#476)", () => {
         chat={chatOf(items)}
         status="connected"
         draft="And their sizes?"
+        draftKey="draft"
         onDraft={() => {}}
         onDraftStep={() => undefined}
         onRetry={() => {}}
