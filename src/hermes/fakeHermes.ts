@@ -759,9 +759,7 @@ export class FakeHermes {
         const sid = open[0][1].sid;
         this.runtime.set(sid, stored);
         const messages = this.transcripts[stored] ?? [];
-        // A batch clarify's snapshot carries the answers locked so far (`ServerRequest.snapshot`).
-        const open_requests = open.map(([id, q]) => ({ id, method: q.method, params: { session_id: sid, ...q.params, ...(q.locked && Object.keys(q.locked).length && { answers: { ...q.locked } }) } }));
-        return this.respond(r.id, { session_id: sid, stored_session_id: stored, message_count: messages.length, messages, info: this.sessionInfo, running: true, open_requests });
+        return this.respond(r.id, { session_id: sid, stored_session_id: stored, message_count: messages.length, messages, info: this.sessionInfo, running: true, open_requests: this.openRequestsOf(sid) });
       }
       const runtimeId = `rt-r${++this.resumed}`;
       this.runtime.set(runtimeId, stored);
@@ -1041,6 +1039,14 @@ export class FakeHermes {
       const remaining = qids.filter((id) => !(id in q.locked!));
       if (!remaining.length) this.settle(requestId, { answers: { ...q.locked }, outcome: "submitted" }, "clarify.lock");
       this.respond(r.id, { status: "ok", remaining });
+    },
+    // `tui_gateway/methods_session.py` `session.events.since` at `f0d94882`: the events after `last_seen`, of which this
+    // fake keeps none, and the requests still open for the live session. Any session id answers, an unknown one with
+    // none open. Other params are refused, as the contract refuses unknown keys.
+    "session.events.since": (r) => {
+      const { session_id, last_seen, ...rest } = r.params;
+      if (Object.keys(rest).length || (last_seen !== undefined && !Number.isInteger(last_seen))) return this.fail(r.id, -32602, "invalid params");
+      this.respond(r.id, { events: [], latest_seq: 0, truncated: false, count: 0, epoch: "fake", open_requests: this.openRequestsOf(String(session_id ?? "")) });
     },
     // `tui_gateway/methods_prompt.py` `request.answer` at the deployed `bf0203a`: the proxy for a response frame. A
     // request no longer open is `expired`.
@@ -2294,6 +2300,16 @@ export class FakeHermes {
       ...over,
     };
     return { id: this.ask(sid, "approval", params), requestId: params.request_id };
+  }
+
+  /**
+   * The requests Hermes still waits on in the live session `sid`, oldest first, as `open_requests` lists them
+   * (`server_requests.open_requests`): each as sent, a batch clarify's with the answers locked so far.
+   */
+  openRequestsOf(sid: string) {
+    return [...this.openRequests]
+      .filter(([, q]) => q.sid === sid)
+      .map(([id, q]) => ({ id, method: q.method, params: { session_id: sid, ...q.params, ...(q.locked && Object.keys(q.locked).length && { answers: { ...q.locked } }) } }));
   }
 
   /** Hermes stops waiting for an answer (timeout, interrupt, answered elsewhere) and withdraws the request. */

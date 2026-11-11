@@ -234,36 +234,128 @@ describe("Questions after a reconnect", () => {
 });
 
 describe("Questions on a chat another Hermes app also has open", () => {
-  it("closes a clarify the other app answered once the clarify tool finishes, as Hermes sends no request.cancel", async () => {
-    const { server, runtime, card } = await replying();
+  // Hermes tells no other client when one answers (`resolve_response`, `lock_answer`), so the app asks it which
+  // requests it still waits on (`session.events.since` → `open_requests`) once a tool call finishes or the turn ends.
+  it("closes a card the other app answered once a tool call finishes, though Hermes sends no request.cancel", async () => {
+    const { server, hermes, runtime, card } = await replying();
     server.event(runtime, "tool.start", { tool_id: "t1", name: "clarify" });
     const id = server.askClarify(runtime, [WHEN])!;
     server.answerElsewhere(id, "response");
+    await hermes.idle();
     expect(card()).not.toHaveProperty("ended");
 
     server.event(runtime, "tool.complete", { tool_id: "t1", result: '{"responses": []}' });
+    await hermes.idle();
     expect(card()).toMatchObject({ ended: "resolved" });
+    expect(server.requests.find((r) => r.method === "session.events.since")?.params).toEqual({ session_id: runtime, last_seen: Number.MAX_SAFE_INTEGER });
   });
 
-  it("keeps a sudo question waiting while another tool call that was already running finishes", async () => {
-    const { server, runtime, card } = await replying();
+  it("keeps a question no tool call of the chat asked while an unrelated tool call finishes, and takes its answer after", async () => {
+    const { server, hermes, id: chatId, runtime, card } = await replying();
     server.event(runtime, "tool.start", { tool_id: "t1", name: "web_search" });
-    server.event(runtime, "tool.start", { tool_id: "t2", name: "terminal" });
-    const id = server.askSudo(runtime)!;
+    // A side question's skill asks for its secret under the chat's session, with no tool call of the chat's own.
+    const id = server.askSecret(runtime)!;
     server.event(runtime, "tool.complete", { tool_id: "t1" });
+    server.event(runtime, "tool.start", { tool_id: "t2", name: "read_file" });
+    server.event(runtime, "tool.complete", { tool_id: "t2" });
+    await hermes.idle();
+    expect(card("secret")).not.toHaveProperty("ended");
+
+    await hermes.answerQuestion(chatId, id, { kind: "value", value: "sk-weather-1" });
+    expect(server.settled).toEqual([{ id, method: "secret", result: { value: "sk-weather-1" }, via: "request.answer" }]);
+    expect(card("secret")).toMatchObject({ answer: "answered" });
+  });
+
+  it.each(["message.complete", "error"])("keeps a question Hermes still waits on when the turn ends with %s, and takes its answer after", async (end) => {
+    const { server, hermes, id: chatId, runtime, chat, card } = await replying();
+    const id = server.askSudo(runtime)!;
+    server.event(runtime, end, end === "error" ? { message: "The model failed." } : { status: "complete", text: "Done." });
+    await hermes.idle();
+    expect(chat().running).toBe(false);
     expect(card("sudo")).not.toHaveProperty("ended");
 
+    await hermes.answerQuestion(chatId, id, { kind: "value", value: "hunter2" });
+    expect(server.settled).toEqual([{ id, method: "sudo", result: { value: "hunter2" }, via: "request.answer" }]);
+    expect(card("sudo")).toMatchObject({ answer: "answered" });
+  });
+
+  it("closes a card the other app answered when the turn ends", async () => {
+    const { server, hermes, runtime, card } = await replying();
+    const id = server.askSudo(runtime)!;
     server.answerElsewhere(id, "response");
-    server.event(runtime, "tool.complete", { tool_id: "t2" });
+    server.event(runtime, "message.complete", { status: "complete", text: "Done." });
+    await hermes.idle();
     expect(card("sudo")).toMatchObject({ ended: "resolved" });
   });
 
-  it("keeps a question waiting when a tool call started after it finishes", async () => {
-    const { server, runtime, card } = await replying();
-    server.askSudo(runtime);
-    server.event(runtime, "tool.start", { tool_id: "t3", name: "read_file" });
-    server.event(runtime, "tool.complete", { tool_id: "t3" });
+  it("goes by what Hermes lists, not by which tool calls still run", async () => {
+    const { server, hermes, runtime, card } = await replying();
+    server.event(runtime, "tool.start", { tool_id: "t1", name: "terminal" });
+    const sudo = server.askSudo(runtime)!;
+    const secret = server.askSecret(runtime)!;
+    server.event(runtime, "tool.start", { tool_id: "t2", name: "web_search" });
+    server.answerElsewhere(sudo, "response");
+    server.event(runtime, "tool.complete", { tool_id: "t1" });
+    await hermes.idle();
+    // t2, started after both cards, still runs.
+    expect(card("sudo")).toMatchObject({ ended: "resolved" });
+    expect(card("secret")).toMatchObject({ id: secret });
+    expect(card("secret")).not.toHaveProperty("ended");
+  });
+
+  it("leaves a card that arrives while Hermes is being asked", async () => {
+    const { server, hermes, id: chatId, runtime, card } = await replying();
+    const held: (() => void)[] = [];
+    // Hermes lists what it waits on when the read reaches it; the answer reaches the app later.
+    server.handlers["session.events.since"] = (r) => {
+      const open_requests = server.openRequestsOf(String(r.params.session_id));
+      held.push(() => server.respond(r.id, { events: [], latest_seq: 0, truncated: false, count: 0, epoch: "fake", open_requests }));
+    };
+    const sudo = server.askSudo(runtime)!;
+    server.answerElsewhere(sudo, "response");
+    server.event(runtime, "tool.complete", { tool_id: "t1" });
+    const secret = server.askSecret(runtime)!;
+    held.splice(0).forEach((answer) => answer());
+    await hermes.idle();
+    expect(card("sudo")).toMatchObject({ ended: "resolved" });
+    expect(card("secret")).not.toHaveProperty("ended");
+
+    await hermes.answerQuestion(chatId, secret, { kind: "value", value: "sk-weather-1" });
+    expect(server.settled.map((s) => s.id)).toEqual([secret]);
+  });
+
+  it.each([
+    ["without session.events.since", (server: FakeHermes) => (server.handlers["session.events.since"] = (r) => server.fail(r.id, -32601, "unknown method: session.events.since"))],
+    ["whose session.events.since lists no open requests", (server: FakeHermes) => (server.handlers["session.events.since"] = (r) => server.respond(r.id, { events: [], latest_seq: 0, truncated: false, count: 0 }))],
+  ])("never closes a card on a Hermes %s, until Hermes withdraws it", async (_, older) => {
+    const { server, hermes, runtime, card } = await replying();
+    older(server);
+    const id = server.askSudo(runtime)!;
+    server.answerElsewhere(id, "response");
+    server.event(runtime, "tool.complete", { tool_id: "t1" });
+    server.event(runtime, "message.complete", { status: "complete", text: "Done." });
+    await hermes.idle();
     expect(card("sudo")).not.toHaveProperty("ended");
+
+    const other = server.askSecret(runtime)!;
+    server.cancelRequest(other, "timeout");
+    expect(card("secret")).toMatchObject({ ended: "timeout" });
+  });
+
+  it("shows a question Hermes still waits on as waiting after a reconnect, though the turn that ran beside it ended", async () => {
+    vi.useFakeTimers();
+    const { server, hermes, id: chatId, runtime, card } = await replying();
+    const id = server.askSecret(runtime)!;
+    server.event(runtime, "message.complete", { status: "complete", text: "Done." });
+    await hermes.idle();
+    server.drop();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hermes.idle();
+    expect(card("secret")).toMatchObject({ id });
+    expect(card("secret")).not.toHaveProperty("ended");
+
+    await hermes.answerQuestion(chatId, id, { kind: "value", value: "sk-weather-1" });
+    expect(server.settled).toEqual([{ id, method: "secret", result: { value: "sk-weather-1" }, via: "request.answer" }]);
   });
 
   it("says Hermes had stopped waiting when the owner answers after the other app did", async () => {
