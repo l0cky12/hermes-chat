@@ -248,3 +248,38 @@ describe("The transcript", () => {
     });
   });
 });
+
+describe("A message that can't be drawn (#476)", () => {
+  it("shows an error in its place, while the other messages and the composer keep working", () => {
+    // React reports the caught error on the console, which Logs keeps.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const onSend = vi.fn();
+    const items: Item[] = [
+      { kind: "user", id: "u-0", text: "List the backup folder." },
+      { kind: "tool", id: "t-1", name: "terminal", status: "done", preview: 5 as never },
+      { kind: "assistant", id: "a-2", text: "14 snapshots." },
+    ];
+    render(
+      <ChatPane
+        chat={chatOf(items)}
+        status="connected"
+        draft="And their sizes?"
+        onDraft={() => {}}
+        onDraftStep={() => undefined}
+        onRetry={() => {}}
+        onEdit={() => {}}
+        onDismiss={() => {}}
+        onAttach={async () => ({ attachments: [], refused: [] })}
+        onSend={onSend}
+        onStop={() => {}}
+        onAnswer={() => {}}
+      />,
+    );
+    expect(item("u-0")?.textContent).toContain("List the backup folder.");
+    expect(item("a-2")?.textContent).toContain("14 snapshots.");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.queryByText("terminal")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(onSend).toHaveBeenCalledWith("And their sizes?", []);
+  });
+});
