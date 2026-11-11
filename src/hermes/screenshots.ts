@@ -33,8 +33,8 @@ export type ScreenshotSink = {
  * Every way a chat's staged attachments change, each chat's under its Draft key. `added`: attached in the composer, or
  * back from a message Hermes didn't confirm. `sent`: they went with a message, which holds them from then on (`hold`,
  * `sent`, `finish`). `removed`: the owner took them out. `gone`: the chat was deleted or archived. A file the desk owns
- * is deleted once it is removed, its chat goes, or its message no longer needs it, unless a chat still holds it; signing
- * out deletes them all (`dispose`).
+ * is staged in one chat at a time, so it is deleted once it is removed, its chat goes, or its message no longer needs
+ * it; signing out deletes them all (`dispose`). A file the owner picked from their own folders can be in several.
  */
 export type Staging =
   | { kind: "added"; key: string; attachments: readonly Attachment[] }
@@ -162,6 +162,14 @@ export class ScreenshotDesk {
       case "added":
         if (this.disposed) return this.release(e.attachments.map((a) => a.path));
         next = [...now, ...e.attachments.filter((a) => !now.some((x) => x.path === a.path))];
+        // An owned file reaches a second chat only when the owner picks it from the captures folder. It moves here:
+        // Rust deletes it once this chat's message no longer needs it, whichever chat still shows it.
+        for (const [key, files] of this.staged) {
+          const left = files.filter((a) => !(this.mine.has(a.path) && e.attachments.some((x) => x.path === a.path)));
+          if (key === e.key || left.length === files.length) continue;
+          if (left.length) this.staged.set(key, left);
+          else this.staged.delete(key);
+        }
         break;
       case "sent":
         next = now.filter((a) => !e.paths.includes(a.path));
@@ -213,12 +221,11 @@ export class ScreenshotDesk {
   }
 
   /**
-   * Deletes any of `paths` that are captures no message is sending and no chat holds. Others are ignored: a file the
-   * owner picked from their own folders is never deleted.
+   * Deletes any of `paths` that are captures no message is sending. Others are ignored: a file the owner picked from
+   * their own folders is never deleted.
    */
   release(paths: readonly string[]) {
-    const held = new Set([...this.staged.values()].flatMap((files) => files.map((a) => a.path)));
-    for (const p of paths) if (!this.sending.has(p) && !held.has(p) && this.mine.delete(p)) void this.api.discard(p).catch(() => {});
+    for (const p of paths) if (!this.sending.has(p) && this.mine.delete(p)) void this.api.discard(p).catch(() => {});
   }
 
   /** The app is signing out or closing: every capture not yet sent is deleted, and one still being taken will be. */
