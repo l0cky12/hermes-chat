@@ -137,9 +137,6 @@ beforeAll(() => {
   globalThis.CSS ??= { escape: (s: string) => s } as typeof CSS;
 });
 
-// Each test types a whole setup through; with the full suite running in parallel that can pass the 5 s default.
-vi.setConfig({ testTimeout: 20_000 });
-
 const SAVED = "hermes-chat.sign-in";
 let home: FakeHermes;
 
