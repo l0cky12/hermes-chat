@@ -10,8 +10,11 @@
 //!
 //! The webview names the page and where it shows; Rust checks the address as the pane does (`web_page::web_url`).
 
+use crate::annotate::{AnnotateError, Answer, Pick, Still};
+use crate::screenshot::Captures;
 use crate::server_page::Jar;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tauri::ipc::Channel;
 
 /// A rectangle in the window's CSS pixels, which are GTK's logical pixels: the app's page is never zoomed.
@@ -103,6 +106,23 @@ pub fn close(app: &tauri::AppHandle, key: String) {
     imp::close(app, key)
 }
 
+/// Takes a still of the page shown as `key` (ADR 0094) and writes it to the captures folder. The page keeps it, to check
+/// picks against, until the next still or the page closes.
+pub async fn annotate_still(app: &tauri::AppHandle, key: String, captures: Arc<Captures>) -> Result<Still, AnnotateError> {
+    imp::annotate_still(app, key, captures).await
+}
+
+/// What is under `(x, y)` on still `still`, `up` parents above the element there. `None`: nothing is.
+pub async fn annotate_query(app: &tauri::AppHandle, key: String, still: u64, x: f64, y: f64, up: u32) -> Result<Option<Answer>, AnnotateError> {
+    imp::annotate_query(app, key, still, x, y, up).await
+}
+
+/// Picks what is under `(x, y)` on still `still`: the element, if the page's pixels in its box still match the still's,
+/// or else its box as a region.
+pub async fn annotate_pick(app: &tauri::AppHandle, key: String, still: u64, x: f64, y: f64, up: u32) -> Result<Pick, AnnotateError> {
+    imp::annotate_pick(app, key, still, x, y, up).await
+}
+
 #[cfg(not(target_os = "linux"))]
 mod imp {
     use super::*;
@@ -114,15 +134,31 @@ mod imp {
     pub fn reload(_: &tauri::AppHandle, _: String) {}
     pub fn place(_: &tauri::AppHandle, _: String, _: Option<Placement>) {}
     pub fn close(_: &tauri::AppHandle, _: String) {}
+
+    fn unsupported() -> AnnotateError {
+        AnnotateError::Unsupported("Annotations need the page's own view, which only Linux has for now.".into())
+    }
+    pub async fn annotate_still(_: &tauri::AppHandle, _: String, _: Arc<Captures>) -> Result<Still, AnnotateError> {
+        Err(unsupported())
+    }
+    pub async fn annotate_query(_: &tauri::AppHandle, _: String, _: u64, _: f64, _: f64, _: u32) -> Result<Option<Answer>, AnnotateError> {
+        Err(unsupported())
+    }
+    pub async fn annotate_pick(_: &tauri::AppHandle, _: String, _: u64, _: f64, _: f64, _: u32) -> Result<Pick, AnnotateError> {
+        Err(unsupported())
+    }
 }
 
 #[cfg(target_os = "linux")]
 mod imp {
     use super::*;
+    use crate::annotate::{self, Pixels, QueryArgs, RegionWhy, Target};
     use gtk::prelude::*;
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
     use std::rc::Rc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
     use tauri::Manager;
     use webkit2gtk::{
         BackForwardListExt, BackForwardListItemExt, FileChooserRequestExt, LoadEvent, NetworkError, PermissionRequestExt, PolicyError, ScriptDialogType,
@@ -145,6 +181,7 @@ mod imp {
         moves: Rc<Moves>,
         jar: Option<Jar>,
         placement: Option<Placement>,
+        still: Option<Kept>,
     }
 
     pub(super) struct Moves {
@@ -158,6 +195,8 @@ mod imp {
         /// back, and says so).
         last: RefCell<(Option<String>, (usize, usize))>,
         answered: Cell<bool>,
+        /// Goes up each time the page moves, starts a load or loses its web process, so a still from before is stale.
+        generation: Cell<u64>,
     }
 
     impl Moves {
@@ -168,6 +207,7 @@ mod imp {
                 loading: Cell::new(false),
                 last: RefCell::default(),
                 answered: Cell::new(false),
+                generation: Cell::new(0),
             })
         }
 
@@ -185,9 +225,14 @@ mod imp {
             if !asked && kept && was == url {
                 return;
             }
+            self.moved();
             if let Some(url) = url.filter(|u| crate::web_page::web_url(u).is_ok()) {
                 self.send(PageEvent::At { url, replace: asked || kept });
             }
+        }
+
+        fn moved(&self) {
+            self.generation.set(self.generation.get() + 1);
         }
 
         fn ask(&self, url: url::Url) {
@@ -209,7 +254,10 @@ mod imp {
     pub(super) fn watch(view: &webkit2gtk::WebView, moves: &Rc<Moves>) {
         let m = moves.clone();
         view.connect_load_changed(move |view, event| match event {
-            LoadEvent::Started => m.loading.set(true),
+            LoadEvent::Started => {
+                m.loading.set(true);
+                m.moved();
+            }
             LoadEvent::Committed => {
                 m.loading.set(false);
                 m.answered.set(true);
@@ -265,6 +313,7 @@ mod imp {
         });
         let m = moves.clone();
         view.connect_web_process_terminated(move |_, _| {
+            m.moved();
             m.send(PageEvent::Failed { message: "The page stopped: WebKit's process for it ended.".into(), url: None });
         });
     }
@@ -315,7 +364,7 @@ mod imp {
         let moves = Moves::new(on_event);
         watch(&view, &moves);
         overlay.add_overlay(&view);
-        Page { key, view, moves, jar, placement: None }
+        Page { key, view, moves, jar, placement: None, still: None }
     }
 
     pub fn open(app: &tauri::AppHandle, key: String, on_event: Channel<PageEvent>) -> Result<(), String> {
@@ -506,10 +555,221 @@ mod imp {
         view
     }
 
+    // ---- annotations (ADR 0094) ----
+
+    /// How long the page has to answer a query, or to give the snapshot a pick checks against.
+    const ANSWER_WITHIN: Duration = Duration::from_secs(1);
+    /// How long the still itself may take.
+    const STILL_WITHIN: Duration = Duration::from_secs(3);
+    static NEXT_STILL: AtomicU64 = AtomicU64::new(1);
+
+    /// The still the page's annotation is being picked on, kept to check a pick's pixels against.
+    #[derive(Clone)]
+    pub(super) struct Kept {
+        pub id: u64,
+        pub generation: u64,
+        pub width: f64,
+        pub height: f64,
+        pub scale: f64,
+        pub pixels: Arc<Pixels>,
+    }
+
+    pub(super) struct Taken {
+        pub kept: Kept,
+        pub url: String,
+        pub taken_at_ms: u64,
+    }
+
+    type Done<T> = Box<dyn FnOnce(Result<T, AnnotateError>)>;
+
+    /// Starts `ask` with a cancellable and a callback, and calls `done` once: with what `ask` gives, or with `NoAnswer`
+    /// once `limit` passes, when the call is cancelled. A web process busy with the page's own script may never give
+    /// WebKit's callback back.
+    fn within<T: 'static>(limit: Duration, done: impl FnOnce(Result<T, AnnotateError>) + 'static, ask: impl FnOnce(&gio::Cancellable, Done<T>)) {
+        let cancellable = gio::Cancellable::new();
+        let done: Rc<RefCell<Option<Done<T>>>> = Rc::new(RefCell::new(Some(Box::new(done))));
+        let timer = Rc::new(Cell::new(None::<gtk::glib::SourceId>));
+        let (d, c, t) = (done.clone(), cancellable.clone(), timer.clone());
+        timer.set(Some(gtk::glib::timeout_add_local_once(limit, move || {
+            t.take();
+            c.cancel();
+            if let Some(done) = d.take() {
+                done(Err(AnnotateError::NoAnswer));
+            }
+        })));
+        ask(
+            &cancellable,
+            Box::new(move |answer| {
+                if let Some(timer) = timer.take() {
+                    timer.remove();
+                }
+                if let Some(done) = done.take() {
+                    done(answer);
+                }
+            }),
+        );
+    }
+
+    fn snapshot(view: &webkit2gtk::WebView, cancellable: &gio::Cancellable, done: Done<Pixels>) {
+        use webkit2gtk::{SnapshotOptions, SnapshotRegion};
+        view.snapshot(SnapshotRegion::Visible, SnapshotOptions::NONE, Some(cancellable), move |surface| {
+            let failed = |e: &dyn std::fmt::Display| AnnotateError::Failed(format!("Couldn't take a still of the page: {e}"));
+            let pixels = surface.map_err(|e| failed(&e)).and_then(|surface| {
+                let mut image = cairo::ImageSurface::try_from(surface).map_err(|_| failed(&"it isn't an image"))?;
+                image.flush();
+                let (width, height, stride) = (image.width() as usize, image.height() as usize, image.stride() as usize);
+                let data = image.data().map_err(|e| failed(&e))?.to_vec();
+                Pixels::new(width, height, stride, data).ok_or_else(|| failed(&"its size is wrong"))
+            });
+            done(pixels);
+        });
+    }
+
+    /// Takes a still of the page shown as `key`, and keeps it to check picks against.
+    pub(super) fn still_in(key: &str, done: impl FnOnce(Result<Taken, AnnotateError>) + 'static) {
+        let Some((view, moves)) = shown(key) else { return done(Err(AnnotateError::NoPage)) };
+        let Some(url) = view.uri().map(String::from).filter(|u| crate::web_page::web_url(u).is_ok()) else { return done(Err(AnnotateError::NoPage)) };
+        let generation = moves.generation.get();
+        let (width, height, scale) = (f64::from(view.allocated_width()), f64::from(view.allocated_height()), f64::from(view.scale_factor()));
+        let key = key.to_owned();
+        let keep = move |pixels: Result<Pixels, AnnotateError>| {
+            let pixels = pixels?;
+            if moves.generation.get() != generation {
+                return Err(AnnotateError::Stale);
+            }
+            let taken_at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+            let kept = Kept { id: NEXT_STILL.fetch_add(1, Ordering::Relaxed), generation, width, height, scale, pixels: Arc::new(pixels) };
+            let page = PAGE.with(|p| p.borrow_mut().as_mut().filter(|p| p.key == key).map(|p| p.still = Some(kept.clone())));
+            page.ok_or(AnnotateError::NoPage)?;
+            Ok(Taken { kept, url, taken_at_ms })
+        };
+        within(STILL_WITHIN, move |pixels| done(keep(pixels)), |cancellable, got| snapshot(&view, cancellable, got));
+    }
+
+    /// The page shown as `key`, and its still `still`, if the page hasn't moved since.
+    fn on_still(key: &str, still: u64) -> Result<(webkit2gtk::WebView, Rc<Moves>, Kept), AnnotateError> {
+        let found = PAGE.with(|p| {
+            let p = p.borrow();
+            let page = p.as_ref().filter(|p| p.key == key)?;
+            let kept = page.still.clone().filter(|k| k.id == still)?;
+            Some((page.view.clone(), page.moves.clone(), kept))
+        });
+        let (view, moves, kept) = found.ok_or(AnnotateError::NoPage)?;
+        if moves.generation.get() != kept.generation {
+            return Err(AnnotateError::Stale);
+        }
+        Ok((view, moves, kept))
+    }
+
+    fn ask(view: &webkit2gtk::WebView, moves: Rc<Moves>, generation: u64, args: QueryArgs, done: impl FnOnce(Result<Option<Answer>, AnnotateError>) + 'static) {
+        use javascriptcore::ValueExt;
+        let arguments = gtk::glib::VariantDict::new(None);
+        arguments.insert("x", args.x);
+        arguments.insert("y", args.y);
+        arguments.insert("up", f64::from(args.up));
+        let arguments = arguments.end();
+        within(ANSWER_WITHIN, done, |cancellable, done| {
+            view.call_async_javascript_function(annotate::QUERY, Some(&arguments), Some(annotate::WORLD), None, Some(cancellable), move |answer| {
+                if moves.generation.get() != generation {
+                    return done(Err(AnnotateError::Stale));
+                }
+                let json = answer.ok().filter(|v| v.is_string()).map(|v| v.to_str());
+                done(json.ok_or(AnnotateError::NoAnswer).and_then(|json| annotate::parse_answer(&json).map_err(|_| AnnotateError::NoAnswer)));
+            });
+        });
+    }
+
+    /// What is at `(x, y)` on still `still` of the page shown as `key`, `up` parents above the element there.
+    pub(super) fn query_in(key: &str, still: u64, x: f64, y: f64, up: u32, done: impl FnOnce(Result<Option<Answer>, AnnotateError>) + 'static) {
+        let asked = on_still(key, still).and_then(|(view, moves, kept)| Ok((QueryArgs::new(x, y, up, kept.width, kept.height)?, view, moves, kept)));
+        match asked {
+            Ok((args, view, moves, kept)) => ask(&view, moves, kept.generation, args, done),
+            Err(e) => done(Err(e)),
+        }
+    }
+
+    /// Picks what is at `(x, y)` on still `still`: the element, if the page's pixels in its box still match the still's;
+    /// otherwise its box as a region.
+    pub(super) fn pick_in(key: &str, still: u64, x: f64, y: f64, up: u32, done: impl FnOnce(Result<Pick, AnnotateError>) + 'static) {
+        let asked = on_still(key, still).and_then(|(view, moves, kept)| Ok((QueryArgs::new(x, y, up, kept.width, kept.height)?, view, moves, kept)));
+        let (args, view, moves, kept) = match asked {
+            Ok(asked) => asked,
+            Err(e) => return done(Err(e)),
+        };
+        let check = view.clone();
+        ask(&view, moves.clone(), kept.generation, args, move |answer| {
+            let answer = match answer {
+                Ok(Some(answer)) => answer,
+                Ok(None) => return done(Err(AnnotateError::NoAnswer)),
+                Err(e) => return done(Err(e)),
+            };
+            let rect = answer.rect;
+            if let Target::OtherSite { host } = &answer.target {
+                return done(Ok(Pick::Region { rect, why: RegionWhy::OtherSite { host: host.clone() } }));
+            }
+            let compare = move |now: Result<Pixels, AnnotateError>| {
+                if moves.generation.get() != kept.generation {
+                    return done(Err(AnnotateError::Stale));
+                }
+                let why = match now {
+                    Err(_) => Some(RegionWhy::NoAnswer),
+                    Ok(now) if annotate::box_changed(&kept.pixels, &now, rect, kept.scale) => Some(RegionWhy::Changed),
+                    Ok(_) => None,
+                };
+                done(Ok(match why {
+                    Some(why) => Pick::Region { rect, why },
+                    None => Pick::Element(answer),
+                }));
+            };
+            within(ANSWER_WITHIN, compare, |cancellable, got| snapshot(&check, cancellable, got));
+        });
+    }
+
+    /// Runs `start` on the main thread, GTK's, and waits for what it gives `done`.
+    async fn on_main<T: Send + 'static>(app: &tauri::AppHandle, start: impl FnOnce(Done<T>) + Send + 'static) -> Result<T, AnnotateError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || {
+            start(Box::new(move |answer| {
+                let _ = tx.send(answer);
+            }))
+        })
+        .map_err(|e| AnnotateError::Failed(e.to_string()))?;
+        rx.await.unwrap_or(Err(AnnotateError::NoAnswer))
+    }
+
+    pub async fn annotate_still(app: &tauri::AppHandle, key: String, captures: Arc<Captures>) -> Result<Still, AnnotateError> {
+        let Taken { kept, url, taken_at_ms } = on_main(app, move |done| still_in(&key, done)).await?;
+        let pixels = kept.pixels.clone();
+        let path = tokio::task::spawn_blocking(move || {
+            let png = annotate::png(&pixels)?;
+            captures.write("still", &png).map_err(|e| AnnotateError::Failed(e.to_string()))
+        })
+        .await
+        .map_err(|e| AnnotateError::Failed(e.to_string()))??;
+        Ok(Still {
+            id: kept.id,
+            generation: kept.generation,
+            path: path.to_string_lossy().into_owned(),
+            url,
+            taken_at_ms,
+            width: kept.width,
+            height: kept.height,
+            scale: kept.scale,
+        })
+    }
+
+    pub async fn annotate_query(app: &tauri::AppHandle, key: String, still: u64, x: f64, y: f64, up: u32) -> Result<Option<Answer>, AnnotateError> {
+        on_main(app, move |done| query_in(&key, still, x, y, up, done)).await
+    }
+
+    pub async fn annotate_pick(app: &tauri::AppHandle, key: String, still: u64, x: f64, y: f64, up: u32) -> Result<Pick, AnnotateError> {
+        on_main(app, move |done| pick_in(&key, still, x, y, up, done)).await
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
-        use std::time::{Duration, Instant};
+        use std::time::Instant;
 
         /// The name and parent of process `pid`.
         fn stat(pid: u32) -> Option<(String, u32)> {
@@ -635,116 +895,71 @@ Object.defineProperty(document.getElementById('save'), 'innerText', {{ get() {{ 
             )
         }
 
-        /// The hostile page, shown in an overlay at 640×480 as the app shows it.
+        const KEY: &str = "page";
+
+        /// The page at `url`, opened and shown as the app shows one: at 640×480 in an overlay over the app's view.
+        fn open_page(url: &str) -> (gtk::Window, gtk::Overlay, webkit2gtk::WebView) {
+            gtk::init().expect("a display");
+            let overlay = gtk::Overlay::new();
+            overlay.add(&gtk::Label::new(Some("app")));
+            overlay.connect_get_child_position(|_, _| {
+                let (x, y, w, h) = AT.with(Cell::get);
+                Some(gtk::gdk::Rectangle::new(x, y, w, h))
+            });
+            let window = gtk::Window::new(gtk::WindowType::Toplevel);
+            window.set_default_size(1000, 700);
+            window.add(&overlay);
+            window.show_all();
+            open_in(&overlay, KEY.into(), Channel::new(|_| Ok(())));
+            let (view, _) = shown(KEY).unwrap();
+            let loaded = Rc::new(Cell::new(false));
+            let l = loaded.clone();
+            view.connect_load_changed(move |_, event| l.set(l.get() || event == LoadEvent::Finished));
+            go(KEY, url::Url::parse(url).unwrap(), None);
+            show_at(&overlay, &view, Some(&Placement { rect: Rect { x: 100.0, y: 50.0, width: 640.0, height: 480.0 }, holes: vec![] }));
+            run_until(|| loaded.get(), 120, "the page loads");
+            run_for(1000);
+            (window, overlay, view)
+        }
+
         fn hostile_view() -> (gtk::Window, gtk::Overlay, webkit2gtk::WebView) {
             let cross = serve(|_| "<button style='width:100%;height:100%'>Cross</button>".into());
             let port = serve(move |path| match path {
                 "/frame" => "<body style='margin:0'><button id=inner style='width:150px;height:50px'>Inner button</button></body>".into(),
                 _ => hostile_page(cross),
             });
-            gtk::init().expect("a display");
-            let view = page_webview(&page_context());
-            view.set_no_show_all(true);
-            let window = gtk::Window::new(gtk::WindowType::Toplevel);
-            window.set_default_size(1000, 700);
-            let overlay = gtk::Overlay::new();
-            overlay.add(&gtk::Label::new(Some("app")));
-            overlay.connect_get_child_position(|_, _| Some(gtk::gdk::Rectangle::new(100, 50, 640, 480)));
-            overlay.add_overlay(&view);
-            window.add(&overlay);
-            window.show_all();
-            view.show();
-            let loaded = Rc::new(Cell::new(false));
-            let l = loaded.clone();
-            view.connect_load_changed(move |_, event| l.set(l.get() || event == LoadEvent::Finished));
-            view.load_uri(&format!("http://127.0.0.1:{port}/"));
-            run_until(|| loaded.get(), 120, "the page loads");
-            run_for(1000);
-            (window, overlay, view)
+            open_page(&format!("http://127.0.0.1:{port}/"))
         }
 
-        struct Shot {
-            width: i32,
-            height: i32,
-            stride: i32,
-            data: Vec<u8>,
+        fn plain_view() -> (gtk::Window, gtk::Overlay, webkit2gtk::WebView) {
+            let port = serve(|_| "<body style='margin:0;background:rgb(10,20,30)'><button style='width:100px;height:40px'>Go</button></body>".into());
+            open_page(&format!("http://127.0.0.1:{port}/"))
         }
 
-        fn snapshot(view: &webkit2gtk::WebView) -> Shot {
-            use webkit2gtk::{SnapshotOptions, SnapshotRegion};
-            let out: Rc<RefCell<Option<Result<Shot, String>>>> = Rc::default();
+        fn wait<T: 'static>(start: impl FnOnce(Done<T>)) -> Result<T, AnnotateError> {
+            let out = Rc::new(RefCell::new(None));
             let o = out.clone();
-            view.snapshot(SnapshotRegion::Visible, SnapshotOptions::NONE, None::<&gio::Cancellable>, move |r| {
-                let shot = r.map_err(|e| e.to_string()).and_then(|surface| {
-                    let mut image = gtk::cairo::ImageSurface::try_from(surface).map_err(|_| "not an image surface".to_owned())?;
-                    image.flush();
-                    let (width, height, stride) = (image.width(), image.height(), image.stride());
-                    let data = image.data().map_err(|e| e.to_string())?.to_vec();
-                    Ok(Shot { width, height, stride, data })
-                });
-                o.replace(Some(shot));
-            });
-            run_until(|| out.borrow().is_some(), 20, "a snapshot");
-            out.take().unwrap().expect("a snapshot")
-        }
-
-        /// Differing pixels inside a box in CSS pixels, scaled into device pixels, and the box's pixel count.
-        fn differing(a: &Shot, b: &Shot, (x, y, w, h): (f64, f64, f64, f64), scale: f64) -> (usize, usize) {
-            let (x0, y0, x1, y1) = ((x * scale) as i32, (y * scale) as i32, ((x + w) * scale) as i32, ((y + h) * scale) as i32);
-            let (mut differ, mut all) = (0, 0);
-            for row in y0.max(0)..y1.min(a.height).min(b.height) {
-                for col in x0.max(0)..x1.min(a.width).min(b.width) {
-                    let (ia, ib) = ((row * a.stride + col * 4) as usize, (row * b.stride + col * 4) as usize);
-                    all += 1;
-                    differ += usize::from(a.data[ia..ia + 4] != b.data[ib..ib + 4]);
-                }
-            }
-            (differ, all)
-        }
-
-        const PROBE_QUERY: &str = r#"
-let doc = document, px = x, py = y, el = null, depth = 0, crossHost = null, offX = 0, offY = 0;
-for (;;) {
-  el = doc.elementFromPoint(px, py);
-  if (!el) break;
-  if ((el.tagName === 'IFRAME' || el.tagName === 'FRAME') && depth < 4) {
-    let inner = null;
-    try { inner = el.contentDocument; } catch (e) {}
-    const r = el.getBoundingClientRect();
-    if (!inner) { try { crossHost = new URL(el.src).host; } catch (e) {} break; }
-    const dx = r.left + el.clientLeft, dy = r.top + el.clientTop;
-    px -= dx; py -= dy; offX += dx; offY += dy;
-    doc = inner; depth++;
-    continue;
-  }
-  break;
-}
-for (let i = 0; i < up && el && el.parentElement; i++) el = el.parentElement;
-if (!el) return JSON.stringify(null);
-const r = el.getBoundingClientRect();
-globalThis.__isoMark = 1;
-return JSON.stringify({
-  tag: el.tagName.toLowerCase(), text: (el.innerText || '').replace(/\s+/g, ' ').slice(0, 120),
-  rect: [r.left + offX, r.top + offY, r.width, r.height], depth, crossHost,
-  color: el.ownerDocument.defaultView.getComputedStyle(el).color,
-  jsonIsNative: JSON.stringify.toString().includes('[native code]'),
-});
-"#;
-
-        fn ask(view: &webkit2gtk::WebView, body: &str, x: f64, y: f64, up: u32) -> serde_json::Value {
-            use javascriptcore::ValueExt;
-            let args = gtk::glib::VariantDict::new(None);
-            args.insert("x", x);
-            args.insert("y", y);
-            args.insert("up", f64::from(up));
-            let out: Rc<RefCell<Option<Result<String, String>>>> = Rc::default();
-            let o = out.clone();
-            view.call_async_javascript_function(body, Some(&args.end()), Some("hermes-chat-annotate"), None, None::<&gio::Cancellable>, move |r| {
-                o.replace(Some(r.map(|v| v.to_str().to_string()).map_err(|e| e.to_string())));
-            });
+            start(Box::new(move |answer| {
+                o.replace(Some(answer));
+            }));
             run_until(|| out.borrow().is_some(), 20, "an answer");
-            let answer = out.take().unwrap().expect("an answer");
-            serde_json::from_str(&answer).unwrap_or_else(|e| panic!("{e}: {answer}"))
+            out.take().unwrap()
+        }
+
+        /// A still of the page, which then hides behind it, as the Preview hides it.
+        fn take_still(overlay: &gtk::Overlay, view: &webkit2gtk::WebView) -> Taken {
+            let taken = wait(|done| still_in(KEY, done)).expect("a still");
+            hide(overlay, view);
+            run_for(300);
+            taken
+        }
+
+        fn query(still: u64, x: f64, y: f64, up: u32) -> Result<Option<Answer>, AnnotateError> {
+            wait(|done| query_in(KEY, still, x, y, up, done))
+        }
+
+        fn pick(still: u64, x: f64, y: f64, up: u32) -> Result<Pick, AnnotateError> {
+            wait(|done| pick_in(KEY, still, x, y, up, done))
         }
 
         fn in_page(view: &webkit2gtk::WebView, js: &str) -> String {
@@ -758,73 +973,152 @@ return JSON.stringify({
             out.take().unwrap()
         }
 
-        /// The facts ADR 0094 builds on, with WebKit's own calls: a hidden view snapshots in device pixels and matches
-        /// the still while nothing changes; it answers a function in an isolated world, which the page's replacements
-        /// don't reach and which the page can't see; same-origin frames are entered, and another site's gives its host.
+        fn element(pick: &Pick) -> (&Answer, Option<&str>, &str, &std::collections::BTreeMap<annotate::StyleProp, annotate::Text<80>>) {
+            match pick {
+                Pick::Element(answer @ Answer { target: Target::Element { label, selector, styles, .. }, .. }) => {
+                    (answer, label.as_ref().map(|l| l.as_str()), selector.as_str(), styles)
+                }
+                other => panic!("not an element: {other:?}"),
+            }
+        }
+
+        fn rect(x: f64, y: f64, width: f64, height: f64) -> annotate::Rect {
+            annotate::Rect { x, y, width, height }
+        }
+
+        /// A hidden page answers the query from its isolated world, which the page's own replacements of
+        /// elementFromPoint, getBoundingClientRect, getComputedStyle, JSON.stringify and innerText don't reach, and its
+        /// snapshot matches the still. Nothing the page holds in a field, a hidden input, a data attribute, a
+        /// secret-looking class or a signed background address comes out.
         #[test]
         #[ignore = "needs a display, a session bus and GTK on one thread, so one test a process: xvfb-run -a dbus-run-session -- cargo test --lib page_view::imp::tests::a_hidden_page -- --ignored"]
         fn a_hidden_page_answers_from_an_isolated_world_and_snapshots() {
             let (_window, overlay, view) = hostile_view();
-            let scale = f64::from(view.scale_factor());
-            let (width, height) = (view.allocated_width(), view.allocated_height());
-            assert_eq!((width, height), (640, 480), "the view's box");
-
             let started = Instant::now();
-            let still = snapshot(&view);
-            eprintln!("scale {scale}: visible snapshot {}×{} in {:?}", still.width, still.height, started.elapsed());
-            assert_eq!((still.width, still.height), (width * scale as i32, height * scale as i32), "the still is in device pixels");
-
+            let taken = wait(|done| still_in(KEY, done)).expect("a still");
+            let scale = taken.kept.scale;
+            eprintln!("scale {scale}: still {}×{} in {:?}", taken.kept.pixels.width(), taken.kept.pixels.height(), started.elapsed());
             hide(&overlay, &view);
             run_for(300);
-            assert!(!view.is_visible());
-            let mut times = Vec::new();
-            let mut hidden = None;
-            for _ in 0..5 {
-                let started = Instant::now();
-                hidden = Some(snapshot(&view));
-                times.push(started.elapsed());
-            }
-            let hidden = hidden.unwrap();
-            eprintln!("scale {scale}: hidden snapshots {}×{} in {times:?}", hidden.width, hidden.height);
-            assert_eq!((hidden.width, hidden.height), (still.width, still.height));
-            let (differ, all) = differing(&still, &hidden, (0.0, 0.0, 640.0, 480.0), scale);
-            eprintln!("scale {scale}: hidden against visible, {differ} of {all} pixels differ");
-            assert_eq!(differ, 0, "an unchanged hidden page matches the still");
+            assert!(!view.is_visible(), "the page hides behind the still");
+            let id = taken.kept.id;
 
-            let save = ask(&view, PROBE_QUERY, 60.0, 50.0, 0);
-            assert_eq!(save["tag"], "button");
-            assert_eq!(save["text"], "Save changes", "the real text, not the page's getter");
-            assert_eq!(save["rect"], serde_json::json!([40, 40, 120, 36]), "the real box, not the page's");
-            assert_eq!(save["color"], "rgb(255, 255, 255)", "the real computed style");
-            assert_eq!(save["jsonIsNative"], true);
-            assert_eq!(ask(&view, PROBE_QUERY, 60.0, 50.0, 1)["tag"], "body", "up climbs to the parent");
-            let same = ask(&view, PROBE_QUERY, 60.0, 180.0, 0);
-            assert_eq!((&same["tag"], &same["text"], &same["depth"]), (&"button".into(), &"Inner button".into(), &1.into()), "a same-origin frame is entered");
-            assert_eq!(same["rect"], serde_json::json!([40, 160, 150, 50]), "in the top page's pixels");
-            let cross = ask(&view, PROBE_QUERY, 300.0, 180.0, 0);
-            assert_eq!(cross["tag"], "iframe");
-            assert!(cross["crossHost"].as_str().is_some_and(|h| h.starts_with("localhost:")), "another site's frame gives its host: {cross}");
+            let started = Instant::now();
+            let save = pick(id, 60.0, 50.0, 0).expect("a pick");
+            eprintln!("scale {scale}: a pick (query and check snapshot) in {:?}", started.elapsed());
+            let (answer, label, selector, styles) = element(&save);
+            assert_eq!(answer.rect, rect(40.0, 40.0, 120.0, 36.0), "the real box, not the page's");
+            assert_eq!(label, Some("Save changes"), "the real text, not the page's getter");
+            assert_eq!(selector, "html > body > button#save.primary", "no session-like class");
+            assert_eq!(styles[&annotate::StyleProp::Color].as_str(), "rgb(255, 255, 255)", "the real computed style");
+            assert_eq!(answer.view.scale, scale);
+
+            let password = query(id, 210.0, 45.0, 0).unwrap().unwrap();
+            assert!(matches!(password.target, Target::Field { field: annotate::Field::Password, label: None, .. }), "{password:?}");
+            let background = pick(id, 50.0, 110.0, 0).unwrap();
+            let (_, _, selector, _) = element(&background);
+            assert_eq!(selector, "html > body > div#bg");
+            let same = pick(id, 60.0, 180.0, 0).unwrap();
+            let (answer, label, selector, _) = element(&same);
+            assert_eq!(
+                (answer.rect, label, selector),
+                (rect(40.0, 160.0, 150.0, 50.0), Some("Inner button"), "html > body > button#inner"),
+                "a same-origin frame is entered"
+            );
+            let frame = query(id, 60.0, 180.0, 3).unwrap().unwrap();
+            assert!(matches!(&frame.target, Target::Element { tag, .. } if tag.as_str() == "iframe"), "up climbs out of the frame: {frame:?}");
+            assert_eq!(frame.rect, rect(40.0, 160.0, 200.0, 100.0));
+            let cross = pick(id, 300.0, 180.0, 0).unwrap();
+            assert!(
+                matches!(&cross, Pick::Region { rect: r, why: RegionWhy::OtherSite { host } } if *r == rect(260.0, 160.0, 200.0, 100.0) && serde_json::to_value(host).unwrap().as_str().unwrap().starts_with("localhost:")),
+                "another site's frame is a region named by its host: {cross:?}"
+            );
+            let long = query(id, 50.0, 310.0, 0).unwrap().unwrap();
+            let Target::Element { label: Some(long_label), .. } = &long.target else { panic!("{long:?}") };
+            assert_eq!(long_label.as_str().chars().count(), 80);
+            let body = query(id, 60.0, 50.0, 1).unwrap().unwrap();
+            assert!(matches!(&body.target, Target::Element { tag, .. } if tag.as_str() == "body"), "up climbs to the parent");
+
+            let said = serde_json::to_string(&(&save, &password, &background, &same, &frame, &cross, &long, &body)).unwrap();
+            for secret in ["hunter2", "CSRF999", "SECRETSIG", "TOK123", "session-8f3a", "EVIL", "evil"] {
+                assert!(!said.contains(secret), "{secret} came out: {said}");
+            }
+            assert_eq!(in_page(&view, "JSON.stringify({})"), "\"evil\"", "the page's own replacements were in place");
+            assert_eq!(in_page(&view, "document.visibilityState"), "hidden");
+
             let mut latency: Vec<Duration> = (0..20)
                 .map(|_| {
                     let started = Instant::now();
-                    ask(&view, PROBE_QUERY, 60.0, 50.0, 0);
+                    query(id, 60.0, 50.0, 0).unwrap();
                     started.elapsed()
                 })
                 .collect();
             latency.sort();
             eprintln!("scale {scale}: hidden query min {:?}, median {:?}, max {:?}", latency[0], latency[10], latency[19]);
-            assert_eq!(in_page(&view, "typeof __isoMark"), "undefined", "the page can't see the isolated world");
-            assert_eq!(in_page(&view, "document.visibilityState"), "hidden");
 
-            in_page(&view, "document.getElementById('save').style.left = '300px'");
+            in_page(&view, "document.getElementById('save').style.background = 'rgb(200, 0, 0)'");
             run_for(300);
-            let (differ, all) = differing(&still, &snapshot(&view), (40.0, 40.0, 120.0, 36.0), scale);
-            eprintln!("scale {scale}: after the page moved the button, {differ} of {all} pixels in its box differ");
-            assert!(differ * 2 > all, "a page that changed doesn't match the still");
+            let moved = pick(id, 60.0, 50.0, 0).unwrap();
+            assert!(matches!(moved, Pick::Region { why: RegionWhy::Changed, .. }), "a page that changed under the still gives a region: {moved:?}");
+        }
 
-            view.show();
+        #[test]
+        #[ignore = "needs a display, a session bus and GTK on one thread, so one test a process: xvfb-run -a dbus-run-session -- cargo test --lib page_view::imp::tests::a_still_is -- --ignored"]
+        fn a_still_is_in_device_pixels() {
+            let (_window, _overlay, view) = plain_view();
+            let scale = f64::from(view.scale_factor());
+            let taken = wait(|done| still_in(KEY, done)).expect("a still");
+            assert!(taken.url.starts_with("http://127.0.0.1:"), "{}", taken.url);
+            assert_eq!((taken.kept.width, taken.kept.height, taken.kept.scale), (640.0, 480.0, scale), "the view's size in CSS pixels, and its scale");
+            let device = ((640.0 * scale) as usize, (480.0 * scale) as usize);
+            assert_eq!((taken.kept.pixels.width(), taken.kept.pixels.height()), device);
+            let png = annotate::png(&taken.kept.pixels).unwrap();
+            let image = cairo::ImageSurface::create_from_png(&mut png.as_slice()).unwrap();
+            assert_eq!((image.width() as usize, image.height() as usize), device, "the PNG too");
+            eprintln!("scale {scale}: still {}×{} device pixels for a 640×480 view, PNG {} bytes", device.0, device.1, png.len());
+        }
+
+        #[test]
+        #[ignore = "needs a display, a session bus and GTK on one thread, so one test a process: xvfb-run -a dbus-run-session -- cargo test --lib page_view::imp::tests::a_page_that_moves -- --ignored"]
+        fn a_page_that_moves_makes_its_still_stale() {
+            let (_window, overlay, view) = plain_view();
+            let first = take_still(&overlay, &view).kept.id;
+            assert!(query(first, 20.0, 20.0, 0).unwrap().is_some());
+            in_page(&view, "history.pushState({}, '', '/moved')");
             run_for(300);
-            assert_eq!(snapshot(&view).width, still.width, "the view shows again");
+            assert_eq!(query(first, 20.0, 20.0, 0), Err(AnnotateError::Stale), "pushState after the still");
+            assert_eq!(pick(first, 20.0, 20.0, 0), Err(AnnotateError::Stale));
+
+            let second = take_still(&overlay, &view).kept.id;
+            assert!(query(second, 20.0, 20.0, 0).unwrap().is_some(), "a new still works");
+            assert_eq!(query(first, 20.0, 20.0, 0), Err(AnnotateError::NoPage), "the page keeps only its latest still");
+            assert!(matches!(query(second, 640.0, 20.0, 0), Err(AnnotateError::Failed(_))), "a point off the still");
+            in_page(&view, "location.hash = 'there'");
+            run_for(300);
+            assert_eq!(query(second, 20.0, 20.0, 0), Err(AnnotateError::Stale), "a fragment after the still");
+            let third = take_still(&overlay, &view).kept.id;
+            in_page(&view, "location.reload()");
+            run_for(1000);
+            assert_eq!(query(third, 20.0, 20.0, 0), Err(AnnotateError::Stale), "a load after the still");
+        }
+
+        #[test]
+        #[ignore = "needs a display, a session bus and GTK on one thread, so one test a process: xvfb-run -a dbus-run-session -- cargo test --lib page_view::imp::tests::a_busy_page -- --ignored"]
+        fn a_busy_page_gives_no_answer_within_a_second() {
+            let (_window, overlay, view) = plain_view();
+            let id = take_still(&overlay, &view).kept.id;
+            view.evaluate_javascript("const end = Date.now() + 4000; while (Date.now() < end) {}", None, None, None::<&gio::Cancellable>, |_| {});
+            let started = Instant::now();
+            let busy = query(id, 20.0, 20.0, 0);
+            let took = started.elapsed();
+            eprintln!("a busy page: {busy:?} after {took:?}");
+            assert_eq!(busy, Err(AnnotateError::NoAnswer));
+            assert!(took >= Duration::from_millis(950) && took < Duration::from_millis(1800), "{took:?}");
+            let started = Instant::now();
+            assert_eq!(pick(id, 20.0, 20.0, 0), Err(AnnotateError::NoAnswer));
+            assert!(started.elapsed() < Duration::from_millis(1800));
+            run_for(4000);
+            assert!(query(id, 20.0, 20.0, 0).unwrap().is_some(), "it answers once it is free");
         }
     }
 }

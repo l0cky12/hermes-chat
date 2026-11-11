@@ -3,8 +3,10 @@
 //! from the answer's shape alone. A form field's value has no place in these types, and a raw answer that carries any
 //! key the query doesn't send is refused whole.
 
+use crate::screenshot::{CaptureError, Captures};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 /// The body of the function the page runs, with `x`, `y` and `up` as its arguments.
 pub const QUERY: &str = include_str!("annotate_query.js");
@@ -145,11 +147,12 @@ impl Rect {
         [self.x, self.y, self.width, self.height].iter().all(|v| v.is_finite()) && self.width >= 0.0 && self.height >= 0.0
     }
 
-    /// This box cut to `width` × `height` from the origin, if any of it is left.
+    /// This box cut to `width` × `height` from the origin, unless it lies outside. A box with no size (a body whose
+    /// children are all positioned) stays one.
     pub fn clip(&self, width: f64, height: f64) -> Option<Rect> {
         let (x0, y0) = (self.x.max(0.0), self.y.max(0.0));
         let (x1, y1) = ((self.x + self.width).min(width), (self.y + self.height).min(height));
-        (x1 > x0 && y1 > y0).then_some(Rect { x: x0, y: y0, width: x1 - x0, height: y1 - y0 })
+        (x1 >= x0 && y1 >= y0).then_some(Rect { x: x0, y: y0, width: x1 - x0, height: y1 - y0 })
     }
 }
 
@@ -446,14 +449,6 @@ impl Pixels {
     pub fn height(&self) -> usize {
         self.height
     }
-
-    pub fn stride(&self) -> usize {
-        self.stride
-    }
-
-    pub fn data(&self) -> &[u8] {
-        &self.data
-    }
 }
 
 /// Whether any pixel inside `rect` (CSS pixels, scaled by `scale` into device pixels) differs between the still and
@@ -469,6 +464,66 @@ pub fn box_changed(still: &Pixels, now: &Pixels, rect: Rect, scale: f64) -> bool
         let (a, b) = (row * still.stride, row * now.stride);
         still.data[a + x0 * 4..a + x1 * 4] != now.data[b + x0 * 4..b + x1 * 4]
     })
+}
+
+/// The PNG of a still.
+#[cfg(target_os = "linux")]
+pub fn png(pixels: &Pixels) -> Result<Vec<u8>, AnnotateError> {
+    let failed = |e: &dyn std::fmt::Display| AnnotateError::Failed(format!("Couldn't keep the still: {e}"));
+    let (width, height, stride) = (pixels.width as i32, pixels.height as i32, pixels.stride as i32);
+    let image = cairo::ImageSurface::create_for_data(pixels.data.clone(), cairo::Format::ARgb32, width, height, stride).map_err(|e| failed(&e))?;
+    let mut png = Vec::new();
+    image.write_to_png(&mut png).map_err(|e| failed(&e))?;
+    Ok(png)
+}
+
+/// The longest side a staged annotation's image may have.
+const MAX_SIDE: f64 = 2560.0;
+
+/// Stages the still at `still` as annotation `n`: outlined at `rect` (CSS pixels) times `scale`, scaled down to at most
+/// 2560 pixels on its longest side, and written as `annotation-<n>.png`. The still is deleted once the annotation is
+/// written.
+#[cfg(target_os = "linux")]
+pub fn stage(captures: &Captures, still: &Path, n: u32, rect: Rect, scale: f64) -> Result<PathBuf, CaptureError> {
+    let failed = |e: &dyn std::fmt::Display| CaptureError::Failed(format!("Couldn't mark the still: {e}"));
+    if !captures.owns(still) {
+        return Err(CaptureError::Failed("That still isn't one the app took.".into()));
+    }
+    if !(1..=999).contains(&n) || !rect.sound() || !(scale > 0.0 && scale <= 16.0) {
+        return Err(CaptureError::Failed("That mark isn't on the still.".into()));
+    }
+    let mut file = std::fs::File::open(still).map_err(|e| failed(&e))?;
+    let image = cairo::ImageSurface::create_from_png(&mut file).map_err(|e| failed(&e))?;
+    let line = 2.0 * scale;
+    let cx = cairo::Context::new(&image).map_err(|e| failed(&e))?;
+    cx.set_source_rgb(37.0 / 255.0, 99.0 / 255.0, 235.0 / 255.0);
+    cx.set_line_width(line);
+    cx.rectangle(rect.x * scale + line / 2.0, rect.y * scale + line / 2.0, (rect.width * scale - line).max(0.0), (rect.height * scale - line).max(0.0));
+    cx.stroke().map_err(|e| failed(&e))?;
+    drop(cx);
+    let fit = (MAX_SIDE / f64::from(image.width().max(image.height()))).min(1.0);
+    let out = if fit < 1.0 {
+        let (width, height) = ((f64::from(image.width()) * fit).round() as i32, (f64::from(image.height()) * fit).round() as i32);
+        let smaller = cairo::ImageSurface::create(cairo::Format::ARgb32, width.max(1), height.max(1)).map_err(|e| failed(&e))?;
+        let cx = cairo::Context::new(&smaller).map_err(|e| failed(&e))?;
+        cx.scale(fit, fit);
+        cx.set_source_surface(&image, 0.0, 0.0).map_err(|e| failed(&e))?;
+        cx.paint().map_err(|e| failed(&e))?;
+        drop(cx);
+        smaller
+    } else {
+        image
+    };
+    let mut png = Vec::new();
+    out.write_to_png(&mut png).map_err(|e| failed(&e))?;
+    let path = captures.write(&format!("annotation-{n}"), &png)?;
+    captures.discard(still);
+    Ok(path)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn stage(_: &Captures, _: &Path, _: u32, _: Rect, _: f64) -> Result<PathBuf, CaptureError> {
+    Err(CaptureError::Unsupported("Annotations are made on Linux only for now.".into()))
 }
 
 #[cfg(test)]
@@ -738,5 +793,87 @@ mod tests {
             serde_json::to_value(region).unwrap(),
             json!({ "kind": "region", "rect": { "x": 1.0, "y": 2.0, "width": 3.0, "height": 4.0 }, "why": { "kind": "changed" } })
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    mod staging {
+        use super::*;
+
+        struct Folder(PathBuf);
+        impl Drop for Folder {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        fn captures(tag: &str) -> (Folder, Captures) {
+            let base = std::env::temp_dir().join(format!("hermes-chat-annotate-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            let captures = Captures::open(base.join("captures")).unwrap();
+            (Folder(base), captures)
+        }
+
+        /// A grey still `width` × `height` device pixels, kept as a capture.
+        fn still(captures: &Captures, width: usize, height: usize) -> PathBuf {
+            let pixels = Pixels::new(width, height, width * 4, [0x80, 0x80, 0x80, 0xff].repeat(width * height)).unwrap();
+            captures.write("still", &png(&pixels).unwrap()).unwrap()
+        }
+
+        /// The colour at `(x, y)` of a PNG, as `[r, g, b]`.
+        fn rgb(image: &mut cairo::ImageSurface, x: usize, y: usize) -> [u8; 3] {
+            let stride = image.stride() as usize;
+            let data = image.data().unwrap();
+            let i = y * stride + x * 4;
+            [data[i + 2], data[i + 1], data[i]]
+        }
+
+        fn open(path: &Path) -> cairo::ImageSurface {
+            cairo::ImageSurface::create_from_png(&mut std::fs::File::open(path).unwrap()).unwrap()
+        }
+
+        #[test]
+        fn staging_outlines_the_mark_and_deletes_the_still() {
+            let (_folder, captures) = captures("outline");
+            let at = still(&captures, 400, 200);
+            let rect = Rect { x: 10.0, y: 10.0, width: 50.0, height: 20.0 };
+            let staged = stage(&captures, &at, 1, rect, 2.0).unwrap();
+            assert_eq!(staged.file_name().unwrap(), "annotation-1.png");
+            assert!(captures.owns(&staged));
+            assert!(!at.exists() && !at.parent().unwrap().exists(), "the still is deleted");
+            let mut image = open(&staged);
+            assert_eq!((image.width(), image.height()), (400, 200), "a small still keeps its size");
+            let blue = [37, 99, 235];
+            assert_eq!(rgb(&mut image, 21, 40), blue, "the box's left edge, 2 CSS px wide at scale 2");
+            assert_eq!(rgb(&mut image, 70, 21), blue, "its top edge");
+            assert_eq!(rgb(&mut image, 118, 58), blue, "its bottom-right corner");
+            assert_eq!(rgb(&mut image, 40, 40), [0x80; 3], "inside the outline");
+            assert_eq!(rgb(&mut image, 18, 40), [0x80; 3], "outside the box");
+            assert_eq!(rgb(&mut image, 121, 40), [0x80; 3], "outside the box");
+        }
+
+        #[test]
+        fn a_large_still_is_staged_at_2560_pixels_at_most() {
+            let (_folder, captures) = captures("large");
+            let at = still(&captures, 3000, 1000);
+            let staged = stage(&captures, &at, 2, Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 }, 2.0).unwrap();
+            assert_eq!(staged.file_name().unwrap(), "annotation-2.png");
+            let image = open(&staged);
+            assert_eq!((image.width(), image.height()), (2560, 853));
+        }
+
+        #[test]
+        fn only_a_still_the_app_took_is_staged() {
+            let (folder, captures) = captures("refuse");
+            let elsewhere = folder.0.join("still.png");
+            std::fs::write(&elsewhere, b"\x89PNG\r\n\x1a\n").unwrap();
+            let rect = Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 };
+            assert!(stage(&captures, &elsewhere, 1, rect, 1.0).is_err());
+            assert!(elsewhere.exists());
+            let at = still(&captures, 10, 10);
+            assert!(stage(&captures, &at, 0, rect, 1.0).is_err(), "annotations count from 1");
+            assert!(stage(&captures, &at, 1, Rect { width: -1.0, ..rect }, 1.0).is_err());
+            assert!(stage(&captures, &at, 1, rect, f64::NAN).is_err());
+            assert!(at.exists(), "a refused stage keeps the still");
+        }
     }
 }

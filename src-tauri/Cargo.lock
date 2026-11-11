@@ -1769,6 +1769,7 @@ version = "0.1.4"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "cairo-rs",
  "dbus",
  "flate2",
  "futures-util",
