@@ -8,7 +8,6 @@ import type { Chat, Item } from "../hermes/model";
 import { ChatPane } from "./ChatPane";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
 let actEnv: boolean | undefined;

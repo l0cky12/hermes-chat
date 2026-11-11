@@ -7,13 +7,12 @@ import { FakeHermes, row } from "../hermes/fakeHermes";
 import { connect, type Hermes } from "../hermes/transport";
 import { UI_PREFS_KEY } from "../hermes/uiPrefs";
 import { Main } from "../App";
-import { CHAT_DRAG, closeTabIn, navigateTabs } from "./Tabs";
+import { closeTabIn, navigateTabs } from "./Tabs";
 
 const drops = vi.hoisted(() => new Set<(e: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({
   onDragDropEvent: async (cb: (e: { payload: unknown }) => void) => { drops.add(cb); return () => drops.delete(cb); },
 }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   // As WebView2 answers (a Promise that settles when the scroll ends), so an effect that leaks it fails here too (#308).
@@ -31,7 +30,6 @@ afterEach(async () => {
 
 const settle = (hermes: Hermes) => act(async () => void (await hermes.idle()));
 const prompts = (server: FakeHermes) => server.requests.filter((r) => r.method === "prompt.submit");
-const interrupts = (server: FakeHermes) => server.requests.filter((r) => r.method === "session.interrupt");
 
 const panes = () => Array.from(document.querySelectorAll<HTMLElement>(".pane"));
 const pane = (i: number) => panes()[i];

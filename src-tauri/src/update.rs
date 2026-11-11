@@ -107,9 +107,11 @@ fn is_appimage() -> bool {
     bundle_type() == Some(BundleType::AppImage) && std::env::var_os("APPIMAGE").is_some()
 }
 
-/// Whether this build has the updater's key and endpoints, so the plugin is registered (lib.rs).
+/// Whether this build has the updater's key, so the plugin is registered (lib.rs). The release config is committed with
+/// an empty key (ADR 0075): a build from it as it stands could check for an update and never verify one, so it counts
+/// as a build without the updater.
 pub fn configured(config: &tauri::Config) -> bool {
-    config.plugins.0.contains_key("updater")
+    config.plugins.0.get("updater").and_then(|updater| updater.get("pubkey")?.as_str()).is_some_and(|key| !key.trim().is_empty())
 }
 
 impl Updates {
@@ -410,6 +412,21 @@ mod tests {
         assert_eq!(parse_query("hermes-chat 1:0.2.0-3"), Some("1:0.2.0-3".into()));
         assert_eq!(parse_query("hermes-chat-git"), None);
         assert_eq!(parse_query(""), None);
+    }
+
+    #[test]
+    fn the_updater_is_configured_only_with_a_public_key() {
+        let config = |updater: serde_json::Value| -> tauri::Config {
+            serde_json::from_value(serde_json::json!({ "identifier": "net.l0cky12.test", "plugins": { "updater": updater } })).unwrap()
+        };
+        let endpoints = ["https://example.com/latest.json"];
+        assert!(configured(&config(serde_json::json!({ "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk=", "endpoints": endpoints }))));
+        // tauri.release.conf.json as committed: the key stays empty until the owner makes one (ADR 0075).
+        assert!(!configured(&config(serde_json::json!({ "pubkey": "", "endpoints": endpoints }))));
+        assert!(!configured(&config(serde_json::json!({ "pubkey": " \n\t", "endpoints": endpoints }))));
+        assert!(!configured(&config(serde_json::json!({ "endpoints": endpoints }))));
+        assert!(!configured(&config(serde_json::json!({ "pubkey": 7, "endpoints": endpoints }))));
+        assert!(!configured(&serde_json::from_value(serde_json::json!({ "identifier": "net.l0cky12.test" })).unwrap()));
     }
 
     #[test]

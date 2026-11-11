@@ -13,6 +13,7 @@
 import { chatUsageOf, costLabel, tokens as shortTokens, usd, type ChatUsage, type Cost } from "./usage";
 import { instantsOf, isoIn, knownZone } from "./schedule";
 import { statusOf } from "./pipe";
+import { errorText } from "./values";
 
 const DAY = 86_400_000;
 /** Dashboard REST caps `GET /api/sessions` pages at 100. */
@@ -25,7 +26,6 @@ export const MAX_SEGMENT_READS = 300;
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined);
 const obj = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined);
 const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** How the app reads Hermes for analytics. Every call names the profile it reads. */
 export type UsageIo = {
@@ -285,7 +285,7 @@ export async function collectUsage(
       if (e instanceof StaleRead) throw e;
       checkLive(signal);
       state = "failed";
-      error = messageOf(e);
+      error = errorText(e);
     }
     const inPeriod = [...seen.values()].filter(({ chat }) => chat.startedAt >= period.from && chat.startedAt < period.to);
     for (const c of inPeriod) {
@@ -299,7 +299,7 @@ export async function collectUsage(
         hermes = totals ? { state: "ok", totals } : { state: "unsupported" };
       } catch (e) {
         checkLive(signal);
-        hermes = statusOf(e) === 404 ? { state: "unsupported" } : { state: "failed", error: messageOf(e) };
+        hermes = statusOf(e) === 404 ? { state: "unsupported" } : { state: "failed", error: errorText(e) };
       }
     }
     reads.push({ profile, state, read, ...(error && { error }), ...(hermes && { hermes }) });

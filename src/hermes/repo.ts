@@ -4,6 +4,7 @@
 
 import type { Progress, WorktreeRequest } from "./worktrees";
 import { signInSshTarget, type SignInAddress } from "./terminal";
+import { errorText } from "./values";
 
 /** One line of `git status --porcelain=v2`, as the helper reports it. Paths are relative to the checkout's top. */
 export type Entry = {
@@ -194,7 +195,7 @@ export function asRepoFailure(e: unknown): RepoFailure {
     const o = e as { kind: unknown; message: unknown; output?: unknown };
     return new RepoFailure(String(o.kind), String(o.message), typeof o.output === "string" ? o.output : "");
   }
-  return new RepoFailure("internal", e instanceof Error ? e.message : String(e));
+  return new RepoFailure("internal", errorText(e));
 }
 
 /** What to do about a failure, beyond what it says, or undefined when there's nothing to add. */
@@ -530,12 +531,6 @@ export function asCommitted(v: unknown): Committed {
   const c = v as Committed;
   if (!c || typeof c.head !== "string" || !Array.isArray(c.files)) throw new RepoFailure("bad-reply", "The server's answer wasn't a commit.");
   return c;
-}
-
-export function asStamps(v: unknown): { head: string | null; index: string } {
-  const s = v as { head: string | null; index: string };
-  if (!s || typeof s.index !== "string") throw new RepoFailure("bad-reply", "The server's answer didn't say how the index is now.");
-  return s;
 }
 
 export function asDiff(v: unknown): DiffReply {

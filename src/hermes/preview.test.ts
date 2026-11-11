@@ -83,9 +83,21 @@ describe("Pages on a loopback address (issue #171)", () => {
     expect(pageOn({ kind: "web", url: "https://example.com/", on: "local" })).toBeUndefined();
   });
 
-  it("loads only a tunnel address on this computer's 127.0.0.1", () => {
+  it("loads only a tunnel address on this computer's loopback", () => {
     expect(tunnelUrl("http://127.0.0.1:41234/a?b#c", APP)).toBe("http://127.0.0.1:41234/a?b#c");
-    for (const raw of ["http://localhost:41234/", "https://evil.example/", "http://127.0.0.1/", "javascript:alert(1)", "http://u:p@127.0.0.1:4/"])
+    expect(tunnelUrl("http://p0123456789abcdef.localhost:41234/a", APP)).toBe("http://p0123456789abcdef.localhost:41234/a");
+    for (const raw of [
+      "http://localhost:41234/",
+      "https://evil.example/",
+      "http://127.0.0.1/",
+      "javascript:alert(1)",
+      "http://u:p@127.0.0.1:4/",
+      "http://p0123456789abcdef.localhost/",
+      "http://tauri.localhost:41234/",
+      "http://p0123456789abcde.localhost:41234/",
+      "http://x.p0123456789abcdef.localhost:41234/",
+      "http://p0123456789abcdef.localhost.evil.example:41234/",
+    ])
       expect(tunnelUrl(raw, APP), raw).toBeUndefined();
     expect(tunnelUrl("http://127.0.0.1:1420/", "http://127.0.0.1:1420")).toBeUndefined();
   });
@@ -330,6 +342,13 @@ describe("Rendering untrusted file text", () => {
   it("fences code so the file can't close the fence", () => {
     expect(fenced("a ``` b ```` c", "python")).toBe("`````python\na ``` b ```` c\n`````");
     expect(fenced("plain", "")).toBe("```\nplain\n```");
+  });
+
+  it("names only a plain language on the fence, so the server's language can't end it", () => {
+    expect(fenced("x", "c++")).toBe("```c++\nx\n```");
+    expect(fenced("x", "objective-c")).toBe("```objective-c\nx\n```");
+    expect(fenced("x", "js\n```\n<img src=x>")).toBe("```\nx\n```");
+    expect(fenced("x", "py {.class}")).toBe("```\nx\n```");
   });
 
   it("puts a no-network policy ahead of an HTML file", () => {

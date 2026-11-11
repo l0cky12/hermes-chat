@@ -3,8 +3,7 @@
 import { useEffect, useState } from "react";
 import type { TrayStatus, TrayWiring } from "../hermes/tauriTray";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
-
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
+import { errorText } from "../hermes/values";
 
 function where(s: TrayStatus): { text: string; problem: boolean } {
   if (s.tray === "shown") return { text: "The tray icon is showing. Its menu has Show or Hide, New chat, Open Inbox and Quit.", problem: false };
@@ -46,7 +45,7 @@ export function TraySettings({ tray }: { tray?: TrayWiring }) {
     try {
       setStatus(await tray.setCloseToTray(on));
     } catch (e) {
-      setProblem(`Couldn't ${on ? "turn on" : "turn off"} Close to tray: ${messageOf(e)}`);
+      setProblem(`Couldn't ${on ? "turn on" : "turn off"} Close to tray: ${errorText(e)}`);
       // Show what Rust has now, whichever way the write went.
       await tray.status().then(setStatus, () => {});
     } finally {

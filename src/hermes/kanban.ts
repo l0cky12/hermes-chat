@@ -5,6 +5,7 @@
 // decides everything; a `status.update` only says which task to read.
 import { TASK_MEANS, isStale, parseTask, sameTask, type DispatchedTask } from "./dispatched";
 import { statusOf, type RestMethod } from "./pipe";
+import { isObj } from "./values";
 
 export type RestFn = (method: RestMethod, pathAndQuery: string, body?: unknown) => Promise<unknown>;
 
@@ -15,7 +16,6 @@ export type KanbanBoard = { slug: string; current: boolean; archived: boolean };
 export type SeenTask = { task: DispatchedTask; sessionId?: string };
 
 const BASE = "api/plugins/kanban";
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 export class KanbanApi {
   constructor(private rest: RestFn) {}

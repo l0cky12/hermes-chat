@@ -34,6 +34,7 @@ export function ArtifactEditor({
 }) {
   const artifactKey = keyOf(artifact);
   // Opening an artifact already open keeps its draft, history and versions.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => void store.open(artifact), [artifactKey]);
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const s = snap.get(artifactKey);
@@ -56,6 +57,7 @@ export function ArtifactEditor({
     const el = area.current;
     if (!el || !s || el.value !== s.draft) return;
     if (el.selectionStart !== s.sel.start || el.selectionEnd !== s.sel.end) el.setSelectionRange(s.sel.start, s.sel.end);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [s?.history, s?.draft]);
   // The webview's own undo (from its context menu) would undo against text React set: ours runs instead. The textarea
   // comes and goes (a proposal, a conflict or another tab replaces it), so the listener follows the element itself.

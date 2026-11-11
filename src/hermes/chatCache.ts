@@ -18,16 +18,22 @@ import { pickOf } from "./models";
 
 /** Every key prefix this module keeps a connection's data under, each followed by its scope (connections.ts). */
 export const CACHE_PREFIXES = () => [LIST_PREFIX, TRANSCRIPT_PREFIX, PROFILE_PREFIX, PULLED_PREFIX, OUTBOX_PREFIX, QUEUE_PREFIX, HELD_PREFIX, BRANCH_PREFIX];
-const LIST_PREFIX = "hermes-chat.chats.";
-const TRANSCRIPT_PREFIX = "hermes-chat.transcript.";
-const PROFILE_PREFIX = "hermes-chat.profile.";
-const PULLED_PREFIX = "hermes-chat.older-pulled.";
-const OUTBOX_PREFIX = "hermes-chat.outbox.";
-const QUEUE_PREFIX = "hermes-chat.queue.";
+/** Each profile's chat list, by connection and profile. */
+export const LIST_PREFIX = "hermes-chat.chats.";
+/** A chat's Saved copy, by connection, profile and chat. */
+export const TRANSCRIPT_PREFIX = "hermes-chat.transcript.";
+/** The profile shown last, by connection: its value is the profile's name. */
+export const PROFILE_PREFIX = "hermes-chat.profile.";
+/** The profiles whose older chats were pulled, by connection: its value lists their names. */
+export const PULLED_PREFIX = "hermes-chat.older-pulled.";
+/** A chat's Failed and uncertain messages, by connection, profile and chat. */
+export const OUTBOX_PREFIX = "hermes-chat.outbox.";
+/** A chat's Queued messages, by connection, profile and chat. */
+export const QUEUE_PREFIX = "hermes-chat.queue.";
 /** The branches this app made, and the ones whose answer was lost, per connection and profile (ADR 0027). */
-const BRANCH_PREFIX = "hermes-chat.branches.";
+export const BRANCH_PREFIX = "hermes-chat.branches.";
 /** Where drafts.ts kept a chat's sent messages Hermes didn't take, or may not have, before the outbox: moved into it. */
-const HELD_PREFIX = "hermes-chat.undelivered.";
+export const HELD_PREFIX = "hermes-chat.undelivered.";
 
 const outboxListeners = new Set<() => void>();
 // Include writes the store couldn't keep: those outboxes and queues still exist in the running transport.
@@ -42,6 +48,21 @@ export function subscribeOutbox(fn: () => void): () => void {
 export function forgetLiveChatData(parts: string[]) {
   for (const [prefix, rows] of [[OUTBOX_PREFIX, liveOutboxes], [QUEUE_PREFIX, liveQueues]] as const) {
     for (const key of rows.keys()) if (inScope(parts, key.slice(prefix.length))) rows.delete(key);
+  }
+}
+
+/**
+ * Moves or drops the failed-write outboxes and queues held in memory, by key: `move` answers a key's new key, null to
+ * drop it, or undefined to keep it (profileLocalData.ts, a profile renamed or deleted).
+ */
+export function moveLiveChatData(move: (key: string) => string | null | undefined) {
+  for (const rows of [liveOutboxes, liveQueues] as Map<string, unknown>[]) {
+    for (const [key, value] of [...rows]) {
+      const to = move(key);
+      if (to === undefined) continue;
+      rows.delete(key);
+      if (to !== null) rows.set(to, value);
+    }
   }
 }
 

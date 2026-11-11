@@ -77,9 +77,6 @@ export function fromKey(key: string): Pick<ModelPick, "provider" | "model"> | un
   return at > 0 && at < key.length - 1 ? { provider: key.slice(0, at), model: key.slice(at + 1) } : undefined;
 }
 
-export const samePick = (a?: ModelPick, b?: ModelPick) =>
-  !!a && !!b && a.provider === b.provider && a.model === b.model && a.effort === b.effort && a.fast === b.fast;
-
 /** The model's name without a vendor prefix, as the picker's button shows it. */
 export const shortName = (model: string) => model.slice(model.lastIndexOf("/") + 1);
 

@@ -13,7 +13,6 @@ import { Main } from "../App";
 import { OutputsScreen } from "./Outputs";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 // Paging works the same at any page size, and 200 rows rendered twice cost seconds of CPU, which a busy machine
 // stretches past the test timeout (#394).
 vi.mock("./outputPage", () => ({ OUTPUT_PAGE: 20 }));

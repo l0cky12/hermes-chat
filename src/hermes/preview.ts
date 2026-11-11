@@ -5,8 +5,9 @@
 // frame (ADR 0007). Everything shown is untrusted: nothing here turns it into HTML the app itself renders.
 import type { Item } from "./model";
 import { RestError, sessionNotFound } from "./pipe";
-import { SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, type RemotePreview } from "./remoteFiles";
+import { IMAGE_DATA_URL, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, type RemotePreview } from "./remoteFiles";
 import type { ArtifactRef } from "./artifacts";
+import { errorText } from "./values";
 
 export type PreviewTarget =
   /**
@@ -45,16 +46,11 @@ export type FileView =
  */
 export type Framing = { kind: "refused"; by: string } | { kind: "unreachable"; message: string } | { kind: "notRefused" };
 
-/** The most text Hermes's `read-text` returns, and the most Rust reads of a Local file (`_FS_TEXT_PREVIEW_MAX_BYTES`). */
-export const TEXT_PREVIEW_BYTES = 512 * 1024;
-
 const IMAGE_NAME = /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i;
 /** The images a local preview reads: the ones Rust's `read_preview` takes. */
 const LOCAL_IMAGE_NAME = /\.(png|jpe?g|gif|webp|bmp)$/i;
 const MARKDOWN_NAME = /\.(md|markdown|mdx)$/i;
 const HTML_NAME = /\.x?html?$/i;
-/** `data:` URLs the pane shows as images. SVG in an `<img>` runs no scripts. */
-const IMAGE_DATA_URL = /^data:image\/(png|jpeg|gif|webp|bmp|svg\+xml|x-icon|vnd\.microsoft\.icon);base64,[A-Za-z0-9+/=]*$/;
 
 /**
  * Text from a tool, with its bidi embedding, override and isolate controls made visible as `\uFFFD`: they can make a
@@ -183,15 +179,18 @@ export function addressOf(t: PreviewTarget): string {
   }
 }
 
+/** The host Rust serves a server page's tunnel at: `127.0.0.1`, or on Windows the page's own name (ADR 0144). */
+const TUNNEL_HOST = /^(127\.0\.0\.1|p[0-9a-f]{16}\.localhost)$/;
+
 /**
- * The address Rust gave for a server page's tunnel, if it is what Rust makes: http(s) on `127.0.0.1` at a port, and
+ * The address Rust gave for a server page's tunnel, if it is what Rust makes: http(s) on a tunnel host at a port, and
  * never the app's own origin. Anything else isn't loaded.
  */
 export function tunnelUrl(raw: string, appOrigin: string): string | undefined {
   const web = checkWebUrl(raw, appOrigin);
   if (!("url" in web)) return undefined;
   const u = new URL(web.url);
-  return u.hostname === "127.0.0.1" && u.port ? web.url : undefined;
+  return TUNNEL_HOST.test(u.hostname) && u.port ? web.url : undefined;
 }
 
 /** A path the server can read: absolute, or under its home (`~/`). Relative paths would resolve in Hermes's own folder. */
@@ -335,7 +334,7 @@ type ReadText = { binary?: boolean; byteSize?: number; language?: string; mimeTy
 
 /** A failed dashboard request in the owner's words. */
 function serverFileError(e: unknown): Error {
-  const message = e instanceof Error ? e.message : String(e);
+  const message = errorText(e);
   if (message === "Not connected to Hermes.") return new Error("Files on the server can't be read while Hermes Chat isn't connected.");
   if (!(e instanceof RestError)) return new Error(message);
   let detail = e.body.trim();
@@ -428,9 +427,13 @@ export function sandboxedHtml(html: string): string {
   return `<meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer">${html}`;
 }
 
-/** A Markdown code fence longer than any run of backticks in `text`, so the file can't close it early. */
+/**
+ * A Markdown code fence longer than any run of backticks in `text`, so the file can't close it early. A `language` that
+ * isn't a plain name like `c++` or `objective-c` is left off: the server sends it, and a newline in it would end the
+ * fence's first line.
+ */
 export function fenced(text: string, language: string): string {
   const longest = Math.max(2, ...Array.from(text.matchAll(/`+/g), (m) => m[0].length));
   const fence = "`".repeat(longest + 1);
-  return `${fence}${language}\n${text}\n${fence}`;
+  return `${fence}${/^[\w+-]+$/.test(language) ? language : ""}\n${text}\n${fence}`;
 }
