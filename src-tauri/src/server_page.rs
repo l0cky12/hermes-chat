@@ -26,6 +26,7 @@
 use crate::loopback_peer::{self, Peers};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::ffi::OsString;
 use std::path::Path;
 #[cfg(unix)]
@@ -862,7 +863,7 @@ impl ServerPages {
                     let _ = child.wait().await;
                     why.unwrap_or(None)
                 }
-                () = &mut serving => Some("The tunnel stopped listening.".into()),
+                never = &mut serving => match never {},
             };
             pages.open.lock().unwrap().remove(&task_key);
             if let Some(message) = why {
@@ -1058,15 +1059,19 @@ fn client_hello() -> Vec<u8> {
     [&[0x16, 0x03, 0x01][..], &sized(&handshake)].concat()
 }
 
-/// Accepts connections on `listener` and copies each one to and from ssh's `socket`. Runs until dropped; returns only
-/// if accepting fails. A connection from anyone but `peers` is closed unanswered (ADR 0105, ADR 0138).
-pub(crate) async fn serve(listener: TcpListener, socket: Address, peers: Peers) {
+/// How long the relay waits after a failed accept before the next, so running out of file descriptors doesn't spin.
+const ACCEPT_RETRY: Duration = Duration::from_millis(100);
+
+/// Accepts connections on `listener` and copies each one to and from ssh's `socket`, until dropped: it never returns.
+/// A failed accept (a connection reset before it was taken, or no file descriptors left) passes, so it is logged and
+/// the next tried a moment later. A connection from anyone but `peers` is closed unanswered (ADR 0105, ADR 0138).
+pub(crate) async fn serve(listener: TcpListener, socket: Address, peers: Peers) -> Infallible {
     let listener = &listener;
     serve_with(move || listener.accept(), socket, peers).await
 }
 
 /// `serve`, taking each connection from `accept`.
-async fn serve_with<A, F>(mut accept: A, socket: Address, peers: Peers)
+async fn serve_with<A, F>(mut accept: A, socket: Address, peers: Peers) -> Infallible
 where
     A: FnMut() -> F,
     F: std::future::Future<Output = std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)>>,
@@ -1075,7 +1080,14 @@ where
     loop {
         tokio::select! {
             accepted = accept() => {
-                let Ok((mut tcp, _)) = accepted else { return };
+                let (mut tcp, _) = match accepted {
+                    Ok(accepted) => accepted,
+                    Err(e) => {
+                        eprintln!("hermes-chat: a relay couldn't accept a connection, and will try again: {e}");
+                        tokio::time::sleep(ACCEPT_RETRY).await;
+                        continue;
+                    }
+                };
                 let socket = socket.clone();
                 conns.spawn(async move {
                     if !loopback_peer::admits(peers, &tcp) {
