@@ -1,7 +1,9 @@
 // The screenshot desk: a capture goes to the composer on screen (or waits for one), failures turn into the notes the
-// owner reads, and every capture is deleted once it is sent, removed, refused or left behind.
+// owner reads, each chat keeps its staged files, and every capture is deleted once nothing needs it.
 import { describe, expect, it, vi } from "vitest";
+import type { Attachment } from "./model";
 import { ScreenshotDesk, captureName, failureText, type Captured, type ScreenshotApi, type ScreenshotSink } from "./screenshots";
+import { stagedFiles } from "./unsaved";
 
 /** A Rust side whose captures land when the test says. */
 function fakeApi() {
@@ -25,10 +27,14 @@ function fakeApi() {
   };
 }
 
-function sink(keep: (paths: string[]) => string[] = (p) => p) {
+const file = (path: string): Attachment => ({ path, name: path.split("/").pop()!, size: 10, kind: "image" });
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+/** A composer on the chat whose Draft key is `key`. `attached`: the files it was asked to check. */
+function sink(keep: (paths: string[]) => string[] = (p) => p, key = "chat-a") {
   const attached: string[][] = [];
   const notes: string[] = [];
-  const s: ScreenshotSink = { attach: async (paths) => (attached.push(paths), keep(paths)), restore: (back) => void attached.push(back.map((a) => a.path)), note: (t) => void notes.push(t) };
+  const s: ScreenshotSink = { key, check: async (paths) => (attached.push(paths), keep(paths).map(file)), note: (t) => void notes.push(t) };
   return { s, attached, notes };
 }
 
@@ -43,13 +49,13 @@ describe("Screenshot desk", () => {
     desk.dispose();
     await new Promise((r) => setTimeout(r, 0));
     expect(rust.discarded).toEqual([]);
-    desk.sent([{ path: pasted, name: "clipboard.png", size: 1, kind: "image" }], true);
+    desk.sent("chat-a", [{ path: pasted, name: "clipboard.png", size: 1, kind: "image" }], true);
     desk.own(["/home/liam/.cache/hermes-chat/captures/1/1/late.png"]);
     await new Promise((r) => setTimeout(r, 0));
     expect(rust.discarded).toEqual([pasted, "/home/liam/.cache/hermes-chat/captures/1/1/late.png"]);
   });
 
-  it("attaches a capture to the composer on screen, and deletes it once released", async () => {
+  it("stages a capture in the chat on screen, and deletes it once the owner removes it", async () => {
     const rust = fakeApi();
     const onAttached = vi.fn();
     const desk = new ScreenshotDesk(rust.api, onAttached);
@@ -63,14 +69,16 @@ describe("Screenshot desk", () => {
     await taking;
 
     expect(composer.attached).toEqual([["/run/user/1000/hermes-chat/captures/1/0/shot.png"]]);
+    expect(desk.stagedIn("chat-a").map((a) => a.path)).toEqual(["/run/user/1000/hermes-chat/captures/1/0/shot.png"]);
     expect(onAttached).toHaveBeenCalledWith(false);
     expect(desk.getSnapshot()).toEqual({ capturing: false });
     expect(rust.discarded).toEqual([]);
 
-    // Releasing anything that isn't a capture does nothing; a capture is deleted once.
-    desk.release(["/home/liam/Pictures/rack.png", "/run/user/1000/hermes-chat/captures/1/0/shot.png"]);
-    desk.release(["/run/user/1000/hermes-chat/captures/1/0/shot.png"]);
-    await new Promise((r) => setTimeout(r, 0));
+    // Anything that isn't a capture is never deleted, and a capture is deleted once.
+    desk.change({ kind: "removed", key: "chat-a", paths: ["/home/liam/Pictures/rack.png", "/run/user/1000/hermes-chat/captures/1/0/shot.png"] });
+    desk.change({ kind: "removed", key: "chat-a", paths: ["/run/user/1000/hermes-chat/captures/1/0/shot.png"] });
+    await tick();
+    expect(desk.stagedIn("chat-a")).toEqual([]);
     expect(rust.discarded).toEqual(["/run/user/1000/hermes-chat/captures/1/0/shot.png"]);
   });
 
@@ -153,21 +161,23 @@ describe("Screenshot desk", () => {
     const rust = fakeApi();
     const desk = new ScreenshotDesk(rust.api);
     // The first composer's check is still running when it goes (another chat opened).
-    let check!: (kept: string[]) => void;
-    const first: ScreenshotSink = { restore: () => {}, attach: () => new Promise((r) => (check = r)), note: () => {} };
+    let check!: (kept: Attachment[]) => void;
+    const first: ScreenshotSink = { key: "chat-a", check: () => new Promise((r) => (check = r)), note: () => {} };
     const stop = desk.attachTo(first);
     const taking = desk.capture();
     await rust.land({ path: "/c/1/0/a.png" });
     stop();
-    const second = sink();
+    const second = sink(undefined, "chat-b");
     desk.attachTo(second.s);
-    check(["/c/1/0/a.png"]);
+    check([file("/c/1/0/a.png")]);
     await taking;
     expect(second.attached).toEqual([["/c/1/0/a.png"]]);
+    expect(desk.stagedIn("chat-a")).toEqual([]);
+    expect(desk.stagedIn("chat-b").map((a) => a.path)).toEqual(["/c/1/0/a.png"]);
     expect(rust.discarded).toEqual([]);
   });
 
-  it("puts captures back when Hermes didn't confirm the message, and deletes them once it did", async () => {
+  it("puts captures back in the chat they were sent from when Hermes didn't confirm the message, and deletes them once it did", async () => {
     const rust = fakeApi();
     const desk = new ScreenshotDesk(rust.api);
     const composer = sink();
@@ -175,14 +185,20 @@ describe("Screenshot desk", () => {
     const taking = desk.capture();
     await rust.land({ path: "/c/1/0/a.png" });
     await taking;
+    const sending = [file("/c/1/0/a.png"), file("/home/liam/rack.png")];
+    desk.hold(["/c/1/0/a.png"]);
+    desk.change({ kind: "sent", key: "chat-a", paths: ["/c/1/0/a.png"] });
+    expect(desk.stagedIn("chat-a")).toEqual([]);
 
-    desk.sent(["/c/1/0/a.png", "/home/liam/rack.png"].map((path) => ({ path, name: "a.png", size: 10, kind: "image" })), false);
-    await new Promise((r) => setTimeout(r, 0));
-    expect(composer.attached).toEqual([["/c/1/0/a.png"], ["/c/1/0/a.png"]]);
+    desk.sent("chat-a", sending, false);
+    await tick();
+    expect(desk.stagedIn("chat-a").map((a) => a.path)).toEqual(["/c/1/0/a.png"]);
     expect(composer.notes).toEqual(["Hermes didn't confirm it got your message, so its files are back here. Send them again, or remove them."]);
     expect(rust.discarded).toEqual([]);
 
-    desk.sent([{ path: "/c/1/0/a.png", name: "a.png", size: 10, kind: "image" }], true);
+    desk.hold(["/c/1/0/a.png"]);
+    desk.change({ kind: "sent", key: "chat-a", paths: ["/c/1/0/a.png"] });
+    desk.sent("chat-a", [file("/c/1/0/a.png")], true);
     await new Promise((r) => setTimeout(r, 0));
     expect(rust.discarded).toEqual(["/c/1/0/a.png"]);
   });
@@ -201,6 +217,57 @@ describe("Screenshot desk", () => {
     desk.attachTo(second.s);
     await new Promise((r) => setTimeout(r, 0));
     expect(second.attached).toEqual([["/c/1/0/a.png"]]);
+  });
+});
+
+describe("Each chat's staged attachments", () => {
+  it("keeps each chat's files apart, lists them all for Settings, and deletes a chat's own once it goes", async () => {
+    const rust = fakeApi();
+    // Desks of the tests above that never signed out still list theirs.
+    const others = stagedFiles.getSnapshot();
+    const desk = new ScreenshotDesk(rust.api);
+    desk.own(["/c/1/0/a.png", "/c/1/1/b.png"]);
+    desk.change({ kind: "added", key: "chat-a", attachments: [file("/c/1/0/a.png"), file("/home/liam/notes.txt")] });
+    desk.change({ kind: "added", key: "chat-b", attachments: [file("/c/1/1/b.png")] });
+    desk.change({ kind: "added", key: "chat-a", attachments: [file("/c/1/0/a.png")] });
+    expect(desk.stagedIn("chat-a").map((a) => a.name)).toEqual(["a.png", "notes.txt"]);
+    expect(desk.stagedIn("chat-b").map((a) => a.name)).toEqual(["b.png"]);
+    expect(stagedFiles.getSnapshot()).toEqual([...others, "a.png", "notes.txt", "b.png"]);
+
+    desk.change({ kind: "gone", key: "chat-a" });
+    await tick();
+    expect(desk.stagedIn("chat-a")).toEqual([]);
+    expect(rust.discarded).toEqual(["/c/1/0/a.png"]);
+    expect(stagedFiles.getSnapshot()).toEqual([...others, "b.png"]);
+
+    desk.dispose();
+    await tick();
+    expect(rust.discarded).toEqual(["/c/1/0/a.png", "/c/1/1/b.png"]);
+    expect(stagedFiles.getSnapshot()).toEqual(others);
+  });
+
+  it("stages a file it owns in one chat at a time, and one the owner picked from their folders in any", async () => {
+    const rust = fakeApi();
+    const desk = new ScreenshotDesk(rust.api);
+    desk.own(["/c/1/0/a.png"]);
+    desk.change({ kind: "added", key: "chat-a", attachments: [file("/c/1/0/a.png"), file("/home/liam/notes.txt")] });
+    desk.change({ kind: "added", key: "chat-b", attachments: [file("/c/1/0/a.png"), file("/home/liam/notes.txt")] });
+    expect(desk.stagedIn("chat-a").map((a) => a.path)).toEqual(["/home/liam/notes.txt"]);
+    expect(desk.stagedIn("chat-b").map((a) => a.path)).toEqual(["/c/1/0/a.png", "/home/liam/notes.txt"]);
+    desk.change({ kind: "removed", key: "chat-b", paths: ["/c/1/0/a.png"] });
+    await tick();
+    expect(rust.discarded).toEqual(["/c/1/0/a.png"]);
+  });
+
+  it("deletes a file staged after signing out", async () => {
+    const rust = fakeApi();
+    const desk = new ScreenshotDesk(rust.api);
+    desk.own(["/c/1/0/a.png"]);
+    desk.dispose();
+    await tick();
+    expect(rust.discarded).toEqual(["/c/1/0/a.png"]);
+    desk.change({ kind: "added", key: "chat-a", attachments: [file("/c/1/0/late.png")] });
+    expect(desk.stagedIn("chat-a")).toEqual([]);
   });
 });
 

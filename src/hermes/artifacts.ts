@@ -13,7 +13,6 @@ import {
   RemoteFilesError,
   TimedOut,
   deadline,
-  errorText,
   explain,
   newTransferId,
   protectedPath,
@@ -27,6 +26,7 @@ import {
   SANDBOX_NOT_FOUND_PREFIX,
 } from "./remoteFiles";
 import { RestError, sessionNotFound } from "./pipe";
+import { errorText } from "./values";
 import { EDIT_MAX_BYTES, MINE_MARK, merge3 } from "./textEdit";
 import {
   ASK_INSTRUCTIONS,

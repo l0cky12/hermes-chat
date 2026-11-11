@@ -7,10 +7,12 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Chat, Item } from "../hermes/model";
 import { chatUsageOf } from "../hermes/usage";
 import { ChatPane } from "./ChatPane";
+import { ScreenshotDesk, type ScreenshotApi } from "../hermes/screenshots";
 import { REPLY_NOTES } from "./Usage";
 
+const noScreenshots: ScreenshotApi = { capture: () => Promise.reject(new Error("no screenshots in this test")), discard: async () => {} };
+
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -25,7 +27,7 @@ function pane(chat: Chat, onUsage = () => {}) {
     <ChatPane
       chat={chat}
       status="connected"
-      draft=""
+      draft="" draftKey="draft" screenshots={new ScreenshotDesk(noScreenshots)}
       onDraft={() => {}}
       onDraftStep={() => undefined}
       onRetry={() => {}}
@@ -189,7 +191,7 @@ describe("A chat's usage", () => {
       <ChatPane
         chat={chatOf([], { usage: chatUsageOf(stored, 0) })}
         status="connected"
-        draft=""
+        draft="" draftKey="draft" screenshots={new ScreenshotDesk(noScreenshots)}
         onDraft={() => {}}
         onDraftStep={() => undefined}
           onRetry={() => {}}

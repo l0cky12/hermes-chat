@@ -130,7 +130,7 @@ export type ClarifyQuestion = { qid: string; question: string; choices: string[]
 
 /**
  * What the owner gives a waiting Clarify, Sudo password or Secret question: one Clarify answer to lock, a password or
- * secret `value`, or Skip. The value is never kept: it goes to Hermes and is dropped (ADR 0138).
+ * secret `value`, or Skip. The value is never kept: it goes to Hermes and is dropped (ADR 0146).
  */
 export type QuestionAnswer = { kind: "lock"; qid: string; answer: string } | { kind: "value"; value: string } | { kind: "skip" };
 

@@ -24,6 +24,7 @@ describe("Hermes transport", () => {
       others: { byName: {} },
       queues: {},
       branches: { links: {}, attempts: [] },
+      botPictures: {},
       status: "connected",
       route: { kind: "ssh", target: "liam@hermes" },
       unsecure: false,

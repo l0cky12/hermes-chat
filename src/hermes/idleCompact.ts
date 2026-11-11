@@ -9,6 +9,7 @@
 import { isWaiting, type Chat, type ConnectionStatus } from "./model";
 import type { CompactResult } from "./contextInspect";
 import type { IdleCompactPrefs } from "./uiPrefs";
+import { errorText } from "./values";
 
 /** How often the app looks for an idle chat to compact. */
 export const IDLE_COMPACT_CHECK_MS = 30_000;
@@ -105,7 +106,7 @@ export class IdleCompactor {
     try {
       this.report({ ...base, result: await this.api.compact(c.id) });
     } catch (e) {
-      this.report({ ...base, error: e instanceof Error ? e.message : String(e) });
+      this.report({ ...base, error: errorText(e) });
     } finally {
       this.running = false;
     }

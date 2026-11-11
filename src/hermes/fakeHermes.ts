@@ -311,7 +311,7 @@ export class FakeHermes {
    */
   botMode: "full" | "no-canonical" | "none" = "full";
   /** What each profile's `profile.yaml` says about it, for `profiles.list`. */
-  profileMeta: Record<string, { description?: string; display_name?: string; ui_meta?: Record<string, unknown> }> = {};
+  profileMeta: Record<string, { description?: string; description_auto?: boolean; display_name?: string; ui_meta?: Record<string, unknown> }> = {};
   /** Each profile's avatar, as a data URL (`profiles.get_asset`). */
   botAvatars: Record<string, string> = {};
   /** Runs as each `session.list` arrives, with its profile, e.g. to make a Bot Chat as another client would meanwhile. */
@@ -350,6 +350,25 @@ export class FakeHermes {
   profileCreateLost?: string;
   /** While set, `POST /api/profiles` makes the profile but not its model, and answers `model_error` with this. */
   profileModelError?: string;
+  /** The profiles whose gateway runs, as `GET /api/profiles` reports them (`gateway_running`). */
+  gatewaysRunning = new Set<string>();
+  /**
+   * Settings → Profiles' routes this server lacks, each answering FastAPI's own 404 (`Not Found`) or, for a path that
+   * has another method, a 405: an older Hermes (ADR 0144).
+   */
+  profileRoutesMissing = new Set<"rename" | "describe" | "describeAuto" | "setModel" | "remove">();
+  /** While set, `DELETE /api/profiles/{name}` removes the folder and answers `settlement_pending` with this `retry_command`. */
+  profileSettlementPending?: string;
+  /** While set, `PATCH`/`DELETE /api/profiles/{name}` wait for it before answering, as Hermes does stopping a gateway. */
+  profileGatewayStop?: Promise<void>;
+  /** What `POST /api/profiles/{name}/describe-auto` answers: a description it writes, or a failure's reason. */
+  describeAuto: { ok: true; description: string } | { ok: false; reason: string } = { ok: true, description: "Writes and reviews code." };
+  /** While set, `POST /api/profiles/{name}/describe-auto` waits for it before answering, as Hermes's LLM call does. */
+  describeAutoGate?: Promise<void>;
+  /** While set, `PATCH /api/profiles/{name}` fails with this, as a 500 or a lost answer, renaming nothing. */
+  profileRenameError?: string | Error;
+  /** While set, `PATCH /api/profiles/{name}` renames, then fails with this message, as a connection lost before the answer. */
+  profileRenameLost?: string;
   /**
    * Scheduled jobs by profile, as `cron/jobs.json` holds them, and how the cron routes behave
    * (`hermes_cli/web_routers/cron.py` at the deployed `bf0203a`, as probed with a throwaway HERMES_HOME).
@@ -792,6 +811,14 @@ export class FakeHermes {
         const messages = this.transcripts[stored] ?? [];
         return this.respond(r.id, { session_id: sid, stored_session_id: stored, message_count: messages.length, messages, info: this.sessionInfo, running: true, open_requests: this.openRequestsOf(sid) });
       }
+      const busy = this.reattachTurns && [...this.inflight].find(([sid, t]) => t.stored === stored && this.turns.has(sid));
+      if (busy) {
+        const [sid, { user, assistant }] = busy;
+        this.runtime.set(sid, stored);
+        const messages = shownHistory(this.transcripts[stored] ?? []);
+        const inflight = { user, assistant, streaming: true };
+        return this.respond(r.id, { session_id: sid, stored_session_id: stored, message_count: messages.length, messages, info: this.sessionInfo, running: true, inflight });
+      }
       const runtimeId = `rt-r${++this.resumed}`;
       this.runtime.set(runtimeId, stored);
       this.runtimeProfile.set(runtimeId, (r.params.profile as string | undefined) || "default");
@@ -871,6 +898,7 @@ export class FakeHermes {
       if (stored) this.storeMessage(stored, { role: "user", text: String(r.params.text), row_id: this.userRowId });
       if (drop === "stored") return this.drop();
       this.turns.add(runtimeId);
+      if (stored) this.inflight.set(runtimeId, { stored, user: String(r.params.text ?? ""), assistant: "" });
       this.stopped.delete(runtimeId);
       this.respond(r.id, { status: "streaming", ...(this.userRowId !== undefined && { user_row_id: this.userRowId }) });
       const prompt = String(r.params.text ?? "");
@@ -1437,7 +1465,11 @@ export class FakeHermes {
         model: this.profileModel[name]?.model ?? null,
         provider: this.profileModel[name]?.provider ?? null,
         description: this.profileMeta[name]?.description ?? "",
-        display_name: "",
+        description_auto: this.profileMeta[name]?.description_auto ?? false,
+        display_name: this.profileMeta[name]?.display_name ?? "",
+        skill_count: (this.skills.folders[name] ?? []).length,
+        gateway_running: this.gatewaysRunning.has(name),
+        has_env: name in this.profileEnv,
         distribution_name: this.distributions[name] ?? null,
       })),
     }),
@@ -1760,6 +1792,7 @@ export class FakeHermes {
     const messages = /^\/api\/sessions\/([^/]+)\/messages$/.exec(req.path);
     const soul = /^\/api\/profiles\/([^/]+)\/soul$/.exec(req.path);
     const profilePath = /^\/api\/profiles\/([^/]+)$/.exec(req.path);
+    const profileField = /^\/api\/profiles\/([^/]+)\/(description|model|describe-auto)$/.exec(req.path);
     const handler =
       this.rest[`${method} ${req.path}`] ??
       (method === "POST" && req.path === "/api/sessions/import" ? () => this.importSessions(req.body!) : undefined) ??
@@ -1769,7 +1802,9 @@ export class FakeHermes {
       (method === "GET" && snapshot ? () => this.mutationSnapshot(snapshot[1], req.query.get("profile")) : undefined) ??
       (method === "GET" && messages ? () => this.storedMessages(decodeURIComponent(messages[1]), req.query) : undefined) ??
       (soul && this.soulRoutes && (method === "GET" || method === "PUT") ? () => this.soul(method, decodeURIComponent(soul[1]), req.body) : undefined) ??
-      (method === "DELETE" && profilePath ? () => this.deleteProfile(decodeURIComponent(profilePath[1])) : undefined) ??
+      (method === "DELETE" && profilePath && !this.profileRoutesMissing.has("remove") ? () => this.deleteProfile(decodeURIComponent(profilePath[1])) : undefined) ??
+      (method === "PATCH" && profilePath && !this.profileRoutesMissing.has("rename") ? () => this.renameProfile(decodeURIComponent(profilePath[1]), req.body ?? {}) : undefined) ??
+      (profileField ? this.profileFieldRoute(method, decodeURIComponent(profileField[1]), profileField[2], req.body ?? {}) : undefined) ??
       this.webhooks.route(req) ??
       this.cron.route(req) ??
       this.kanban.route(req) ??
@@ -1783,6 +1818,9 @@ export class FakeHermes {
     const toolset = /^\/api\/tools\/toolsets(?:\/([^/]+)(\/config)?)?$/.exec(req.path);
     if (!handler && toolset) return JSON.stringify(await this.toolsetRoute(req, toolset[1], !!toolset[2]));
     if (soul && this.soulRoutes && method !== "GET" && method !== "PUT") throw new RestError(405, `{"detail":"Method Not Allowed"}`);
+    // A path Hermes routes for another method: FastAPI answers 405.
+    if (!handler && profilePath && (method === "PATCH" || method === "DELETE") && !(this.profileRoutesMissing.has("rename") && this.profileRoutesMissing.has("remove")))
+      throw new RestError(405, `{"detail":"Method Not Allowed"}`);
     if (soul && !this.soulRoutes) throw new RestError(404, `{"detail":"No such API endpoint: ${req.path}"}`);
     if (!handler) throw new RestError(404, `{"detail":"Not Found"}`);
     return JSON.stringify(await handler(req));
@@ -2095,9 +2133,88 @@ export class FakeHermes {
   }
 
   /** `DELETE /api/profiles/{name}` at `f0d94882`: removes the profile's folder; the default profile can't be deleted. */
-  private deleteProfile(name: string): unknown {
+  /**
+   * `PATCH /api/profiles/{name}` `{new_name}` at `f0d94882` (`rename_profile`): for `default`, a display name only
+   * (empty or over 64 characters refused); otherwise the new id is lowercased and checked as a create checks it, the
+   * gateway stopped, and the profile's folder moved with everything in it.
+   */
+  private async renameProfile(name: string, body: Record<string, unknown>): Promise<unknown> {
+    const refuse = (detail: string) => new RestError(400, JSON.stringify({ detail }));
+    const known = (p: string) => p === "default" || p in this.otherProfiles;
+    if (typeof body.new_name !== "string")
+      throw new RestError(422, `{"detail":[{"type":"missing","loc":["body","new_name"],"msg":"Field required"}]}`);
+    if (name !== "default" && !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) throw refuse(`'${name}' is not a valid profile name.`);
+    if (!known(name)) throw new RestError(404, JSON.stringify({ detail: `Profile '${name}' does not exist.` }));
+    if (name === "default") {
+      const display = body.new_name.trim();
+      if (!display) throw refuse("Display name cannot be empty.");
+      if (display.length > 64) throw refuse(`Display name too long (${display.length} chars, max 64).`);
+      this.profileMeta.default = { ...this.profileMeta.default, display_name: display };
+      return { ok: true, name: "default", display_name: display, path: "/home/liam/.hermes" };
+    }
+    const to = body.new_name.trim().toLowerCase();
+    if (to === "default") throw refuse("Cannot rename to 'default' — it is reserved.");
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(to)) throw refuse(`'${to}' is not a valid profile name.`);
+    if (["hermes", "test", "tmp", "root", "sudo"].includes(to)) throw refuse(`Profile name '${to}' is reserved.`);
+    if (known(to)) throw refuse(`Profile '${to}' already exists.`);
+    if (this.profileGatewayStop) await this.profileGatewayStop;
+    if (this.profileRenameError) throw thrown(this.profileRenameError);
+    const move = <T,>(m: Record<string, T>) => {
+      if (name in m) {
+        m[to] = m[name];
+        delete m[name];
+      }
+    };
+    move(this.otherProfiles);
+    move(this.souls);
+    move(this.profileEnv);
+    move(this.profileModel);
+    move(this.profileMeta);
+    move(this.memory);
+    move(this.distributions);
+    move(this.skills.folders);
+    if (this.skills.profiles.delete(name)) this.skills.profiles.add(to);
+    if (this.gatewaysRunning.delete(name)) this.gatewaysRunning.add(to);
+    if (this.profileRenameLost) throw new Error(this.profileRenameLost);
+    return { ok: true, name: to, path: `/home/liam/.hermes/profiles/${to}` };
+  }
+
+  /** `PUT …/description`, `PUT …/model` and `POST …/describe-auto` at `f0d94882`, each after `_resolve_profile_dir`. */
+  private profileFieldRoute(method: string, name: string, field: string, body: Record<string, unknown>): ((req: RestRequest) => unknown) | undefined {
+    const route = field === "description" ? "describe" : field === "model" ? "setModel" : "describeAuto";
+    if (this.profileRoutesMissing.has(route)) return undefined;
+    if ((field === "describe-auto") !== (method === "POST") || (field !== "describe-auto" && method !== "PUT")) return undefined;
+    return () => {
+      if (name !== "default" && !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) throw new RestError(400, JSON.stringify({ detail: `'${name}' is not a valid profile name.` }));
+      if (name !== "default" && !(name in this.otherProfiles)) throw new RestError(404, JSON.stringify({ detail: `Profile '${name}' does not exist.` }));
+      if (field === "description") {
+        const text = typeof body.description === "string" ? body.description.trim() : "";
+        this.profileMeta[name] = { ...this.profileMeta[name], description: text, description_auto: false };
+        return { ok: true, description: text, description_auto: false };
+      }
+      if (field === "model") {
+        const provider = typeof body.provider === "string" ? body.provider.trim() : "";
+        const model = typeof body.model === "string" ? body.model.trim() : "";
+        if (!provider || !model) throw new RestError(400, JSON.stringify({ detail: "provider and model are required" }));
+        this.profileModel[name] = { ...(this.profileModel[name] ?? { reasoning_effort: "medium", fast: false }), model, provider };
+        return { ok: true, provider, model };
+      }
+      if (this.describeAutoGate) return this.describeAutoGate.then(() => this.describeAutoAnswer(name));
+      return this.describeAutoAnswer(name);
+    };
+  }
+
+  private describeAutoAnswer(name: string): unknown {
+    const outcome = this.describeAuto;
+    if (outcome.ok) this.profileMeta[name] = { ...this.profileMeta[name], description: outcome.description, description_auto: true };
+    return { ok: outcome.ok, reason: outcome.ok ? "" : outcome.reason, description: outcome.ok ? outcome.description : "", description_auto: outcome.ok };
+  }
+
+  private async deleteProfile(name: string): Promise<unknown> {
     if (name === "default") throw new RestError(400, JSON.stringify({ detail: "Cannot delete the default profile." }));
     if (!(name in this.otherProfiles)) throw new RestError(404, JSON.stringify({ detail: `Profile '${name}' does not exist.` }));
+    if (this.profileGatewayStop) await this.profileGatewayStop;
+    this.gatewaysRunning.delete(name);
     delete this.otherProfiles[name];
     delete this.souls[name];
     delete this.profileEnv[name];
@@ -2106,6 +2223,8 @@ export class FakeHermes {
     delete this.memory[name];
     delete this.skills.folders[name];
     this.skills.profiles.delete(name);
+    if (this.profileSettlementPending !== undefined)
+      return { ok: true, path: `/home/liam/.hermes/profiles/${name}`, identity_settled: false, settlement_pending: true, retry_command: this.profileSettlementPending };
     return { ok: true, path: `/home/liam/.hermes/profiles/${name}` };
   }
 
@@ -2213,12 +2332,29 @@ export class FakeHermes {
 
   /** The runtime sessions with a turn running, as far as this fake has heard: started by a prompt or `message.start`, ended by `message.complete` or `error`. */
   readonly turns = new Set<string>();
+  /**
+   * Whether `session.resume` reattaches a session whose turn still runs, as the deployed `f0d94882` does: the reply
+   * streamed so far comes back as `inflight`, and the turn's later frames go to the new connection
+   * (`_live_session_payload`, `_inflight_snapshot`). Off, the resume starts a new idle runtime.
+   */
+  reattachTurns = false;
+  /** A running turn's prompt and the reply text it has streamed, by runtime session (`inflight_turn`). */
+  private readonly inflight = new Map<string, { stored: string; user: string; assistant: string }>();
   /** The runtime sessions the owner stopped, until their next prompt: the poller starts no wake turn in them (`_notif_claim_turn`). */
   readonly stopped = new Set<string>();
 
   event(sessionId: string, type: string, payload: Record<string, unknown> = {}) {
-    if (type === "message.start") this.turns.add(sessionId);
-    if (type === "message.complete" || type === "error") this.turns.delete(sessionId);
+    if (type === "message.start") {
+      this.turns.add(sessionId);
+      const stored = this.runtime.get(sessionId);
+      if (stored && !this.inflight.has(sessionId)) this.inflight.set(sessionId, { stored, user: "", assistant: "" });
+    }
+    const turn = this.inflight.get(sessionId);
+    if (type === "message.delta" && turn && typeof payload.text === "string") turn.assistant += payload.text;
+    if (type === "message.complete" || type === "error") {
+      this.turns.delete(sessionId);
+      this.inflight.delete(sessionId);
+    }
     this.frame({ jsonrpc: "2.0", method: "event", params: { type, session_id: sessionId, payload } });
   }
 

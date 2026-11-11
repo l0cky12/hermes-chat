@@ -14,6 +14,7 @@
 // as text, and the preview renders the prompt exactly as Hermes's `_render_prompt` would.
 import { RestError, type RestMethod } from "./pipe";
 import { CapabilityUnsupportedError } from "./capabilities";
+import { errorText, isObj } from "./values";
 
 export type RestFn = (method: RestMethod, pathAndQuery: string, body?: unknown) => Promise<unknown>;
 
@@ -161,7 +162,6 @@ export type DeliveryTarget = { id: string; name: string; ready: boolean };
 /** What a create or edit came to. `secret` is the route's new secret, shown once and never kept. */
 export type Saved = { automation: Automation; secret?: string; note?: string };
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const text = (v: unknown) => (typeof v === "string" ? v : "");
 const opt = (v: unknown) => (typeof v === "string" && v ? v : undefined);
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
@@ -282,7 +282,7 @@ export function decodeChatId(chatId: string): { profile: string; route: string; 
  */
 export function automationError(e: unknown): AutomationError {
   if (e instanceof AutomationError) return e;
-  const message = e instanceof Error ? e.message : String(e);
+  const message = errorText(e);
   if (message === "Not connected to Hermes." || message === "The chat connection is closed.")
     return new AutomationError("offline", "Hermes Chat isn't connected to Hermes, so nothing was sent. Automations keep running on the server.");
   if (e instanceof RestError && e.status === 401) return new AutomationError("forbidden", "The dashboard sign-in has expired, so nothing was changed. Sign in again.");

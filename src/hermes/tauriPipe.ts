@@ -109,16 +109,23 @@ export const tauriReach = (d: SignInDetails, expectServer: string | undefined, q
 
 export const reachRoute: ReachRoute = (d, expectServer) => tauriReach(d, expectServer);
 
-/** The pipe for a connection: its routes, tried in order (routes.ts `routedPipe`), each opened by Rust. */
-export function tauriPipe(d: SignInDetails, hooks?: RoutedHooks): OpenPipe {
-  return routedPipe(d, (one, opts) => routePipe(one, opts), hooks);
+/**
+ * The pipe for a connection: its routes, tried in order (routes.ts `routedPipe`), each opened by Rust. `connection`:
+ * the saved connection's id, which Rust holds the open connection under (ADR 0125).
+ */
+export function tauriPipe(d: SignInDetails, connection: string, hooks?: RoutedHooks): OpenPipe {
+  return routedPipe(d, (one, opts) => routePipe(one, connection, opts), hooks);
 }
 
 /** One route's pipe. `expectServer`, `quick`, `sshRoute` and `onStep`: see routes.ts `OpenRoute`. */
-function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boolean; sshRoute?: string; onStep?: (s: Step, at?: number) => void }): OpenPipe {
+function routePipe(
+  d: SignInDetails,
+  savedConnection: string,
+  opts: { expectServer?: string; quick: boolean; sshRoute?: string; onStep?: (s: Step, at?: number) => void },
+): OpenPipe {
   const target = targetOf(d);
   return async (onEvent, profile, signal) => {
-    const args = { target, credential: credentialOf(d), profile, expectServer: opts.expectServer ?? null, quick: opts.quick, sshRoute: opts.sshRoute ?? null };
+    const args = { target, credential: credentialOf(d), profile, savedConnection, expectServer: opts.expectServer ?? null, quick: opts.quick, sshRoute: opts.sshRoute ?? null };
     // Names this connection: every command below names it too, so one sent after it was replaced reaches nothing (#474).
     const attempt = crypto.randomUUID();
     const route = await opening<Route>("hermes_connect", args, onEvent, signal, opts.onStep, attempt);
@@ -152,7 +159,7 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
         channel.onmessage = onProgress;
         return invoke<Downloaded | null>("files_download", { attempt, id, path, name, onProgress: channel }).then((got) => got ?? undefined, asError);
       },
-      pickUpload: () => invoke<PickedUpload | null>("files_pick_upload").then((p) => p ?? undefined, asError),
+      pickUpload: () => invoke<PickedUpload | null>("files_pick_upload", { attempt }).then((p) => p ?? undefined, asError),
       discardUpload: (token) => invoke<void>("files_discard_pick", { token }).catch(asError),
       upload: (id, token, path, overwrite, onProgress) => {
         const channel = new Channel<TransferProgress>();
@@ -194,7 +201,7 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
         await opening<void>("hermes_reopen", { profile, connection: attempt }, onEvent, signal, onStep);
         return pipe;
       },
-      close: () => invoke<void>("hermes_disconnect").catch(asError),
+      close: () => invoke<void>("hermes_disconnect", { attempt }).catch(asError),
     };
     return pipe;
   };

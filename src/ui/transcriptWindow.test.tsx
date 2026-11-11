@@ -5,11 +5,13 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Chat, Item } from "../hermes/model";
 import { ChatPane, type FindTarget, type JumpTarget } from "./ChatPane";
+import { ScreenshotDesk, type ScreenshotApi } from "../hermes/screenshots";
 import { useShowInChat } from "./showInChat";
 import { chunkBlocks } from "./transcriptChunks";
 
+const noScreenshots: ScreenshotApi = { capture: () => Promise.reject(new Error("no screenshots in this test")), discard: async () => {} };
+
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 const VIEW = 600;
 const GAP = 22;
@@ -106,6 +108,8 @@ function pane(chat: Chat, over: Over = {}) {
       footer={over.showAt === undefined ? undefined : <ShowButton at={over.showAt} />}
       status="connected"
       draft=""
+      draftKey="draft"
+      screenshots={new ScreenshotDesk(noScreenshots)}
       onDraft={() => {}}
       onDraftStep={() => undefined}
       onRetry={() => {}}

@@ -65,6 +65,7 @@ export function useVoiceConversation(o: {
     });
     setConversation(c);
     return () => c.dispose();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [o.speaker, !o.voice]);
   useEffect(() => conversation?.observe({ running: !!o.chat.running, items: o.chat.items }), [conversation, o.chat.running, o.chat.items]);
   useEffect(() => conversation?.setAway(o.away), [conversation, o.away]);

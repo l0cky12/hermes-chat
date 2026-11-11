@@ -9,7 +9,6 @@ import { FakeHermes } from "../hermes/fakeHermes";
 import type { Pipe, PipeEvent } from "../hermes/pipe";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 const keyring = new Map<string, string>();
 const fake = new FakeHermes();

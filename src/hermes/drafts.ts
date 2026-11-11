@@ -1,7 +1,8 @@
 // What the owner has typed in each chat's composer and not sent yet, kept in localStorage per connection, profile
-// and chat, so switching chats or restarting the app doesn't lose it. Text only: attachments stay in the composer
-// until it closes. A sent message Hermes didn't take, or may not have, isn't a draft: it stays in its chat, kept in
-// the chat's outbox (transport.ts `Outgoing`), until the owner retries or dismisses it.
+// and chat, so switching chats or restarting the app doesn't lose it. Text only: the chat's staged attachments are
+// kept beside it by the screenshot desk, under the same key, for this run only (ADR 0145). A sent message Hermes
+// didn't take, or may not have, isn't a draft: it stays in its chat, kept in the chat's outbox (transport.ts
+// `Outgoing`), until the owner retries or dismisses it.
 //
 // Each Draft keeps its own undo history here, in memory only: the webview's history can't be used in the composer,
 // since text the app writes (a slash pick, a Draft shown again on a chat switch, another pane on the same Draft)
@@ -33,6 +34,11 @@ export type Drafts = {
   /** Puts back text that didn't go, unless the owner has typed something new there meanwhile. */
   putBack(key: string, text: string): void;
   subscribe(fn: () => void): () => void;
+  /**
+   * Moves each Draft held in memory, with its undo history, where `move` says (null: drops it), after a profile was
+   * renamed or deleted (profileLocalData.ts). The stored copies are the caller's to move.
+   */
+  move(move: (key: string) => string | null | undefined): void;
 };
 
 /**
@@ -94,6 +100,18 @@ export function drafts(storage: DraftStorage, now = Date.now): Drafts {
     subscribe(fn) {
       listeners.add(fn);
       return () => void listeners.delete(fn);
+    },
+    move(move) {
+      let moved = false;
+      for (const map of [texts, histories] as Map<string, unknown>[])
+        for (const [key, value] of [...map]) {
+          const to = move(key);
+          if (to === undefined) continue;
+          moved = true;
+          map.delete(key);
+          if (to !== null) map.set(to, value);
+        }
+      if (moved) notify();
     },
   };
 }

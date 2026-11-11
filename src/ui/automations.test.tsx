@@ -9,7 +9,6 @@ import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 // jsdom has no Worker: filter patterns go to fake workers, which never answer one starting `(a+)+`, as a real one stuck on it
 // wouldn't.
 vi.mock("../hermes/patternRunner", async (original) => {

@@ -4,7 +4,7 @@
 import { createContext, useCallback, useContext, useId, useState, type ReactNode } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { Copy, ExternalLink, PanelRight } from "lucide-react";
-import { linkTarget, type LinkTarget, type PreviewTarget } from "../hermes/preview";
+import { linkTarget, withoutBidi, type LinkTarget, type PreviewTarget } from "../hermes/preview";
 import { messageOf } from "../hermes/voice";
 import { Menu } from "./ChatMenu";
 import type { WebPages } from "./tauriPreview";
@@ -134,6 +134,15 @@ function LinkMenu({
 }
 
 /**
+ * A link's tooltip, the one place its address shows before the click. The address always comes first: a Markdown title
+ * (`[docs](https://x/?d=… "https://docs.python.org/")`) only follows it, on one line of its own (#471).
+ */
+function linkTip(where: string | undefined, title: string | undefined): string | undefined {
+  const words = title && withoutBidi(title).replace(/\s+/g, " ").trim();
+  return [where, words].filter(Boolean).join("\n") || undefined;
+}
+
+/**
  * A link in a reply or a previewed Markdown file. An http(s) link opens in the Preview, a loopback one from the Hermes
  * server (ADR 0114); anything else does nothing, since following it would replace Hermes Chat's own window. Same-page
  * `#anchors` still scroll, and keep WebKit's own menu. A link whose address react-markdown emptied (`file:`,
@@ -170,7 +179,7 @@ export function PreviewLink({
     <a
       href={href}
       className={className}
-      title={title ?? (url && click === "preview" ? `${url}\nOpens in the preview${link?.kind === "serverPage" ? ", from the Hermes server" : ""}` : (url ?? href))}
+      title={linkTip(url && click === "preview" ? `${url}\nOpens in the preview${link?.kind === "serverPage" ? ", from the Hermes server" : ""}` : (url ?? href), title)}
       onClick={follow}
       onAuxClick={follow}
       onContextMenu={

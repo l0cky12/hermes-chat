@@ -55,6 +55,7 @@ fn failed(e: reqwest::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lock::Locked;
 
     async fn serve(content_type: &'static str, body: Vec<u8>) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -80,7 +81,7 @@ mod tests {
         let target_addr = target.local_addr().unwrap();
         let record = seen.clone();
         let app = axum::Router::new().fallback(move |headers: axum::http::HeaderMap| {
-            *record.lock().unwrap() = Some(headers.get("referer").and_then(|v| v.to_str().ok()).map(str::to_owned));
+            *record.locked() = Some(headers.get("referer").and_then(|v| v.to_str().ok()).map(str::to_owned));
             async { ([(CONTENT_TYPE, "image/png")], b"\x89PNG".to_vec()) }
         });
         tokio::spawn(async move { axum::serve(target, app).await.unwrap() });
@@ -89,7 +90,7 @@ mod tests {
         let hop = axum::Router::new().fallback(move || async move { axum::response::Redirect::temporary(&format!("http://{target_addr}/p.png")) });
         tokio::spawn(async move { axum::serve(first, hop).await.unwrap() });
         load(&format!("http://{first_addr}/p.png?token=SECRET")).await.unwrap();
-        assert_eq!(*seen.lock().unwrap(), Some(None));
+        assert_eq!(*seen.locked(), Some(None));
     }
 
     #[tokio::test]

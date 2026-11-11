@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Attachment } from "../hermes/model";
 import { asError } from "../hermes/tauriPipe";
 import { fmtSize } from "./bits";
+import { errorText } from "../hermes/values";
 
 /** A staged image's thumbnail once read, or why it couldn't be read. */
 export type Preview = { url: string } | { error: string };
@@ -35,7 +36,7 @@ export class Previews {
     return this.ready.get(path);
   }
 
-  sync(attachments: Attachment[]) {
+  sync(attachments: readonly Attachment[]) {
     const staged = new Set(attachments.filter((a) => a.kind === "image").map((a) => a.path));
     for (const [path, p] of this.ready)
       if (!staged.has(path)) {
@@ -58,7 +59,7 @@ export class Previews {
     try {
       p = { url: this.urls.createObjectURL(await this.read(path)) };
     } catch (e) {
-      p = { error: e instanceof Error ? e.message : String(e) };
+      p = { error: errorText(e) };
     }
     if (this.disposed || this.reading.get(path) !== token) return this.release(p);
     this.reading.delete(path);

@@ -22,7 +22,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 const details = { mode: "url" as const, sshTarget: "", url: "https://hermes.example.com", username: "liam", password: "hunter2" };
 
 async function opened() {
-  const pipe = await tauriPipe(details)(() => {}, "default");
+  const pipe = await tauriPipe(details, "saved-connection-1")(() => {}, "default");
   const connect = calls.find((c) => c.cmd === "hermes_connect")!;
   return { pipe, attempt: connect.args.attempt as string };
 }
@@ -54,6 +54,15 @@ describe("The Tauri pipe (#474, #486)", () => {
     expect(reopen.args.connection).toBe(attempt);
     // Its own name, so stopping the reopen can't stop another opening.
     expect(reopen.args.attempt).not.toBe(attempt);
+  });
+
+  it("opens under the saved connection's id, and names the connection it opened when it picks an upload and when it closes", async () => {
+    const { pipe, attempt } = await opened();
+    expect(calls.find((c) => c.cmd === "hermes_connect")!.args.savedConnection).toBe("saved-connection-1");
+    await pipe.pickUpload();
+    await pipe.close();
+    expect(calls.find((c) => c.cmd === "files_pick_upload")!.args).toEqual({ attempt });
+    expect(calls.find((c) => c.cmd === "hermes_disconnect")!.args).toEqual({ attempt });
   });
 
   it("gives each connection opened its own name", async () => {

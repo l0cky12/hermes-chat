@@ -315,6 +315,7 @@ function Output({ id, api }: { id: SubagentId; api: SubagentsApi }) {
   };
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
     return () => void asked.current++;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -357,6 +358,7 @@ function Controls({ s, under, api }: { s: Subagent; under: number; api: Subagent
   const saidRef = useRef<HTMLParagraphElement>(null);
   // Where focus goes once the controls it was on are gone or disabled, as soon as that place is there to take it.
   const [focusNext, setFocusNext] = useState<"box" | "stop" | "said">();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => {
     const el = focusNext && { box: boxRef, stop: stopRef, said: saidRef }[focusNext].current;
     if (!el || ("disabled" in el && el.disabled)) return;

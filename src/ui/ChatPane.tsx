@@ -1,14 +1,14 @@
 // Transcript, thinking, tool-call groups, Approval cards, find bar, composer and the Settle button, ported from the prototype.
 // Dictation and Read aloud come from Voice.tsx.
-import { createContext, memo, type ReactNode, type RefObject, useCallback, useContext, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, memo, type ReactNode, type RefObject, useCallback, startTransition, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, Columns2, CornerDownRight, EyeOff, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Square, Trash2, Wrench, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { decodeString } from "micromark-util-decode-string";
 import type { ApprovalChoice, AttachCheck, Attachment, Chat, ChatQueue, ConnectionStatus, Item, OutgoingItem, QuestionAnswer, SideQuestion, Source } from "../hermes/model";
-import { SOURCE_LABEL, isOutgoing, isQuestion, isWaiting } from "../hermes/model";
+import { SOURCE_LABEL, isOutgoing, isWaiting } from "../hermes/model";
 import type { SkillCall } from "../hermes/skillCommands";
-import type { DeskState, ScreenshotDesk } from "../hermes/screenshots";
+import type { ScreenshotDesk } from "../hermes/screenshots";
 import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard } from "./QuestionCard";
 import { Menu, PinItem, type ChatPin } from "./ChatMenu";
@@ -27,7 +27,6 @@ import { SourceIcon, Spinner, StoredTime, composing, escapeRe, highlight } from 
 import { caretAfter, editStep, inputKind, type EditStep } from "./editKeys";
 import type { EditKind } from "../hermes/editHistory";
 import { wakeFull } from "../hermes/snooze";
-import { stagedFiles } from "../hermes/unsaved";
 import { AttachmentChip, Previews, readPreview } from "./previews";
 import { Speaker } from "./speaker";
 import { DictationNoteView, DictationStrip, ListenButton, MicButton, type VoiceApi, listenBlocked, micBlocked, useDictation, useVoiceSetup } from "./Voice";
@@ -49,6 +48,7 @@ import { CopyButton, replyMarkdown } from "./CopyMessage";
 import { turnsOf, type ReplayKind, type Variant } from "../hermes/replay";
 import type { FollowUp } from "../hermes/uiPrefs";
 import { sttRoute } from "../hermes/sttRoute";
+import { errorText } from "../hermes/values";
 
 /**
  * What a message sent while the chat's reply runs does (ADR 0057). `mode`: what Enter does, the Follow-up behavior
@@ -139,6 +139,9 @@ const sameVersions = (a?: Map<number, Variant[]>, b?: Map<number, Variant[]>) =>
  */
 export type FindTarget = { query: string; itemId?: string; at: number };
 
+/** How long a new find query may wait for the transcript to mark it in the background before a streamed delta marks it. */
+const FIND_WAITS_MS = 200;
+
 /**
  * What to go to: a tool call, opened, by its call id (`Item.callId`), or a message by its stored row (`rowId`), as a
  * branch's link back does. `at` tells one request from the next.
@@ -158,7 +161,6 @@ const STATUS_NOTE: Record<ConnectionStatus, string | undefined> = {
   offline: "Offline. Click the status dot to reconnect.",
 };
 
-const NOT_CAPTURING: DeskState = { capturing: false };
 const noDesk = () => () => {};
 /**
  * The name a pasted file is saved under: its own, or for a screenshot (no name, or the webview's generic `image.png`)
@@ -182,6 +184,28 @@ export function refuseStrayFileDrops(target: Window = window) {
   };
   target.addEventListener("dragover", refuse);
   target.addEventListener("drop", refuse);
+}
+
+/**
+ * What a paste into the composer attaches. The webview pastes the text itself, except for a file copy, whose text is
+ * only the files' paths.
+ */
+export type PasteAttaches =
+  /** Files copied in a file manager: a `text/uri-list` of `file://` URIs, which WebKitGTK names but hides. Rust reads it. */
+  | { kind: "copied files" }
+  /** Files the paste event carries as bytes: a screenshot, or files copied in Explorer (Chromium). */
+  | { kind: "files"; files: File[]; keepText: boolean }
+  /** No text the page can see: WebKitGTK hides a clipboard image, and the text beside it, from the paste event. */
+  | { kind: "clipboard images" }
+  | { kind: "nothing" };
+
+export function pasteAttaches(data: { types: readonly string[]; files: ArrayLike<File>; getData(type: string): string }): PasteAttaches {
+  const files = Array.from(data.files);
+  const text = data.getData("text/plain");
+  if (files.length) return { kind: "files", files, keepText: !!text };
+  const uris = data.getData("text/uri-list").split(/\r?\n/).filter((l) => l && !l.startsWith("#"));
+  if (data.types.includes("text/uri-list") && uris.every((u) => u.startsWith("file:"))) return { kind: "copied files" };
+  return text ? { kind: "nothing" } : { kind: "clipboard images" };
 }
 
 /**
@@ -232,6 +256,7 @@ function MoreMenu({
   const [exporting, setExporting] = useState(false);
   useEffect(() => {
     if (!onDelete) setAskDelete(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [!onDelete]);
   const item = (label: string, icon: ReactNode, run: () => void, title?: string, danger?: boolean) => (
     <button
@@ -316,7 +341,7 @@ const savedWhen = (at: number) => new Date(at).toLocaleString(undefined, { dateS
  * Hermes is connected. `onRetry`, `onEdit` and `onDismiss` act on failed or unconfirmed messages. `modelControls`
  * contains the model picker; `footer` contains the status bar. Only the active pane answers Ctrl+F and takes focus as
  * it opens. Native drops attach to the pane under the pointer. Export, Copy chat link, Settle and Archive are in the header's More menu.
- * `screenshots` attaches captures; `screenshotKeys` names the shortcut.
+ * `screenshots` takes captures and keeps every chat's staged attachments; `screenshotKeys` names the shortcut.
  * `voice` supplies Dictation and Read aloud. `voiceSend` puts a Voice conversation's turn in the chat as the owner's
  * message; it is left out for a chat not started yet, where a conversation can't start (ADR 0111). `commands` runs the slash commands typed in the composer. `queue` is the
  * chat's queue of messages waiting to go after its reply, and `queueApi` changes it; it is left out for a chat not
@@ -337,6 +362,7 @@ export function ChatPane({
   status,
   alsoPostsIn,
   draft,
+  draftKey,
   onDraft,
   onDraftStep,
   onRetry,
@@ -396,6 +422,8 @@ export function ChatPane({
   status: ConnectionStatus;
   alsoPostsIn?: Source;
   draft: string;
+  /** The Draft's key (drafts.ts `draftKey`): the chat's staged attachments are kept under it too. */
+  draftKey: string;
   onDraft: (text: string, how?: EditKind) => void;
   /** Undoes or redoes the Draft, and says its text then, or undefined when there was nothing to step. */
   onDraftStep: (step: EditStep) => string | undefined;
@@ -424,7 +452,7 @@ export function ChatPane({
   split?: boolean;
   voice?: VoiceApi;
   voiceSend?: (text: string) => Promise<{ delivery: Delivery; itemId?: string }>;
-  screenshots?: ScreenshotDesk;
+  screenshots: ScreenshotDesk;
   screenshotKeys?: string;
   /** The names of the projects the chat is in, or a new chat will be put in. */
   projects?: string[];
@@ -468,6 +496,7 @@ export function ChatPane({
     const s = new Speaker((text) => voiceRef.current!.speak(text));
     setSpeaker(s);
     return () => s.dispose();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [!voice]);
   const listen = speaker && { speaker, blocked: listenBlocked(status, voiceSetup) };
   useEffect(() => { if (!active) speaker?.stop(); }, [active, speaker]);
@@ -570,6 +599,7 @@ export function ChatPane({
     setQuery(findTarget.query);
     setLanding(true);
     stickToBottom.current = false;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [findTarget?.at]);
 
   const openFind = () => {
@@ -588,11 +618,26 @@ export function ChatPane({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // The transcript catches up with the find bar in the background, so re-marking a long chat doesn't hold up typing.
+  // The query the transcript marks. A new one is marked in the background, so re-marking a long chat doesn't hold up
+  // typing. A streamed delta renders the pane at once and starts that work again, so once a query has waited a moment
+  // the next delta marks it with it; useDeferredValue would wait for the reply to end (#435). Closing clears at once.
   const typed = findOpen ? query : "";
-  const q = useDeferredValue(typed);
+  const [q, setQ] = useState("");
+  /** The query being marked in the background, and since when; "" when none is. */
+  const asked = useRef({ query: "", at: 0 });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- every render on purpose, so each streamed delta checks the query
+  useLayoutEffect(() => {
+    if (q === typed) asked.current.query = "";
+    else if (!typed) setQ("");
+    else if (asked.current.query !== typed) {
+      asked.current = { query: typed, at: performance.now() };
+      startTransition(() => setQ(typed));
+    } else if (performance.now() - asked.current.at > FIND_WAITS_MS) setQ(typed);
+  });
+  const finding = q !== typed;
   const finds = useMemo(() => (q ? new RegExp(escapeRe(q), "i") : undefined), [q]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useLayoutEffect(() => {
     if (q !== typed) return;
     const marks = q ? Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("mark.hit") ?? []) : [];
@@ -620,7 +665,9 @@ export function ChatPane({
     if (!jumpTo) return;
     stickToBottom.current = false;
     setJumping(jumpTo);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [jumpTo?.at]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useLayoutEffect(() => {
     if (!jumping) return;
     let el: HTMLElement | null | undefined;
@@ -678,7 +725,7 @@ export function ChatPane({
   }, []);
 
   const step = (d: number) => {
-    if (!count) return;
+    if (!count || finding) return;
     setMatchIndex((i) => (Math.min(i, count - 1) + d + count) % count);
     scrollToMatch.current = true;
     stickToBottom.current = false;
@@ -719,6 +766,7 @@ export function ChatPane({
   const shown = useTranscriptWindow({ scroller: scrollRef, chunks, all: !!q, stuck: stickToBottom, target: jumpChunk ?? revealChunk });
   revealRef.current = (has) => shown.reveal(chunks.findIndex((c) => c.some(has)));
   // Cards ignore clicks for a moment after the transcript changes, since it may have moved them under the pointer.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const movedAt = useMemo(() => performance.now(), [chat.items, chat.sideQuestions]);
   const last = chat.items[chat.items.length - 1];
   const waiting = chat.items.find(isWaiting);
@@ -797,12 +845,12 @@ export function ChatPane({
               }}
             />
             <span className="find-count" aria-live="polite">
-              {query ? `${count ? Math.min(matchIndex, count - 1) + 1 : 0} of ${count}` : ""}
+              {!query ? "" : finding ? "Finding…" : `${count ? Math.min(matchIndex, count - 1) + 1 : 0} of ${count}`}
             </span>
-            <button className="icon-btn" title="Previous (↑ or Shift+Enter)" disabled={!count} onClick={() => step(-1)}>
+            <button className="icon-btn" title="Previous (↑ or Shift+Enter)" disabled={!count || finding} onClick={() => step(-1)}>
               <ChevronUp size={16} />
             </button>
-            <button className="icon-btn" title="Next (↓ or Enter)" disabled={!count} onClick={() => step(1)}>
+            <button className="icon-btn" title="Next (↓ or Enter)" disabled={!count || finding} onClick={() => step(1)}>
               <ChevronDown size={16} />
             </button>
             <button className="icon-btn" title="Close (Esc)" onClick={closeFind}>
@@ -940,6 +988,7 @@ export function ChatPane({
         hint={waiting && (waiting.kind === "approval" ? "Hermes is waiting for your approval above." : "Hermes is waiting for your answer above.")}
         alsoPostsIn={alsoPostsIn}
         text={draft}
+        draftKey={draftKey}
         onText={onDraft}
         onStep={onDraftStep}
         onAttach={onAttach}
@@ -1302,6 +1351,7 @@ function ToolRow({ t }: { t: ToolItem }) {
   const jump = useContext(JumpContext);
   useEffect(() => {
     if (jump?.callId && t.callId === jump.callId) setOpen(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [jump?.at]);
   const summary = t.status === "stopped" ? "stopped" : t.summary;
   return (
@@ -1375,6 +1425,7 @@ function ToolGroup({ tools }: { tools: ToolItem[] }) {
   const jump = useContext(JumpContext);
   useEffect(() => {
     if (jump?.callId && tools.some((t) => t.callId === jump.callId)) setOpen(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [jump?.at]);
   if (tools.length === 1)
     return (
@@ -1413,6 +1464,7 @@ function Composer({
   hint,
   alsoPostsIn,
   text,
+  draftKey,
   onText,
   onStep,
   onAttach,
@@ -1444,6 +1496,8 @@ function Composer({
   alsoPostsIn?: Source;
   /** `onSend` empties it. */
   text: string;
+  /** Where the desk keeps this chat's staged attachments. */
+  draftKey: string;
   onText: (text: string, how?: EditKind) => void;
   onStep: (step: EditStep) => string | undefined;
   onAttach: (paths: string[]) => Promise<AttachCheck>;
@@ -1461,19 +1515,16 @@ function Composer({
   conversation?: VoiceConversation;
   started?: boolean;
   status: ConnectionStatus;
-  /** Screenshots come from here, and staged ones go back to it to be deleted once sent, removed or left behind. */
-  screenshots?: ScreenshotDesk;
+  /** Screenshots come from here, and it keeps the chat's staged attachments. */
+  screenshots: ScreenshotDesk;
   screenshotKeys?: string;
   commands?: CommandHost;
   /** While a reply runs, Enter queues or steers by its `mode`, and Ctrl+Enter does the other. */
   followUp?: FollowUpHost;
   compare?: Comparing;
 }) {
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
-  // What an update's restart would drop, for Settings to name (unsaved.ts).
-  const me = useRef({}).current;
-  useEffect(() => stagedFiles.set(me, attachments), [attachments]);
-  useEffect(() => () => stagedFiles.set(me, []), []);
+  // The chat's staged attachments, kept by the desk under its Draft key so they outlive this composer (ADR 0145).
+  const attachments = useSyncExternalStore(screenshots.subscribe, () => screenshots.stagedIn(draftKey));
   const focused = useRef(autoFocus);
   focused.current = autoFocus;
   // The transcript joins the text as it is when it arrives, typed meanwhile included.
@@ -1515,12 +1566,15 @@ function Composer({
   useEffect(() => {
     if (wasDictating.current && !dictation.active && autoFocus) taRef.current?.focus();
     wasDictating.current = dictation.active;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [dictation.active]);
   // Leaving a pane (including Settings or the narrow switcher) releases its microphone and drops late transcripts.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => { if (!autoFocus) dictation.cancel(); }, [autoFocus]);
   // So does hiding the window to the tray: the microphone never stays open behind a hidden window (ADR 0034). The
   // recording is dropped, as Cancel drops it; nothing is sent to Hermes to transcribe.
   const windowHidden = useWindowHidden();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => { if (windowHidden) dictation.cancel(); }, [windowHidden]);
 
   // Files still being read, saved or checked: sending waits for them, so none misses the message it was added for.
@@ -1534,55 +1588,50 @@ function Composer({
     }
   };
 
-  const add = (paths: string[], stillHere = () => true) => busy(async () => {
+  const check = async (paths: string[], stillHere = () => true): Promise<Attachment[]> => {
     if (!paths.length) return [];
     try {
       const got = await onAttach(paths);
       if (!stillHere()) return [];
-      setAttachments((cur) => [...cur, ...got.attachments.filter((a) => !cur.some((x) => x.path === a.path))]);
       setRefused(got.refused);
-      return got.attachments.map((a) => a.path);
+      return got.attachments;
     } catch (e) {
-      if (!stillHere()) return [];
-      setRefused([`Couldn't attach files: ${e instanceof Error ? e.message : String(e)}`]);
+      if (stillHere()) setRefused([`Couldn't attach files: ${errorText(e)}`]);
       return [];
     }
+  };
+  // Staged in this composer's chat even if it has closed meanwhile: the chat keeps what was added to it.
+  const add = (paths: string[]) => busy(async () => {
+    const got = await check(paths);
+    screenshots.change({ kind: "added", key: draftKey, attachments: got });
+    return got.map((a) => a.path);
   });
   const addRef = useRef(add);
   addRef.current = add;
+  const checkRef = useRef(check);
+  checkRef.current = check;
   const dropHereRef = useRef(dropHere);
   dropHereRef.current = dropHere;
 
-  // Screenshots attach here while this composer is on screen. Any still staged when it goes (another chat opened,
-  // signing out) are deleted: attachments aren't kept in a Draft.
-  const shot = useSyncExternalStore(screenshots?.subscribe ?? noDesk, screenshots?.getSnapshot ?? (() => NOT_CAPTURING));
+  // Screenshots attach here while this composer is on screen.
+  const shot = useSyncExternalStore(screenshots.subscribe, screenshots.getSnapshot);
   // A new screenshot replaces the notes about the last thing attached.
   useEffect(() => {
     if (shot.capturing) setRefused([]);
   }, [shot.capturing]);
-  const staged = useRef(attachments);
-  staged.current = attachments;
-  const open = useRef(true);
   useEffect(() => {
-    open.current = true;
-    return () => void (open.current = false);
-  }, []);
-  useEffect(() => {
-    if (!screenshots || !autoFocus) return;
+    if (!autoFocus) return;
     let current = true;
     const stop = screenshots.attachTo({
-      attach: (paths) => addRef.current(paths, () => current),
-      detach: (paths) => setAttachments((cur) => cur.filter((a) => !paths.includes(a.path))),
-      restore: (back) => setAttachments((cur) => [...cur, ...back.filter((a) => !cur.some((x) => x.path === a.path))]),
+      key: draftKey,
+      check: (paths) => busy(() => checkRef.current(paths, () => current)),
       note: (text) => setRefused((cur) => [...cur, text]),
     });
     return () => {
       current = false;
       stop();
     };
-  }, [screenshots, autoFocus]);
-  // Focus changes only transfer capture routing. A pane retains its staged attachments until its composer leaves.
-  useEffect(() => () => screenshots?.release(staged.current.map((a) => a.path)), [screenshots]);
+  }, [screenshots, autoFocus, draftKey]);
 
   // Tauri's native drop event (off on Windows, below): it gives real file paths, so Rust can read the bytes. Every composer
   // hears every drop; with two panes, the one under the pointer takes it. Tauri gives the point in physical pixels.
@@ -1615,18 +1664,28 @@ function Composer({
           ),
       );
       const paths = saved.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
-      screenshots?.own(paths);
+      screenshots.own(paths);
       const failed = saved.find((r): r is PromiseRejectedResult => r.status === "rejected");
       if (failed) {
-        screenshots?.release(paths);
+        screenshots.release(paths);
         throw failed.reason;
       }
-      const kept = await add(paths, () => open.current);
-      screenshots?.release(paths.filter((p) => !kept.includes(p)));
+      const kept = await add(paths);
+      screenshots.release(paths.filter((p) => !kept.includes(p)));
       const notes = tooBig.map((f) => overLimitNote(nameOf(f), f.size, LIMITS.file));
       if (notes.length) setRefused((cur) => (paths.length ? [...cur, ...notes] : notes));
     } catch (e) {
-      setRefused([`Couldn't attach the files: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't attach the files: ${errorText(e)}`]);
+    }
+  });
+  // Files copied in a file manager attach by path, as a drop does. Rust reads them, since WebKitGTK hides them.
+  const attachCopied = () => busy(async () => {
+    try {
+      const paths = await invoke<string[]>("attach_copied_files");
+      if (paths.length) await add(paths);
+      else setRefused(["Only files on this computer can be attached."]);
+    } catch (e) {
+      setRefused([`Couldn't attach the files: ${errorText(e)}`]);
     }
   });
   const stageRef = useRef(stageFiles);
@@ -1669,7 +1728,7 @@ function Composer({
     try {
       await add(await invoke<string[]>("attach_picked_files"));
     } catch (e) {
-      setRefused([`Couldn't open the file picker: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't open the file picker: ${errorText(e)}`]);
     }
   };
 
@@ -1722,7 +1781,7 @@ function Composer({
       const out = await followUp!.steer(words);
       if (out) setRefused([out]);
     } catch (e) {
-      setRefused([`Couldn't steer the reply, so nothing was sent: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't steer the reply, so nothing was sent: ${errorText(e)}`]);
     } finally {
       setSteering(false);
     }
@@ -1740,7 +1799,7 @@ function Composer({
       if (attachments.length) return setRefused(["Files can't go with a message that runs a skill. Send them in a message of their own."]);
       if (queueing && onQueue) return setRefused(["A message that runs a skill can't be queued. Send it while connected, with no reply running and nothing queued."]);
       if (offline || running) return;
-      onSend(text.trim(), attachments, skill.call);
+      onSend(text.trim(), [], skill.call);
       setRefused([]);
       return;
     }
@@ -1755,13 +1814,13 @@ function Composer({
       }
     }
     if (queueing && onQueue) {
-      const why = onQueue(text.trim(), attachments);
+      const why = onQueue(text.trim(), [...attachments]);
       if (why) return setRefused([why]);
     } else {
       if (offline || running) return;
-      onSend(text.trim(), attachments);
+      onSend(text.trim(), [...attachments]);
     }
-    setAttachments([]);
+    screenshots.change({ kind: "sent", key: draftKey, paths: attachments.map((a) => a.path) });
     setRefused(fellBack ? [fellBack] : []);
   };
   // What Enter, and the button beside the text, do now; Ctrl+Enter does the other while a reply runs.
@@ -1835,10 +1894,7 @@ function Composer({
                 key={f.path}
                 file={f}
                 preview={previews.current?.get(f.path)}
-                onRemove={() => {
-                  setAttachments((cur) => cur.filter((x) => x.path !== f.path));
-                  screenshots?.release([f.path]);
-                }}
+                onRemove={() => screenshots.change({ kind: "removed", key: draftKey, paths: [f.path] })}
               />
             ))}
           </div>
@@ -1853,13 +1909,12 @@ function Composer({
           {...slash.inputProps}
           onChange={(e) => onText(e.target.value, inputKind(e.nativeEvent))}
           onPaste={(e) => {
-            // Only files are taken over; text pastes as it always has.
             if (dragging) return;
-            const files = Array.from(e.clipboardData.files);
-            if (files.length) {
-              e.preventDefault();
-              void stageFiles(files);
-            } else if (!e.clipboardData.getData("text/plain")) void stageFiles(clipboardImages());
+            const paste = pasteAttaches(e.clipboardData);
+            if (paste.kind === "copied files" || (paste.kind === "files" && !paste.keepText)) e.preventDefault();
+            if (paste.kind === "copied files") void attachCopied();
+            else if (paste.kind === "files") void stageFiles(paste.files);
+            else if (paste.kind === "clipboard images") void stageFiles(clipboardImages());
           }}
           onKeyDown={(e) => {
             if (slash.onKeyDown(e)) return;
@@ -1893,17 +1948,15 @@ function Composer({
               }}
             />
           )}
-          {screenshots && (
-            <button
-              className="icon-btn"
-              title={screenshotKeys ? `Attach a screenshot (${screenshotKeys})` : "Attach a screenshot"}
-              aria-label="Attach a screenshot"
-              disabled={shot.capturing}
-              onClick={() => void screenshots.capture()}
-            >
-              <Camera size={16} />
-            </button>
-          )}
+          <button
+            className="icon-btn"
+            title={screenshotKeys ? `Attach a screenshot (${screenshotKeys})` : "Attach a screenshot"}
+            aria-label="Attach a screenshot"
+            disabled={shot.capturing}
+            onClick={() => void screenshots.capture()}
+          >
+            <Camera size={16} />
+          </button>
           {modelControls}
           {!dictation.active && (
             <span className="composer-keys" title={steerWhy && `Can't steer now: ${steerWhy}`}>

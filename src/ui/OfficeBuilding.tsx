@@ -13,6 +13,7 @@ import { OfficeCard } from "./OfficeCard";
 import { OfficeQualitySwitch } from "./OfficeSettings";
 import { deskLabel } from "./officeText";
 import { usePageHidden, useWindowFocused } from "./windowState";
+import { errorText } from "../hermes/values";
 
 const HEAD_TO_TAG_GRACE_MS = 250;
 
@@ -55,6 +56,37 @@ const tagText = (room: Room, d: Desk) => (d.agent.kind === "reply" ? room.title 
 
 const NO_ONE: Floor = { characters: [], more: 0, memory: EMPTY_FLOOR_MEMORY };
 
+type Size = { w: number; h: number };
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+/**
+ * Where the tower's floor labels go, from where their floors are on screen, the bottom floor first. Each stays as near
+ * its floor as it can while no two labels (each at most `tag` big, centred on its point) touch and all of them are
+ * inside the `canvas`. A column holds as many as fit between the bottom floor and the canvas's top, so labels don't
+ * slide down over the building; the rest go on in more columns beside it, toward the nearer edge (away from the
+ * building in the middle) when they fit there. All show while any floor does, so a floor above the canvas's top edge
+ * keeps a label inside it.
+ */
+export function towerLabels(at: readonly ScreenPoint[], tag: Size, canvas: Size): ScreenPoint[] {
+  if (!at.length) return [];
+  const w = tag.w + 2;
+  const h = tag.h + 2;
+  const above = Math.floor((clamp(at[0].y, h / 2, canvas.h - h / 2) + h / 2) / h);
+  const rows = clamp(above, Math.ceil(at.length / Math.max(1, Math.floor(canvas.w / w))), Math.max(1, Math.floor(canvas.h / h)));
+  const cols = Math.ceil(at.length / rows);
+  const nearer = at[0].x < canvas.w / 2 ? -1 : 1;
+  const fits = (dir: number) => (dir < 0 ? at[0].x - w / 2 : canvas.w - w / 2 - at[0].x) >= (cols - 1) * w;
+  const step = (fits(nearer) || !fits(-nearer) ? nearer : -nearer) * w;
+  const x0 = clamp(at[0].x, w / 2 + Math.max(0, -step) * (cols - 1), canvas.w - w / 2 - Math.max(0, step) * (cols - 1));
+  const off = at.every((p) => p.off);
+  // A later column's labels sit beside the first column's. Up each column: no lower than the canvas's foot or a label
+  // above the one below. Then down: no higher than the canvas's top or a label below the one above. Both fit.
+  const ys = at.map((_, i) => at[i % rows].y);
+  for (let i = 0; i < ys.length; i++) ys[i] = Math.min(ys[i], i % rows ? ys[i - 1] - h : canvas.h - h / 2);
+  for (let i = ys.length - 1; i >= 0; i--) ys[i] = Math.max(ys[i], i % rows === rows - 1 || i === ys.length - 1 ? h / 2 : ys[i + 1] + h);
+  return at.map((p, i) => ({ x: cols === 1 ? clamp(p.x, w / 2, canvas.w - w / 2) : x0 + Math.floor(i / rows) * step, y: ys[i], off }));
+}
+
 /**
  * What the building keeps while it is closed: who sits where on each floor, and the floor it last drew. Opened again,
  * it starts from that picture, so an agent that left meanwhile, its entry dismissed in the inbox, walks out of it.
@@ -94,6 +126,7 @@ export function OfficeBuilding({
     const b = officeFloors(rooms, memory.current.floors, Date.now());
     memory.current = { ...memory.current, floors: b.memory };
     return b;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [rooms, memory, wake]);
   useEffect(() => {
     if (built.wakeAt === undefined) return;
@@ -114,7 +147,8 @@ export function OfficeBuilding({
     });
   const towerNow = useRef(tower);
   towerNow.current = tower;
-  const lights = tower.map((t) => (t.lit ? 1 : 0)).join("");
+  // All a floor's label says, so a frame lays the labels out again whenever one may change size.
+  const towerLabelsSay = tower.map((t) => `${t.profile}|${t.agents}|${t.lit ? 1 : 0}`).join(";");
 
   const picture = `${opened}:${pictureOf(floor)}`;
   const latest = useRef({ floor, opened });
@@ -170,7 +204,10 @@ export function OfficeBuilding({
               for (const [key, p] of at) place(tags.current.get(key), p);
               for (const [r, p] of Object.entries(rooms) as [BuildingRoom, ScreenPoint][]) place(roomTags.current.get(r), p);
               place(more.current, door);
-              floors.forEach((p, i) => place(floorTags.current[i], p));
+              const labels = floorTags.current.slice(0, floors.length);
+              const tag = { w: Math.max(0, ...labels.map((el) => el?.offsetWidth ?? 0)), h: Math.max(0, ...labels.map((el) => el?.offsetHeight ?? 0)) };
+              const box = { w: canvas.current?.clientWidth ?? 0, h: canvas.current?.clientHeight ?? 0 };
+              towerLabels(floors, tag, box).forEach((p, i) => place(labels[i], p));
             },
             // The frame counter, for proof that nothing draws while nothing moves. Written straight to the page.
             onFrame: (n) => host.current?.setAttribute("data-frames", String(n)),
@@ -180,11 +217,12 @@ export function OfficeBuilding({
         );
         setScene(made);
       })
-      .catch((e: unknown) => live && fallback.current(`The building couldn't be loaded: ${e instanceof Error ? e.message : String(e)}`));
+      .catch((e: unknown) => live && fallback.current(`The building couldn't be loaded: ${errorText(e)}`));
     return () => {
       live = false;
       made?.dispose();
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, []);
 
   const started = useRef<OfficeScene>(undefined);
@@ -197,7 +235,7 @@ export function OfficeBuilding({
     scene.setFloor(floor, opened);
     memory.current = { ...memory.current, last: { floor, profile: opened } };
   }, [scene, picture, memory]);
-  useEffect(() => scene?.setTower(towerNow.current), [scene, lights]);
+  useEffect(() => scene?.setTower(towerNow.current), [scene, towerLabelsSay]);
   useEffect(() => scene?.setMode(mode), [scene, mode]);
   useEffect(() => scene?.setMotion(moves), [scene, moves]);
   useEffect(() => scene?.setQuality(quality), [scene, quality]);
@@ -258,6 +296,9 @@ export function OfficeBuilding({
               ref={(el) => void (el ? tags.current.set(c.key, el) : tags.current.delete(c.key))}
               onClick={() => setSelected(c.key)}
               onPointerEnter={() => hover(c.key)}
+              // Straight from the head onto its tag, React's enter comes before the canvas's own leave lets go of the
+              // character; the move that follows both keeps the tag.
+              onPointerMove={() => hover(c.key)}
               onPointerLeave={() => hover(undefined)}
             >
               <span className="office-dot" aria-hidden />

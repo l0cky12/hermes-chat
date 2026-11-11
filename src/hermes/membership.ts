@@ -1,3 +1,4 @@
+import { isObj } from "./values";
 // Which chats are in which project, kept by Hermes so every computer shows the same (ADR 0109, #84).
 //
 // Hermes at the deployed `bf0203a`, and upstream at `9302ba9e` (2026-11-03), has no record linking a project to its
@@ -58,7 +59,6 @@ export class MembershipUnsupportedError extends Error {
   }
 }
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown, max = 400) => (typeof v === "string" && v.length > 0 && v.length <= max ? v : undefined);
 const STATUSES: readonly OpStatus[] = ["applied", "unchanged", "conflict", "no_project", "no_session"];
 

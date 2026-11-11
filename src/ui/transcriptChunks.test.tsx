@@ -5,10 +5,12 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Chat, Item, SideQuestion } from "../hermes/model";
 import { ChatPane, type FindTarget } from "./ChatPane";
+import { ScreenshotDesk, type ScreenshotApi } from "../hermes/screenshots";
 import { chunkBlocks } from "./transcriptChunks";
 
+const noScreenshots: ScreenshotApi = { capture: () => Promise.reject(new Error("no screenshots in this test")), discard: async () => {} };
+
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 const sideRenders = vi.hoisted(() => [] as string[]);
 vi.mock("./SideQuestions", async (actual) => {
@@ -40,6 +42,8 @@ function pane(chat: Chat, findTarget?: FindTarget) {
       findTarget={t}
       status="connected"
       draft=""
+      draftKey="draft"
+      screenshots={new ScreenshotDesk(noScreenshots)}
       onDraft={() => {}}
       onDraftStep={() => undefined}
       onRetry={() => {}}

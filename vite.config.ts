@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -13,4 +14,7 @@ export default defineConfig({
   plugins: [react(), devCsp],
   clearScreen: false,
   server: { port: 1420, strictPort: true, host: "127.0.0.1" },
+  // The jsdom tests that drive the whole app take up to about 5.5 s on CI's runners. Set here rather than per test or
+  // file, a run's `--testTimeout` still replaces it when a busy machine needs more.
+  test: { testTimeout: 20_000 },
 });

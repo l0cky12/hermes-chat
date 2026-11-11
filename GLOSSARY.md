@@ -64,7 +64,7 @@ The owner's action that removes a chat from Hermes for good, in every Hermes cli
 _Avoid_: remove, archive
 
 **Export**:
-Saving one chat as a Markdown file, in a place the owner picks in the Save dialog. The Export dialog comes first: the owner picks the messages, whether tool calls and Approvals and the names of attached files go in (left out at first), and what is redacted, and sees the file exactly as it will be saved. Likely secrets are flagged and redacted unless the owner keeps them, and the owner can redact any text they select. The file holds only what Hermes Chat has loaded for the chat, as it was when the dialog opened, and never an attachment's contents. It warns that it may still contain sensitive information, since detection can miss a secret. Nothing is uploaded (ADR 0076).
+Saving one chat as a file, in a place the owner picks in the Save dialog: Markdown to read, JSON in Hermes's own session format, an Image (a PNG), or an HTML page that runs no script and loads nothing. The Export dialog comes first: the owner picks the messages, whether tool calls and Approvals and the names of attached files go in (left out at first), and what is redacted, and sees the file exactly as it will be saved. Likely secrets are flagged and redacted unless the owner keeps them, and the owner can redact any text they select. The file holds only what Hermes Chat has loaded for the chat, as it was when the dialog opened, and never an attachment's contents. It warns that it may still contain sensitive information, since detection can miss a secret. Nothing is uploaded (ADR 0076).
 _Avoid_: download, backup, snapshot (#92's published copy, which waits for a hosting service), share
 
 **Backup**:
@@ -100,12 +100,20 @@ _Avoid_: restore, sync, upload
 
 **Profile**:
 A separate Hermes agent setup on the server, with its own chats. The app shows one profile's chats at a time. The profile switcher shows which other profiles have Unread chats, checked every two minutes, so it can lag behind.
-Switching profile happens in place, with the same sign-in: the list shows what this computer saved for the profile, says it is connecting and loading, and is remembered for the next launch only once its chats load. If they can't, it says why and offers to try again or go back. Each profile keeps its own drafts, Saved copies and Model pick, and nothing that arrives for the profile left shows in the new one. If a reply is running or an Approval waiting, the switcher asks first. Hermes keeps the reply going, and the Approval waits until Hermes stops waiting; switching back brings both back.
+Switching profile happens in place, with the same sign-in: the list shows what this computer saved for the profile, says it is connecting and loading, and is remembered for the next launch only once its chats load. If they can't, it says why and offers to try again or go back. Each profile keeps its own drafts, Saved copies and Model pick, and nothing that arrives for the profile left shows in the new one. If a reply is running or an Approval waiting, the switcher asks first. Hermes keeps the reply going, and the Approval waits until Hermes stops waiting; switching back brings both back. The switcher only switches: profiles are made, renamed, edited and deleted in Settings → Profiles, whose Open goes through the switcher's same question (ADR 0144).
 _Avoid_: account, workspace, agent (as a name for a profile), connection (the server signed in to, which covers every profile)
 
 **Clone profile**:
 Making a new profile on the server from another one, from the profile switcher's menu. By default the clone is fresh, with only the parts the owner picks: the source's persona, model, description and own skills. It has no API keys. The full copy, which the owner turns on after a warning, also copies the source's API keys, memory and every setting. Chats, scheduled jobs and messaging channels are never copied. The new profile is read back before it can be opened, and the dialog says which parts didn't copy (ADR 0074).
 _Avoid_: duplicate, fork, copy (as a name for the feature; a copy is what Hermes's full copy does)
+
+**Rename profile**:
+Giving a profile a new id on the server, from Settings → Profiles. Hermes stops the profile's running gateway first, for up to 10 seconds. Once Hermes has renamed it, this computer's data for the profile moves to the new name: drafts, Queued and Failed messages, the chat list and Saved copies, pins, tags, Saved filters, snoozes, project membership and defaults, persona edits, inbox dismissals and which profile was shown. Renaming the profile in use keeps the app on it under the new name. Hermes's built-in `default` keeps its id: renaming it sets only a display name, shown before the id, as in "Main (default)" (ADR 0144).
+_Avoid_: move, relabel
+
+**Delete profile**:
+Removing a profile's folder from the server, from Settings → Profiles, after its name is typed to confirm: its chats, persona, memory, skills, API keys, scheduled jobs and messaging channels. Hermes can't undo it. This computer's data for that profile goes too, and another connection's profile of the same name stays. Deleting the profile in use switches to `default` first, and nothing is deleted if the owner stays. `default` can't be deleted. A delete Hermes is still settling, or one another client already made, counts as done (ADR 0144).
+_Avoid_: remove (removing a connection keeps the server's profiles), archive
 
 **Bot Mode**:
 Hermes's way of treating each profile as a bot with a lasting identity, each with one Bot Chat. The Bots view shows it, opened from the rail. A Hermes without Bot Mode has no Bots button, and Connection diagnostics says why (ADR 0066).
@@ -118,6 +126,10 @@ _Avoid_: agent (Hermes's own word for what runs the chat), assistant, persona (t
 **Bot Chat**:
 A bot's one chat that always continues: the profile's chat titled exactly "Bot Chat". Hermes finds it by that title each time it opens, never by a remembered id or by which chat is newest. It is created only when the bot has none, with no message sent. It stays out of the chat list and search: the bot's row is the way to it. `/new` in it compacts it instead of starting a new chat (ADR 0066).
 _Avoid_: forever chat, canonical chat, DM, main chat
+
+**Bot mode** (of the chat list):
+The chat list panel showing the bots in place of the chats, while the active pane shows a Bot Chat. The profile switcher, New chat and Search stay above them. New chat, or any ordinary chat opened, ends it, and a launch never starts in it (ADR 0066).
+_Avoid_: Bot Mode (that is Hermes's feature), bots sidebar
 
 **Connection**:
 A Hermes server this computer can sign in to, saved with a name, its Routes, its dashboard username, and when it was last used. Each keeps its own password and Extra request headers in the system keyring, and its own Drafts, Queued messages, Failed messages, Saved copies, profile shown, Model pick and chat to reopen on this computer, so the same profile name on two servers never shares them. One is in use at a time. Switching to another asks first when a reply is running or an Approval waiting; Hermes keeps the reply going, and switching back brings both back. Removing one deletes only what this computer keeps for it, after saying what that is; its chats stay on the server. Nothing picks a connection by its name, or on its own: launch signs in to the one in use, showing its saved chat list meanwhile, Connecting, when there is one (ADR 0089), and when that one is removed, the sign-in screen offers the others and waits (ADR 0112).
@@ -172,10 +184,10 @@ A local file the owner sends with a message: an image Hermes looks at, or any ot
 _Avoid_: upload, file (when the attachment is meant)
 
 **Screenshot**:
-An image of a region or window of the owner's screen, taken from the composer by a shortcut or the camera button, and staged as an Attachment. It stays on this computer until the message is sent. Composer captures are deleted when removed or left behind; a failed or uncertain message keeps its Screenshot for Retry until confirmed, reconciled or dismissed.
+An image of a region or window of the owner's screen, taken from the composer by a shortcut or the camera button, and staged as an Attachment. It stays on this computer until the message is sent. A capture staged in a composer is deleted when the owner removes it or its chat is deleted or archived, and is staged in one chat at a time; a failed or uncertain message keeps its Screenshot for Retry until confirmed, reconciled or dismissed.
 _Avoid_: screen capture, snapshot
 
-**Annotation** (proposed, not built):
+**Annotation** (proposed; Rust can take the still, pick and stage, and nothing in the UI offers it yet):
 A pointer at part of a web page in the Preview, staged in the composer: a Screenshot of the page with the picked element or region marked, plus a block of words with the page's address, the time, the box and the owner's note. An element also adds its details. A region has none. The owner picks it on a still of the page, which covers the live page while they annotate; the page stays loaded behind it. Nothing is sent until the owner sends the message (ADR 0094).
 _Avoid_: comment (the official desktop app's word), inspector
 
@@ -192,7 +204,7 @@ Another take on one turn of a chat, made with Edit under the owner's message or 
 _Avoid_: variant (in the UI), alternative, retry, rerun
 
 **Draft**:
-The text the owner has typed in a chat's composer and not sent. Each chat keeps its own draft, and so does the New chat pane, separately for each connection and profile. A draft is still there after switching chats or restarting the app. Sending or queuing it empties it. A message Hermes doesn't take becomes a Failed message, not a draft again. The text comes back into the composer only when a new chat can't be started, or when the chat has left the list before the message went in. A chat open in a pane that Hermes no longer has (deleted elsewhere) gives way to the New chat pane, and its draft goes there too. One that is only older than the list reaches, or archived elsewhere, stays open. Attachments aren't kept in a draft.
+The text the owner has typed in a chat's composer and not sent. Each chat keeps its own draft, and so does the New chat pane, separately for each connection and profile. A draft is still there after switching chats or restarting the app. Sending or queuing it empties it. A message Hermes doesn't take becomes a Failed message, not a draft again. The text comes back into the composer only when a new chat can't be started, or when the chat has left the list before the message went in. A chat open in a pane that Hermes no longer has (deleted elsewhere) gives way to the New chat pane, and its draft goes there too. One that is only older than the list reaches, or archived elsewhere, stays open. Each chat also keeps the attachments staged in its composer, next to its draft, until the owner sends or removes them or the chat is deleted or archived. Unlike the text, they are kept only while the app runs and the owner stays signed in to that connection (ADR 0145).
 _Avoid_: unsent message, saved message
 
 **Queued message**:
@@ -263,7 +275,7 @@ Hermes asking the owner before it runs a command it counts as dangerous. It show
 _Avoid_: permission, confirmation, prompt
 
 **Question** (from Hermes):
-Hermes stopping in a reply to ask the owner something, and waiting for the answer. It shows as a card in its chat, and Hermes waits until the owner answers it, Hermes stops waiting (its deadline, or the reply is stopped), or another Hermes app answers it first. Four kinds show here: an **Approval**, a **Clarify**, a **Sudo password** and a **Secret**. Whatever ends one closes its card, and the card says how. Nothing else closes it: a question from a background task or a plugin command can outlive the reply that was running when it came. Hermes asks other kinds too (a password manager's master password, a login to save, one-time codes, and requests only the official app's own window answers). The app doesn't show those, and on a Hermes that shares chats it leaves them for another app to answer (ADR 0138).
+Hermes stopping in a reply to ask the owner something, and waiting for the answer. It shows as a card in its chat, and Hermes waits until the owner answers it, Hermes stops waiting (its deadline, or the reply is stopped), or another Hermes app answers it first. Four kinds show here: an **Approval**, a **Clarify**, a **Sudo password** and a **Secret**. Whatever ends one closes its card, and the card says how. Nothing else closes it: a question from a background task or a plugin command can outlive the reply that was running when it came. Hermes asks other kinds too (a password manager's master password, a login to save, one-time codes, and requests only the official app's own window answers). The app doesn't show those, and on a Hermes that shares chats it leaves them for another app to answer (ADR 0146).
 _Avoid_: prompt, request (Hermes's word for the message that carries it), dialog
 
 **Clarify**:
@@ -521,8 +533,8 @@ _Avoid_: local time (ambiguous between the server and this computer), display ti
 One view of a chat, its transcript and composer. The app can show two, side by side or one above the other. Each pane
 has its own tabs; a tab dragged to the other pane or to a pane's edge moves there (ADR 0052). The focused pane is the one the
 chat list, Search and keyboard shortcuts target. This focus does not change whether a chat is Active or Settled.
-Two panes of one chat share its Draft, Queued messages and running reply; each has its own scroll, Find and pending
-Attachments.
+Two panes of one chat share its Draft, staged Attachments, Queued messages and running reply; each has its own scroll
+and Find.
 
 **Compare**:
 Two panes whose sends go to both: one message typed in either pane goes to the chat in each, so two models answer it side
@@ -531,7 +543,7 @@ ordinary chat. While either has a reply running or messages queued, sending is r
 the owner stops it, or when either pane shows another chat or closes (ADR 0101).
 
 **Update**:
-A newer version of Hermes Chat itself. For the packaged app, the owner installs it with pacman, and the app never replaces pacman's files. For a standalone build made with an update key, the app installs it, after checking its signature. Either way the new version runs only after the owner restarts the app. Drafts, unsent and uncertain messages, and queues are kept across the restart, for every connection, profile and chat. Files attached in a composer and a second pane aren't. A saved copy that can't be put back is set aside in a file of its own and never put back automatically (ADR 0060).
+A newer version of Hermes Chat itself. For the packaged app, the owner installs it with pacman, and the app never replaces pacman's files. For a standalone build made with an update key, the app installs it, after checking its signature. Either way the new version runs only after the owner restarts the app. Drafts, unsent and uncertain messages, and queues are kept across the restart, for every connection, profile and chat. Files staged in any chat's composer and a second pane aren't. A saved copy that can't be put back is set aside in a file of its own and never put back automatically (ADR 0060).
 _Avoid_: upgrade (pacman's word, for the package step only)
 
 **Release**:
@@ -565,6 +577,7 @@ _Avoid_: locale (the code's word for the language, its tag and its formats toget
 - **Artifact** vs **Edit** (of a Server file): both edit a text file's text with the same checked save, but an Artifact is an Output, edited beside the chat on the machine its tool wrote it on, with Hermes's proposed edits and kept versions. A Server file edit is made in the Files tab and only reaches the dashboard's machine.
 - **Output** vs a path in a reply: Outputs counts only what a tool's own result says it wrote. A reply that says "saved to /srv/x.pdf", or a `terminal` command that creates a file, makes no Output, though the owner can add that file by its path.
 - **Inbox** vs **Rail inbox**: the Inbox is the chat list's first section, one profile's Active chats; the Rail inbox, opened from the tray's Open Inbox, lists what needs the owner across every profile on the server, chats in any state included. Settling a chat doesn't dismiss its Rail inbox entry, and dismissing an entry doesn't settle the chat (ADR 0063).
+- **Bot Mode** vs the chat list's **bot mode**: Bot Mode is Hermes's feature, which a server has or lacks; the list's bot mode is the panel showing the bots while a Bot Chat is open. The code calls the first `botMode` (capabilities.ts) and the second `botsInList` (App.tsx).
 - **Settled** vs **Archived**: they are different things. Archiving sets Hermes's own "archived" flag and hides a chat in every Hermes client; settling is this app's view of the owner's attention, stored as the "pinned" flag. Neither touches the other (ADR 0005).
 - **Queued message** vs **Draft** vs **Failed message**: a Draft hasn't been sent or queued; a Queued message waits in the chat's queue to be sent by this app; a Failed message was sent, and Hermes didn't take it or may not have. A queued message that goes leaves the queue, and becomes a Failed message only if Hermes doesn't take it.
 - **Imported chat** vs pulling older history: the list holds the past month's chats until the owner pulls older history in Settings, after which it holds all of the profile's chats. Pulled chats come in Settled unless pinned, but they are Imported chats only if their Source isn't this app.

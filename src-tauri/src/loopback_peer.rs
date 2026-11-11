@@ -3,8 +3,8 @@
 //! the sign-in tunnel's; only the owner's own programs may use a server page's, which WebKit's network process loads.
 //!
 //! On Linux the peer's socket is looked up in `/proc/net/tcp` and `/proc/net/tcp6`, which name each socket's owner
-//! and inode. TCP has no `SO_PEERCRED`. On Windows the peer's row in the IPv4 TCP table names the process that holds
-//! it, and that process's token names its account. A connection whose row or owner can't be found or read is refused.
+//! and inode. TCP has no `SO_PEERCRED`. On Windows the peer's row in the IPv4 or IPv6 TCP table names the process that
+//! holds it, and that process's token names its account. A connection whose row or owner can't be found or read is refused.
 //! Other platforms, which the app isn't built for, admit every connection.
 
 #[cfg(target_os = "linux")]
@@ -40,6 +40,22 @@ pub(crate) fn this_account() -> Account {
     Account
 }
 
+/// Whether process `pid` runs as this process's account. False when either account can't be read, which is the case
+/// for another account's process unless the app runs as an administrator.
+#[cfg(windows)]
+pub(crate) fn runs_as_this_account(pid: u32) -> bool {
+    let this = this_account();
+    this.is_some() && win::account_of(pid) == this
+}
+
+/// Whether file or folder `path` has the owner this process gives what it makes: its account, or the Administrators
+/// group when it runs elevated. False when either owner can't be read.
+#[cfg(windows)]
+pub(crate) fn owned_as_this_process_makes(path: &std::path::Path) -> bool {
+    let this = win::default_owner();
+    this.is_some() && win::owner_of(path) == this
+}
+
 /// Who a relay port serves.
 #[derive(Clone, Copy)]
 pub(crate) enum Peers {
@@ -62,8 +78,8 @@ pub(crate) fn admits(peers: Peers, tcp: &tokio::net::TcpStream) -> bool {
 
 #[cfg(windows)]
 pub(crate) fn admits(peers: Peers, tcp: &tokio::net::TcpStream) -> bool {
-    let (Ok(SocketAddr::V4(local)), Ok(SocketAddr::V4(peer))) = (tcp.local_addr(), tcp.peer_addr()) else { return false };
-    let Ok(rows) = win::tcp_table() else { return false };
+    let (Ok(local), Ok(peer)) = (tcp.local_addr(), tcp.peer_addr()) else { return false };
+    let Ok(rows) = win::tcp_table(local.is_ipv6()) else { return false };
     let Some(pid) = far_end(&rows, local, peer) else { return false };
     match peers {
         Peers::ThisProcess => pid == std::process::id(),
@@ -76,42 +92,80 @@ pub(crate) fn admits(_peers: Peers, _tcp: &tokio::net::TcpStream) -> bool {
     true
 }
 
-#[cfg(windows)]
-use std::net::SocketAddr;
 #[cfg(any(windows, test))]
-use std::net::SocketAddrV4;
+use std::net::SocketAddr;
 
-/// One row of Windows' IPv4 TCP table: a connection's two ends and the process that holds it.
+/// One row of Windows' IPv4 or IPv6 TCP table: a connection's two ends and the process that holds it.
 #[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Row {
-    local: SocketAddrV4,
-    remote: SocketAddrV4,
+    local: SocketAddr,
+    remote: SocketAddr,
     pid: u32,
 }
 
 /// The process holding the peer's end of a connection the relay accepted on `local` from `peer`: the row whose local
 /// end is `peer` and whose remote end is `local`.
 #[cfg(any(windows, test))]
-fn far_end(rows: &[Row], local: SocketAddrV4, peer: SocketAddrV4) -> Option<u32> {
+fn far_end(rows: &[Row], local: SocketAddr, peer: SocketAddr) -> Option<u32> {
+    // Only the address and port: a row names no IPv6 flow label, and loopback has no scope.
+    let (local, peer) = (SocketAddr::new(local.ip(), local.port()), SocketAddr::new(peer.ip(), peer.port()));
     rows.iter().find(|r| r.local == peer && r.remote == local).map(|r| r.pid)
 }
 
 #[cfg(windows)]
 mod win {
     use super::{Account, Row};
-    use std::net::SocketAddrV4;
+    use std::net::{Ipv6Addr, SocketAddr, SocketAddrV4};
     use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE, NO_ERROR};
-    use windows_sys::Win32::NetworkManagement::IpHelper::{GetExtendedTcpTable, MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID, TCP_TABLE_OWNER_PID_CONNECTIONS};
-    use windows_sys::Win32::Networking::WinSock::AF_INET;
-    use windows_sys::Win32::Security::{GetLengthSid, GetTokenInformation, IsValidSid, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetExtendedTcpTable, MIB_TCP6ROW_OWNER_PID, MIB_TCP6TABLE_OWNER_PID, MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID, TCP_TABLE_OWNER_PID_CONNECTIONS,
+    };
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
+    use windows_sys::Win32::Security::{GetLengthSid, GetTokenInformation, IsValidSid, TokenOwner, TokenUser, PSID, TOKEN_INFORMATION_CLASS, TOKEN_QUERY};
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION};
 
     pub(crate) const SID_SIZE: usize = 68;
 
     pub(super) fn this_account() -> Account {
         // SAFETY: the pseudo-handle for this process needs no closing.
-        unsafe { user_of(GetCurrentProcess()) }
+        unsafe { token_sid(GetCurrentProcess(), TokenUser) }
+    }
+
+    /// The owner this process gives what it makes (`TokenOwner`).
+    pub(super) fn default_owner() -> Account {
+        // SAFETY: the pseudo-handle for this process needs no closing.
+        unsafe { token_sid(GetCurrentProcess(), TokenOwner) }
+    }
+
+    /// The owner of file or folder `path`. `None` when Windows won't say.
+    pub(super) fn owner_of(path: &std::path::Path) -> Account {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
+        use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
+        use windows_sys::Win32::Security::{OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut owner: PSID = std::ptr::null_mut();
+        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: `wide` ends in a NUL. `owner` points into `descriptor`, which is freed once the SID is copied out.
+        unsafe {
+            let read = GetNamedSecurityInfoW(
+                wide.as_ptr(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                &mut owner,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut descriptor,
+            );
+            if read != ERROR_SUCCESS {
+                return None;
+            }
+            let account = sid_bytes(owner);
+            LocalFree(descriptor);
+            account
+        }
     }
 
     /// The account process `pid` runs as. `None` when Windows won't open the process or its token, which is the case
@@ -123,29 +177,36 @@ mod win {
             if process.is_null() {
                 return None;
             }
-            let user = user_of(process);
+            let user = token_sid(process, TokenUser);
             CloseHandle(process);
             user
         }
     }
 
+    /// The SID `class` names in `process`'s token: `TokenUser` or `TokenOwner`, which both start with the SID's pointer.
+    ///
     /// # Safety
     /// `process` is a live process handle with at least limited query access.
-    unsafe fn user_of(process: HANDLE) -> Account {
+    unsafe fn token_sid(process: HANDLE, class: TOKEN_INFORMATION_CLASS) -> Account {
         let mut token: HANDLE = std::ptr::null_mut();
         if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
             return None;
         }
-        // A TOKEN_USER and the SID it points to, which Windows puts right after it. 8-aligned, as TOKEN_USER needs.
+        // The structure and the SID it points to, which Windows puts right after it. 8-aligned, as it needs.
         let mut buf = [0u64; 16];
         let mut len = 0u32;
-        let read = GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), size_of_val(&buf) as u32, &mut len);
+        let read = GetTokenInformation(token, class, buf.as_mut_ptr().cast(), size_of_val(&buf) as u32, &mut len);
         CloseHandle(token);
         if read == 0 {
             return None;
         }
-        let sid = (*buf.as_ptr().cast::<TOKEN_USER>()).User.Sid;
-        if IsValidSid(sid) == 0 {
+        sid_bytes(*buf.as_ptr().cast::<PSID>())
+    }
+
+    /// # Safety
+    /// `sid` is null or points to memory Windows filled with a SID.
+    unsafe fn sid_bytes(sid: PSID) -> Account {
+        if sid.is_null() || IsValidSid(sid) == 0 {
             return None;
         }
         let n = GetLengthSid(sid) as usize;
@@ -154,14 +215,16 @@ mod win {
         Some(out)
     }
 
-    /// Every established IPv4 TCP connection on this computer, with the process that holds each end.
-    pub(super) fn tcp_table() -> std::io::Result<Vec<Row>> {
+    /// Every established IPv4 (or, with `ipv6`, IPv6) TCP connection on this computer, with the process that holds each
+    /// end.
+    pub(super) fn tcp_table(ipv6: bool) -> std::io::Result<Vec<Row>> {
+        let family = if ipv6 { AF_INET6 } else { AF_INET };
         let mut buf: Vec<u64> = Vec::new();
         loop {
             let mut size = (buf.len() * 8) as u32;
             let table = if buf.is_empty() { std::ptr::null_mut() } else { buf.as_mut_ptr().cast() };
             // SAFETY: `table` is null with a size of 0, or `buf`, which holds `size` bytes, 8-aligned as the table needs.
-            let r = unsafe { GetExtendedTcpTable(table, &mut size, 0, AF_INET.into(), TCP_TABLE_OWNER_PID_CONNECTIONS, 0) };
+            let r = unsafe { GetExtendedTcpTable(table, &mut size, 0, family.into(), TCP_TABLE_OWNER_PID_CONNECTIONS, 0) };
             match r {
                 NO_ERROR if !buf.is_empty() => break,
                 NO_ERROR => return Ok(Vec::new()),
@@ -169,17 +232,34 @@ mod win {
                 e => return Err(std::io::Error::from_raw_os_error(e as i32)),
             }
         }
-        let table = buf.as_ptr().cast::<MIB_TCPTABLE_OWNER_PID>();
-        // SAFETY: Windows filled `buf` with a table that starts at `table`'s `table` field. At most as many rows as fit
-        // in `buf` are read.
-        let rows = unsafe {
-            let first = std::ptr::addr_of!((*table).table).cast::<MIB_TCPROW_OWNER_PID>();
-            let fit = (buf.len() * 8 - (first as usize - table as usize)) / size_of::<MIB_TCPROW_OWNER_PID>();
-            std::slice::from_raw_parts(first, ((*table).dwNumEntries as usize).min(fit))
-        };
-        // Addresses and ports are in network byte order, a port in the low two bytes of its field.
-        let end = |addr: u32, port: u32| SocketAddrV4::new(addr.to_ne_bytes().into(), u16::from_be(port as u16));
-        Ok(rows.iter().map(|r| Row { local: end(r.dwLocalAddr, r.dwLocalPort), remote: end(r.dwRemoteAddr, r.dwRemotePort), pid: r.dwOwningPid }).collect())
+        // Ports are in network byte order, in the low two bytes of their field.
+        let port = |p: u32| u16::from_be(p as u16);
+        // SAFETY: Windows filled `buf` with a table of `family`'s rows.
+        Ok(if ipv6 {
+            let end = |addr: [u8; 16], p: u32| SocketAddr::new(Ipv6Addr::from(addr).into(), port(p));
+            unsafe { rows::<MIB_TCP6ROW_OWNER_PID>(&buf, std::mem::offset_of!(MIB_TCP6TABLE_OWNER_PID, table)) }
+                .iter()
+                .map(|r| Row { local: end(r.ucLocalAddr, r.dwLocalPort), remote: end(r.ucRemoteAddr, r.dwRemotePort), pid: r.dwOwningPid })
+                .collect()
+        } else {
+            // Addresses are in network byte order too.
+            let end = |addr: u32, p: u32| SocketAddrV4::new(addr.to_ne_bytes().into(), port(p)).into();
+            unsafe { rows::<MIB_TCPROW_OWNER_PID>(&buf, std::mem::offset_of!(MIB_TCPTABLE_OWNER_PID, table)) }
+                .iter()
+                .map(|r| Row { local: end(r.dwLocalAddr, r.dwLocalPort), remote: end(r.dwRemoteAddr, r.dwRemotePort), pid: r.dwOwningPid })
+                .collect()
+        })
+    }
+
+    /// The rows of a table in `buf`: its `dwNumEntries`, then rows from `offset`. At most as many as fit in `buf`.
+    ///
+    /// # Safety
+    /// `buf` holds a table that `GetExtendedTcpTable` filled with rows of type `T`, which start at `offset`.
+    unsafe fn rows<T>(buf: &[u64], offset: usize) -> &[T] {
+        let entries = *buf.as_ptr().cast::<u32>() as usize;
+        let first = buf.as_ptr().cast::<u8>().add(offset).cast::<T>();
+        let fit = (buf.len() * 8 - offset) / size_of::<T>();
+        std::slice::from_raw_parts(first, entries.min(fit))
     }
 }
 
@@ -321,7 +401,7 @@ mod row_tests {
 
     #[test]
     fn the_peers_row_names_the_process_that_holds_it() {
-        let at = |s: &str| s.parse::<SocketAddrV4>().unwrap();
+        let at = |s: &str| s.parse::<SocketAddr>().unwrap();
         let (relay, peer) = (at("127.0.0.1:8080"), at("127.0.0.1:54321"));
         let served = Row { local: relay, remote: peer, pid: 10 };
         let theirs = Row { local: peer, remote: relay, pid: 20 };
@@ -347,5 +427,15 @@ mod windows_tests {
         assert!(admits(Peers::Account(this_account()), &server));
         assert!(!admits(Peers::Account(local_system()), &server));
         assert!(!admits(Peers::Account(None), &server), "an account the app couldn't read matches nothing");
+    }
+    #[test]
+    fn a_folder_this_process_made_has_its_owner_and_the_system_folder_doesnt() {
+        let dir = std::env::temp_dir().join(format!("hermes-owner-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(owned_as_this_process_makes(&dir));
+        let _ = std::fs::remove_dir(&dir);
+        let system = std::path::Path::new(&std::env::var("SystemRoot").unwrap()).join("System32");
+        assert!(!owned_as_this_process_makes(&system), "System32 is TrustedInstaller's");
+        assert!(!owned_as_this_process_makes(&dir), "a folder that's gone has no owner");
     }
 }

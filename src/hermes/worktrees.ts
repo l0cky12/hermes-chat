@@ -5,6 +5,7 @@
 // attach. This computer keeps only a copy of which chats it started in a worktree, to label them in the chat.
 
 import { RepoFailure, type RepoApi } from "./repo";
+import { errorText, isObj } from "./values";
 
 export type WorktreeState =
   | "creating"
@@ -165,8 +166,6 @@ export type WorktreeRequest =
  * it (creating, setup, removing). Without `stream` the same request runs without progress. */
 export type WorktreeApi = RepoApi;
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-
 function need<T>(v: unknown, check: (o: Record<string, unknown>) => boolean, what: string): T {
   if (!isObj(v) || !check(v)) throw new RepoFailure("bad-reply", `The server's answer wasn't ${what} this app understands.`);
   return v as T;
@@ -219,8 +218,6 @@ export function dirtyText(d: Worktree["dirty"]): string | undefined {
   ].filter(Boolean);
   return parts.length ? parts.join(", ") : undefined;
 }
-
-export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /** The folder a worktree for `branch` would get by default, as the helper suggests it; shown before the first preview. */
 export function slug(name: string): string {
@@ -323,7 +320,7 @@ export async function startInWorktree(
     await api.run(w.target, { op: "worktreeAttachConfirm", repo: w.repo, id: w.id, token, chat: chatId });
     return { chatId, token };
   } catch (e) {
-    const why = e instanceof Error ? e.message : String(e);
+    const why = errorText(e);
     return {
       chatId,
       token,
