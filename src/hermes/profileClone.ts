@@ -158,7 +158,7 @@ export function preview(plan: Pick<Plan, "kind"> & { parts?: ReadonlySet<Part> }
 function profileProblem(e: unknown, doing: string): { problem: string; unwritten: boolean } {
   const message = said(e);
   if (/^Not connected to Hermes|^The chat connection is closed|^Hermes Chat doesn't relay/.test(message)) return { problem: message, unwritten: true };
-  const a = answered(message);
+  const a = answered(e);
   if (!a) return { problem: `Couldn't ${doing}: ${message}`, unwritten: false };
   const reason = a.detail ? ` Hermes said: ${a.detail}` : "";
   if (a.status === 405 || (a.status === 404 && /^(not found$|no such api endpoint\b)/i.test(a.detail)))

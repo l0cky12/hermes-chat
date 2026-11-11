@@ -235,12 +235,28 @@ pub fn client(headers: &HeaderMap) -> Result<reqwest::Client, TransportError> {
 /// `client`, with redirects kept to the dashboard's origin even without extra headers when `always` is set, as for a
 /// request that carries a provider key.
 fn client_kept_to_origin(headers: &HeaderMap, always: bool) -> Result<reqwest::Client, TransportError> {
-    let mut http = reqwest::Client::builder().default_headers(headers.clone()).no_proxy();
+    let mut http = reqwest::Client::builder()
+        .default_headers(headers.clone())
+        .no_proxy()
+        .connect_timeout(CONNECT_LIMIT)
+        .tcp_keepalive(KEEPALIVE_IDLE)
+        .tcp_keepalive_interval(KEEPALIVE_INTERVAL)
+        .tcp_keepalive_retries(KEEPALIVE_RETRIES);
     if always || !headers.is_empty() {
         http = http.redirect(redirect::Policy::custom(same_origin_redirects));
     }
     http.build().map_err(unreachable)
 }
+
+/// How long opening a connection to the dashboard may take before the call fails.
+const CONNECT_LIMIT: Duration = Duration::from_secs(15);
+
+/// A kept-alive connection that went half-open, as one does across a suspend, is found by keepalive probes and closed,
+/// so a call on it fails instead of waiting for good (#473): the first probe after 30 s without traffic, then one each
+/// 10 s, given up after 3 unanswered.
+const KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+const KEEPALIVE_RETRIES: u32 = 3;
 
 /// With extra headers set, a redirect is followed only within the dashboard's origin (scheme, host and port), so
 /// the headers never reach another site. reqwest only strips its own credential headers on such a redirect.
@@ -1499,23 +1515,21 @@ impl Dashboard {
             return Err(TransportError::NotRelayed(format!("{method} {path}")));
         }
         let config = method == Method::GET && segments == ["api", "config"];
-        let list = method == Method::GET && is_session_list(&routed);
+        let idle = if method == Method::GET && is_session_list(&routed) { SESSION_LIST_IDLE_LIMIT } else { ANSWER_IDLE_LIMIT };
         // Hermes answers removing an endpoint with the endpoints left, each with its key's preview (ADR 0133).
         let answer_unread = method == Method::DELETE && routed.starts_with("api/providers/custom-endpoints/");
         let mut req = self.signed(method, url);
         if let Some(body) = body {
             req = req.header(header::CONTENT_TYPE, "application/json").body(body);
         }
-        let resp = if list { unless_stalled(SESSION_LIST_IDLE_LIMIT, req.send()).await? } else { req.send().await.map_err(unreachable)? };
+        let resp = unless_stalled(idle, req.send()).await?;
         self.keep_cookies(&resp);
         match resp.status() {
-            s if s.is_success() && list => text_unless_stalled(resp, SESSION_LIST_IDLE_LIMIT).await,
             s if s.is_success() && answer_unread => Ok(r#"{"ok":true}"#.to_owned()),
-            s if s.is_success() && config => config_without_credentials(&resp.text().await.map_err(unreachable)?),
-            s if s.is_success() => resp.text().await.map_err(unreachable),
+            s if s.is_success() && config => config_without_credentials(&text_unless_stalled(resp, idle).await?),
+            s if s.is_success() => text_unless_stalled(resp, idle).await,
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
-            _ if list => Err(unexpected_sent(resp, &self.hide, "", Some(SESSION_LIST_IDLE_LIMIT)).await),
-            _ => Err(unexpected(resp, &self.hide).await),
+            _ => Err(unexpected_sent(resp, &self.hide, "", Some(idle)).await),
         }
     }
 
@@ -1622,7 +1636,7 @@ impl Dashboard {
     async fn post_audio(&self, path: &str, profile: &str, body: &serde_json::Value) -> Result<AudioAnswer, TransportError> {
         let mut url = endpoint(&self.base, path);
         url.query_pairs_mut().append_pair("profile", profile);
-        let resp = self.signed(Method::POST, url).json(body).send().await.map_err(unreachable)?;
+        let resp = unless_stalled(ANSWER_IDLE_LIMIT, self.signed(Method::POST, url).json(body).send()).await?;
         self.keep_cookies(&resp);
         let status = resp.status();
         if status == StatusCode::UNAUTHORIZED {
@@ -1631,7 +1645,7 @@ impl Dashboard {
         if status.is_redirection() {
             return Err(unexpected(resp, &self.hide).await);
         }
-        let text = resp.text().await.map_err(unreachable)?;
+        let text = text_unless_stalled(resp, ANSWER_IDLE_LIMIT).await?;
         if status.is_success() {
             return serde_json::from_str(&text)
                 .map(AudioAnswer::Done)
@@ -1673,7 +1687,7 @@ impl Dashboard {
         if let Some(json) = json {
             req = req.json(json);
         }
-        let mut resp = req.send().await.map_err(unreachable)?;
+        let mut resp = unless_stalled(ANSWER_IDLE_LIMIT, req.send()).await?;
         self.keep_cookies(&resp);
         match resp.status() {
             s if s.is_success() => {}
@@ -1685,7 +1699,7 @@ impl Dashboard {
             return Err(too_large(size));
         }
         let mut body = Vec::new();
-        while let Some(chunk) = resp.chunk().await.map_err(unreachable)? {
+        while let Some(chunk) = unless_stalled(ANSWER_IDLE_LIMIT, resp.chunk()).await? {
             body.extend_from_slice(&chunk);
             if body.len() as u64 > max_bytes {
                 return Err(too_large(body.len() as u64));
@@ -1843,10 +1857,10 @@ impl Dashboard {
         let body = agent_text_body(path, text, session)?;
         let query = url::form_urlencoded::Serializer::new(String::new()).append_pair("profile", profile).finish();
         let (url, _) = relay_url(&self.base, "api/fs/write-text", &query)?;
-        let resp = self.signed(Method::POST, url).json(&body).send().await.map_err(unreachable)?;
+        let resp = unless_stalled(ANSWER_IDLE_LIMIT, self.signed(Method::POST, url).json(&body).send()).await?;
         self.keep_cookies(&resp);
         match resp.status() {
-            s if s.is_success() => resp.text().await.map_err(unreachable),
+            s if s.is_success() => text_unless_stalled(resp, ANSWER_IDLE_LIMIT).await,
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
             _ => Err(unexpected(resp, &self.hide).await),
         }
@@ -2632,7 +2646,7 @@ fn shown_body(status: StatusCode, text: &str, headers: &HeaderMap) -> String {
 /// A failed answer as an error, with the start of its body. Reads only the first few KB, so a huge or endless error
 /// body can't fill memory. `headers`: what the request carried that mustn't be shown (`shown_body`).
 async fn unexpected(resp: reqwest::Response, headers: &HeaderMap) -> TransportError {
-    unexpected_sent(resp, headers, "", None).await
+    unexpected_sent(resp, headers, "", Some(ANSWER_IDLE_LIMIT)).await
 }
 
 /// `unexpected` for a request whose body carried `secret`, such as a password: an error that repeats it anywhere, as
@@ -2812,9 +2826,14 @@ fn unreachable(e: reqwest::Error) -> TransportError {
 
 /// Hermes serves `api/sessions` from a read-only query of at most 100 rows, each SQLite read waiting at most 5 s for a
 /// lock (hermes_cli/web_routers/sessions.py; `_READ_BUSY_TIMEOUT_S` in hermes_state.py), so a minute without a byte is a
-/// stall. Other routes may stay silent for minutes and still answer: memory provider setup runs installs of up to
-/// 300 s each (hermes_cli/web_routers/memory_providers.py).
+/// stall.
 const SESSION_LIST_IDLE_LIMIT: Duration = Duration::from_secs(60);
+
+/// How long any other dashboard call may go without a byte from Hermes before it is given up as `Stalled` (#473). Other
+/// routes may stay silent for minutes and still answer: memory provider setup runs an install of up to 300 s
+/// (hermes_cli/web_routers/memory_providers.py), so this is twice that. A call still sending its body counts as silent:
+/// at this limit a 25 MB recording needs about 45 KB/s.
+const ANSWER_IDLE_LIMIT: Duration = Duration::from_secs(600);
 
 fn is_session_list(path: &str) -> bool {
     let mut segs = path.split('/').filter(|seg| !seg.is_empty());
@@ -2988,10 +3007,10 @@ impl Dashboard {
         if let Some(body) = body {
             req = req.header(header::CONTENT_TYPE, "application/json").body(body);
         }
-        let resp = req.send().await.map_err(unreachable)?;
+        let resp = unless_stalled(ANSWER_IDLE_LIMIT, req.send()).await?;
         self.keep_cookies(&resp);
         match resp.status() {
-            s if s.is_success() => resp.text().await.map_err(unreachable),
+            s if s.is_success() => text_unless_stalled(resp, ANSWER_IDLE_LIMIT).await,
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
             _ if show_failure => Err(unexpected(resp, &self.hide).await),
             s => Err(TransportError::Unexpected { status: s.as_u16(), body: "(not shown, as it may hold the key)".into() }),
@@ -3069,20 +3088,14 @@ impl Dashboard {
     /// `PUT /api/mcp/servers` with the whole map; a refusal is shown without any secret the map held.
     async fn write_mcp_map(&self, http: &reqwest::Client, url: Url, edited: &crate::mcp::Edited) -> Result<(), TransportError> {
         let body = json!({ "servers": edited.servers }).to_string();
-        let resp = http
-            .put(url)
-            .header(header::COOKIE, self.cookie_header())
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(body)
-            .send()
-            .await
-            .map_err(unreachable)?;
+        let put = http.put(url).header(header::COOKIE, self.cookie_header()).header(header::CONTENT_TYPE, "application/json").body(body);
+        let resp = unless_stalled(ANSWER_IDLE_LIMIT, put.send()).await?;
         self.keep_cookies(&resp);
         match resp.status() {
             s if s.is_success() => Ok(()),
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
             s => {
-                let answer = resp.text().await.unwrap_or_default();
+                let answer = text_unless_stalled(resp, ANSWER_IDLE_LIMIT).await.unwrap_or_default();
                 // Neither a secret the map held nor a value of the owner's extra request headers is shown.
                 let body = shown_body(s, &crate::mcp::scrubbed(&answer, &edited.secrets), &self.hide);
                 Err(TransportError::Unexpected { status: s.as_u16(), body })

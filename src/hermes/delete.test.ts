@@ -9,6 +9,7 @@ import { DeleteChatDialog } from "../ui/DeleteChat";
 import { FakeHermes, row, type RestRequest } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
 import { connect } from "./transport";
+import { RestError } from "./pipe";
 
 async function listed(...rows: ReturnType<typeof row>[]) {
   const server = new FakeHermes();
@@ -128,7 +129,7 @@ describe("Deleting a chat", () => {
   it("puts the chat back and says why when the server refuses", async () => {
     const { server, hermes, ids, cache } = await listed(row("a", 1, { title: "Nightly backup" }), row("b", 2));
     server.rest["DELETE /api/sessions/a"] = () => {
-      throw new Error("The dashboard answered 409: session_busy");
+      throw new RestError(409, "session_busy");
     };
     expect(await hermes.delete("a")).toBe(false);
     expect(ids().sort()).toEqual(["a", "b"]);
@@ -261,7 +262,7 @@ describe("A copied profile, whose chats keep the ids they had", () => {
     const answer = hold(server, "PATCH /api/sessions/b");
     const archiving = hermes.archive("b");
     // A Settle whose write fails stays wanted, to be written again.
-    server.rest["PATCH /api/sessions/c"] = () => Promise.reject(new Error("The dashboard answered 503"));
+    server.rest["PATCH /api/sessions/c"] = () => Promise.reject(new RestError(503, "", "The dashboard answered 503"));
     await hermes.settle("c");
     delete server.rest["PATCH /api/sessions/c"];
     expect(shown()).toEqual(["c"]);
@@ -278,7 +279,7 @@ describe("A copied profile, whose chats keep the ids they had", () => {
   it("a pin write that ends after the owner switched to the copy says nothing there", async () => {
     const { server, hermes } = await listed(row("c", 1, { pinned: true }));
     server.otherProfiles = { work: [row("c", 1, { pinned: true })] };
-    const answer = hold(server, "PATCH /api/sessions/c", () => Promise.reject(new Error("The dashboard answered 503")));
+    const answer = hold(server, "PATCH /api/sessions/c", () => Promise.reject(new RestError(503, "", "The dashboard answered 503")));
     const settling = hermes.settle("c");
     await hermes.switchProfile("work");
     await hermes.sync();

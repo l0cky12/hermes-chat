@@ -13,6 +13,7 @@ import type { SavedSignIn } from "../hermes/account";
 import { connectionRefs, formatChatLink, parseChatLink, type ConnectionRefs } from "../hermes/chatLinks";
 import { linkInbox, type LinkInbox } from "../hermes/tauriLinks";
 import { Main } from "../App";
+import { RestError } from "../hermes/pipe";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
@@ -183,7 +184,7 @@ describe("Opening a chat link", () => {
     const { server, linkTo, open, user } = await launch();
     const profiles = server.rest["GET /api/profiles"];
     server.rest["GET /api/profiles"] = () => {
-      throw new Error("The dashboard answered 502: Bad Gateway");
+      throw new RestError(502, "Bad Gateway");
     };
     await open(linkTo("default", "nas"));
     expect((await screen.findByRole("alert")).textContent).toMatch(/couldn't look the linked chat up: The dashboard answered 502/);

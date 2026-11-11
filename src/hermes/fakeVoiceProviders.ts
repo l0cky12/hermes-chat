@@ -3,6 +3,7 @@
 // the deployed `f0d94882e8` answers them (`hermes_cli/web_routers/tools.py`, `config_env.py`; research doc "Voice
 // providers"). Rows and defaults are trimmed copies of `TOOL_CATEGORIES` and `config_defaults.py` there.
 import type { RestRequest } from "./fakeHermes";
+import { RestError } from "./pipe";
 
 type Kind = "stt" | "tts";
 
@@ -70,7 +71,7 @@ const SCHEMA = {
   "agent.reasoning_effort": { type: "select", options: ["low", "medium", "high"] },
 };
 
-const answered = (status: number, detail: string) => new Error(`The dashboard answered ${status}: ${JSON.stringify({ detail })}`);
+const answered = (status: number, detail: string) => new RestError(status, JSON.stringify({ detail }));
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
 function merge(into: Record<string, unknown>, from: Record<string, unknown>) {

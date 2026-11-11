@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LogBuffer, LogFollower, TAIL, bundleText, clean, levelOf, note, passes, redact, since, visible, type Entry } from "./logs";
+import { RestError } from "./pipe";
 
 afterEach(() => vi.useRealTimers());
 
@@ -255,22 +256,22 @@ describe("LogFollower", () => {
 
   it("stops for a Hermes without the route or the file, and keeps trying after a permission error", async () => {
     vi.useFakeTimers();
-    const run = async (err: string) => {
+    const run = async (err: Error) => {
       const file = new FakeLogFile();
-      file.fail = new Error(err);
+      file.fail = err;
       const f = follow(file);
       f.start();
       await vi.advanceTimersByTimeAsync(0);
       await poll(f);
       return { state: f.getState(), reads: file.reads };
     };
-    expect(await run(`The dashboard answered 404: {"detail":"Not Found"}`)).toMatchObject({ state: { kind: "unsupported" }, reads: 1 });
-    expect(await run(`The dashboard answered 400: {"detail":"Unknown log file: mcp"}`)).toMatchObject({
+    expect(await run(new RestError(404, `{"detail":"Not Found"}`))).toMatchObject({ state: { kind: "unsupported" }, reads: 1 });
+    expect(await run(new RestError(400, `{"detail":"Unknown log file: mcp"}`))).toMatchObject({
       state: { kind: "unsupported", reason: "This Hermes doesn't have the agent log (Unknown log file: mcp)." },
       reads: 1,
     });
-    expect(await run(`The dashboard answered 403: {"detail":"Forbidden"}`)).toMatchObject({ state: { kind: "failed", reason: "Permission denied: Forbidden" }, reads: 2 });
-    expect(await run(`The dashboard answered 500: {"detail":"[Errno 13] Permission denied: '/root/.hermes/logs/agent.log'"}`)).toMatchObject({
+    expect(await run(new RestError(403, `{"detail":"Forbidden"}`))).toMatchObject({ state: { kind: "failed", reason: "Permission denied: Forbidden" }, reads: 2 });
+    expect(await run(new RestError(500, `{"detail":"[Errno 13] Permission denied: '/root/.hermes/logs/agent.log'"}`))).toMatchObject({
       state: { kind: "failed", reason: "[Errno 13] Permission denied: '/root/.hermes/logs/agent.log'" },
     });
     const html = new LogFollower(async () => "<html>", "agent");
@@ -371,7 +372,7 @@ describe("LogFollower redaction across lines and reads", () => {
     const f = new LogFollower(file.read, "agent", { pollMs: 1000 });
     f.start();
     await vi.advanceTimersByTimeAsync(0);
-    file.fail = new Error(`The dashboard answered 502: {"detail":"upstream refused token=rawSecret123"}`);
+    file.fail = new RestError(502, `{"detail":"upstream refused token=rawSecret123"}`);
     await poll(f);
     expect(f.getState()).toMatchObject({ kind: "failed", reason: "upstream refused token=[redacted]" });
     file.fail = undefined;

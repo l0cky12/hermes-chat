@@ -12,7 +12,7 @@
 // Hermes has no conditional write, so a Save first reads SOUL.md again and writes only if it is still what the editor
 // started from, then reads it back to check it holds what was sent (ADR 0014). The `tui_gateway` twin,
 // `profiles.configure {soul}`, is not used: it writes with a bare `write_text` that can leave a truncated file.
-import type { RestMethod } from "./pipe";
+import { RestError, type RestMethod } from "./pipe";
 
 /** SOUL.md as Hermes has it. `exists` false: there is no file, and `content` is empty. */
 export type Soul = { exists: boolean; content: string };
@@ -68,18 +68,17 @@ export const asReadBack = (text: string) => text.replace(/^﻿/, "").replace(/\r
 /** Whether two reads of SOUL.md are the same file. */
 export const sameSoul = (a: Soul, b: Soul) => a.exists === b.exists && asReadBack(a.content) === asReadBack(b.content);
 
-/** `The dashboard answered 404: {"detail":"…"}` (src-tauri/src/transport.rs `TransportError::Unexpected`). */
-export function answered(message: string): { status: number; detail: string } | undefined {
-  const m = /^The dashboard answered (\d{3}): ?([\s\S]*)$/.exec(message);
-  if (!m) return undefined;
-  let detail = m[2];
+/** A dashboard answer's status and Hermes's reason (src-tauri/src/transport.rs `TransportError::Unexpected`). */
+export function answered(e: unknown): { status: number; detail: string } | undefined {
+  if (!(e instanceof RestError)) return undefined;
+  let detail = e.body;
   try {
-    const d = (JSON.parse(m[2]) as { detail?: unknown }).detail;
+    const d = (JSON.parse(e.body) as { detail?: unknown }).detail;
     if (typeof d === "string") detail = d;
   } catch {
     // Not JSON, e.g. a proxy's error page: keep the text.
   }
-  return { status: Number(m[1]), detail: detail.trim() };
+  return { status: e.status, detail: detail.trim() };
 }
 
 const DENIED = /permission denied|errno 13\b|errno 1\b|operation not permitted|read-only file system|errno 30\b/i;
@@ -92,10 +91,10 @@ export function personaError(e: unknown, profile: string, writing: boolean): Per
   if (/^Not connected to Hermes|^The chat connection is closed/.test(message))
     return new PersonaError("disconnected", "Not connected to Hermes.", undefined, true);
   if (/^Can't reach the Hermes dashboard/.test(message)) return new PersonaError("disconnected", message);
-  if (/^The dashboard sign-in has expired/.test(message)) return new PersonaError("signed-out", message);
+  if (e instanceof RestError && e.status === 401) return new PersonaError("signed-out", message);
   // Refused before it was sent, by the relay or because Hermes lacks the route (capabilities.ts).
   if (/^Hermes Chat doesn't relay/.test(message)) return new PersonaError("unsupported", message, undefined, true);
-  const a = answered(message);
+  const a = answered(e);
   if (!a) return new PersonaError("error", `Couldn't ${verb} SOUL.md: ${message}`);
   const said = a.detail ? ` Hermes said: ${a.detail}` : "";
   // A route the server doesn't have: `bf0203a` answers `404 No such API endpoint: <path>` (checked live), plain FastAPI

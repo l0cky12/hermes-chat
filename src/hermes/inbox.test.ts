@@ -5,6 +5,7 @@ import { memoryCache } from "./memoryCache";
 import { INBOX_PREFIX, blocksRestore, inboxAcks, inboxEntries, needsOwner, type InboxEntry, type InboxKind } from "./inbox";
 import type { OutgoingItem } from "./model";
 import { connect, type Hermes } from "./transport";
+import { RestError } from "./pipe";
 
 const nowS = () => Date.now() / 1000;
 const unreadRow = (id: string, minutesAgo = 1, over = {}) => row(id, minutesAgo / 1440, { last_read_at: 0, ...over });
@@ -222,7 +223,7 @@ describe("The inbox", () => {
     await hermes.checkOtherProfiles();
     const list = server.rest["GET /api/sessions"];
     server.rest["GET /api/sessions"] = (req) => {
-      if (req.query.get("profile") === "work") throw new Error("The dashboard answered 503: busy");
+      if (req.query.get("profile") === "work") throw new RestError(503, "busy");
       return list(req);
     };
     vi.useFakeTimers({ now: Date.now() + 20_000 });
@@ -260,9 +261,9 @@ describe("The inbox", () => {
     server.liveSessions = [{ id: "rt-z", session_key: "work-busy", status: "working", last_active: nowS() }];
     server.rest["GET /api/sessions/work-busy"] = (req) => {
       const profile = req.query.get("profile");
-      if (profile === "ops") throw new Error("The dashboard answered 503: busy");
+      if (profile === "ops") throw new RestError(503, "busy");
       if (profile === "work") return server.otherProfiles.work.find((r) => r.id === "work-busy");
-      throw new Error(`The dashboard answered 404: {"detail":"Session not found"}`);
+      throw new RestError(404, `{"detail":"Session not found"}`);
     };
     await vi.advanceTimersByTimeAsync(20_000);
     await hermes.checkOtherProfiles();

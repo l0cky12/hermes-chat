@@ -12,7 +12,7 @@
 //
 // Every write is read back; the list decides what the screen shows. Payload text is untrusted: it is only ever shown
 // as text, and the preview renders the prompt exactly as Hermes's `_render_prompt` would.
-import type { RestMethod } from "./pipe";
+import { RestError, type RestMethod } from "./pipe";
 import { CapabilityUnsupportedError } from "./capabilities";
 
 export type RestFn = (method: RestMethod, pathAndQuery: string, body?: unknown) => Promise<unknown>;
@@ -277,30 +277,28 @@ export function decodeChatId(chatId: string): { profile: string; route: string; 
 }
 
 /**
- * A failed call as the owner reads it. The Rust relay words a dashboard error `The dashboard answered 404: {...}` and a
- * dropped connection `Can't reach the Hermes dashboard: …`.
+ * A failed call as the owner reads it. A dashboard answer is a `RestError`; the Rust relay words a dropped connection
+ * `Can't reach the Hermes dashboard: …`.
  */
 export function automationError(e: unknown): AutomationError {
   if (e instanceof AutomationError) return e;
   const message = e instanceof Error ? e.message : String(e);
   if (message === "Not connected to Hermes." || message === "The chat connection is closed.")
     return new AutomationError("offline", "Hermes Chat isn't connected to Hermes, so nothing was sent. Automations keep running on the server.");
-  if (/sign-in has expired/.test(message)) return new AutomationError("forbidden", "The dashboard sign-in has expired, so nothing was changed. Sign in again.");
+  if (e instanceof RestError && e.status === 401) return new AutomationError("forbidden", "The dashboard sign-in has expired, so nothing was changed. Sign in again.");
   if (e instanceof CapabilityUnsupportedError) return new AutomationError("unsupported", "This Hermes server has no webhook routes, so nothing was sent. Updating Hermes adds them.");
-  if (/doesn't relay/.test(message)) return new AutomationError("unsupported", "This version of Hermes Chat can't send that to Hermes.");
-  const m = /^The dashboard answered (\d{3}): ([\s\S]*)$/.exec(message);
-  if (!m) return new AutomationError("unknown", `Hermes didn't answer: ${message}`);
-  const status = Number(m[1]);
-  let detail: unknown = m[2].trim();
+  if (!(e instanceof RestError)) return /doesn't relay/.test(message) ? new AutomationError("unsupported", "This version of Hermes Chat can't send that to Hermes.") : new AutomationError("unknown", `Hermes didn't answer: ${message}`);
+  const status = e.status;
+  let detail: unknown = e.body.trim();
   try {
-    detail = JSON.parse(m[2]).detail ?? detail;
+    detail = JSON.parse(e.body).detail ?? detail;
   } catch {
     // Not JSON, or cut short by the relay.
   }
   const said = typeof detail === "string" ? detail : isObj(detail) && typeof detail.message === "string" ? detail.message : JSON.stringify(detail);
   if ((status === 404 || status === 405) && (said === "Not Found" || said === "Method Not Allowed")) return new AutomationError("unsupported", "This Hermes server doesn't have that. Updating Hermes adds it.");
   if (status === 404) return new AutomationError("gone", /No subscription named/.test(said) ? "This automation isn't on the server any more: it was deleted in another Hermes client." : sentence(said));
-  if (status === 401 || status === 403) return new AutomationError("forbidden", `The dashboard doesn't allow this: ${said}`);
+  if (status === 403) return new AutomationError("forbidden", `The dashboard doesn't allow this: ${said}`);
   if (status === 409 && isObj(detail) && detail.code === "needs_confirmation") return new AutomationError("confirm", sentence(said));
   if (status === 409 && isObj(detail) && detail.code === "paused") return new AutomationError("paused", sentence(said));
   if (status === 409) return new AutomationError("conflict", sentence(said), isObj(detail) ? toAutomation(detail.current) : undefined);
@@ -396,7 +394,7 @@ export class AutomationsApi {
   async create(profile: string, f: AutomationFields, paused: boolean): Promise<Saved> {
     const { list, automation: clash } = await this.find(profile, f.name);
     if (clash) throw new AutomationError("refused", `There's already an automation named “${f.name}” in this profile. Pick another name.`);
-    if (!list.platformEnabled) throw automationError(new Error('The dashboard answered 400: {"detail":"Webhook platform is not enabled."}'));
+    if (!list.platformEnabled) throw automationError(new RestError(400, '{"detail":"Webhook platform is not enabled."}'));
     const gaps = list.contract ? [] : stockGaps(f);
     if (gaps.length) throw new AutomationError("unsupported", `This Hermes server can't keep ${gaps.join(" or ")} on a route (it doesn't have webhooks/1). Remove them, or update Hermes.`);
     const body: Record<string, unknown> = {

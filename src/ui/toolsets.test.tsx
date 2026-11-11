@@ -10,6 +10,7 @@ import { PROBE_NAME } from "../hermes/toolsets";
 import { ToolsetSettings, type OpenChat } from "./ToolsetSettings";
 import { SettingsScreen } from "./Settings";
 import { appearanceStore } from "./appearance";
+import { RestError } from "../hermes/pipe";
 
 afterEach(cleanup);
 
@@ -179,7 +180,7 @@ describe("Settings → Toolsets", () => {
   it("asks before a change when it couldn't check what turning a toolset on does", async () => {
     const server = new FakeHermes();
     const { user } = await shown(server);
-    server.toolsetConfigFailure = "The dashboard answered 500: {}";
+    server.toolsetConfigFailure = new RestError(500, "{}");
     await user.click(toggle("Computer Use"));
     const ask = await screen.findByRole("alertdialog");
     expect(ask.textContent).toMatch(/couldn't check whether turning Computer Use .* on starts an install on the server/);

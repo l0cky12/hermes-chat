@@ -5,6 +5,7 @@ import { FakeHermes } from "./fakeHermes";
 import { connect, type Hermes } from "./transport";
 import type { ContextState } from "./projectContext";
 import { CONTEXT_LEDGER_KEY, ContextExistsError, contextLedger, type ContextProject } from "./projectContextFiles";
+import { RestError } from "./pipe";
 
 const running: Hermes[] = [];
 afterEach(async () => {
@@ -195,7 +196,7 @@ describe("changing a project's context files", () => {
     const [file] = ready(await files.read("default", budget)).files;
     delete server.managedFiles.nodes[`${DIR}/notes.md`];
     server.rest["GET /api/files"] = () => {
-      throw new Error("The dashboard answered 500: listing failed");
+      throw new RestError(500, "listing failed");
     };
     await expect(files.remove("default", DIR, file)).rejects.toThrow(/Couldn't remove notes.md: .*404.*, and the folder couldn't be listed to check/);
   });

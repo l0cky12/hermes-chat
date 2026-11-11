@@ -9,6 +9,7 @@ import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
 import { StrictMode } from "react";
 import { ScheduledJobs } from "./ScheduledJobs";
+import { RestError } from "../hermes/pipe";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
@@ -345,7 +346,7 @@ describe("the Scheduled jobs screen", () => {
     await user.click(row);
     await user.click(screen.getByRole("button", { name: /Run now/ }));
     expect(screen.getByRole("alertdialog").textContent).toMatch(/A run of this job is under way on the server: Hermes runs one at a time/);
-    s.cron.failNext = { match: /trigger$/, when: "before", message: 'The dashboard answered 409: {"detail":"Job is already running or was claimed by another scheduler"}' };
+    s.cron.failNext = { match: /trigger$/, when: "before", message: new RestError(409, '{"detail":"Job is already running or was claimed by another scheduler"}') };
     await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Run now" }));
     expect((await screen.findByRole("alert")).textContent).toBe("This job is running already. Its result shows here once it finishes.");
     expect(job.last_run_at).toBeNull();
@@ -375,7 +376,7 @@ describe("the Scheduled jobs screen", () => {
     const s = server();
     const route = s.cron.route.bind(s.cron);
     let refuse = true;
-    s.cron.route = (req) => (refuse && req.path === "/api/cron/jobs" ? () => Promise.reject(new Error('The dashboard answered 403: {"detail":"Forbidden"}')) : route(req));
+    s.cron.route = (req) => (refuse && req.path === "/api/cron/jobs" ? () => Promise.reject(new RestError(403, '{"detail":"Forbidden"}')) : route(req));
     await launch(s);
     expect((await screen.findByRole("alert")).textContent).toBe("The dashboard doesn't allow this: Forbidden");
     expect(screen.queryByRole("button", { name: /New job/ })).toBeNull();
@@ -384,7 +385,7 @@ describe("the Scheduled jobs screen", () => {
     const t = server();
     const { user: u2 } = await launch(t);
     await u2.click(screen.getByText("[fixture] Weekday brief"));
-    t.cron.failNext = { match: /pause$/, when: "before", message: 'The dashboard answered 403: {"detail":"Forbidden"}' };
+    t.cron.failNext = { match: /pause$/, when: "before", message: new RestError(403, '{"detail":"Forbidden"}') };
     await u2.click(screen.getByRole("button", { name: /Pause/ }));
     expect((await screen.findByRole("alert")).textContent).toBe("The dashboard doesn't allow this: Forbidden");
     expect(screen.getByRole("button", { name: /Pause/ })).toBeTruthy();

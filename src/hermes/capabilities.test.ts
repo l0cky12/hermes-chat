@@ -20,10 +20,11 @@ import {
   type CapabilityIO,
 } from "./capabilities";
 import { RpcError } from "./transport";
+import { RestError } from "./pipe";
 
 afterEach(() => vi.useRealTimers());
 
-const answered = (status: number, detail: string) => new Error(`The dashboard answered ${status}: ${JSON.stringify({ detail })}`);
+const answered = (status: number, detail: string) => new RestError(status, JSON.stringify({ detail }));
 
 /** A Hermes as upstream `74b2ed6` answers each read the store makes. */
 const NEW: Record<string, unknown> = {
@@ -291,7 +292,7 @@ describe("partial and malformed answers", () => {
     // The route is there and names its own reason.
     expect(of(answered(404, "Profile 'x' does not exist"))).toBe("supported");
     expect(of(answered(400, "Unknown toolset"))).toBe("supported");
-    expect(of(new Error("The dashboard sign-in has expired. Sign in again."))).toBe("unknown");
+    expect(of(new RestError(401, "", "The dashboard sign-in has expired. Sign in again."))).toBe("unknown");
     expect(of(answered(403, "Forbidden"))).toBe("unknown");
     expect(of(answered(502, "Bad Gateway"))).toBe("unreachable");
     expect(of(new Error("Can't reach the Hermes dashboard: connection reset"))).toBe("unreachable");

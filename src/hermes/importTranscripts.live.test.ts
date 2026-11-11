@@ -8,6 +8,7 @@
 //   npx vitest run src/hermes/importTranscripts.live.test.ts
 import { beforeAll, describe, expect, it } from "vitest";
 import { ImportFileError, ImportRefusedError, planImport, readBack, sendImport, type ImportFormat, type ImportRest } from "./importTranscripts";
+import { RestError } from "./pipe";
 
 // This app's tsconfig has no Node types; vitest runs the file in Node.
 declare const process: { env: Record<string, string | undefined> };
@@ -30,7 +31,7 @@ function dashboard(): ImportRest {
     if (!cookie) await send("POST", "auth/password-login", { provider: "basic", username: process.env.HERMES_LIVE_USER, password: process.env.HERMES_LIVE_PASSWORD });
     const res = await send(method, path, body);
     const text = await res.text();
-    if (!res.ok) throw new Error(`The dashboard answered ${res.status}: ${text.slice(0, 600)}`);
+    if (!res.ok) throw new RestError(res.status, text.slice(0, 600));
     return JSON.parse(text);
   };
 }

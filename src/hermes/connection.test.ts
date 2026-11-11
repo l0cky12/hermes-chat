@@ -87,6 +87,21 @@ describe("Reconnecting", () => {
     }
   });
 
+  it("goes Offline at once when the dashboard turns the password down or refuses sign-ins for now, without retrying (#472)", async () => {
+    for (const refusal of ["Wrong username or password.", "Too many sign-in attempts. Wait a minute and try again."]) {
+      const server = new FakeHermes();
+      let tries = 0;
+      const hermes = await connect((onEvent, profile, signal) => (tries++, server.openPipe(onEvent, profile, signal)));
+      server.refuse = refusal;
+      server.drop();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(hermes.getSnapshot()).toMatchObject({ status: "offline", closedReason: refusal });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(tries).toBe(2);
+      await hermes.close();
+    }
+  });
+
   it("goes Offline at once if the server now speaks the canonical protocol", async () => {
     const { server, hermes } = await signedIn();
     server.readyPayload = { ...server.readyPayload, session_authority: true };
@@ -161,6 +176,29 @@ describe("Reconnecting", () => {
 
     expect(resumes(server)).toHaveLength(2);
     expect(chat("tg").runtimeId).toBe(server.runtimeIdOf("tg"));
+    expect(chat("tg").items.map((i) => ("text" in i ? i.text : i.kind))).toEqual(["How full is the NAS?", "82% used."]);
+  });
+
+  it("gives up a request Hermes never answers, so the chat it was loading can load again (#473)", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("tg", 2, { source: "telegram" })];
+    server.transcripts = { tg: [{ role: "user", text: "How full is the NAS?" }, { role: "assistant", text: "82% used." }] };
+    const { hermes, chat, status } = await signedIn(server);
+    await hermes.sync();
+    const resume = server.handlers["session.resume"];
+    server.handlers["session.resume"] = () => {};
+    const opening = hermes.open("tg");
+    expect(chat("tg").loading).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    await opening;
+    expect(status()).toBe("connected");
+    expect(chat("tg").loading).toBe(false);
+    expect(chat("tg").items.at(-1)).toMatchObject({ kind: "error", text: expect.stringContaining("didn't answer session.resume") });
+
+    server.handlers["session.resume"] = resume;
+    await hermes.open("tg");
+    expect(resumes(server)).toHaveLength(2);
     expect(chat("tg").items.map((i) => ("text" in i ? i.text : i.kind))).toEqual(["How full is the NAS?", "82% used."]);
   });
 

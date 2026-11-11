@@ -1119,8 +1119,27 @@ async fn slow_stub() -> Dashboard {
         .route("/auth/password-login", post(login))
         .route("/api/sessions", get(list))
         .route("/api/skills", get(five_minutes))
-        .route("/api/memory/providers/{name}/setup", post(five_minutes));
+        .route("/api/memory/providers/{name}/setup", post(five_minutes))
+        .route("/api/sessions/{id}", get(std::future::pending::<()>).patch(std::future::pending::<()>));
     sign_in_at(&serve(app).await, &sign_in("hunter2")).await.expect("signed in")
+}
+
+/// Issue #473: any other call Hermes takes and never answers is given up too, once ten minutes pass without a byte, so
+/// a feature waiting on it gets its answer.
+#[tokio::test(start_paused = true)]
+async fn any_call_hermes_never_answers_fails_after_ten_minutes_without_a_byte() {
+    let dashboard = slow_stub().await;
+    let body = Some(json!({"pinned": true}).to_string());
+    gives_up_after_ten_minutes("GET", dashboard.request("GET", "api/sessions/s1", None)).await;
+    gives_up_after_ten_minutes("PATCH", dashboard.request("PATCH", "api/sessions/s1", body)).await;
+    gives_up_after_ten_minutes("get_limited", dashboard.get_limited("api/sessions/s1", 1000)).await;
+}
+
+async fn gives_up_after_ten_minutes(call: &str, answer: impl std::future::Future<Output = Result<String, TransportError>>) {
+    let started = tokio::time::Instant::now();
+    let err = tokio::time::timeout(Duration::from_secs(3600), answer).await.expect("the call gave up within the hour").err().unwrap();
+    assert!(matches!(err, TransportError::Stalled(600)), "{call}: {err:?}");
+    assert_eq!(started.elapsed().as_secs(), 600, "{call}");
 }
 
 #[tokio::test(start_paused = true)]

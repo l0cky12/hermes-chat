@@ -51,14 +51,13 @@ import { MemoryProvidersApi } from "./memoryProviders";
 import { SkillsApi } from "./skills";
 import { CapabilityStore, CapabilityUnsupportedError, failureOf, isNoRoute, sharesChats, specOf, type CapabilityId, type ServerFacts } from "./capabilities";
 import { BOT_CHAT_TITLE, BotChats, BotModeUnsupportedError, isBotChat, isBotChatTitle, rosterOf, type Bot } from "./bots";
-import type { OpenPipe, Pipe, PipeEvent, RestMethod, Route, Speech, Transcript, VoiceSetup } from "./pipe";
+import { RestError, conflictOf, sessionNotFound, statusOf, type OpenPipe, type Pipe, type PipeEvent, type RestMethod, type Route, type Speech, type Transcript, type VoiceSetup } from "./pipe";
 import { projectContextFiles, type ChatContext, type ProjectContextFiles } from "./projectContextFiles";
 import { withContext } from "./projectContext";
 import { typedText } from "./branch";
-import { RemoteFilesError, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, SESSION_GONE, previewSupport, remoteFiles, type EditIo, type RemoteFiles } from "./remoteFiles";
+import { RemoteFilesError, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, previewSupport, remoteFiles, type EditIo, type RemoteFiles } from "./remoteFiles";
 import { isUnsecure } from "./unsecure";
-import { TOKEN_REFUSED } from "./routes";
-import { WRONG_PASSWORD } from "./account";
+import { signInRefused } from "./account";
 import { AccountsApi } from "./accounts";
 import { providerKeys, readyProviders, type ProviderSetup, type SavedKey } from "./setup";
 import { restartHold } from "./unsaved";
@@ -122,6 +121,15 @@ const PAGE_SIZE = 100;
 const MAX_PAGES = 20;
 /** How long the model list may take: Hermes may first fetch model metadata, which it bounds at 15 seconds. */
 const MODELS_TIMEOUT_MS = 30_000;
+/**
+ * How long a JSON-RPC request waits for its answer before it is given up (#473). Dashboard REST calls are bounded in
+ * Rust; a request over `/api/ws` only here, where its id is known. The heartbeat finds a dead socket, but not a live
+ * Hermes that never answers one request, which would hold whatever waits on it.
+ */
+const RPC_ANSWER_MS = 120_000;
+/** Methods Hermes answers only once a model has run (`session.compress`, `llm.oneshot`) or a file has arrived. */
+const SLOW_RPC_ANSWER_MS = 600_000;
+const SLOW_RPC = new Set(["session.compress", "llm.oneshot", "image.attach_bytes", "file.attach"]);
 /** Checking another profile for Unread chats reads one page of its most recent ones. */
 const OTHER_PAGE_SIZE = 50;
 /**
@@ -470,6 +478,9 @@ const newKey = () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? 
  */
 export class ConnectionLostError extends Error {}
 
+/** Hermes didn't answer a request in time (`RPC_ANSWER_MS`): like a drop, whether it got the request can't be known. */
+class AnswerTimedOutError extends ConnectionLostError {}
+
 /**
  * Hermes has the session but won't edit it, and answers as if it weren't there. At `bf0203a` the gateway takes edits
  * only for sessions it has a route for (Telegram, CLI, API), so every chat a WS client started is refused with 404
@@ -684,6 +695,8 @@ export class Hermes {
   private archiveUnsure = new Map<string, { profile: string; title: string }>();
   /** Chats the owner deleted here, or is deleting. A list read before the delete can't bring one back. */
   private deleted = new PerProfile<true>();
+  /** Chats started here that no list read has brought yet: Hermes stores a session with its first prompt. */
+  private unstored = new PerProfile<true>();
   /** Chats that had a turn running, or an Approval waiting, when the connection dropped. Reconnecting resumes them,
    * which brings back what Hermes is still waiting on. */
   private resumeOnReconnect = new Set<string>();
@@ -1148,6 +1161,11 @@ export class Hermes {
     },
     () => this.generation,
   );
+
+  /** Rust's name for the connection open now, for a command made outside the pipe (`Pipe.connectionId`). */
+  get connectionId(): string | undefined {
+    return this.pipe?.connectionId;
+  }
 
   /** The profile whose chats are shown. */
   get profile(): string {
@@ -1753,7 +1771,7 @@ export class Hermes {
             const row = (await this.rest("GET", `${sessionPath(chatId)}?${new URLSearchParams({ profile })}`)) as SessionRow;
             found.push({ profile, title: listTitle(row), source: toSource(row.source) });
           } catch (e) {
-            if (!(e as Error).message.includes("answered 404")) unsure = true;
+            if (!sessionNotFound(e)) unsure = true;
           }
         }),
       );
@@ -1853,7 +1871,7 @@ export class Hermes {
     try {
       row = (await this.rest("GET", `${sessionPath(chatId)}?${new URLSearchParams({ profile })}`)) as typeof row;
     } catch (e) {
-      if ((e as Error).message.includes("answered 404")) return null;
+      if (sessionNotFound(e)) return null;
       throw e;
     }
     if (row?.id !== chatId) return null;
@@ -2087,6 +2105,7 @@ export class Hermes {
     this.usageFrom.set(res.session_id, countersOf((res.info as { usage?: unknown } | undefined)?.usage) ?? ZERO_COUNTERS);
     this.runtimeOwners.set(res.session_id, { profile: this.profile, chatId: chat.id });
     this.pinWanted.set(profile, chat.id, true);
+    this.unstored.set(profile, chat.id, true);
     this.update({ chats: [chat, ...this.snapshot.chats] });
     return chat.id;
   }
@@ -2723,7 +2742,7 @@ export class Hermes {
       const read = chatUsageOf(row, Date.now());
       this.patchChat(chatId, (c) => ({ ...c, usage: newerChatUsage(c.usage, read), usageError: undefined }));
     } catch (e) {
-      if (this.profile !== profile || (e as Error).message.includes("answered 404")) return;
+      if (this.profile !== profile || sessionNotFound(e)) return;
       this.patchChat(chatId, (c) => ({ ...c, usageError: `Couldn't read usage from Hermes: ${(e as Error).message}` }));
     }
   }
@@ -3173,8 +3192,9 @@ export class Hermes {
       await this.fencedPatch(chatId, profile, { title }, revision);
     } catch (e) {
       const why = (e as Error).message;
-      const conflict = why.includes("revision_conflict");
-      if (!conflict && /^The dashboard answered 4/.test(why)) throw e;
+      const status = statusOf(e);
+      const conflict = conflictOf(e, "revision_conflict");
+      if (!conflict && status !== undefined && status >= 400 && status < 500) throw e;
       // The edit may have landed though its answer was lost, so the title as stored now decides.
       const now = await this.readTitle(chatId, profile).catch(() => {
         throw new Error(`Couldn't tell whether Hermes saved the new title: ${why}`);
@@ -3379,7 +3399,7 @@ export class Hermes {
         const res = (await this.rest("GET", `${sessionPath(chatId)}/messages?${query}`)) as { messages?: unknown };
         page = Array.isArray(res?.messages) ? (res.messages as CompactionRow[]).filter((r) => typeof r?.id === "number") : [];
       } catch (e) {
-        if (offset === 0 && (e as Error).message.includes("answered 404")) {
+        if (offset === 0 && sessionNotFound(e)) {
           page = [];
         } else throw e;
       }
@@ -4028,13 +4048,12 @@ export class Hermes {
         if (this.closing) return;
         this.failedTries++;
         this.update({ status: "reconnecting", closedReason: (e as Error).message, ...this.switchFailed(e as Error) });
-        // A server that changed protocol won't change back on its own, nor will a token it turned down (ADR 0058).
-        if (e instanceof ProtocolMismatchError || TOKEN_REFUSED.test((e as Error).message)) this.update({ status: "offline" });
-        else {
-          // Retrying a password Hermes turned down would only spend sign-in attempts.
-          if ((e as Error).message === WRONG_PASSWORD) this.launchFailed = false;
-          this.retryLater();
-        }
+        // A server that changed protocol won't change back on its own, nor will a sign-in Hermes turned down (ADR 0058,
+        // 0089), and retrying one only spends sign-in attempts (#472). Reconnecting then waits for the owner.
+        const refused = signInRefused((e as Error).message);
+        if (refused) this.launchFailed = false;
+        if (e instanceof ProtocolMismatchError || refused) this.update({ status: "offline" });
+        else this.retryLater();
       } finally {
         this.redialing = undefined;
       }
@@ -4228,13 +4247,17 @@ export class Hermes {
     this.saveList(profile, this.snapshot.chats);
   }
 
-  /** Whether Hermes has the chat archived, from its stored row; undefined when the session is gone. */
+  /**
+   * Whether Hermes has the chat archived, from its stored row; undefined when the session is gone. A 404 alone doesn't
+   * say so (#486): Hermes must also report no such session in the mutation snapshot, and the chat must be one Hermes
+   * stored, not one started here that it hasn't stored yet (`unstored`).
+   */
   private async readArchived(chatId: string, profile: string): Promise<boolean | undefined> {
     try {
       const row = (await this.rest("GET", `api/sessions/${encodeURIComponent(chatId)}?${new URLSearchParams({ profile })}`)) as SessionDetail;
       return !!row.archived;
     } catch (e) {
-      if ((e as Error).message.includes("answered 404")) return undefined;
+      if (sessionNotFound(e) && !this.unstored.has(profile, chatId) && !(await this.mutationSnapshot(chatId, profile)).exists) return undefined;
       throw e;
     }
   }
@@ -4418,6 +4441,7 @@ export class Hermes {
     // chat holding a message sent from here that Hermes hasn't confirmed, or a queue: a new chat whose first message
     // failed has no row either, and its message stays until the owner retries or dismisses it (ADR 0006, #468).
     const listedIds = new Set(listed.map((c) => c.id));
+    for (const id of listedIds) this.unstored.delete(profile, id);
     const holdsUnsent = (c: Chat) => c.items.some(isOutgoing) || !!this.snapshot.queues[c.id]?.items.length;
     // One Hermes now lists as a Bot Chat, such as an ordinary chat renamed to the title in another client, stays out
     // of the list from now on, and is marked so every Bot Chat rule applies to it (ADR 0066).
@@ -4540,8 +4564,8 @@ export class Hermes {
       try {
         return await this.fencedPatch(chatId, profile, flags, runtime_revision);
       } catch (e) {
-        if (exists && (e as Error).message.includes("answered 404")) throw new EditRefusedError((e as Error).message);
-        if (attempt > 0 || !(e as Error).message.includes("revision_conflict") || !(await retry())) throw e;
+        if (exists && statusOf(e) === 404) throw new EditRefusedError((e as Error).message);
+        if (attempt > 0 || !conflictOf(e, "revision_conflict") || !(await retry())) throw e;
       }
     }
   }
@@ -4587,7 +4611,7 @@ export class Hermes {
         await this.rest("DELETE", `${sessionPath(chatId)}?${query}`);
         return;
       } catch (e) {
-        if (attempt > 0 || !/revision_conflict|stale_generation/.test((e as Error).message)) throw e;
+        if (attempt > 0 || !conflictOf(e, "revision_conflict", "stale_generation")) throw e;
       }
     }
   }
@@ -4699,7 +4723,7 @@ export class Hermes {
           await this.restGet(`api/fs/read-text?${new URLSearchParams({ path, profile, session_id: session })}`, LIST_MAX_BYTES);
           return { state: "available" };
         } catch (e) {
-          return outputFound(e instanceof Error ? e.message : String(e));
+          return outputFound(e);
         }
       },
     };
@@ -4792,7 +4816,14 @@ export class Hermes {
     const refused = this.capabilities.refuses({ rpc: method });
     if (refused) return Promise.reject(new CapabilityUnsupportedError(refused));
     const id = this.nextId++;
-    const done = new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
+    const done = new Promise((resolve, reject) => {
+      const ms = SLOW_RPC.has(method) ? SLOW_RPC_ANSWER_MS : RPC_ANSWER_MS;
+      const late = setTimeout(() => {
+        if (this.pending.delete(id)) reject(new AnswerTimedOutError(`Hermes didn't answer ${method} within ${ms / 1000} s.`));
+      }, ms);
+      const settled = <T>(settle: (v: T) => void) => (v: T) => (clearTimeout(late), settle(v));
+      this.pending.set(id, { resolve: settled(resolve), reject: settled(reject) });
+    });
     // Diagnostics learns from the screens' own requests (not its own checks), for the connection each went out on.
     if (observe) {
       this.observe({ method }, done);
@@ -5041,18 +5072,10 @@ const LIST_MAX_BYTES = 8 * 1024 * 1024;
  * What a failed `read-text` naming an Output's chat says about the file (outputs.ts `OutputsIo.confirm`, ADR 0062), or
  * undefined when Hermes no longer has the chat. A file too large to preview, or one Hermes is using, is there.
  */
-export function outputFound(message: string): { state: "missing" | "folder" | "forbidden" | "available" | "unknown"; why?: string } | undefined {
-  if (SESSION_GONE.test(message)) return undefined;
-  const m = /^The dashboard answered (\d{3}): ([\s\S]*)$/.exec(message);
-  if (!m) return { state: "unknown", why: message };
-  let detail = m[2];
-  try {
-    const d = (JSON.parse(m[2]) as { detail?: unknown }).detail;
-    if (typeof d === "string") detail = d;
-  } catch {
-    // As it came.
-  }
-  const status = Number(m[1]);
+export function outputFound(e: unknown): { state: "missing" | "folder" | "forbidden" | "available" | "unknown"; why?: string } | undefined {
+  if (sessionNotFound(e)) return undefined;
+  if (!(e instanceof RestError)) return { state: "unknown", why: e instanceof Error ? e.message : String(e) };
+  const { status, detail } = e;
   if (status === 404 && detail.startsWith(SANDBOX_NOT_FOUND_PREFIX)) return { state: "missing", why: SANDBOX_MISSING };
   if (status === 404 && detail === "File not found") return { state: "missing", why: "It isn't at this path where its chat's tools ran: it was deleted, moved or renamed." };
   if (status === 400 && detail === "Path points to a directory") return { state: "folder" };

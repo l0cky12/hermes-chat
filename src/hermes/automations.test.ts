@@ -21,6 +21,7 @@ import {
   typedFilterValue,
 } from "./automations";
 import { FakeWebhooks, type SessionRow } from "./fakeHermes";
+import { RestError } from "./pipe";
 import { testPattern } from "./pyRegex";
 
 describe("the preview matches Hermes's webhook adapter", () => {
@@ -165,7 +166,7 @@ function harness(contract = true, sessions: SessionRow[] = []) {
     if (url.pathname === "/api/sessions") return { sessions: sessions.filter((s) => s.source === url.searchParams.get("source")) };
     if (url.pathname === "/api/cron/delivery-targets") return { targets: [{ id: "local", name: "Local" }, { id: "telegram", name: "Telegram", home_target_set: true }] };
     const h = fake.route({ method, path: url.pathname, query: url.searchParams, body: body as Record<string, unknown> | undefined });
-    if (!h) throw new Error('The dashboard answered 404: {"detail":"Not Found"}');
+    if (!h) throw new RestError(404, '{"detail":"Not Found"}');
     return JSON.parse(JSON.stringify(await h()));
   };
   return { fake, api: new AutomationsApi(rest), calls };

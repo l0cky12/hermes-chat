@@ -12,6 +12,7 @@
 // Hermes's helper tasks, which no chat carries.
 import { chatUsageOf, costLabel, tokens as shortTokens, usd, type ChatUsage, type Cost } from "./usage";
 import { instantsOf, isoIn, knownZone } from "./schedule";
+import { statusOf } from "./pipe";
 
 const DAY = 86_400_000;
 /** Dashboard REST caps `GET /api/sessions` pages at 100. */
@@ -298,7 +299,7 @@ export async function collectUsage(
         hermes = totals ? { state: "ok", totals } : { state: "unsupported" };
       } catch (e) {
         checkLive(signal);
-        hermes = /answered 404/.test(messageOf(e)) ? { state: "unsupported" } : { state: "failed", error: messageOf(e) };
+        hermes = statusOf(e) === 404 ? { state: "unsupported" } : { state: "failed", error: messageOf(e) };
       }
     }
     reads.push({ profile, state, read, ...(error && { error }), ...(hermes && { hermes }) });

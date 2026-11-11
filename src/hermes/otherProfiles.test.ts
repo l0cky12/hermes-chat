@@ -3,6 +3,7 @@ import { FakeHermes, row, type RestRequest } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
 import { totalUnread } from "./otherProfiles";
 import { type ChatCache, connect } from "./transport";
+import { RestError } from "./pipe";
 
 const read = () => Date.now() / 1000 - 60;
 const unreadRow = (id: string, daysAgo = 0, over = {}) => row(id, daysAgo, { last_read_at: 0, ...over });
@@ -167,7 +168,7 @@ describe("Unread in other profiles", () => {
       const { server, hermes, others } = await signedIn();
       const list = server.rest["GET /api/sessions"];
       server.rest["GET /api/sessions"] = (req) => {
-        if (req.query.get("profile") === "aegis") throw new Error("The dashboard answered 500: database is locked");
+        if (req.query.get("profile") === "aegis") throw new RestError(500, "database is locked");
         return list(req);
       };
       await hermes.checkOtherProfiles();
@@ -183,7 +184,7 @@ describe("Unread in other profiles", () => {
       const first = others().byName.work;
 
       server.rest["GET /api/sessions"] = () => {
-        throw new Error("The dashboard answered 503");
+        throw new RestError(503, "", "The dashboard answered 503");
       };
       await vi.advanceTimersByTimeAsync(15_000);
       await hermes.checkOtherProfiles();
@@ -196,7 +197,7 @@ describe("Unread in other profiles", () => {
       const { server, hermes, others } = await signedIn();
       await hermes.checkOtherProfiles();
       server.rest["GET /api/profiles"] = () => {
-        throw new Error("The dashboard answered 502");
+        throw new RestError(502, "", "The dashboard answered 502");
       };
       await vi.advanceTimersByTimeAsync(15_000);
       await hermes.checkOtherProfiles();

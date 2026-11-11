@@ -12,6 +12,7 @@ import { connect, type Hermes } from "../hermes/transport";
 import { UI_PREFS_KEY } from "../hermes/uiPrefs";
 import { Main, type Screenshots } from "../App";
 import type { Captured } from "../hermes/screenshots";
+import { RestError } from "../hermes/pipe";
 
 const drops = vi.hoisted(() => new Set<(e: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({
@@ -643,7 +644,7 @@ describe("A chat that leaves the list under a pane (#467)", () => {
       await vi.waitFor(() => expect(hermes.getSnapshot().status).toBe("connected"), { timeout: 5_000 });
       await hermes.idle();
       await vi.waitFor(() => expect(titleIn(0)).toBe("New chat"), { timeout: 5_000 });
-      server.rest["GET /api/sessions/backup"] = () => Promise.reject(new Error("The dashboard answered 500: busy"));
+      server.rest["GET /api/sessions/backup"] = () => Promise.reject(new RestError(500, "busy"));
       return sendTracked(...args);
     });
 

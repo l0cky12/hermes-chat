@@ -3,6 +3,7 @@ import { FakeHermes, fakeEnv } from "./fakeHermes";
 import { connect } from "./transport";
 import { explain, explainSignIn, isSetUp, missing, providerKeys, readStatus, readyProviders, testConnection, type Probe, type ProbeFailure, type Probed } from "./setup";
 import type { SignInDetails } from "./tauriPipe";
+import { RestError } from "./pipe";
 
 const READY = JSON.stringify({ jsonrpc: "2.0", method: "event", params: { type: "gateway.ready", payload: { skin: {} } } });
 const STATUS = JSON.stringify({ version: "0.22.5", auth_required: true, auth_providers: ["basic", "conduit-local-live"] });
@@ -331,7 +332,7 @@ describe("Model provider keys", () => {
   it("throws, rather than calling the server unsupported, when GET /api/env fails for another reason than a missing route", async () => {
     const server = new FakeHermes();
     server.rest["GET /api/env"] = () => {
-      throw new Error(`The dashboard answered 500: {"detail":"Internal server error"}`);
+      throw new RestError(500, `{"detail":"Internal server error"}`);
     };
     const hermes = await connect(server.openPipe);
     await expect(hermes.providerSetup()).rejects.toThrow("500");
