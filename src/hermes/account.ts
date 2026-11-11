@@ -52,6 +52,10 @@ export const WRONG_PASSWORD = "Wrong username or password.";
 /** Whether `reason` is a sign-in that only asking again can fix, so launch shows the sign-in screen, not Offline. */
 export const turnedDown = (reason: string) => reason === WRONG_PASSWORD || TOKEN_REFUSED.test(reason);
 
+/** Whether `reason` is a sign-in Hermes turned down, or won't take for now (`TransportError::RateLimited`): trying it
+ * again on its own would only spend sign-in attempts. */
+export const signInRefused = (reason: string) => turnedDown(reason) || reason.startsWith("Too many sign-in attempts.");
+
 /** What the keyring kept at sign-in. */
 export type Kept = { password: boolean; headers: boolean };
 

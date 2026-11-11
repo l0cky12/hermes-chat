@@ -66,10 +66,16 @@ fn checked_ticket(ticket: &str) -> Result<&str, TransportError> {
     }
 }
 
+/// How long the Screen's socket may take to open (#473).
+const OPEN_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Opens `/api/display/ws` with `ticket` on `dashboard`'s connection.
 pub async fn open(dashboard: Arc<Dashboard>, ticket: &str, on_event: impl Fn(DisplayEvent) + Send + 'static) -> Result<DisplaySocket, TransportError> {
     let handshake = dashboard.ws_handshake("api/display/ws", &[("display_ticket", checked_ticket(ticket)?)])?;
-    let (ws, _) = tokio_tungstenite::connect_async(handshake).await.map_err(|e| TransportError::WebSocket(e.to_string()))?;
+    let (ws, _) = tokio::time::timeout(OPEN_LIMIT, tokio_tungstenite::connect_async(handshake))
+        .await
+        .map_err(|_| TransportError::WebSocket(format!("it didn't open within {}s.", OPEN_LIMIT.as_secs())))?
+        .map_err(|e| TransportError::WebSocket(e.to_string()))?;
     let (outgoing, mut to_server) = mpsc::unbounded_channel::<Out>();
     tokio::spawn(async move {
         let (mut sink, mut stream) = ws.split();

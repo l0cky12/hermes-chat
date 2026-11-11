@@ -57,8 +57,7 @@ import { withContext } from "./projectContext";
 import { typedText } from "./branch";
 import { RemoteFilesError, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, SESSION_GONE, previewSupport, remoteFiles, type EditIo, type RemoteFiles } from "./remoteFiles";
 import { isUnsecure } from "./unsecure";
-import { TOKEN_REFUSED } from "./routes";
-import { WRONG_PASSWORD } from "./account";
+import { signInRefused } from "./account";
 import { AccountsApi } from "./accounts";
 import { providerKeys, readyProviders, type ProviderSetup, type SavedKey } from "./setup";
 import { restartHold } from "./unsaved";
@@ -122,6 +121,15 @@ const PAGE_SIZE = 100;
 const MAX_PAGES = 20;
 /** How long the model list may take: Hermes may first fetch model metadata, which it bounds at 15 seconds. */
 const MODELS_TIMEOUT_MS = 30_000;
+/**
+ * How long a JSON-RPC request waits for its answer before it is given up (#473). Dashboard REST calls are bounded in
+ * Rust; a request over `/api/ws` only here, where its id is known. The heartbeat finds a dead socket, but not a live
+ * Hermes that never answers one request, which would hold whatever waits on it.
+ */
+const RPC_ANSWER_MS = 120_000;
+/** Methods Hermes answers only once a model has run (`session.compress`, `llm.oneshot`) or a file has arrived. */
+const SLOW_RPC_ANSWER_MS = 600_000;
+const SLOW_RPC = new Set(["session.compress", "llm.oneshot", "image.attach_bytes", "file.attach"]);
 /** Checking another profile for Unread chats reads one page of its most recent ones. */
 const OTHER_PAGE_SIZE = 50;
 /**
@@ -469,6 +477,9 @@ const newKey = () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? 
  * known. A JSON-RPC id means nothing on the next connection, so asking again there isn't safe.
  */
 export class ConnectionLostError extends Error {}
+
+/** Hermes didn't answer a request in time (`RPC_ANSWER_MS`): like a drop, whether it got the request can't be known. */
+class AnswerTimedOutError extends ConnectionLostError {}
 
 /**
  * Hermes has the session but won't edit it, and answers as if it weren't there. At `bf0203a` the gateway takes edits
@@ -4000,13 +4011,12 @@ export class Hermes {
         if (this.closing) return;
         this.failedTries++;
         this.update({ status: "reconnecting", closedReason: (e as Error).message, ...this.switchFailed(e as Error) });
-        // A server that changed protocol won't change back on its own, nor will a token it turned down (ADR 0058).
-        if (e instanceof ProtocolMismatchError || TOKEN_REFUSED.test((e as Error).message)) this.update({ status: "offline" });
-        else {
-          // Retrying a password Hermes turned down would only spend sign-in attempts.
-          if ((e as Error).message === WRONG_PASSWORD) this.launchFailed = false;
-          this.retryLater();
-        }
+        // A server that changed protocol won't change back on its own, nor will a sign-in Hermes turned down (ADR 0058,
+        // 0089), and retrying one only spends sign-in attempts (#472). Reconnecting then waits for the owner.
+        const refused = signInRefused((e as Error).message);
+        if (refused) this.launchFailed = false;
+        if (e instanceof ProtocolMismatchError || refused) this.update({ status: "offline" });
+        else this.retryLater();
       } finally {
         this.redialing = undefined;
       }
@@ -4758,7 +4768,14 @@ export class Hermes {
     const refused = this.capabilities.refuses({ rpc: method });
     if (refused) return Promise.reject(new CapabilityUnsupportedError(refused));
     const id = this.nextId++;
-    const done = new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
+    const done = new Promise((resolve, reject) => {
+      const ms = SLOW_RPC.has(method) ? SLOW_RPC_ANSWER_MS : RPC_ANSWER_MS;
+      const late = setTimeout(() => {
+        if (this.pending.delete(id)) reject(new AnswerTimedOutError(`Hermes didn't answer ${method} within ${ms / 1000} s.`));
+      }, ms);
+      const settled = <T>(settle: (v: T) => void) => (v: T) => (clearTimeout(late), settle(v));
+      this.pending.set(id, { resolve: settled(resolve), reject: settled(reject) });
+    });
     // Diagnostics learns from the screens' own requests (not its own checks), for the connection each went out on.
     if (observe) {
       this.observe({ method }, done);
