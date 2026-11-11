@@ -419,15 +419,15 @@ fn command(program: &Path) -> tokio::process::Command {
     command
 }
 
-/// A private folder for one recording, deleted with everything in it when dropped.
+/// A private folder for one recording, made in `parent` and deleted with everything in it when dropped.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    fn new() -> std::io::Result<Self> {
+    fn new(parent: &Path) -> std::io::Result<Self> {
         use std::sync::atomic::AtomicU64;
         static N: AtomicU64 = AtomicU64::new(0);
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-        let dir = std::env::temp_dir().join(format!("hermes-chat-stt-{}-{nanos}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        let dir = parent.join(format!("hermes-chat-stt-{}-{nanos}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         // `create`, not `create_all`: it fails if anything, a link included, is already there. On Windows the folder
         // takes the ACL of the user's own temp folder.
         #[allow(unused_mut)]
@@ -453,6 +453,11 @@ fn time_limit(wav_bytes: usize) -> Duration {
 /// Has `engine` transcribe a WAV recording in `language`, within `limit`. The recording is written to a private folder
 /// that is deleted afterwards, whatever happens. Errors say why, for the owner.
 pub async fn transcribe(engine: &Engine, wav: &[u8], limit: Duration, language: &str) -> Result<Transcript, String> {
+    transcribe_in(&std::env::temp_dir(), engine, wav, limit, language).await
+}
+
+/// [`transcribe`], with the recording's private folder made in `parent`.
+async fn transcribe_in(parent: &Path, engine: &Engine, wav: &[u8], limit: Duration, language: &str) -> Result<Transcript, String> {
     if let Some(why) = problem(Some(engine)) {
         return Err(why);
     }
@@ -460,7 +465,7 @@ pub async fn transcribe(engine: &Engine, wav: &[u8], limit: Duration, language: 
         return Err(format!("The recording is over {} MB.", MAX_WAV_BYTES / 1024 / 1024));
     }
     let model = engine.model.as_deref().expect("checked by problem");
-    let scratch = Scratch::new().map_err(|e| format!("Couldn't make a private folder for the recording: {e}"))?;
+    let scratch = Scratch::new(parent).map_err(|e| format!("Couldn't make a private folder for the recording: {e}"))?;
     let wav_path = scratch.0.join("audio.wav");
     {
         use std::io::Write;
@@ -1416,10 +1421,10 @@ mod tests {
         Engine { kind: Kind::WhisperCpp, binary, model: Some(dir.join("ggml-tiny.bin")) }
     }
 
-    /// The private folders left behind in the temp dir by this process.
-    fn leftovers() -> usize {
-        let prefix = format!("hermes-chat-stt-{}-", std::process::id());
-        children(&std::env::temp_dir()).iter().filter(|p| name_of(p).starts_with(&prefix)).count()
+    /// The private folders left behind in `parent`. A test that counts them passes its own folder to `transcribe_in`,
+    /// so it doesn't count the folders of tests running beside it.
+    fn leftovers(parent: &Path) -> usize {
+        children(parent).iter().filter(|p| name_of(p).starts_with("hermes-chat-stt-")).count()
     }
 
     #[cfg(unix)]
@@ -1432,22 +1437,25 @@ mod tests {
             "ok",
             r#"l="$6"; while [ "$1" != "-of" ]; do shift; done; echo "$(stat -c %a "$(dirname "$2")") $l" > "$2.txt"; echo "[BLANK_AUDIO]" >> "$2.txt""#,
         );
-        let got = transcribe(&ok, b"RIFF....", Duration::from_secs(10), "es").await.unwrap();
+        let got = transcribe_in(&d, &ok, b"RIFF....", Duration::from_secs(10), "es").await.unwrap();
         assert_eq!(got.text, "700 es", "the recording's folder is private, and the language is passed on");
         assert_eq!(got.provider.as_deref(), Some("whisper.cpp"));
 
         let fails = fake_engine(&d, "fails", "echo 'error: failed to load model' >&2; exit 3");
-        assert_eq!(transcribe(&fails, b"RIFF", Duration::from_secs(10), "auto").await.unwrap_err(), "whisper.cpp exited with 3: error: failed to load model");
+        assert_eq!(
+            transcribe_in(&d, &fails, b"RIFF", Duration::from_secs(10), "auto").await.unwrap_err(),
+            "whisper.cpp exited with 3: error: failed to load model"
+        );
 
         let hangs = fake_engine(&d, "hangs", "exec sleep 30");
-        let err = transcribe(&hangs, b"RIFF", Duration::from_millis(300), "auto").await.unwrap_err();
+        let err = transcribe_in(&d, &hangs, b"RIFF", Duration::from_millis(300), "auto").await.unwrap_err();
         assert!(err.contains("took longer than"), "{err}");
 
         let mut gone = ok.clone();
         gone.model = Some(d.join("missing.bin"));
-        assert!(transcribe(&gone, b"RIFF", Duration::from_secs(10), "auto").await.unwrap_err().contains("isn't there any more"));
-        assert!(transcribe(&ok, &vec![0; MAX_WAV_BYTES + 1], Duration::from_secs(10), "auto").await.unwrap_err().contains("over 25 MB"));
-        assert_eq!(leftovers(), 0);
+        assert!(transcribe_in(&d, &gone, b"RIFF", Duration::from_secs(10), "auto").await.unwrap_err().contains("isn't there any more"));
+        assert!(transcribe_in(&d, &ok, &vec![0; MAX_WAV_BYTES + 1], Duration::from_secs(10), "auto").await.unwrap_err().contains("over 25 MB"));
+        assert_eq!(leftovers(&d), 0);
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -1740,10 +1748,12 @@ mod tests {
         };
         let engine = Engine { kind: Kind::WhisperCpp, binary: cli.into(), model: Some(model.into()) };
         let wav = std::fs::read(wav).unwrap();
+        let d = temp("real");
         let started = Instant::now();
-        let got = transcribe(&engine, &wav, time_limit(wav.len()), "auto").await.unwrap();
+        let got = transcribe_in(&d, &engine, &wav, time_limit(wav.len()), "auto").await.unwrap();
         println!("{:?} in {:?}: {}", version(&engine.binary).await, started.elapsed(), got.text);
         assert!(got.text.to_lowercase().contains("ask not what your country can do for you"), "{}", got.text);
-        assert_eq!(leftovers(), 0);
+        assert_eq!(leftovers(&d), 0);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

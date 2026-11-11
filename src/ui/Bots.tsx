@@ -1,6 +1,7 @@
 // The Bots view (ADR 0066): one row per bot, which is a Hermes profile, with its picture, name, description, its Bot
 // Chat's last message and what it is doing. A row opens the bot's Bot Chat, found by title every time (bots.ts); the
-// pen beside it starts an ordinary chat in the bot's profile.
+// pen beside it starts an ordinary chat in the bot's profile. The same rows (`BotList`) fill the chat list panel while
+// a Bot Chat is open (bot mode).
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { ChevronDown, ChevronRight, Loader, RefreshCw, ShieldAlert, SquarePen, X } from "lucide-react";
 import { BotModeUnsupportedError, type Bot, type BotActivity } from "../hermes/bots";
@@ -13,16 +14,18 @@ export const BOTS_REFRESH_MS = 15_000;
 const ACTIVITY_LABEL: Record<NonNullable<BotActivity>, string> = { replying: "Replying", "needs-you": "Needs you" };
 
 /**
- * `load`: reads the roster (`Hermes.bots`). `avatar`: a bot's picture, read once per bot that has one. `activity`: what
- * the bot is doing in its Bot Chat. `leaving`: what switching away from the shown profile leaves behind, asked about
- * before a row in another profile opens. `onUnsupported`: this Hermes turned out to have no Bot Mode.
+ * `last`: the roster as last read, and when, shown until `load` reads it again (`Hermes.bots`). `pictures`: each bot's
+ * picture, by profile. `activity`: what the bot is doing in its Bot Chat. `leaving`: what switching away from the shown
+ * profile leaves behind, asked about before a row in another profile opens. `onUnsupported`: this Hermes turned out to
+ * have no Bot Mode.
  */
 export function Bots({
   server,
   profile,
   connected,
+  last,
+  pictures,
   load,
-  avatar,
   activity,
   leaving,
   onOpen,
@@ -34,8 +37,9 @@ export function Bots({
   server: string;
   profile: string;
   connected: boolean;
-  load: () => Promise<Bot[]>;
-  avatar: (profile: string) => Promise<string | undefined>;
+  last?: { roster: Bot[]; at: number };
+  pictures: Record<string, string>;
+  load: () => Promise<unknown>;
   activity: (bot: Bot, roster: readonly Bot[]) => BotActivity;
   leaving?: string;
   onOpen: (bot: Bot) => void;
@@ -45,19 +49,13 @@ export function Bots({
   onUnsupported?: (why: string) => void;
 }) {
   const l = useLocale();
-  const [bots, setBots] = useState<Bot[]>();
+  const bots = last?.roster;
   const [error, setError] = useState<string>();
   /** This Hermes turned out to have no Bot Mode, and why. */
   const [unsupported, setUnsupported] = useState<string>();
-  const [checkedAt, setCheckedAt] = useState<number>();
   const [loading, setLoading] = useState(false);
-  const [pictures, setPictures] = useState<Record<string, string>>({});
-  const [showHidden, setShowHidden] = useState(false);
-  const [asking, setAsking] = useState<{ bot: Bot; then: "open" | "new" }>();
   const root = useRef<HTMLElement>(null);
-  const list = useRef<HTMLUListElement>(null);
   const headId = useId();
-  const asked = useRef(new Set<string>());
   const reads = useRef(0);
   useReturnFocus();
 
@@ -65,11 +63,9 @@ export function Bots({
     const n = ++reads.current;
     setLoading(true);
     try {
-      const got = await load();
+      await load();
       if (n !== reads.current) return;
-      setBots(got);
       setError(undefined);
-      setCheckedAt(Date.now());
     } catch (e) {
       if (n !== reads.current) return;
       if (e instanceof BotModeUnsupportedError) {
@@ -88,17 +84,6 @@ export function Bots({
     return () => clearInterval(every);
   }, [connected, load, unsupported]);
 
-  // Each picture is asked for once while the view is open; a bot without one, or one that fails, shows its initial.
-  useEffect(() => {
-    for (const b of bots ?? []) {
-      if (!b.hasAvatar || asked.current.has(b.profile)) continue;
-      asked.current.add(b.profile);
-      avatar(b.profile)
-        .then((url) => url && setPictures((p) => ({ ...p, [b.profile]: url })))
-        .catch(() => {});
-    }
-  }, [bots, avatar]);
-
   useEffect(() => {
     const away = (e: PointerEvent) => {
       const at = e.target;
@@ -113,34 +98,14 @@ export function Bots({
   useEffect(() => {
     if (!(bots || unsupported) || !first.current) return;
     first.current = false;
-    (list.current?.querySelector<HTMLElement>(".bots-open") ?? root.current?.querySelector<HTMLElement>(".bots-close"))?.focus();
+    (root.current?.querySelector<HTMLElement>(".bots-open") ?? root.current?.querySelector<HTMLElement>(".bots-close"))?.focus();
   }, [bots, unsupported]);
 
-  const go = (bot: Bot, then: "open" | "new") => {
-    if (bot.profile !== profile && leaving) return setAsking({ bot, then });
-    (then === "open" ? onOpen : onNewChat)(bot);
-  };
-
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
-    if (composing(e)) return;
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      if (asking) setAsking(undefined);
-      else onClose();
-      return;
-    }
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    const rows = Array.from(list.current?.querySelectorAll<HTMLButtonElement>(".bots-open") ?? []);
-    const at = rows.indexOf(document.activeElement as HTMLButtonElement);
-    if (at < 0) return;
-    e.preventDefault();
-    rows[at + (e.key === "ArrowDown" ? 1 : -1)]?.focus();
+    if (composing(e) || e.key !== "Escape") return;
+    e.stopPropagation();
+    onClose();
   };
-
-  // Pinned bots first, then Hermes's order. Hidden ones wait behind a disclosure, as in Hermes's own list.
-  const shown = (bots ?? []).filter((b) => !b.hidden).sort((a, b) => Number(b.pinned) - Number(a.pinned));
-  const hidden = (bots ?? []).filter((b) => b.hidden);
-  const row = (b: Bot) => <Row key={b.profile} bot={b} picture={pictures[b.profile]} activity={activity(b, bots ?? [])} shown={b.profile === profile} onOpen={() => go(b, "open")} onNewChat={() => go(b, "new")} />;
 
   return (
     <section ref={root} className="inbox bots" role="dialog" aria-labelledby={headId} onKeyDown={onKeyDown}>
@@ -176,23 +141,115 @@ export function Bots({
       {!unsupported && (error || !connected) && (
         <p className={`inbox-note bots-note ${error ? "err" : ""}`} role={error ? "alert" : undefined}>
           {!connected ? "Not connected to Hermes." : `Couldn't read the bots: ${error}`}
-          {checkedAt && bots ? ` Showing them as of ${ago(l, checkedAt)}.` : ""}
+          {last ? ` Showing them as of ${ago(l, last.at)}.` : ""}
         </p>
       )}
+      {!unsupported && (
+        <BotList bots={bots} busy={loading} pictures={pictures} activity={activity} profile={profile} leaving={leaving} onOpen={onOpen} onNewChat={onNewChat} />
+      )}
+      {!bots && !error && !unsupported && connected && <div className="empty-hint inbox-empty">Reading the bots…</div>}
+    </section>
+  );
+}
+
+/**
+ * The bots' rows, in the Bots view and in the chat list panel's bot mode: pinned first, hidden ones behind a
+ * disclosure, Up and Down between them. A row in another profile than `profile` asks first while `leaving` says what
+ * switching leaves behind. `current`: the profile of the bot whose Bot Chat is open.
+ */
+export function BotList({
+  bots,
+  busy,
+  pictures,
+  activity,
+  profile,
+  current,
+  leaving,
+  onOpen,
+  onNewChat,
+}: {
+  bots?: Bot[];
+  busy?: boolean;
+  pictures: Record<string, string>;
+  activity: (bot: Bot, roster: readonly Bot[]) => BotActivity;
+  profile: string;
+  current?: string;
+  leaving?: string;
+  onOpen: (bot: Bot) => void;
+  onNewChat: (bot: Bot) => void;
+}) {
+  const [showHidden, setShowHidden] = useState(false);
+  const [asking, setAsking] = useState<{ bot: Bot; then: "open" | "new" }>();
+
+  const go = (bot: Bot, then: "open" | "new") => {
+    if (bot.profile !== profile && leaving) return setAsking({ bot, then });
+    setAsking(undefined);
+    (then === "open" ? onOpen : onNewChat)(bot);
+  };
+
+  // Escape takes the question away wherever focus is, before it closes the Bots view or reaches anything else.
+  useEffect(() => {
+    if (!asking) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape" || e.isComposing) return;
+      e.stopPropagation();
+      setAsking(undefined);
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [asking]);
+
+  const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
+    if (composing(e) || (e.key !== "ArrowDown" && e.key !== "ArrowUp")) return;
+    const rows = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>(".bots-open"));
+    const at = rows.indexOf(document.activeElement as HTMLButtonElement);
+    if (at < 0) return;
+    e.preventDefault();
+    rows[at + (e.key === "ArrowDown" ? 1 : -1)]?.focus();
+  };
+
+  // Pinned bots first, then Hermes's order. Hidden ones wait behind a disclosure, as in Hermes's own list.
+  const shown = (bots ?? []).filter((b) => !b.hidden).sort((a, b) => Number(b.pinned) - Number(a.pinned));
+  const hidden = (bots ?? []).filter((b) => b.hidden);
+  const row = (b: Bot) => (
+    <Row
+      key={b.profile}
+      bot={b}
+      picture={pictures[b.profile]}
+      activity={activity(b, bots ?? [])}
+      shown={b.profile === profile}
+      current={b.profile === current}
+      onOpen={() => go(b, "open")}
+      onNewChat={() => go(b, "new")}
+    />
+  );
+
+  return (
+    <>
       {asking && (
-        <div className="confirm inbox-leave" role="alertdialog" aria-label={`Switch to ${asking.bot.profile}?`}>
+        <div
+          className="confirm inbox-leave"
+          role="alertdialog"
+          aria-label={`Switch to ${asking.bot.profile}?`}
+        >
           <span>{leaving}</span>
           <div className="confirm-actions">
             <button className="btn" autoFocus onClick={() => setAsking(undefined)}>
               Stay
             </button>
-            <button className="btn primary" onClick={() => (asking.then === "open" ? onOpen : onNewChat)(asking.bot)}>
+            <button
+              className="btn primary"
+              onClick={() => {
+                setAsking(undefined);
+                (asking.then === "open" ? onOpen : onNewChat)(asking.bot);
+              }}
+            >
               Switch to {asking.bot.profile}
             </button>
           </div>
         </div>
       )}
-      <ul className="inbox-list bots-list" ref={list} aria-label="Bots" aria-busy={!bots && loading} hidden={!!unsupported}>
+      <ul className="inbox-list bots-list" aria-label="Bots" aria-busy={!bots && busy} onKeyDown={onKeyDown}>
         {shown.map(row)}
         {hidden.length > 0 && (
           <li className="bots-hidden">
@@ -204,12 +261,27 @@ export function Bots({
         )}
         {showHidden && hidden.map(row)}
       </ul>
-      {!bots && !error && !unsupported && connected && <div className="empty-hint inbox-empty">Reading the bots…</div>}
-    </section>
+    </>
   );
 }
 
-function Row({ bot: b, picture, activity, shown, onOpen, onNewChat }: { bot: Bot; picture?: string; activity: BotActivity; shown: boolean; onOpen: () => void; onNewChat: () => void }) {
+function Row({
+  bot: b,
+  picture,
+  activity,
+  shown,
+  current,
+  onOpen,
+  onNewChat,
+}: {
+  bot: Bot;
+  picture?: string;
+  activity: BotActivity;
+  shown: boolean;
+  current: boolean;
+  onOpen: () => void;
+  onNewChat: () => void;
+}) {
   const l = useLocale();
   const preview = b.botChat?.preview || (b.botChat ? "No messages yet" : "No Bot Chat yet. Open it to start one.");
   const when = b.lastActive ? ago(l, b.lastActive, "now") : "";
@@ -225,8 +297,8 @@ function Row({ bot: b, picture, activity, shown, onOpen, onNewChat }: { bot: Bot
     .filter(Boolean)
     .join(". ");
   return (
-    <li className={`inbox-row bots-row${activity ? ` is-${activity}` : ""}${b.hidden ? " is-hidden" : ""}`}>
-      <button className="bots-open" aria-label={label} onClick={onOpen}>
+    <li className={`inbox-row bots-row${activity ? ` is-${activity}` : ""}${b.hidden ? " is-hidden" : ""}${current ? " is-current" : ""}`}>
+      <button className="bots-open" aria-label={label} aria-current={current || undefined} onClick={onOpen}>
         <span className={`bots-face${b.color ? " has-color" : ""}`} style={b.color ? { background: b.color } : undefined} aria-hidden>
           {picture ? <img src={picture} alt="" /> : (b.name.trim()[0] ?? "?").toUpperCase()}
         </span>

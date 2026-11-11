@@ -364,7 +364,9 @@ describe("Chat list by keyboard", () => {
   it("reaches each chat with Tab, and Enter opens it", async () => {
     const s = await signedIn();
     button(/default/).focus();
-    // New chat and Search, labeled, come first.
+    // Hide chats ends the profile's row; New chat and Search, labeled, come next.
+    await s.user.tab();
+    expect(focused()).toBe(button("Hide chats (Ctrl+B)"));
     await s.user.tab();
     expect(focused()).toBe(button("New chat"));
     await s.user.tab();
@@ -617,6 +619,30 @@ describe("Existing shortcuts", () => {
     await s.user.keyboard("{Control>}b{/Control}");
     expect(screen.queryByRole("button", { name: /Nightly backup/ })).toBeNull();
     await s.user.keyboard("{Control>}b{/Control}");
+    expect(screen.getByRole("button", { name: /Nightly backup/ })).toBeTruthy();
+  });
+
+  it("hides the list from the button beside the profile switcher, and Ctrl+B brings it back", async () => {
+    const s = await signedIn();
+    const hide = screen.getByRole("button", { name: "Hide chats (Ctrl+B)" });
+    expect(hide.closest(".sb-head")?.querySelector(".profile-switch")).toBeTruthy();
+    expect(hide.getAttribute("title")).toBe("Hide chats (Ctrl+B)");
+    expect(hide.getAttribute("aria-keyshortcuts")).toBe("Control+B");
+    await s.user.click(hide);
+    expect(screen.queryByRole("button", { name: /Nightly backup/ })).toBeNull();
+    // A pointer click leaves no rail tip up beside the H, away from the pointer.
+    expect(document.querySelector(".rail-tip")).toBeNull();
+    await s.user.keyboard("{Control>}b{/Control}");
+    expect(screen.getByRole("button", { name: /Nightly backup/ })).toBeTruthy();
+    // From the keyboard, focus moves to the rail's button that brings the panel back.
+    screen.getByRole("button", { name: "Hide chats (Ctrl+B)" }).focus();
+    await s.user.keyboard("{Enter}");
+    expect(screen.queryByRole("button", { name: /Nightly backup/ })).toBeNull();
+    expect(focused()).toBe(screen.getByRole("button", { name: "Hide or show chats" }));
+    await s.user.keyboard("{Enter}");
+    expect(screen.getByRole("button", { name: /Nightly backup/ })).toBeTruthy();
+    await s.user.click(screen.getByRole("button", { name: "Hide chats (Ctrl+B)" }));
+    await s.user.click(screen.getByRole("button", { name: "Hide or show chats" }));
     expect(screen.getByRole("button", { name: /Nightly backup/ })).toBeTruthy();
   });
 

@@ -3,6 +3,8 @@ pub mod backup;
 pub mod browser;
 pub mod connect_steps;
 pub mod connection_attempts;
+#[cfg(target_os = "linux")]
+pub mod copied_files;
 pub mod defaults_file;
 pub mod dev_servers;
 pub mod display;
@@ -637,6 +639,21 @@ async fn attach_picked_files(app: tauri::AppHandle, attachable: State<'_, Attach
     Ok(paths)
 }
 
+/// Attaches the files the owner copied in a file manager and pasted into the composer, by path, as a drop does (ADR
+/// 0143). `[]`: the clipboard holds no local files. Elsewhere than Linux the webview's paste event carries the files.
+#[tauri::command]
+async fn attach_copied_files(app: tauri::AppHandle, attachable: State<'_, Attachable>) -> Result<Vec<String>, String> {
+    #[cfg(target_os = "linux")]
+    let paths = copied_files::read(&app).await?;
+    #[cfg(not(target_os = "linux"))]
+    let paths = {
+        let _ = app;
+        Vec::new()
+    };
+    attachable.add(paths.clone());
+    Ok(paths)
+}
+
 /// Takes a screenshot of a region or window the owner picks, staged privately as `<name>.png` for the composer.
 #[tauri::command]
 async fn screenshot_capture(
@@ -990,7 +1007,7 @@ async fn files_download(
 ) -> Result<Option<Downloaded>, RelayError> {
     let epoch = transfers.epoch();
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let mut dialog = app.dialog().file().set_title("Download from the Hermes server").set_file_name(name);
+    let mut dialog = app.dialog().file().set_title("Download from the Hermes server").set_file_name(suggested_name(&name, "download"));
     if let Some(window) = app.get_webview_window("main") {
         dialog = dialog.set_parent(&window);
     }
@@ -1331,6 +1348,29 @@ async fn token_delete(connection: Option<String>) -> Result<(), String> {
     saved_password::delete(saved_password::account(saved_password::TOKEN, connection.as_deref())?).await
 }
 
+/// A file name the webview or the server suggests, made fit to show in a Save dialog (#481): only its last part on
+/// either separator, so it names no folder; without control, invisible or direction-changing characters, which can make
+/// `invoice\u{202E}fdp.exe` read `invoiceexe.pdf`; and without `:` or the other characters Windows refuses, where `:`
+/// would name a drive or a stream. Leading and trailing spaces and dots go too. `fallback` when nothing is left.
+fn suggested_name(name: &str, fallback: &str) -> String {
+    let hidden = |c: char| {
+        c.is_control()
+            || matches!(c, '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}')
+    };
+    let last = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let kept: String = last.chars().filter(|&c| !hidden(c) && !matches!(c, ':' | '<' | '>' | '"' | '|' | '?' | '*')).collect();
+    let mut kept = kept.trim_matches(|c: char| c.is_whitespace() || c == '.').to_owned();
+    if kept.len() > 200 {
+        let end = (0..=200).rev().find(|&i| kept.is_char_boundary(i)).unwrap_or(0);
+        kept.truncate(end);
+    }
+    if kept.is_empty() {
+        fallback.to_owned()
+    } else {
+        kept
+    }
+}
+
 /// Writes `contents` where the owner picks in the native Save dialog, which asks before replacing a file. The webview
 /// never names the path. `None`: the owner cancelled, and nothing was written.
 async fn save_with_dialog(
@@ -1341,6 +1381,7 @@ async fn save_with_dialog(
     contents: impl AsRef<[u8]>,
 ) -> Result<Option<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
+    let file_name = suggested_name(&file_name, filter.1.first().map_or("export".to_owned(), |ext| format!("export.{ext}")).as_str());
     let mut dialog = app.dialog().file().set_title(title).set_file_name(file_name).add_filter(filter.0, filter.1);
     if let Some(window) = app.get_webview_window("main") {
         dialog = dialog.set_parent(&window);
@@ -1517,6 +1558,12 @@ async fn preview_read_local_image(picked: State<'_, PickedFiles>, path: String) 
 #[tauri::command]
 async fn preview_check_web(url: String, user_agent: String) -> Result<web_page::Framing, String> {
     web_page::check(&url, &user_agent).await
+}
+
+/// Whether a typed address's https:// form answers, so the address box opens it rather than http:// (ADR 0103).
+#[tauri::command]
+async fn preview_https_answers(url: String) -> Result<bool, String> {
+    web_page::https_answers(&url).await
 }
 
 /// A Markdown image the owner clicked to load, as a `data:` URL (`markdown_image::load`, ADR 0136).
@@ -1801,6 +1848,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             hermes_stat_files,
             hermes_read_preview,
             attach_picked_files,
+            attach_copied_files,
             stage_clipboard_file,
             hermes_request,
             hermes_transcribe,
@@ -1864,6 +1912,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             preview_read_local,
             preview_read_local_image,
             preview_check_web,
+            preview_https_answers,
             markdown_image_load,
             preview_open_in_browser,
             preview_page_open,
@@ -1938,6 +1987,24 @@ mod test_common;
 mod tests {
     use super::Transfers;
     use std::time::Duration;
+
+    #[test]
+    fn a_suggested_save_name_is_one_plain_file_name() {
+        let name = |s: &str| super::suggested_name(s, "download");
+        assert_eq!(name("invoice\u{202E}fdp.exe"), "invoicefdp.exe");
+        assert_eq!(name("a\u{2066}b\u{2069}c\u{200F}d\u{FEFF}e\u{0007}f\nġ.txt"), "abcdefġ.txt");
+        assert_eq!(name(r"..\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\x.bat"), "x.bat");
+        assert_eq!(name("../../etc/passwd"), "passwd");
+        assert_eq!(name("C:x.txt"), "Cx.txt");
+        assert_eq!(name("report.txt:stream"), "report.txtstream");
+        assert_eq!(name(r#"a<b>c"d|e?f*g.md"#), "abcdefg.md");
+        assert_eq!(name("  .hidden. "), "hidden");
+        for nothing in ["", "..", "/", r"dir\", "\u{202E}", " . "] {
+            assert_eq!(name(nothing), "download", "{nothing:?}");
+        }
+        assert_eq!(name("Chat — notes 2026.md"), "Chat — notes 2026.md");
+        assert_eq!(name(&"é".repeat(150)).len(), 200);
+    }
 
     #[test]
     fn a_chat_exports_only_as_markdown_json_or_an_html_page_each_with_its_own_extension() {

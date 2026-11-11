@@ -187,8 +187,30 @@ cmd_up() {
   wm_pid=$!
   save_state
 
-  # A private session bus: the app never reaches the owner's keyring, notifications or another Hermes Chat.
-  local dbus_out; dbus_out=$(dbus-daemon --session --fork --print-address=1 --print-pid=1) || die "the private D-Bus daemon didn't start"
+  # A private session bus: the app never reaches the owner's keyring, notifications or another Hermes Chat. Its config
+  # names no service directories, so it activates nothing: the standard session config would start a Secret Service
+  # (gnome-keyring), dconf or a portal from /usr/share/dbus-1/services, and hand it this shell's real HOME (#497). A
+  # keyring a feature needs is started by hand against this bus (features/launch.md). The daemon gets the run's HOME and
+  # XDG dirs too, so nothing it starts could reach the owner's.
+  cat >"$run/bus.conf" <<'XML'
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <keep_umask/>
+  <listen>unix:tmpdir=/tmp</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+XML
+  local dbus_out
+  dbus_out=$(env HOME="$run/home" XDG_DATA_HOME="$run/data" XDG_CONFIG_HOME="$run/config" XDG_CACHE_HOME="$run/cache" \
+    XDG_RUNTIME_DIR="$run/runtime" dbus-daemon --config-file="$run/bus.conf" --fork --print-address=1 --print-pid=1) ||
+    die "the private D-Bus daemon didn't start"
   dbus_addr=$(sed -n 1p <<<"$dbus_out"); dbus_pid=$(sed -n 2p <<<"$dbus_out")
   save_state
 
