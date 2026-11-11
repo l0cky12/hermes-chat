@@ -8,7 +8,7 @@
 //!   one `Command` argument: the host is one of three fixed strings, the port a number, the socket a path this module
 //!   made, and the target is the one Rust signed in with, checked as the sign-in tunnel checks it. No shell runs.
 //!   Windows' OpenSSH can't listen on a Unix socket, so there ssh listens on a loopback port instead (`LocalEnd`), and
-//!   each connection to it is used only if ssh holds its far end (ADR 0138).
+//!   each connection to it is used only if ssh holds its far end (ADR 0140).
 //! - A TCP listener Rust binds on `127.0.0.1:0` and keeps, so the port is ephemeral and never released for another
 //!   program to take before ssh binds it. Each connection the frame makes is copied to and from ssh's socket. On
 //!   Linux, a connection from a program run by another account is closed unanswered (`loopback_peer`, ADR 0105).
@@ -275,7 +275,7 @@ fn socket_path_ok(s: &str) -> bool {
 /// This computer's end of ssh's forward, for a server page and for the sign-in tunnel (tunnel.rs, ADR 0098). On Linux,
 /// a Unix socket in a private folder (`SocketDir`) that only the owner can connect to. On Windows, a loopback port
 /// picked just before ssh binds it: any program on this computer could connect to it, as to the relay's own port, and
-/// could take it before ssh binds it, so `connect` checks that ssh holds each connection's far end (ADR 0138).
+/// could take it before ssh binds it, so `connect` checks that ssh holds each connection's far end (ADR 0140).
 #[cfg(unix)]
 pub(crate) struct LocalEnd(SocketDir);
 #[cfg(windows)]

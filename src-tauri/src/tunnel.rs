@@ -4,7 +4,7 @@
 //! The local end is made as a server page's is (ADR 0114, ADR 0098): ssh forwards a Unix socket in a private folder,
 //! and Rust binds `127.0.0.1:0`, keeps the listener and relays each connection to the socket. The port the sign-in
 //! sends the password to is never free for another program to take while ssh signs in. On Windows ssh listens on a
-//! loopback port instead, and each connection to it is checked to reach ssh before anything is sent (ADR 0138).
+//! loopback port instead, and each connection to it is checked to reach ssh before anything is sent (ADR 0140).
 
 use crate::server_page::{self, LocalEnd, Ssh, Stderr};
 use std::process::Stdio;
@@ -24,7 +24,7 @@ pub enum TunnelError {
     Ssh(String),
     #[error("SSH didn't open the tunnel within {0}s.")]
     Timeout(u64),
-    /// The tunnel's port isn't known to be ssh's (Windows, ADR 0138): nothing, the password least of all, went to it.
+    /// The tunnel's port isn't known to be ssh's (Windows, ADR 0140): nothing, the password least of all, went to it.
     #[error("Hermes Chat didn't sign in through the SSH tunnel: {0}")]
     NotSsh(String),
 }
