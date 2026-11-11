@@ -12,9 +12,10 @@ export const MIN_PANE_HEIGHT_PX = 200;
 const DIVIDER_PX = 6;
 /** How far an arrow key moves the divider, as a share of the width. */
 const KEY_STEP = 0.05;
-/** A drag step whose relayout takes longer than this (long chats rewrap) makes the rest of the drag move a guide line,
+/** A drag step whose frame takes longer than this (long chats rewrap) makes the rest of the drag move a guide line,
  * and the panes resize once, on release. */
 const SLOW_STEP_MS = 50;
+type Box = { start: number; len: number };
 
 export type PaneSlot = {
   key: string;
@@ -65,23 +66,27 @@ export function Split({ panes, activeKey, onActivate, covered = false, dir = "ro
   const min = width ? Math.min(0.5, minPx / (width - DIVIDER_PX)) : 0.2;
   const shown = clamp(ratio, min);
 
-  const dragging = useRef<{ frame?: number; x: number; slow: boolean } | null>(null);
+  // `box`: where the split starts and how long it is, measured once when the drag starts, so a step reads no layout.
+  const dragging = useRef<{ frame?: number; x: number; slow: boolean; box?: Box } | null>(null);
   // Where the guide line is, while a slow drag is under way.
   const [ghost, setGhost] = useState<number | null>(null);
-  const ratioAt = (client: number) => {
+  const measure = (): Box | undefined => {
     const r = box.current?.getBoundingClientRect();
-    const [start, len] = r ? (row ? [r.left, r.width] : [r.top, r.height]) : [0, 0];
-    return len ? clamp((client - start - DIVIDER_PX / 2) / (len - DIVIDER_PX), Math.min(0.5, minPx / (len - DIVIDER_PX))) : undefined;
+    return r && (row ? { start: r.left, len: r.width } : { start: r.top, len: r.height });
   };
-  // Live while the panes keep up; once a step is slow, the guide line stands in for the rest of the drag.
+  const ratioAt = (client: number, at = measure()) =>
+    at?.len ? clamp((client - at.start - DIVIDER_PX / 2) / (at.len - DIVIDER_PX), Math.min(0.5, minPx / (at.len - DIVIDER_PX))) : undefined;
+  // Live while the panes keep up; once a step is slow, the guide line stands in for the rest of the drag. A step is
+  // timed to the next frame, since most of a slow one goes to painting the rewrapped chats after the render (#428).
   const dragTo = (d: NonNullable<typeof dragging.current>) => {
-    const to = ratioAt(d.x);
+    const to = ratioAt(d.x, d.box);
     if (to === undefined) return;
     if (d.slow) return setGhost(to);
     const t0 = performance.now();
     flushSync(() => setRatio(to));
-    void box.current?.offsetWidth; // Lays the panes out at their new widths now, to time it.
-    if (performance.now() - t0 > SLOW_STEP_MS) d.slow = true;
+    requestAnimationFrame(() => {
+      if (performance.now() - t0 > SLOW_STEP_MS) d.slow = true;
+    });
   };
   const endDrag = (clientX?: number) => {
     const d = dragging.current;
@@ -143,7 +148,7 @@ export function Split({ panes, activeKey, onActivate, covered = false, dir = "ro
                     if (e.button !== 0) return;
                     e.preventDefault();
                     e.currentTarget.setPointerCapture(e.pointerId);
-                    dragging.current = { x: row ? e.clientX : e.clientY, slow: false };
+                    dragging.current = { x: row ? e.clientX : e.clientY, slow: false, box: measure() };
                     setResizing(true);
                   }}
                   onPointerMove={(e) => {
