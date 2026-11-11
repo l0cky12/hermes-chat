@@ -367,6 +367,8 @@ const tooLarge = (size: number, max: number) => `It's ${mb(size)}. Previews go u
 
 /** Raster and vector images the webview shows in an `<img>`, where an SVG can't run scripts. */
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon"]);
+/** A `data:` URL of one of those types: what the file browser and the preview pane show as an image. */
+export const IMAGE_DATA_URL = /^data:image\/(png|jpeg|gif|webp|bmp|svg\+xml|x-icon|vnd\.microsoft\.icon);base64,[A-Za-z0-9+/=]*$/;
 const TEXT_TYPES = new Set([
   "application/json",
   "application/ld+json",
@@ -770,7 +772,10 @@ function parseRead(body: string, entry: RemoteEntry, support: PreviewSupport, as
   const max = "max" in support ? support.max : TEXT_PREVIEW_MAX_BYTES;
   const size = num(wire.size) ?? entry.size ?? 0;
   if (size > max) throw new RemoteFilesError(tooLarge(size, max));
-  if (support.kind === "image" && !asText) return { kind: "image", path, name, size, mime, dataUrl };
+  if (support.kind === "image" && !asText) {
+    if (!IMAGE_DATA_URL.test(dataUrl)) throw new RemoteFilesError("The server's answer isn't an image.");
+    return { kind: "image", path, name, size, mime, dataUrl };
+  }
   let bytes: Uint8Array;
   try {
     bytes = Uint8Array.from(atob(dataUrl.slice(m[0].length)), (c) => c.charCodeAt(0));

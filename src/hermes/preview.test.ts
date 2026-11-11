@@ -302,6 +302,13 @@ describe("Rendering untrusted file text", () => {
     expect(fenced("plain", "")).toBe("```\nplain\n```");
   });
 
+  it("names only a plain language on the fence, so the server's language can't end it", () => {
+    expect(fenced("x", "c++")).toBe("```c++\nx\n```");
+    expect(fenced("x", "objective-c")).toBe("```objective-c\nx\n```");
+    expect(fenced("x", "js\n```\n<img src=x>")).toBe("```\nx\n```");
+    expect(fenced("x", "py {.class}")).toBe("```\nx\n```");
+  });
+
   it("puts a no-network policy ahead of an HTML file", () => {
     const doc = sandboxedHtml("<img src=https://tracker.example/p.gif><script>alert(1)</script>");
     expect(doc.startsWith('<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:;')).toBe(true);
