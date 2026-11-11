@@ -1661,6 +1661,7 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 }
 .where-server { background: rgba(121, 192, 255, 0.13); color: #8ec8ff; }
 .where-local { background: rgba(74, 222, 128, 0.12); color: var(--ok); }
+.where-insecure { background: rgba(245, 184, 74, 0.14); color: var(--warn); }
 :root[data-mode="light"] .where-server { background: rgba(5, 80, 174, 0.1); color: #0550ae; }
 .preview-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .preview-state {

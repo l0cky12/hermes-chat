@@ -1517,6 +1517,12 @@ async fn preview_check_web(url: String, user_agent: String) -> Result<web_page::
     web_page::check(&url, &user_agent).await
 }
 
+/// Whether a typed address's https:// form answers, so the address box opens it rather than http:// (ADR 0103).
+#[tauri::command]
+async fn preview_https_answers(url: String) -> Result<bool, String> {
+    web_page::https_answers(&url).await
+}
+
 /// A Markdown image the owner clicked to load, as a `data:` URL (`markdown_image::load`, ADR 0136).
 #[tauri::command]
 async fn markdown_image_load(url: String) -> Result<String, String> {
@@ -1862,6 +1868,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             preview_read_local,
             preview_read_local_image,
             preview_check_web,
+            preview_https_answers,
             markdown_image_load,
             preview_open_in_browser,
             preview_page_open,
