@@ -980,7 +980,8 @@ div.route-result { display: flex; flex-direction: column; gap: 6px; }
 .rail-brand { cursor: pointer; }
 .profile-name { font-weight: 600; letter-spacing: -0.01em; font-size: calc(15rem / 14); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-switch { position: relative; min-width: 0; }
-.profile-btn { display: flex; align-items: center; gap: 4px; max-width: 220px; padding: 3px 6px; margin-left: -6px; border-radius: 7px; }
+.sb-hide { flex: none; margin-left: 8px; }
+.profile-btn { display: flex; align-items: center; gap: 4px; max-width: min(220px, calc(100% + 6px)); padding: 3px 6px; margin-left: -6px; border-radius: 7px; }
 .profile-btn:hover, .profile-btn[aria-expanded="true"] { background: var(--raised-2); }
 .profile-chev { color: var(--muted); flex: none; }
 .profile-menu {

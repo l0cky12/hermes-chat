@@ -3,7 +3,7 @@
 // rail's foot. Right-clicking a chat opens its menu (ChatMenu.tsx).
 import { memo, useCallback, useEffect, useId, useReducer, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Hourglass, LockOpen, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
+import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Hourglass, LockOpen, PanelLeftClose, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
 import { waitingLabel, type Handoff } from "../hermes/dispatched";
 import type { Chat, CheckTimes, ConnectionStatus, OtherProfile, OtherProfiles } from "../hermes/model";
 import { SOURCE_LABEL, isWaiting } from "../hermes/model";
@@ -1005,6 +1005,7 @@ export function ChatList({
   profileClone,
   onNew,
   onSearch,
+  onHide,
 }: {
   profile: string;
   bots?: ReactNode;
@@ -1064,6 +1065,8 @@ export function ChatList({
   /** The list's own New chat and Search buttons, labeled with their keys; the rail keeps icons for both. */
   onNew?: () => void;
   onSearch?: () => void;
+  /** Hides this panel, as Ctrl+B does. */
+  onHide?: () => void;
 }) {
   const { chatSectionsShown: shown, chatSectionsCollapsed: collapsed } = useSyncExternalStore(subscribeUIPrefs, getUIPrefs);
   const setCollapsed = (key: SectionKey, on: boolean) => {
@@ -1230,6 +1233,22 @@ export function ChatList({
           onSwitch={onSwitchProfile}
           clone={profileClone}
         />
+        {onHide && (
+          <button
+            className="icon-btn sb-hide"
+            title="Hide chats (Ctrl+B)"
+            aria-label="Hide chats (Ctrl+B)"
+            aria-keyshortcuts="Control+B"
+            onClick={(e) => {
+              onHide();
+              // The button goes with the panel, so a keyboard press moves focus to the rail's button that brings it
+              // back. A pointer click doesn't: focus there would show the rail's tip away from the pointer.
+              if (e.detail === 0) document.querySelector<HTMLElement>(".rail-brand")?.focus();
+            }}
+          >
+            <PanelLeftClose size={16} />
+          </button>
+        )}
       </div>
       {(onNew || onSearch) && (
         <div className="sb-actions">

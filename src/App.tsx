@@ -2884,6 +2884,7 @@ export function Main({
           profileClone={hermes.profileClone}
           onNew={() => newChat()}
           onSearch={() => openSearch()}
+          onHide={() => setListOpen(false)}
         />
       )}
       {botsOpen && (
