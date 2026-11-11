@@ -244,7 +244,8 @@ describe("Settings → Profiles", { timeout: 30_000 }, () => {
     }
     await user.click(screen.getByRole("button", { name: "Open Profiles" }));
     expect(await screen.findByRole("listbox", { name: "Profiles" })).toBeTruthy();
-  });
+    // A search mounts every searched tab, five times over.
+  }, 90_000);
 
   it("saves nothing while Hermes writes a description, and closes only when nothing is under way", async () => {
     const { server, user, list } = await launch();
@@ -273,6 +274,42 @@ describe("Settings → Profiles", { timeout: 30_000 }, () => {
     expect(within(dialog).getByText("The changes you made here aren't saved.")).toBeTruthy();
     await user.click(within(dialog).getByRole("button", { name: "Close without saving" }));
     expect(await screen.findByRole("tabpanel", { name: "Persona" })).toBeTruthy();
+  });
+
+  it("asks before Clone instead leaves a filled-in New profile, and offers neither while creating", async () => {
+    const { server, user } = await launch();
+    await user.click(screen.getByRole("button", { name: "New profile" }));
+    let dialog = screen.getByRole("dialog", { name: "New profile" });
+    await user.type(within(dialog).getByLabelText("Name"), "papers");
+    await user.click(within(dialog).getByRole("button", { name: /Clone one instead/ }));
+    expect(within(dialog).getByText("The changes you made here aren't saved.")).toBeTruthy();
+    await user.click(within(dialog).getByRole("button", { name: "Keep editing" }));
+    let finish = () => {};
+    server.beforeProfileCreate = () => {};
+    const gate = new Promise<void>((go) => (finish = go));
+    const create = server.rest["POST /api/profiles"];
+    server.rest["POST /api/profiles"] = async (req) => (await gate, create(req));
+    dialog = screen.getByRole("dialog", { name: "New profile" });
+    await user.click(within(dialog).getByRole("button", { name: /Create profile/ }));
+    expect(within(dialog).getByRole("button", { name: /Clone one instead/ })).toHaveProperty("disabled", true);
+    expect(within(dialog).getByLabelText("Name")).toHaveProperty("readOnly", true);
+    expect(within(dialog).getByLabelText("Provider")).toHaveProperty("disabled", true);
+    expect(within(dialog).getByLabelText("Persona (optional)")).toHaveProperty("readOnly", true);
+    finish();
+    expect(await screen.findByText("Created papers.")).toBeTruthy();
+  });
+
+  it("shows what Hermes saved when the form is closed without finishing", async () => {
+    const { user, list } = await launch();
+    await user.click(within(option(list, "research")).getByRole("button", { name: "Edit research" }));
+    let dialog = screen.getByRole("dialog", { name: "Edit profile: research" });
+    await user.click(within(dialog).getByRole("button", { name: /Write for me/ }));
+    await waitFor(() => expect(within(dialog).getByLabelText("Description")).toHaveProperty("value", "Writes and reviews code."));
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(option(screen.getByRole("listbox", { name: "Profiles" }), "research").textContent).toMatch(/Writes and reviews code\./));
+    await user.click(within(option(screen.getByRole("listbox", { name: "Profiles" }), "research")).getByRole("button", { name: "Edit research" }));
+    dialog = screen.getByRole("dialog", { name: "Edit profile: research" });
+    expect(within(dialog).getByLabelText("Description")).toHaveProperty("value", "Writes and reviews code.");
   });
 
   it("puts focus on the row selected after a delete, not on the row that went", async () => {

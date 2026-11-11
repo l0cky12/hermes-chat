@@ -428,7 +428,11 @@ export function ProfileSettings({ wiring }: { wiring: ProfilesWiring }) {
             setNotice(result.notice);
             void read(result.select, result.edit).then((now) => !result.edit && now && focusRow(now));
           }}
-          onClose={() => setDialog(undefined)}
+          // Closed without finishing: what saved meanwhile (Write for me, a field before one that failed) shows.
+          onClose={() => {
+            setDialog(undefined);
+            void read();
+          }}
         />
       )}
       {dialog?.kind === "delete" && (
@@ -656,7 +660,9 @@ function ModelPicker({
   onChange,
   optional,
   labelId,
+  disabled,
 }: {
+  disabled?: boolean;
   catalog?: CatalogProvider[];
   provider: string;
   model: string;
@@ -672,7 +678,7 @@ function ModelPicker({
   const models = providers.find((p) => p.slug === provider)?.models ?? [];
   return (
     <div className="profile-model" role="group" aria-labelledby={labelId}>
-      <select aria-label={f.provider} value={provider} onChange={(e) => onChange(e.target.value, "")}>
+      <select aria-label={f.provider} value={provider} disabled={disabled} onChange={(e) => onChange(e.target.value, "")}>
         {optional && <option value="">{f.noProvider}</option>}
         {provider && !known && (
           <option value={provider} translate="no">
@@ -685,7 +691,7 @@ function ModelPicker({
           </option>
         ))}
       </select>
-      <input aria-label={f.modelName} list={listId} className="mono" value={model} disabled={!provider} onChange={(e) => onChange(provider, e.target.value)} />
+      <input aria-label={f.modelName} list={listId} className="mono" value={model} disabled={!provider || disabled} onChange={(e) => onChange(provider, e.target.value)} />
       <datalist id={listId}>
         {models.map((m) => (
           <option key={m} value={m} />
@@ -984,6 +990,7 @@ function ProfileForm({
                 className={isDefault ? undefined : "mono"}
                 autoFocus
                 value={name}
+                readOnly={saving}
                 maxLength={isDefault ? DISPLAY_NAME_MAX + 10 : 70}
                 aria-invalid={!!issue && (row ? nameChanged : !!name)}
                 aria-describedby={nameNote}
@@ -1024,6 +1031,7 @@ function ProfileForm({
                 {row ? f.model : f.modelOptional}
               </span>
               <ModelPicker
+                disabled={saving || writing}
                 catalog={catalog}
                 provider={provider}
                 model={model}
@@ -1058,14 +1066,14 @@ function ProfileForm({
                 <label className="field-label" htmlFor={soulId}>
                   {f.persona}
                 </label>
-                <textarea id={soulId} className="persona-text profile-soul" rows={4} placeholder={f.personaDefault} value={soul} onChange={(e) => setSoul(e.target.value)} />
+                <textarea id={soulId} className="persona-text profile-soul" rows={4} readOnly={saving} placeholder={f.personaDefault} value={soul} onChange={(e) => setSoul(e.target.value)} />
                 <div className="set-hint">{f.personaHint}</div>
               </div>
             )}
             {!row && <SettingNote>{f.keysNote}</SettingNote>}
             {stateNote(states.create)}
             {!row && onClone && (
-              <button className="link-btn profile-clone-link" onClick={onClone}>
+              <button className="link-btn profile-clone-link" disabled={saving} onClick={() => leave(onClone)}>
                 {f.cloneInstead}
               </button>
             )}

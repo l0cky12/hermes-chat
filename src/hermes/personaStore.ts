@@ -101,25 +101,32 @@ export class PersonaStore {
   /**
    * Waits for the saves of the keys `move` moves, then moves each kept copy where it says (null: drops it), in storage
    * and memory: a profile renamed or deleted (profileLocalData.ts). Keys only in storage are the caller's to move.
+   * Each new copy is written before the old one goes; one storage refuses stays where it was, and the move throws
+   * once the rest are done.
    */
   async move(move: (key: string) => string | null | undefined): Promise<void> {
     await Promise.all([...this.saves].filter(([key]) => move(key) !== undefined).map(([, done]) => done));
+    let failed = 0;
     for (const [key, raw] of [...this.memory]) {
       const to = move(key);
       if (to === undefined) continue;
+      // A copy only memory held (storage refused it before) stays only in memory under its new key.
+      const onlyInMemory = this.notStored.has(key);
+      if (to !== null && raw !== null && !onlyInMemory)
+        try {
+          this.storage.setItem(to, raw);
+        } catch {
+          failed++;
+          continue;
+        }
       this.storage.removeItem(key);
       this.memory.delete(key);
-      const notStored = this.notStored.delete(key);
+      this.notStored.delete(key);
       if (to === null) continue;
       this.memory.set(to, raw);
-      if (raw === null) continue;
-      try {
-        this.storage.setItem(to, raw);
-        if (notStored) this.notStored.add(to);
-      } catch {
-        this.notStored.add(to);
-      }
+      if (onlyInMemory) this.notStored.add(to);
     }
+    if (failed) throw new Error(`${failed} persona ${failed === 1 ? "copy" : "copies"} couldn't be moved.`);
   }
 
   /** Notes a save of `key` under way until `done` settles. */

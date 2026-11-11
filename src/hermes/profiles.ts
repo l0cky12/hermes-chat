@@ -253,8 +253,8 @@ export class ProfilesApi {
       return { name: str(res.name) ?? to };
     } catch (e) {
       if (!(e instanceof ProfileError) || e.failure.kind !== "lost" || name === "default") throw e;
-      const rows = await this.list().catch(() => undefined);
-      if (rows && !rows.some((p) => p.name === name) && rows.some((p) => p.name === to)) return { name: to };
+      const names = await this.names();
+      if (names && !names.has(name) && names.has(to)) return { name: to };
       throw e;
     }
   }
@@ -318,8 +318,19 @@ export class ProfilesApi {
 
   /** Whether Hermes lists `name` now; undefined when the list can't be read. */
   private async listed(name: string): Promise<boolean | undefined> {
+    return (await this.names())?.has(name);
+  }
+
+  /**
+   * Every name Hermes lists, to settle a change whose answer was lost; undefined unless every row of the list names
+   * its profile, since a row this app can't read might be the very profile in question.
+   */
+  private async names(): Promise<Set<string> | undefined> {
     try {
-      return (await this.list()).some((p) => p.name === name);
+      const res = await deadline(this.rest("GET", "api/profiles"), this.timeouts.readMs, "listing profiles");
+      if (!isObj(res) || !Array.isArray(res.profiles)) return undefined;
+      const names = res.profiles.map((r) => (isObj(r) && typeof r.name === "string" ? r.name : undefined));
+      return names.every((n): n is string => n !== undefined) ? new Set(names) : undefined;
     } catch {
       return undefined;
     }

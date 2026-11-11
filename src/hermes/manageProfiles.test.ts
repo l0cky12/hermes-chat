@@ -144,6 +144,21 @@ describe("Settings → Profiles' calls", () => {
     expect(await failureOf(api.remove("work"))).toEqual({ kind: "lost", message: "The connection dropped." });
   });
 
+  it("doesn't settle a lost delete or rename by a list with a row it can't read", async () => {
+    const { server, api } = await signedIn();
+    const real = server.rest["GET /api/profiles"];
+    server.rest["GET /api/profiles"] = (req) => {
+      const listed = real(req) as { profiles: Record<string, unknown>[] };
+      return { profiles: [...listed.profiles.filter((p) => p.name !== "work" && p.name !== "research"), { id: "work" }] };
+    };
+    server.profileGatewayStop = Promise.reject(new Error("The connection dropped."));
+    server.profileGatewayStop.catch(() => {});
+    expect(await failureOf(api.remove("work"))).toEqual({ kind: "lost", message: "The connection dropped." });
+    server.profileGatewayStop = undefined;
+    server.profileRenameLost = "The connection dropped.";
+    expect(await failureOf(api.rename("research", "papers"))).toEqual({ kind: "lost", message: "The connection dropped." });
+  });
+
   it("counts a profile's chats as Hermes counts them, and leaves out a count it can't read", async () => {
     const { api } = await signedIn();
     expect(await api.chatCount("default")).toBe(0);

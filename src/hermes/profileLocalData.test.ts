@@ -156,6 +156,26 @@ describe("renaming a profile on this computer", () => {
     expect(localStorage.getItem(kept)).toBe("half a thought");
   });
 
+  it("keeps a persona edit under the old name when its new copy can't be written, so reopening still has it", async () => {
+    // A full storage refuses every new copy, for the persona store and the walk alike.
+    const refusing = {
+      get length() {
+        return localStorage.length;
+      },
+      key: (i: number) => localStorage.key(i),
+      getItem: (k: string) => localStorage.getItem(k),
+      removeItem: (k: string) => localStorage.removeItem(k),
+      setItem: (k: string, v: string) => {
+        if (k.includes('"coder"')) throw new DOMException("full", "QuotaExceededError");
+        localStorage.setItem(k, v);
+      },
+    };
+    const persona = new PersonaStore(refusing);
+    persona.setDraft(personaKey(home, "work"), { text: "Be terse.", base: { content: "", exists: false }, at: 1 });
+    await expect(renameProfileLocally(home, "work", "coder", { persona, storage: refusing })).rejects.toBeInstanceOf(LocalMoveError);
+    expect(new PersonaStore(localStorage).draft(personaKey(home, "work"))?.text).toBe("Be terse.");
+  });
+
   it("moves the Drafts held in memory with their undo history, and forgets them with the profile", async () => {
     const store = drafts(localStorage);
     const from = draftKey(home, "work", "chat-1");
