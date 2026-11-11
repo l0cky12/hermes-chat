@@ -13,6 +13,7 @@ export function ProfilePicker({
   onPick,
   disabled,
   label,
+  defaultName,
 }: {
   /** The profile the tab shows now. */
   value: string;
@@ -24,6 +25,8 @@ export function ProfilePicker({
   disabled?: boolean;
   /** What the list picks, for screen readers, e.g. "Profile whose skills are shown". */
   label: string;
+  /** The display name Hermes keeps for `default`, shown before its id (ADR 0144). */
+  defaultName?: string;
 }) {
   const names = profileChoices(profiles, shown, value);
   return (
@@ -37,7 +40,7 @@ export function ProfilePicker({
     >
       {names.map((n) => (
         <option key={n} value={n}>
-          {n === shown ? `${n} (in use)` : n}
+          {(n === "default" && defaultName ? `${defaultName} (default)` : n) + (n === shown ? " (in use)" : "")}
         </option>
       ))}
     </select>

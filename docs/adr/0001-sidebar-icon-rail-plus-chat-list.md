@@ -4,7 +4,7 @@ The sidebar has two parts. On the far left is a narrow icon rail (about 60 px) t
 
 ## Consequences
 
-- With Search and New chat moved to the rail, the list panel's header becomes the profile switcher: the current profile's name with a ▾ (for example "default ▾"), which opens the list of profiles with a filter box. Profiles are switched here, not in Settings. The header shows the full name because a rail button would only have room for a first letter, and several profiles share one. Ctrl+B or clicking the "H" hides the list panel, leaving the rail and the chat pane. With the panel hidden, the owner switches chats through Search (Ctrl+K).
+- With Search and New chat moved to the rail, the list panel's header becomes the profile switcher: the current profile's name with a ▾ (for example "default ▾"), which opens the list of profiles with a filter box. Profiles are switched here, not in Settings. The header shows the full name because a rail button would only have room for a first letter, and several profiles share one. Ctrl+B, clicking the "H", or the "Hide chats" button at the right end of the profile switcher's row hides the list panel, leaving the rail and the chat pane. With the panel hidden, the owner switches chats through Search (Ctrl+K).
 - Connection status is a dot on the rail: green for Connected, amber for Reconnecting, grey for Offline. An Unsecure connection adds an amber ring and an open-lock mark to the dot. The full wording appears only in the dot's tooltip and in Connection settings, so the list panel has no footer.
 
 ## Considered options

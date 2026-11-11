@@ -1,3 +1,4 @@
+import { errorText } from "../hermes/values";
 // Mermaid diagrams from a reply's ```mermaid fences, drawn as SVG. Mermaid is loaded only when the first diagram is
 // drawn, in its own chunk. A reply carries text from web pages, files and tool output, so a prompt injection can write
 // a diagram, and drawing it must never make the app fetch anything (the same threat as ADR 0099's remote images).
@@ -49,7 +50,7 @@ function contained(svg: string): string {
 }
 
 const firstLine = (error: unknown) =>
-  (error instanceof Error ? error.message : String(error))
+  errorText(error)
     .split("\n")
     .map((line) => line.trim())
     .find(Boolean)

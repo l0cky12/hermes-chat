@@ -6,6 +6,7 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{AppendHeaders, IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
+use hermes_chat::lock::Locked;
 use hermes_chat::mcp::Edit;
 use hermes_chat::transport::{Dashboard, ExtraHeader, SignIn, TransportError};
 use serde_json::{json, Value};
@@ -47,7 +48,7 @@ async fn config(State(s): State<Shared>, headers: HeaderMap, Query(q): Query<Has
     if !signed(&headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let mut s = s.lock().unwrap();
+    let mut s = s.locked();
     let profile = q.get("profile").cloned().unwrap_or_default();
     if q.get("include_defaults").map(String::as_str) != Some("false") {
         // The default read expands `${VAR}`: an edit built on it would write secrets into config.yaml.
@@ -62,12 +63,12 @@ async fn config(State(s): State<Shared>, headers: HeaderMap, Query(q): Query<Has
 
 async fn save_env(State(s): State<Shared>, Query(q): Query<HashMap<String, String>>, Json(body): Json<Value>) -> Response {
     let profile = q.get("profile").cloned().unwrap_or_default();
-    s.lock().unwrap().env.push((profile, body["key"].as_str().unwrap().to_owned(), body["value"].as_str().unwrap().to_owned()));
+    s.locked().env.push((profile, body["key"].as_str().unwrap().to_owned(), body["value"].as_str().unwrap().to_owned()));
     Json(json!({"ok": true})).into_response()
 }
 
 async fn replace(State(s): State<Shared>, headers: HeaderMap, Query(q): Query<HashMap<String, String>>, Json(body): Json<Value>) -> Response {
-    let mut s = s.lock().unwrap();
+    let mut s = s.locked();
     let profile = q.get("profile").cloned().unwrap_or_default();
     s.puts.push((profile.clone(), body.clone()));
     if std::mem::take(&mut s.refuse_echoing_header) {
@@ -97,7 +98,7 @@ async fn stub() -> (Dashboard, Shared) {
 
 async fn stub_with(extra: Vec<ExtraHeader>) -> (Dashboard, Shared) {
     let shared: Shared = Default::default();
-    shared.lock().unwrap().servers.insert(
+    shared.locked().servers.insert(
         "work".into(),
         json!({
             "fs": {"command": "npx", "args": ["-y", "pkg"], "env": {"API_KEY": "s3cret-value", "REF": "${REF}"}, "enabled": false},
@@ -136,7 +137,7 @@ async fn an_edit_changes_one_server_from_the_raw_config_and_reads_it_back() {
         )
         .await
         .unwrap();
-    let s = shared.lock().unwrap();
+    let s = shared.locked();
     assert_eq!(s.expanded_reads, 0);
     assert_eq!(s.puts.len(), 1);
     assert_eq!(s.puts[0].0, "work");
@@ -163,7 +164,7 @@ async fn a_new_bearer_token_goes_to_the_profiles_env_before_the_map() {
         )
         .await
         .unwrap();
-    let s = shared.lock().unwrap();
+    let s = shared.locked();
     assert_eq!(s.env, vec![("work".to_owned(), "MCP_WEB_API_KEY".to_owned(), "tok-1234".to_owned())]);
     assert_eq!(s.servers["work"]["web"], json!({"url": "https://new.example/mcp", "headers": {"Authorization": "Bearer ${MCP_WEB_API_KEY}"}}));
 }
@@ -171,7 +172,7 @@ async fn a_new_bearer_token_goes_to_the_profiles_env_before_the_map() {
 #[tokio::test]
 async fn a_refusal_that_repeats_the_map_never_shows_a_secret() {
     let (dashboard, shared) = stub().await;
-    shared.lock().unwrap().refuse_echoing = true;
+    shared.locked().refuse_echoing = true;
     let err = dashboard
         .mcp_edit("work", &edit(json!({"name": "fs", "server": {"transport": "stdio", "command": "npx", "args": [], "env": [{"key": "API_KEY"}]}})))
         .await
@@ -183,7 +184,7 @@ async fn a_refusal_that_repeats_the_map_never_shows_a_secret() {
 #[tokio::test]
 async fn a_write_that_reads_back_otherwise_is_not_called_saved() {
     let (dashboard, shared) = stub().await;
-    shared.lock().unwrap().drop_env_on_write = true;
+    shared.locked().drop_env_on_write = true;
     let err = dashboard
         .mcp_edit("work", &edit(json!({"name": "fs", "server": {"transport": "stdio", "command": "npx", "args": [], "env": [{"key": "API_KEY"}]}})))
         .await
@@ -194,7 +195,7 @@ async fn a_write_that_reads_back_otherwise_is_not_called_saved() {
 #[tokio::test]
 async fn a_token_saved_before_a_refused_map_is_not_called_unchanged() {
     let (dashboard, shared) = stub().await;
-    shared.lock().unwrap().refuse_echoing = true;
+    shared.locked().refuse_echoing = true;
     let err = dashboard
         .mcp_edit(
             "work",
@@ -206,7 +207,7 @@ async fn a_token_saved_before_a_refused_map_is_not_called_unchanged() {
     assert!(matches!(&err, TransportError::McpUnconfirmed(m) if m.contains("saved the new bearer token")), "{err:?}");
     let shown = err.to_string();
     assert!(shown.starts_with("Not confirmed: ") && !shown.contains("tok-new") && !shown.contains("s3cret"), "{shown}");
-    assert_eq!(shared.lock().unwrap().env.len(), 1);
+    assert_eq!(shared.locked().env.len(), 1);
 }
 
 #[tokio::test]
@@ -226,7 +227,7 @@ async fn an_edit_refused_before_sending_writes_nothing() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("404"), "{err}");
-    let s = shared.lock().unwrap();
+    let s = shared.locked();
     assert!(s.puts.is_empty() && s.env.is_empty());
 }
 
@@ -255,13 +256,13 @@ async fn the_relay_passes_only_the_mcp_writes_the_screen_makes() {
         let err = dashboard.request(method, path, body.map(|b| b.to_string())).await.unwrap_err();
         assert!(matches!(err, TransportError::NotRelayed(_)), "{method} {path}: {err:?}");
     }
-    assert!(shared.lock().unwrap().puts.is_empty(), "the whole-map replace went out from the webview");
+    assert!(shared.locked().puts.is_empty(), "the whole-map replace went out from the webview");
 }
 
 #[tokio::test]
 async fn a_refusal_that_repeats_an_extra_request_header_never_shows_it() {
     let (dashboard, shared) = stub_with(vec![ExtraHeader { name: "CF-Access-Client-Secret".into(), value: "gateway-s3cret-value".into() }]).await;
-    shared.lock().unwrap().refuse_echoing_header = true;
+    shared.locked().refuse_echoing_header = true;
     let err = dashboard
         .mcp_edit("work", &edit(json!({"name": "fs", "server": {"transport": "stdio", "command": "npx", "args": [], "env": [{"key": "API_KEY"}]}})))
         .await

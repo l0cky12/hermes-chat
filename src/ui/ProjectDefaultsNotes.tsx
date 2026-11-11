@@ -5,8 +5,7 @@ import { useState } from "react";
 import { EFFORT_LABEL, shortName, type ModelPick } from "../hermes/models";
 import type { NewChatSettings, Origin, ProjectDefaults } from "../hermes/projectDefaults";
 import { composing, useReturnFocus } from "./bits";
-
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
+import { errorText } from "../hermes/values";
 
 function originLabel(from: Origin, project?: string) {
   if (from === "chat") return "chosen for this chat";
@@ -132,7 +131,7 @@ export function ApplyDefaults({
       await onApply({ model, folder });
       onClose(`Applied ${project}'s defaults to this chat.`);
     } catch (e) {
-      setError(messageOf(e));
+      setError(errorText(e));
       setBusy(false);
     }
   };

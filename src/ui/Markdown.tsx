@@ -10,6 +10,7 @@ import { PreviewLink } from "./previewContext";
 import { splitBlocks, type Blocks } from "./markdownBlocks";
 import { rehypePlugins, remarkPlugins } from "./markdownPipeline";
 import { drawDiagram, drawnAlready, subscribeTheme, themeNow, type Drawing } from "./mermaid";
+import { errorText } from "../hermes/values";
 
 /** Rendered Markdown's text: code as it reads, whatever highlighting and find marks it is wrapped in. */
 function textOf(node: ReactNode): string {
@@ -58,7 +59,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   // The language its `<code>` element names in its class, `language-ts`, or "" for none.
   const language = (typeof code?.className === "string" && code.className.match(/language-(\S+)/)?.[1]) || "";
   const box = useRef<HTMLDivElement>(null);
-  const [copied, setCopied] = useState(false);
+  const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
   const [showSource, setShowSource] = useState(false);
   const diagram = language === "mermaid" && code?.["data-growing"] === undefined;
   const drawing = useDrawing(diagram ? textOf(children) : "", diagram, box);
@@ -76,13 +77,18 @@ function CodeBlock({ children }: { children?: ReactNode }) {
         <button
           className="code-copy"
           onClick={() => {
-            void navigator.clipboard.writeText(textOf(children));
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
+            const show = (state: "copied" | "failed") => {
+              setCopy(state);
+              setTimeout(() => setCopy("idle"), 1200);
+            };
+            navigator.clipboard.writeText(textOf(children)).then(
+              () => show("copied"),
+              () => show("failed"),
+            );
           }}
         >
-          {copied ? <Check size={13} /> : <Copy size={13} />}
-          {copied ? "Copied" : "Copy"}
+          {copy === "copied" ? <Check size={13} /> : <Copy size={13} />}
+          {copy === "copied" ? "Copied" : copy === "failed" ? "Couldn't copy" : "Copy"}
         </button>
       </div>
       {drawing && "note" in drawing && <div className="code-note">{drawing.note}</div>}
@@ -120,7 +126,7 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
         // `//host/p.png` has no scheme for Rust to read; the app's own page is `tauri:` on Linux, so it can't lend one.
         invoke<string>("markdown_image_load", { url: src.startsWith("//") ? `https:${src}` : src }).then(
           (dataUrl) => setLoad({ dataUrl }),
-          (error: unknown) => setLoad({ failed: error instanceof Error ? error.message : String(error) }),
+          (error: unknown) => setLoad({ failed: errorText(error) }),
         );
       }}
     >
@@ -139,7 +145,11 @@ const components: Components = {
       {children}
     </PreviewLink>
   ),
-  img: ({ src, alt, title }) => <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} title={title} />,
+  // Keyed by address: a click loads one image, and Markdown whose text changes under it can put another in its place (#488).
+  img: ({ src, alt, title }) => {
+    const address = typeof src === "string" ? src : undefined;
+    return <MarkdownImage key={address} src={address} alt={alt} title={title} />;
+  },
 };
 
 /**

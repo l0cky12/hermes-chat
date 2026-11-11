@@ -24,11 +24,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rust:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
+      # tauri::generate_context! needs frontendDist (../dist) to exist at compile time.
+      - run: mkdir -p dist
+        shell: bash
+      # Every test binary, as on Linux: the library's unit tests and each file in tests/.
+      - run: cargo test --lib --tests
+        working-directory: src-tauri
+      # Lints the cfg(windows) code, which Linux CI never compiles.
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: src-tauri
+
   nsis:
     runs-on: windows-latest
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -38,16 +62,11 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: node scripts/release/version.mjs check "$TAG"
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri
       - run: npm ci
-      - name: Rust unit tests
-        run: cargo test --lib
-        working-directory: src-tauri
-        env:
-          RUSTFLAGS: ""
       - name: The relay refuses a program run by another account
         shell: pwsh
         working-directory: src-tauri
@@ -67,7 +86,7 @@ jobs:
             sleep 30
           done
           exit 1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: hermes-chat-windows-nsis
           path: src-tauri/target/release/bundle/nsis/*.exe
@@ -75,13 +94,14 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: nsis
+    needs: [rust, nsis]
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: hermes-chat-windows-nsis
           path: ${{ runner.temp }}/nsis

@@ -4,6 +4,7 @@
 // providers"). Rows and defaults are trimmed copies of `TOOL_CATEGORIES` and `config_defaults.py` there.
 import type { RestRequest } from "./fakeHermes";
 import { RestError } from "./pipe";
+import { isObj } from "./values";
 
 type Kind = "stt" | "tts";
 
@@ -72,7 +73,6 @@ const SCHEMA = {
 };
 
 const answered = (status: number, detail: string) => new RestError(status, JSON.stringify({ detail }));
-const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
 function merge(into: Record<string, unknown>, from: Record<string, unknown>) {
   for (const [k, v] of Object.entries(from)) {

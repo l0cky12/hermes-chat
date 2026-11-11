@@ -1,6 +1,7 @@
 // Context files of a project (GLOSSARY.md "Context file", ADR 0135): the files in `<main folder>/context` on the
 // server, which every chat in the project gets.
 import { previewSupport, type RemoteEntry } from "./remoteFiles";
+import { isObj } from "./values";
 
 /** How a file's text is had: as it is, by extraction (`pdf`, `docx`), or not at all (`binary`). */
 export type ContextKind = "text" | "pdf" | "docx" | "binary";
@@ -306,8 +307,6 @@ const ATTACHED = "\n\n--- Attached Context ---\n\n";
 
 /** A message as it is submitted with what its chat is told of its projects' context files, which no client shows. */
 export const withContext = (text: string, blocks: readonly string[]) => (blocks.length ? `${text}${ATTACHED}${blocks.join("\n\n")}` : text);
-
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** A ledger entry as stored; undefined if it isn't one. */
 export function toEntry(v: unknown): LedgerEntry | undefined {

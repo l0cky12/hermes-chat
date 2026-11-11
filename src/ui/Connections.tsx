@@ -9,8 +9,7 @@ import { stageLabel, type TestOutcome } from "../hermes/setup";
 import { ago, composing, routeLabel, useReturnFocus } from "./bits";
 import { useLocale, type Locale } from "../i18n/locale";
 import { SettingNote, SettingsSection } from "./SettingRows";
-
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
+import { errorText } from "../hermes/values";
 
 export const lastUsedText = (c: SavedConnection, l: Locale) => (c.lastUsedAt ? `Used ${ago(l, c.lastUsedAt)}` : "Never connected");
 
@@ -221,7 +220,7 @@ export function ConnectionManager({
     try {
       next = { state: "done", outcome: await onTest(c) };
     } catch (e) {
-      next = { state: "cant", why: messageOf(e) };
+      next = { state: "cant", why: errorText(e) };
     }
     if (runs.current.get(c.id) === n) setTests((t) => ({ ...t, [c.id]: next }));
   };
@@ -498,7 +497,7 @@ export function RemoveConnection({
               try {
                 await onRemove();
               } catch (e) {
-                setError(messageOf(e));
+                setError(errorText(e));
                 setBusy(false);
               }
             }}

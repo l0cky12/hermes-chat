@@ -1,6 +1,6 @@
 // A chat as a file, saved where the owner picks in the native Save dialog (`chat_export` and `chat_export_image` in
 // src-tauri/src/lib.rs): as Markdown to read, as JSON in Hermes's own session-export shape, which keeps each message's
-// time and which Import reads back, or as a PNG picture to share (exportImage.ts). The Export dialog (ui/ExportChat.tsx) chooses the format, what goes in and what is redacted, and shows the
+// time and which Import reads back, as a PNG picture to share (exportImage.ts), or as an inert web page (snapshotPage.ts). The Export dialog (ui/ExportChat.tsx) chooses the format, what goes in and what is redacted, and shows the
 // file before it is saved (ADR 0076). Never in it: connection details or attachment contents. Only JSON has the
 // chat's session id, so an import of it is skipped where Hermes already has the chat.
 import { invoke } from "@tauri-apps/api/core";
@@ -9,6 +9,7 @@ import { findSecrets } from "./secrets";
 import { asError } from "./tauriPipe";
 import { LOAD_ERROR_ID } from "./transport";
 import type { ImagePage } from "./exportImage";
+import { snapshotPage } from "./snapshotPage";
 import type { ChatUsage } from "./usage";
 
 /** Shows the Save dialog for `format` and writes `text` where the owner picks. The path saved to, or `null` if cancelled. */
@@ -84,7 +85,7 @@ const chosen = (chat: Chat, choice: Omit<ExportChoice, "redact">) =>
 const oneLine = (title: string) => title.replace(/\s+/g, " ").trim();
 
 /** `text` with every place each of `redact` is replaced, and how many `[redacted]` it has for them. */
-function redactText(text: string, redact: readonly string[]): { text: string; places: number } {
+export function redactText(text: string, redact: readonly string[]): { text: string; places: number } {
   const spans: [number, number][] = [];
   for (const r of redact) if (r) for (let i = text.indexOf(r); i >= 0; i = text.indexOf(r, i + 1)) spans.push([i, i + r.length]);
   spans.sort((a, b) => a[0] - b[0]);
@@ -149,29 +150,29 @@ function exportNotes(chat: Chat, exportedAt: Date, choice: Omit<ExportChoice, "r
  */
 type Write = (chat: Chat, exportedAt: Date, choice: Omit<ExportChoice, "redact">, text: (s: string) => string, places: () => number) => string;
 
-export type ExportFormat = "markdown" | "json" | "image";
+export type ExportFormat = "markdown" | "json" | "image" | "html";
+
+/** The chat as Markdown: the title, the notes as a block quote, then the chosen items. */
+const markdownWrite: Write = (chat, exportedAt, choice, text, places) => {
+  const title = text(`# ${oneLine(chat.title) || "Untitled chat"}`);
+  const body = text(
+    chosen(chat, choice)
+      .flatMap((i) => block(i, choice.attachments))
+      .join("\n\n"),
+  );
+  const notes = exportNotes(chat, exportedAt, choice, places(), { strong: (s) => `**${s}**`, code: (s) => `\`${s}\`` });
+  return [title, notes.map((n) => (n ? `> ${n}` : ">")).join("\n"), ...(body ? [body] : [])].join("\n\n") + "\n";
+};
+
+const markdownTitle = (file: string) => file.slice(0, file.indexOf("\n")).replace(/^# /, "");
 
 /**
  * Each format the Export dialog offers. A `text` format's file is what `write` returns. An `image` format's `write`
- * returns its `ImagePage` as JSON, which `exportImage.ts` draws and Save writes as a PNG.
+ * returns its `ImagePage` as JSON, which `exportImage.ts` draws and Save writes as a PNG. A `page` format's `write`
+ * returns the Markdown that `snapshotPage` makes the page from.
  */
-export const EXPORT_FORMATS: Record<ExportFormat, { label: string; extension: string; kind: "text" | "image"; write: Write; title: (file: string) => string }> = {
-  markdown: {
-    label: "Markdown",
-    extension: "md",
-    kind: "text",
-    write: (chat, exportedAt, choice, text, places) => {
-      const title = text(`# ${oneLine(chat.title) || "Untitled chat"}`);
-      const body = text(
-        chosen(chat, choice)
-          .flatMap((i) => block(i, choice.attachments))
-          .join("\n\n"),
-      );
-      const notes = exportNotes(chat, exportedAt, choice, places(), { strong: (s) => `**${s}**`, code: (s) => `\`${s}\`` });
-      return [title, notes.map((n) => (n ? `> ${n}` : ">")).join("\n"), ...(body ? [body] : [])].join("\n\n") + "\n";
-    },
-    title: (file) => file.slice(0, file.indexOf("\n")).replace(/^# /, ""),
-  },
+export const EXPORT_FORMATS: Record<ExportFormat, { label: string; extension: string; kind: "text" | "image" | "page"; write: Write; title: (file: string) => string }> = {
+  markdown: { label: "Markdown", extension: "md", kind: "text", write: markdownWrite, title: markdownTitle },
   json: {
     label: "JSON",
     extension: "json",
@@ -186,6 +187,7 @@ export const EXPORT_FORMATS: Record<ExportFormat, { label: string; extension: st
     write: (chat, exportedAt, choice, text, places) => JSON.stringify(imagePage(chat, exportedAt, choice, text, places)),
     title: (file) => (JSON.parse(file) as ImagePage).title,
   },
+  html: { label: "HTML page", extension: "html", kind: "page", write: markdownWrite, title: markdownTitle },
 };
 
 /**
@@ -322,10 +324,12 @@ export type ExportPreview = {
   secrets: { text: string; kind: string; times: number; redacted: boolean }[];
   /** Each picked text and how many places it replaced: 0 when it isn't in what the draft includes now. */
   picked: { text: string; times: number }[];
+  /** Why a page can't be made from what the draft includes, with `text` empty. Only a `page` format has one. */
+  problem?: string;
 };
 
 export function exportPreview(chat: Chat, draft: ExportDraft, exportedAt: Date, format: ExportFormat = "markdown"): ExportPreview {
-  const { write, title, extension } = EXPORT_FORMATS[format];
+  const { write, title, extension, kind } = EXPORT_FORMATS[format];
   const texts: string[] = [];
   write(chat, exportedAt, draft, (s) => (texts.push(s), s), () => 0);
   const times = (text: string) => texts.reduce((n, s) => n + s.split(text).length - 1, 0);
@@ -333,13 +337,15 @@ export function exportPreview(chat: Chat, draft: ExportDraft, exportedAt: Date, 
   for (const s of texts.flatMap((t) => findSecrets(t)))
     if (!secrets.has(s.text)) secrets.set(s.text, { text: s.text, kind: s.kind, times: times(s.text), redacted: !draft.kept.has(s.text) });
   const redact = [...[...secrets.values()].filter((s) => s.redacted).map((s) => s.text), ...draft.picked];
-  const text = render(format, chat, exportedAt, { leftOut: draft.leftOut, toolCalls: draft.toolCalls, attachments: draft.attachments, redact });
+  const file = render(format, chat, exportedAt, { leftOut: draft.leftOut, toolCalls: draft.toolCalls, attachments: draft.attachments, redact });
+  const page = kind === "page" ? snapshotPage({ markdown: file, redacted: redact }) : undefined;
   return {
-    text,
+    text: !page ? file : "page" in page ? page.page.html : "",
     // The title as the file has it, so a redaction there is one in the name too.
-    fileName: exportFileName(title(text), extension),
+    fileName: exportFileName(title(file), extension),
     secrets: [...secrets.values()],
     picked: draft.picked.map((t) => ({ text: t, times: t ? times(t) : 0 })),
+    ...(page && "problem" in page && { problem: page.problem }),
   };
 }
 

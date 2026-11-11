@@ -327,6 +327,11 @@ export class ModelSettingsApi {
     return new URLSearchParams({ ...extra, profile: this.profile() }).toString();
   }
 
+  /** The providers and models Hermes offers, as Settings → Model lists them (`GET /api/model/options`). */
+  async providers(): Promise<CatalogProvider[]> {
+    return catalogFrom(await this.rest("GET", `api/model/options?${this.q()}`));
+  }
+
   /** `GET /api/model/options`, `/api/model/auxiliary`, `/api/config` and `/api/delegation/routing`. */
   async load(): Promise<ModelSettings> {
     const [options, aux, config, routing] = await Promise.all([

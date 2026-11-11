@@ -339,6 +339,7 @@ function SupportBundle({
   const [note, setNote] = useState<string>();
   const [saving, setSaving] = useState(false);
   const included = parts.filter((p) => chosen.has(p.id));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const text = useMemo(() => bundleText(included, { profile, connection, now }), [chosen]);
   const counts = redactionCounts(included);
   const all = text.split("\n");

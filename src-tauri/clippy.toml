@@ -1,0 +1,3 @@
+disallowed-methods = [
+  { path = "std::sync::Mutex::lock", reason = "take it with `Locked::locked` (src/lock.rs): a panic under the lock must not make every later caller panic (#491)" },
+]

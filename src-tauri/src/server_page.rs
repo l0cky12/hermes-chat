@@ -24,9 +24,11 @@
 //! object that is closed with the app), so even an app that crashes takes it along.
 
 use crate::live::ConnectionId;
+use crate::lock::Locked;
 use crate::loopback_peer::{self, Peers};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::ffi::OsString;
 use std::path::Path;
 #[cfg(unix)]
@@ -154,10 +156,10 @@ impl ServerPage {
         format!("{host}:{}", self.port)
     }
 
-    /// The same page through the tunnel's local end: only the host and port change.
-    pub fn local_url(&self, local_port: u16) -> Url {
+    /// The same page through the tunnel's local end at `host`: only the host and port change.
+    pub fn local_url(&self, host: &str, local_port: u16) -> Url {
         let mut u = self.url.clone();
-        u.set_host(Some("127.0.0.1")).expect("an http(s) URL takes an IP host");
+        u.set_host(Some(host)).expect("an http(s) URL takes a loopback host");
         u.set_port(Some(local_port)).expect("an http(s) URL takes a port");
         u
     }
@@ -480,8 +482,7 @@ fn spawner() -> std::sync::mpsc::Sender<Job> {
                 .expect("start the ssh spawner thread");
             Mutex::new(tx)
         })
-        .lock()
-        .unwrap()
+        .locked()
         .clone()
 }
 
@@ -534,20 +535,10 @@ pub(crate) struct Ssh {
 }
 
 impl Ssh {
-    /// Starts `command`. On Windows it starts suspended, goes into the app's job, so it ends with the app, and into a
-    /// job of its own, so it ends with this `Ssh`, and only then runs: nothing it starts can be outside both.
+    /// Starts `command`, in a job of its own that ends with this `Ssh` (`job::start`).
     #[cfg(windows)]
     pub(crate) fn start(command: &mut Command) -> std::io::Result<Ssh> {
-        const CREATE_SUSPENDED: u32 = 0x0000_0004;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let child = command.kill_on_drop(true).creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED).spawn()?;
-        let (Some(handle), Some(pid)) = (child.raw_handle(), child.id()) else {
-            return Err(std::io::Error::other("ssh exited as it started"));
-        };
-        job::ends_with_app(handle)?;
-        let own = job::Own::new()?;
-        own.add(handle)?;
-        job::resume(pid)?;
+        let (child, own) = job::start(command)?;
         Ok(Ssh { child, _job: own })
     }
 
@@ -570,8 +561,10 @@ impl std::ops::DerefMut for Ssh {
     }
 }
 
+/// Windows jobs, which end a program together with everything it started: ssh here, and a speech-to-text engine
+/// (local_stt.rs).
 #[cfg(windows)]
-mod job {
+pub(crate) mod job {
     use std::sync::OnceLock;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32};
@@ -621,23 +614,25 @@ mod job {
         made.map(|h| h as HANDLE).map_err(std::io::Error::from_raw_os_error)
     }
 
-    /// Puts the process `handle` in the app's job, so it ends with this app.
-    pub fn ends_with_app(handle: std::os::windows::io::RawHandle) -> std::io::Result<()> {
-        add(the_job()?, handle)
+    /// Starts `command` with no console window. It starts suspended, goes into the app's job, so it ends with the app,
+    /// and into a job of its own, so it ends with the `Own` returned, and only then runs: nothing it starts can be
+    /// outside both.
+    pub(crate) fn start(command: &mut tokio::process::Command) -> std::io::Result<(tokio::process::Child, Own)> {
+        const CREATE_SUSPENDED: u32 = 0x0000_0004;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let child = command.kill_on_drop(true).creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED).spawn()?;
+        let (Some(handle), Some(pid)) = (child.raw_handle(), child.id()) else {
+            return Err(std::io::Error::other("it exited as it started"));
+        };
+        add(the_job()?, handle)?;
+        let own = Own(killing_job()? as usize);
+        add(own.0 as HANDLE, handle)?;
+        resume(pid)?;
+        Ok((child, own))
     }
 
     /// A job of one process's own, nested in the app's. Dropping it ends that process and everything it started.
-    pub struct Own(usize);
-
-    impl Own {
-        pub fn new() -> std::io::Result<Own> {
-            killing_job().map(|job| Own(job as usize))
-        }
-
-        pub fn add(&self, process: std::os::windows::io::RawHandle) -> std::io::Result<()> {
-            add(self.0 as HANDLE, process)
-        }
-    }
+    pub(crate) struct Own(usize);
 
     impl Drop for Own {
         fn drop(&mut self) {
@@ -647,7 +642,7 @@ mod job {
     }
 
     /// Lets process `pid`, started suspended, run.
-    pub fn resume(pid: u32) -> std::io::Result<()> {
+    fn resume(pid: u32) -> std::io::Result<()> {
         let mut resumed = false;
         // SAFETY: plain Win32 calls on handles opened and closed here; `entry` is sized as Thread32First asks.
         unsafe {
@@ -673,7 +668,7 @@ mod job {
         if resumed {
             Ok(())
         } else {
-            Err(std::io::Error::other("couldn't let ssh run after putting it in its job"))
+            Err(std::io::Error::other("couldn't let it run after putting it in its job"))
         }
     }
 }
@@ -691,7 +686,7 @@ impl Stderr {
                 if n == 0 {
                     break;
                 }
-                let mut k = kept.lock().unwrap();
+                let mut k = kept.locked();
                 k.extend_from_slice(&buf[..n]);
                 let over = k.len().saturating_sub(STDERR_KEPT);
                 k.drain(..over);
@@ -700,7 +695,7 @@ impl Stderr {
     }
 
     pub(crate) fn text(&self) -> String {
-        String::from_utf8_lossy(&self.0.lock().unwrap()).trim().to_owned()
+        String::from_utf8_lossy(&self.0.locked()).trim().to_owned()
     }
 
     /// The last line about a forward the server couldn't open (`channel 2: open failed: connect failed: …`).
@@ -741,12 +736,25 @@ struct Served {
     jar: Jar,
 }
 
-/// Every server page is served at `127.0.0.1`, and cookies don't tell ports apart, so in one jar each page would get
-/// every other server page's cookies.
+/// Every server page's tunnel listens on `127.0.0.1`, and cookies don't tell ports apart, so in one jar each page would
+/// get every other server page's cookies. On Linux each jar is a WebKit context of its own (`page_view`). On Windows the
+/// page is a frame in the app's one WebView2, so each jar is a host name instead (`host`, ADR 0144).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Jar {
     target: String,
     origin: url::Origin,
+}
+
+/// Keyed afresh each run, so the names, and the cookies WebView2 keeps on disk under them, last only the run, as Linux's
+/// jars do (ADR 0081).
+static RUN: std::sync::LazyLock<std::hash::RandomState> = std::sync::LazyLock::new(std::hash::RandomState::new);
+
+impl Jar {
+    /// The jar's own name under `localhost`, which WebView2 resolves to loopback (RFC 6761): `p` and 16 hex digits.
+    pub fn host(&self) -> String {
+        use std::hash::BuildHasher;
+        format!("p{:016x}.localhost", RUN.hash_one(self))
+    }
 }
 
 #[cfg(test)]
@@ -787,6 +795,7 @@ struct Started {
     address: Address,
     stderr: Stderr,
     listener: TcpListener,
+    ipv6: Option<TcpListener>,
 }
 
 impl ServerPages {
@@ -798,9 +807,9 @@ impl ServerPages {
             return Err(ServerPageError::Io("That page key isn't one Hermes Chat makes.".into()));
         }
         let target = checked_target(target).ok_or(ServerPageError::NoSshTarget)?.to_owned();
-        let mut open = self.open.lock().unwrap();
+        let mut open = self.open.locked();
         {
-            let mut stopped = self.stopped.lock().unwrap();
+            let mut stopped = self.stopped.locked();
             if let Some(i) = stopped.iter().position(|k| k == key) {
                 stopped.remove(i);
                 return Err(ServerPageError::Closed(None));
@@ -819,7 +828,7 @@ impl ServerPages {
 
     /// Lets go of a tunnel `begin` registered that won't be opened: its connection went meanwhile.
     pub fn give_up(&self, starting: Starting) {
-        self.open.lock().unwrap().remove(&starting.key);
+        self.open.locked().remove(&starting.key);
     }
 
     /// Opens the tunnel `begin` registered, to `page`: waits until ssh listens and the page's port answers, then
@@ -837,16 +846,18 @@ impl ServerPages {
             started = start(program, &target, &page) => started,
             why = &mut stopped => Err(ServerPageError::Closed(why.unwrap_or(None))),
         };
-        let Started { mut child, end, address, stderr, listener } = match started {
+        let Started { mut child, end, address, stderr, listener, ipv6 } = match started {
             Ok(s) => s,
             Err(e) => {
-                self.open.lock().unwrap().remove(&key);
+                self.open.locked().remove(&key);
                 return Err(e);
             }
         };
         let local_port = listener.local_addr().map_err(|e| ServerPageError::Io(e.to_string()))?.port();
-        if let Some(open) = self.open.lock().unwrap().get_mut(&key) {
-            open.served = Some(Served { local_port, jar: Jar { target: target.clone(), origin: page.url.origin() } });
+        let jar = Jar { target: target.clone(), origin: page.url.origin() };
+        let host = if cfg!(windows) { jar.host() } else { "127.0.0.1".to_owned() };
+        if let Some(open) = self.open.locked().get_mut(&key) {
+            open.served = Some(Served { local_port, jar });
         }
 
         let pages = Arc::clone(self);
@@ -855,7 +866,22 @@ impl ServerPages {
             // Everything the tunnel holds lives in this task: ending it drops the listener, the copies, ssh (killed on
             // drop) and the socket's folder.
             let _end = end;
-            let serving = serve(listener, address, Peers::Account(loopback_peer::this_account()));
+            let peers = Peers::Account(loopback_peer::this_account());
+            let on_ipv6 = {
+                let address = address.clone();
+                async move {
+                    match ipv6 {
+                        Some(ipv6) => serve(ipv6, address, peers).await,
+                        None => std::future::pending().await,
+                    }
+                }
+            };
+            let serving = async move {
+                tokio::select! {
+                    never = serve(listener, address, peers) => never,
+                    never = on_ipv6 => never,
+                }
+            };
             tokio::pin!(serving);
             let why = tokio::select! {
                 status = child.wait() => {
@@ -871,15 +897,15 @@ impl ServerPages {
                     let _ = child.wait().await;
                     why.unwrap_or(None)
                 }
-                () = &mut serving => Some("The tunnel stopped listening.".into()),
+                never = &mut serving => match never {},
             };
-            pages.open.lock().unwrap().remove(&task_key);
+            pages.open.locked().remove(&task_key);
             if let Some(message) = why {
                 on_event(PageEvent::Closed { message });
             }
         });
 
-        Ok(Opened { id: key, url: page.local_url(local_port).to_string(), target, at: page.at() })
+        Ok(Opened { id: key, url: page.local_url(&host, local_port).to_string(), target, at: page.at() })
     }
 
     /// Closes the tunnel `key`, starting or open. The webview asked, so it isn't told. A key not seen yet is kept, so
@@ -887,14 +913,14 @@ impl ServerPages {
     pub fn close(&self, key: &str) {
         // `open` stays locked until the key is kept, in the order `begin` locks them, so a `begin` for the same key can't
         // slip in between finding nothing and keeping it.
-        let mut open = self.open.lock().unwrap();
+        let mut open = self.open.locked();
         match open.remove(key) {
             Some(o) => {
                 drop(open);
                 let _ = o.stop.send(None);
             }
             None if key_ok(key) => {
-                let mut stopped = self.stopped.lock().unwrap();
+                let mut stopped = self.stopped.locked();
                 if stopped.len() >= STOPPED_KEPT {
                     stopped.pop_front();
                 }
@@ -906,7 +932,7 @@ impl ServerPages {
 
     /// Closes every tunnel, starting or open, telling each page `why`: at exit.
     pub fn close_all(&self, why: &str) {
-        for (_, o) in self.open.lock().unwrap().drain() {
+        for (_, o) in self.open.locked().drain() {
             let _ = o.stop.send(Some(why.to_owned()));
         }
     }
@@ -916,7 +942,7 @@ impl ServerPages {
     /// connection's tunnels stay.
     pub fn close_for(&self, connection: &ConnectionId, keep_target: Option<&str>, why: &str) {
         let keep = keep_target.and_then(checked_target);
-        let mut open = self.open.lock().unwrap();
+        let mut open = self.open.locked();
         let going: Vec<String> = open.iter().filter(|(_, o)| o.connection == *connection && Some(o.target.as_str()) != keep).map(|(k, _)| k.clone()).collect();
         for key in going {
             if let Some(o) = open.remove(&key) {
@@ -930,11 +956,11 @@ impl ServerPages {
             return None;
         }
         let port = url.port_or_known_default()?;
-        self.open.lock().unwrap().values().find_map(|o| o.served.as_ref().filter(|s| s.local_port == port)).map(|s| s.jar.clone())
+        self.open.locked().values().find_map(|o| o.served.as_ref().filter(|s| s.local_port == port)).map(|s| s.jar.clone())
     }
 
     pub fn len(&self) -> usize {
-        self.open.lock().unwrap().len()
+        self.open.locked().len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1024,8 +1050,37 @@ async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started
     if end.named_in(&said) {
         return Err(ServerPageError::Ssh(said));
     }
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| ServerPageError::Io(e.to_string()))?;
-    Ok(Started { child, end, address, stderr, listener })
+    let (listener, ipv6) = listen(cfg!(windows)).await.map_err(|e| ServerPageError::Io(e.to_string()))?;
+    Ok(Started { child, end, address, stderr, listener, ipv6 })
+}
+
+/// The tunnel's listeners: on `127.0.0.1`, and with `ipv6` on `[::1]` at the same port. On Windows a page's name under
+/// `localhost` (`Jar::host`) resolves to both, so a program that listened on `[::1]` at the port would otherwise get the
+/// frame's requests and cookies (ADR 0144). The second is `None` without `ipv6`, and when this computer has no `::1`,
+/// where nothing can listen. Any other failure there tries another port, since something may hold that one.
+async fn listen(ipv6: bool) -> std::io::Result<(TcpListener, Option<TcpListener>)> {
+    for _ in 0..16 {
+        let ipv4 = TcpListener::bind(("127.0.0.1", 0)).await?;
+        if !ipv6 {
+            return Ok((ipv4, None));
+        }
+        let port = ipv4.local_addr()?.port();
+        match TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)).await {
+            Ok(ipv6) => return Ok((ipv4, Some(ipv6))),
+            Err(e) if no_ipv6(&e) => return Ok((ipv4, None)),
+            Err(_) => continue,
+        }
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "no port was free on both 127.0.0.1 and [::1]"))
+}
+
+/// Whether binding `[::1]` failed because this computer has no IPv6 or no `::1`.
+fn no_ipv6(e: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    const NO_FAMILY: i32 = libc::EAFNOSUPPORT;
+    #[cfg(windows)]
+    const NO_FAMILY: i32 = windows_sys::Win32::Networking::WinSock::WSAEAFNOSUPPORT;
+    e.kind() == std::io::ErrorKind::AddrNotAvailable || e.raw_os_error() == Some(NO_FAMILY)
 }
 
 /// Whether anything answers through a new tunnel. ssh closing the connection with nothing said means the server
@@ -1069,14 +1124,35 @@ fn client_hello() -> Vec<u8> {
     [&[0x16, 0x03, 0x01][..], &sized(&handshake)].concat()
 }
 
-/// Accepts connections on `listener` and copies each one to and from ssh's `socket`. Runs until dropped; returns only
-/// if accepting fails. A connection from anyone but `peers` is closed unanswered (ADR 0105, ADR 0138).
-pub(crate) async fn serve(listener: TcpListener, socket: Address, peers: Peers) {
+/// How long the relay waits after a failed accept before the next, so running out of file descriptors doesn't spin.
+const ACCEPT_RETRY: Duration = Duration::from_millis(100);
+
+/// Accepts connections on `listener` and copies each one to and from ssh's `socket`, until dropped: it never returns.
+/// A failed accept (a connection reset before it was taken, or no file descriptors left) passes, so it is logged and
+/// the next tried a moment later. A connection from anyone but `peers` is closed unanswered (ADR 0105, ADR 0138).
+pub(crate) async fn serve(listener: TcpListener, socket: Address, peers: Peers) -> Infallible {
+    let listener = &listener;
+    serve_with(move || listener.accept(), socket, peers).await
+}
+
+/// `serve`, taking each connection from `accept`.
+async fn serve_with<A, F>(mut accept: A, socket: Address, peers: Peers) -> Infallible
+where
+    A: FnMut() -> F,
+    F: std::future::Future<Output = std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)>>,
+{
     let mut conns = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
-            accepted = listener.accept() => {
-                let Ok((mut tcp, _)) = accepted else { return };
+            accepted = accept() => {
+                let (mut tcp, _) = match accepted {
+                    Ok(accepted) => accepted,
+                    Err(e) => {
+                        eprintln!("hermes-chat: a relay couldn't accept a connection, and will try again: {e}");
+                        tokio::time::sleep(ACCEPT_RETRY).await;
+                        continue;
+                    }
+                };
                 let socket = socket.clone();
                 conns.spawn(async move {
                     if !loopback_peer::admits(peers, &tcp) {
@@ -1146,9 +1222,63 @@ mod tests {
 
     #[test]
     fn the_frame_loads_the_same_page_on_the_local_end() {
-        assert_eq!(page("http://localhost:3000/a/b?q=1#f").local_url(41234).as_str(), "http://127.0.0.1:41234/a/b?q=1#f");
-        assert_eq!(page("https://[::1]/x").local_url(40000).as_str(), "https://127.0.0.1:40000/x");
+        assert_eq!(page("http://localhost:3000/a/b?q=1#f").local_url("127.0.0.1", 41234).as_str(), "http://127.0.0.1:41234/a/b?q=1#f");
+        assert_eq!(page("https://[::1]/x").local_url("127.0.0.1", 40000).as_str(), "https://127.0.0.1:40000/x");
+        let host = Jar::of("hermes", "http://localhost:3000").host();
+        assert_eq!(page("http://localhost:3000/a").local_url(&host, 41234).as_str(), format!("http://{host}:41234/a"));
         assert_eq!(page("http://0.0.0.0:8000").at(), "0.0.0.0:8000");
+    }
+
+    #[cfg(any(target_os = "linux", windows))]
+    #[tokio::test]
+    async fn the_tunnel_listens_on_both_loopbacks_at_one_port_and_relays_both() {
+        let (ipv4, ipv6) = listen(true).await.unwrap();
+        let ipv6 = ipv6.expect("this computer has ::1");
+        let port = ipv4.local_addr().unwrap().port();
+        assert_eq!(ipv6.local_addr().unwrap(), (std::net::Ipv6Addr::LOCALHOST, port).into());
+        assert!(TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)).await.is_err(), "no other program can listen at [::1] on the port");
+
+        let (address, _end) = ssh_answering("the page").await;
+        let peers = Peers::Account(loopback_peer::this_account());
+        let (ipv4, ipv6) = (tokio::spawn(serve(ipv4, address.clone(), peers)), tokio::spawn(serve(ipv6, address, peers)));
+        for host in ["127.0.0.1", "[::1]"] {
+            let mut s = tokio::net::TcpStream::connect(format!("{host}:{port}")).await.unwrap();
+            s.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await.unwrap();
+            let mut got = String::new();
+            s.read_to_string(&mut got).await.unwrap();
+            assert!(got.ends_with("the page"), "this account's program is relayed on {host}: {got:?}");
+        }
+        ipv4.abort();
+        ipv6.abort();
+    }
+
+    #[tokio::test]
+    async fn a_computer_without_ipv6_gets_the_ipv4_listener_alone() {
+        #[cfg(unix)]
+        let no_family = libc::EAFNOSUPPORT;
+        #[cfg(windows)]
+        let no_family = windows_sys::Win32::Networking::WinSock::WSAEAFNOSUPPORT;
+        assert!(no_ipv6(&std::io::Error::from_raw_os_error(no_family)), "IPv6 is off");
+        assert!(no_ipv6(&std::io::ErrorKind::AddrNotAvailable.into()), "no ::1");
+        assert!(!no_ipv6(&std::io::ErrorKind::AddrInUse.into()), "something holds [::1] at the port: try another");
+        assert!(!no_ipv6(&std::io::ErrorKind::PermissionDenied.into()));
+        let (_, ipv6) = listen(false).await.unwrap();
+        assert!(ipv6.is_none(), "Linux serves its pages at 127.0.0.1 alone");
+    }
+
+    #[test]
+    fn each_jar_has_a_host_name_of_its_own_and_keeps_it() {
+        let a = Jar::of("hermes", "http://localhost:3000");
+        assert_eq!(a.host(), Jar::of("hermes", "http://localhost:3000").host(), "opened again, the same name");
+        let names: std::collections::HashSet<String> =
+            [&a, &Jar::of("hermes", "http://localhost:8080"), &Jar::of("other", "http://localhost:3000"), &Jar::of("hermes", "https://localhost:3000")]
+                .map(Jar::host)
+                .into();
+        assert_eq!(names.len(), 4, "another port, server or scheme gets another name: {names:?}");
+        for name in &names {
+            let label = name.strip_suffix(".localhost").unwrap();
+            assert!(label.len() == 17 && label.starts_with('p') && label[1..].bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()), "{name}");
+        }
     }
 
     #[test]
@@ -1430,7 +1560,7 @@ while True:
     fn events() -> (Events, impl Fn(PageEvent) + Send + 'static) {
         let got: Events = Arc::default();
         let into = got.clone();
-        (got, move |e| into.lock().unwrap().push(e))
+        (got, move |e| into.locked().push(e))
     }
 
     #[cfg(unix)]
@@ -1463,14 +1593,15 @@ while True:
         assert!(pages.is_empty());
         // The webview closed it, so it isn't told.
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(got.lock().unwrap().is_empty());
+        assert!(got.locked().is_empty());
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn a_port_nothing_listens_on_says_so_and_leaves_nothing_running() {
         let fake = Fake::new("closed-port", "ok");
-        let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        let closed = crate::test_common::refusing();
+        let port = closed.addr.port();
         let pages = Arc::new(ServerPages::default());
         let e = open_page(&pages, &fake.program, "hermes", &format!("http://127.0.0.1:{port}/"), |_| {}).await.unwrap_err();
         match &e {
@@ -1518,8 +1649,8 @@ while True:
         let opened = open_page(&pages, &fake.program, "hermes", &format!("http://localhost:{port}/"), on_event).await.unwrap();
         let (pid, socket, _) = fake.ran();
         unsafe { libc::kill(pid, libc::SIGKILL) };
-        until("the page hears", || !got.lock().unwrap().is_empty()).await;
-        assert!(matches!(&got.lock().unwrap()[0], PageEvent::Closed { message } if message.starts_with("ssh ended")));
+        until("the page hears", || !got.locked().is_empty()).await;
+        assert!(matches!(&got.locked()[0], PageEvent::Closed { message } if message.starts_with("ssh ended")));
         until("the socket's folder is gone", || !socket.parent().unwrap().exists()).await;
         assert!(pages.is_empty());
         pages.close(&opened.id);
@@ -1544,13 +1675,13 @@ while True:
         // Signed in through `a` again: only `b`'s page goes.
         pages.close_for(&one(), Some("a"), "moved");
         until("b's ssh ends", || ended(pid_b)).await;
-        assert_eq!(*got_b.lock().unwrap(), [PageEvent::Closed { message: "moved".into() }]);
+        assert_eq!(*got_b.locked(), [PageEvent::Closed { message: "moved".into() }]);
         assert!(!ended(pid_a));
         assert_eq!(pages.len(), 1);
 
         pages.close_for(&one(), None, "signed out");
         until("a's ssh ends", || ended(pid_a)).await;
-        assert_eq!(*got_a.lock().unwrap(), [PageEvent::Closed { message: "signed out".into() }]);
+        assert_eq!(*got_a.locked(), [PageEvent::Closed { message: "signed out".into() }]);
         assert!(pages.is_empty());
     }
 
@@ -1782,8 +1913,8 @@ while True:
         let e = open_page(&pages, &fake.program, "hermes", &format!("http://localhost:{port}/"), |_| {}).await.unwrap_err();
         assert!(matches!(e, ServerPageError::PortClosed { .. }), "{e:?}");
         // A closed https port is still found out.
-        let closed = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
-        let e = open_page(&pages, &fake.program, "hermes", &format!("https://localhost:{closed}/"), |_| {}).await.unwrap_err();
+        let closed = crate::test_common::refusing();
+        let e = open_page(&pages, &fake.program, "hermes", &format!("https://localhost:{}/", closed.addr.port()), |_| {}).await.unwrap_err();
         assert!(matches!(e, ServerPageError::PortClosed { .. }), "{e:?}");
     }
 
@@ -1858,6 +1989,15 @@ while True:
     /// The relay's port, in front of a stand-in for ssh's end that answers every request with `body`, serving programs
     /// run by `account`. The second value keeps the stand-in's end open.
     async fn relay_for(body: &'static str, account: loopback_peer::Account) -> (u16, impl Sized) {
+        let (address, end) = ssh_answering(body).await;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(serve(listener, address, Peers::Account(account)));
+        (port, end)
+    }
+
+    /// A stand-in for ssh's end of a tunnel, answering every request with `body`.
+    async fn ssh_answering(body: &'static str) -> (Address, impl Sized) {
         #[cfg(unix)]
         let (ssh, address, end) = {
             let dir = SocketDir::new().unwrap();
@@ -1881,10 +2021,33 @@ while True:
                 });
             }
         });
+        (address, end)
+    }
+
+    /// A failed accept (a connection reset before it was taken, or no file descriptors left) doesn't end the relay: the
+    /// next connection is still relayed.
+    #[cfg(any(target_os = "linux", windows))]
+    #[tokio::test]
+    async fn the_relay_outlives_a_failed_accept() {
+        let (address, _end) = ssh_answering("the dashboard").await;
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        tokio::spawn(serve(listener, address, Peers::Account(account)));
-        (port, end)
+        tokio::spawn(async move {
+            let mut failed = false;
+            let accept = || {
+                let fail = !std::mem::replace(&mut failed, true);
+                let listener = &listener;
+                async move {
+                    if fail {
+                        return Err(std::io::Error::from(std::io::ErrorKind::ConnectionAborted));
+                    }
+                    listener.accept().await
+                }
+            };
+            serve_with(accept, address, Peers::Account(loopback_peer::this_account())).await
+        });
+        let got = tokio::time::timeout(Duration::from_secs(5), get(&format!("http://127.0.0.1:{port}/"))).await.expect("the relay didn't answer");
+        assert!(got.as_deref().is_ok_and(|g| g.ends_with("the dashboard")), "{got:?}");
     }
 
     /// An account this test never runs as.

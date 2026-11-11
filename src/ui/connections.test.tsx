@@ -9,7 +9,6 @@ import { FakeHermes, row } from "../hermes/fakeHermes";
 import type { Pipe, PipeEvent } from "../hermes/pipe";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 const ALPHA = "https://alpha.example.com";
 const BRAVO = "https://bravo.example.com";
@@ -207,7 +206,7 @@ describe("Saved connections", () => {
     // If local cleanup fails after closing the active transport, Main cannot keep using it.
     const { savedDefaults } = await import("../hermes/projectDefaults");
     let failCleanup: (error: Error) => void = () => {};
-    const unreadable = vi.spyOn(savedDefaults, "forgetScopes").mockImplementationOnce(() => new Promise((_, reject) => { failCleanup = reject; }));
+    const unreadable = vi.spyOn(savedDefaults, "moveScopes").mockImplementationOnce(() => new Promise((_, reject) => { failCleanup = reject; }));
     await userEvent.click(screen.getByRole("button", { name: "Remove Home" }));
     await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: /Remove connection/ }));
     expect(await screen.findByText("Removing Home…")).toBeTruthy();

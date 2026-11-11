@@ -20,6 +20,7 @@ import {
 import { chatImage, type ImagePage } from "../hermes/exportImage";
 import { composing } from "./bits";
 import { useModal } from "./modal";
+import { errorText } from "../hermes/values";
 
 const WHO: Record<string, string> = { user: "You", assistant: "Hermes", thinking: "Hermes, thinking" };
 
@@ -41,6 +42,7 @@ const ABOUT: Record<ExportFormat, string> = {
   markdown: "A Markdown file of the chat, to read.",
   json: "A JSON file of the chat in Hermes's own session format, with each message's time. Import transcripts reads it back.",
   image: "A PNG picture of the chosen messages, to share. Tool calls show their command and output.",
+  html: "A web page of the chat, the page a snapshot would publish. It runs no script, loads nothing, links only to web and mail addresses, and shows images as their address.",
 };
 
 /** The picture drawn for one preview, so a draw that finishes after the owner changed something is never shown or saved. */
@@ -79,13 +81,15 @@ export function ExportChatDialog({
   const [note, setNote] = useState<string>();
   const [saving, setSaving] = useState(false);
   const pre = useRef<HTMLPreElement>(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const preview = useMemo(() => exportPreview(shot, draft, at, format), [draft, format]);
   const messages = shot.items.filter(isMessage);
   const tools = shot.items.filter((i) => i.kind === "tool" || i.kind === "approval").length;
   const attached = shot.items.reduce((n, i) => n + (i.kind === "user" ? (i.attachments?.length ?? 0) : 0), 0);
   const chosen = messages.length - messages.filter((m) => draft.leftOut.has(m.id)).length;
   const empty = !chosen && !(draft.toolCalls && tools);
-  const isImage = EXPORT_FORMATS[format].kind === "image";
+  const kind = EXPORT_FORMATS[format].kind;
+  const isImage = kind === "image";
   const [drawn, setDrawn] = useState<Drawn>();
   const picture = isImage && drawn?.of === preview.text ? drawn : undefined;
 
@@ -95,11 +99,12 @@ export function ExportChatDialog({
     const of = preview.text;
     draw(JSON.parse(of) as ImagePage).then(
       (png) => live && setDrawn({ of, png }),
-      (e: unknown) => live && setDrawn({ of, problem: e instanceof Error ? e.message : String(e) }),
+      (e: unknown) => live && setDrawn({ of, problem: errorText(e) }),
     );
     return () => {
       live = false;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [isImage, preview.text]);
 
   // Text selected in the preview goes in Text to redact, which can also be typed or pasted into from the keyboard.
@@ -141,7 +146,7 @@ export function ExportChatDialog({
         onClose();
       }
     } catch (e) {
-      setNote(`Couldn't save: ${e instanceof Error ? e.message : String(e)}`);
+      setNote(`Couldn't save: ${errorText(e)}`);
     } finally {
       setSaving(false);
     }
@@ -271,8 +276,8 @@ export function ExportChatDialog({
           <span id={pickHelpId} className={overlaps ? "small export-pick-problem" : "muted small"}>
             {overlaps
               ? `Leave ${REDACTED} out: pick text the chat has, on one side of it or the other.`
-              : isImage
-                ? "Type or paste text to replace it everywhere it appears in the picture."
+              : kind !== "text"
+                ? `Type or paste text to replace it everywhere it appears in the ${isImage ? "picture" : "page"}.`
                 : "Select text in the file below, or type it, to replace it everywhere it appears."}
           </span>
         </form>
@@ -304,6 +309,22 @@ export function ExportChatDialog({
               <p className="muted small">Drawing the picture…</p>
             )}
           </div>
+        ) : kind === "page" ? (
+          preview.problem ? (
+            <div className="export-preview export-page">
+              <p role="alert" className="logs-problem">
+                {preview.problem}
+              </p>
+            </div>
+          ) : (
+            <iframe
+              className="export-preview export-page"
+              title="The page, exactly as it will be saved"
+              sandbox=""
+              referrerPolicy="no-referrer"
+              srcDoc={preview.text}
+            />
+          )
         ) : (
           <pre ref={pre} className="export-preview" tabIndex={0} aria-label="The file, exactly as it will be saved">
             {parts.map((t, n) => (
@@ -323,7 +344,7 @@ export function ExportChatDialog({
           <button className="btn" onClick={onClose} disabled={saving}>
             Cancel
           </button>
-          <button className="btn primary" onClick={() => void doSave()} disabled={saving || empty || (isImage && !picture?.png)}>
+          <button className="btn primary" onClick={() => void doSave()} disabled={saving || empty || (isImage && !picture?.png) || preview.problem !== undefined}>
             <Download size={14} /> Save…
           </button>
         </div>

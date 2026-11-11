@@ -24,6 +24,7 @@ import { readUIPrefs, UI_PREFS_KEY } from "./uiPrefs";
 import { TERMINAL_TARGET_KEY } from "./terminal";
 import { QUEUE_LIMIT, type ChatQueue } from "./model";
 import { APPEARANCE_KEY, loadAppearance } from "../ui/appearance";
+import { errorText, isObj } from "./values";
 
 export const BACKUP_FORMAT = "hermes-chat-backup";
 /** The schema this version writes and reads. A backup of a newer schema is refused, never half-read. */
@@ -57,8 +58,6 @@ export type Target = Conn & { parts?: string[] };
 const addressOf = (s: ScopeSource): Conn => ({ mode: s.mode, target: s.mode === "ssh" ? s.sshTarget : s.url, username: s.username });
 export const connOf = (s: ScopeSource): Target => ({ ...addressOf(s), parts: scopeParts(s) });
 const sameConn = (a: Conn, b: Conn) => a.mode === b.mode && a.target === b.target && a.username === b.username;
-/** An address-keyed place's scope: how the stores keyed it before saved connections, and still do without an id. */
-export const scopeOf = (p: Place) => JSON.stringify([p.mode, p.target, p.username, p.profile]);
 /** Where `target`'s `profile` is kept: projectLinks.ts `projectScope`, drafts.ts `draftKey` and chatCache.ts all agree. */
 const scopeAt = (target: Target, profile: string) => JSON.stringify([...(target.parts ?? [target.mode, target.target, target.username]), profile]);
 
@@ -103,7 +102,6 @@ const placeIn = (env: BackupEnv, scope: string) => env.place?.(scope) ?? placeOf
 export function stable(v: unknown): string {
   return JSON.stringify(v, (_, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : 1))) : x));
 }
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 // --- Where things are kept, and what one category is ---
 
@@ -191,7 +189,7 @@ function writeAll(s: BackupStorage, changes: Map<string, string | null>) {
       } catch {
         lost++;
       }
-    const why = e instanceof Error ? e.message : String(e);
+    const why = errorText(e);
     throw new WriteError(
       lost > 0,
       lost
@@ -317,7 +315,7 @@ const grouping = (part: unknown): ScopeLinks | undefined => {
 };
 
 /** The display and startup settings a backup holds. Each profile's chat to reopen isn't: it's a copy of the server's list. */
-const SETTINGS_FIELDS = ["theme", "reopenLastChat", "checkUpdatesOnLaunch", "reasoningBlocks", "modelPicker", "modelFavorites", "statusBar", "screenshotShortcut", "previewWidth", "terminalKind"];
+const SETTINGS_FIELDS = ["theme", "reopenLastChat", "checkUpdatesOnLaunch", "modelPicker", "modelFavorites", "statusBar", "screenshotShortcut", "previewWidth", "terminalKind"];
 const prefsDoc = (s: BackupStorage): Record<string, unknown> => {
   try {
     const d: unknown = JSON.parse(s.getItem(UI_PREFS_KEY) ?? "{}");
@@ -839,7 +837,7 @@ export async function applyRestore(env: BackupEnv, plan: RestorePlan, saveRecove
   try {
     recovery = await saveRecovery(await makeBackup(env, CATEGORY_IDS, new Date(), { raw: true }));
   } catch (e) {
-    const why = e instanceof Error ? e.message : String(e);
+    const why = errorText(e);
     return { recoveryError: `Couldn't save a recovery backup first (${why}), so nothing was restored.`, outcomes: plan.categories.map((p) => ({ id: p.id, state: "skipped", plan: p })) };
   }
   const outcomes: CategoryOutcome[] = [];
@@ -853,7 +851,7 @@ export async function applyRestore(env: BackupEnv, plan: RestorePlan, saveRecove
         await cat(p.id).save(env, before, p.result);
         outcomes.push({ id: p.id, state: "restored", plan: p });
       } catch (e) {
-        outcomes.push({ id: p.id, state: "failed", plan: p, reason: e instanceof Error ? e.message : String(e), ...(e instanceof WriteError && e.changed && { changed: true }) });
+        outcomes.push({ id: p.id, state: "failed", plan: p, reason: errorText(e), ...(e instanceof WriteError && e.changed && { changed: true }) });
       }
   }
   return { recovery, outcomes };

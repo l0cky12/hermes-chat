@@ -29,6 +29,7 @@ import { McpApi } from "./mcp";
 import { GatewaysApi } from "./gateways";
 import { PersonaApi } from "./persona";
 import { ProfileCloneApi } from "./profileClone";
+import { ProfilesApi, toProfileRows } from "./profiles";
 import { APPROVAL_CHOICES, isBroadGrant, isOutgoing, isWaiting, offeredChoices, sameFields, turnStart, type ApprovalChoice, type ApprovalItem, type AttachCheck, type Attachment, type Chat, type ChatQueue, type ConnectionStatus, type ContextUse, type Found, type Item, type ListedChat, type LiveSession, type LiveSessions, type OtherProfiles, type Outgoing, type OutgoingItem, type Queued, type SavedSend, type SeenFailure, type SessionLive, type SideQuestion, type Source, QUEUE_LIMIT } from "./model";
 import { catalogFromServer, fallbackCatalog, isEffort, modelKey, pickFromInfo, type ModelCatalog, type ModelPick } from "./models";
 import { approvalsOf, isApprovalMode, writesFor, type ApprovalPick } from "./approvals";
@@ -49,7 +50,7 @@ import { readBack, sendImport, type PlannedChat } from "./importTranscripts";
 import { memoryApi, type MemoryApi } from "./memory";
 import { MemoryProvidersApi } from "./memoryProviders";
 import { SkillsApi } from "./skills";
-import { CapabilityStore, CapabilityUnsupportedError, failureOf, isNoRoute, sharesChats, specOf, type CapabilityId, type ServerFacts } from "./capabilities";
+import { CapabilityStore, CapabilityUnsupportedError, RouteMissingError, failureOf, isNoRoute, sharesChats, specOf, type CapabilityId, type ServerFacts } from "./capabilities";
 import { BOT_CHAT_TITLE, BotChats, BotModeUnsupportedError, isBotChat, isBotChatTitle, rosterOf, type Bot } from "./bots";
 import { RestError, conflictOf, sessionNotFound, statusOf, type OpenPipe, type Pipe, type PipeEvent, type RestMethod, type Route, type Speech, type Transcript, type VoiceSetup } from "./pipe";
 import { projectContextFiles, type ChatContext, type ProjectContextFiles } from "./projectContextFiles";
@@ -89,6 +90,7 @@ import {
   type StoredBranchRow,
 } from "./branch";
 import { cannotResend, laterOf, replayBlocked, resendText, replayTarget, splitRefs, turnAt, variantRoot, withRefs, withoutMarkers, type ReplayKind, type ReplayPreview } from "./replay";
+import { errorText } from "./values";
 
 /**
  * The `source` this app stamps on chats it starts. Legacy `session.create` stores any string as-is, but the gateway
@@ -144,7 +146,6 @@ const LOOKUPS_PER_CHECK = 3;
 const LOOKUP_AT_ONCE = 4;
 /** The most chats one search lists; dashboard REST caps it at 100. */
 const SEARCH_LIMIT = 50;
-export const SEARCH_MAX = 100;
 /** How long the skills the composer offers are used before they are read again (`skillCommands`). */
 export const SKILL_COMMANDS_FRESH_MS = 60_000;
 /** The most side questions a chat shows; a newer one takes the oldest one's place (ADR 0070). */
@@ -456,9 +457,6 @@ export class BranchUnconfirmed extends Error {
   }
 }
 
-/** Why a branch wasn't asked for after all; nothing went to Hermes. */
-class BranchNotSent extends Error {}
-
 /** Legacy `session.branch` result (`SessionBranchResult` at `bf0203a`): the branch's live and stored ids, its title,
  * its parent, the rows it copied, and its history as `session.resume` shows it. */
 type BranchAnswer = { session_id: string; stored_session_id: string; title: string; parent?: string; message_count: number; messages?: unknown; info?: unknown };
@@ -528,8 +526,17 @@ export type Snapshot = {
   queues: Record<string, ChatQueue>;
   /** The models the shown profile can switch to (`loadModels`); none until read. */
   models?: ModelCatalog;
+  /**
+   * The server's bots as last read, and when (`bots`). A roster spans the profiles, so it is kept across profile
+   * switches and reconnects, for the Bots view to show at once while it reads them again.
+   */
+  bots?: { roster: Bot[]; at: number };
+  /** Each bot's picture as a data URL, by profile, read once per connection for a bot that has one. */
+  botPictures: Record<string, string>;
   /** The switch to `profile` from `from`, until the new profile's list has been read. `error`: why it hasn't yet. */
   switching?: { from: string; error?: string };
+  /** The display name Hermes keeps for its built-in `default` profile, as last listed; none when it has none. */
+  defaultName?: string;
   /** The shown profile's branches made here, and those asked for whose answer was lost (ADR 0027). */
   branches: BranchStore;
   /**
@@ -685,6 +692,10 @@ export class Hermes {
   private botChatIds = new Map<string, Set<string>>();
   /** The roster read for the Bot Chats' ids on a connection (`knownBotChats`). */
   private botChatsRead?: { gen: number; done: Promise<void> };
+  /** This connection's picture asks, by profile: each a token the next ask replaces, so only the latest one lands. */
+  private pictureAsks?: { gen: number; asks: Map<string, object> };
+  /** Roster reads by number: started, and the newest whose answer landed, so an older answer arriving late is dropped. */
+  private rosterReads = { started: 0, landed: 0 };
   /** Chats archived or restored here whose flag Hermes hasn't confirmed yet: the `archived` flag each should have.
    * While a chat is here, this flag beats the one the server lists. */
   private archiveWanted = new PerProfile<boolean>();
@@ -965,6 +976,7 @@ export class Hermes {
       others: noOthers,
       queues: loadQueues(cache, profile),
       branches: cache.loadBranches(profile),
+      botPictures: {},
     };
   }
 
@@ -1148,6 +1160,17 @@ export class Hermes {
   });
   /** The Clone profile dialog's profile list, create and delete (profileClone.ts, ADR 0074). Each call names its profiles. */
   readonly profileClone = new ProfileCloneApi((method, pathAndQuery, body) => this.rest(method, pathAndQuery, body), this.persona, this.skills);
+  /**
+   * Settings → Profiles' list, create, rename, description, model and delete (profiles.ts, ADR 0144). Each call names its
+   * profile. Every list read keeps `default`'s display name for the rest of the app.
+   */
+  readonly manageProfiles = new ProfilesApi(async (method, pathAndQuery, body) => {
+    const res = await this.rest(method, pathAndQuery, body);
+    if (method === "GET" && pathAndQuery === "api/profiles") this.keepDefaultName(res);
+    if (method === "PATCH" && pathAndQuery === "api/profiles/default" && typeof (res as { display_name?: unknown })?.display_name === "string")
+      this.update({ defaultName: (res as { display_name: string }).display_name.trim() || undefined });
+    return res;
+  });
 
   /**
    * What this Hermes server can do, for Connection diagnostics and the screens that depend on it (capabilities.ts,
@@ -1361,7 +1384,24 @@ export class Hermes {
   /** The server's profiles by name, as dashboard REST lists them. One sign-in covers them all (research doc). */
   async profiles(): Promise<string[]> {
     const res = (await this.rest("GET", "api/profiles")) as ProfileList;
+    this.keepDefaultName(res);
     return res.profiles.map((p) => p.name);
+  }
+
+  /**
+   * The Queued and Failed messages holding text that this computer keeps for `profile`, which deleting the profile
+   * loses (Settings → Profiles, ADR 0144).
+   */
+  heldMessagesIn(profile: string): number {
+    const queues = profile === this.profile ? this.snapshot.queues : loadQueues(this.cache, profile);
+    const queued = Object.values(queues).reduce((n, q) => n + q.items.filter((i) => i.text.trim()).length, 0);
+    return queued + this.sendsIn(profile).length;
+  }
+
+  /** Keeps the display name a `GET /api/profiles` answer gives `default`, for the switcher and the profile pickers. */
+  private keepDefaultName(res: unknown) {
+    const row = toProfileRows(res).find((p) => p.name === "default");
+    if (row && row.displayName !== this.snapshot.defaultName) this.update({ defaultName: row.displayName });
   }
 
   /**
@@ -1476,7 +1516,7 @@ export class Hermes {
       this.patchSide(chatId, (qs) => qs.map((q) => (q.id !== id ? q : early === undefined || q.state !== "asking" ? { ...q, taskId } : answered({ ...q, taskId }, early))));
       return true;
     } catch (e) {
-      const error = e instanceof Error ? e.message : String(e);
+      const error = errorText(e);
       this.patchSide(chatId, (qs) => qs.map((q) => (q.id === id && q.state === "asking" ? { id, question, after, state: "failed", error } : q)));
       return false;
     } finally {
@@ -1919,9 +1959,16 @@ export class Hermes {
    */
   async bots(): Promise<Bot[]> {
     const gen = this.generation;
+    const n = ++this.rosterReads.started;
     try {
       const bots = rosterOf(await this.request("profiles.list", {}));
-      if (gen === this.generation) this.botChatIds = new Map(bots.map((b) => [b.profile, new Set(b.botChat ? [b.botChat.id, b.botChat.resolvedId] : [])]));
+      if (gen === this.generation && n > this.rosterReads.landed) {
+        this.rosterReads.landed = n;
+        this.botChatIds = new Map(bots.map((b) => [b.profile, new Set(b.botChat ? [b.botChat.id, b.botChat.resolvedId] : [])]));
+        const pictures = Object.fromEntries(Object.entries(this.snapshot.botPictures).filter(([p]) => bots.some((b) => b.profile === p && b.hasAvatar)));
+        this.update({ bots: { roster: bots, at: Date.now() }, botPictures: pictures });
+        this.readBotPictures(gen, bots);
+      }
       return bots;
     } catch (e) {
       const unsupported =
@@ -1940,6 +1987,29 @@ export class Hermes {
     if (profile) return !!this.botChatIds.get(profile)?.has(chatId);
     for (const ids of this.botChatIds.values()) if (ids.has(chatId)) return true;
     return false;
+  }
+
+  /**
+   * Asks for each bot's picture once per connection, so a picture changed in another client shows after a reconnect.
+   * One held already stays shown meanwhile; a bot without one, or whose picture fails, shows its initial.
+   */
+  private readBotPictures(gen: number, bots: readonly Bot[]) {
+    if (this.pictureAsks?.gen !== gen) this.pictureAsks = { gen, asks: new Map() };
+    const asks = this.pictureAsks.asks;
+    const withPicture = new Set(bots.filter((b) => b.hasAvatar).map((b) => b.profile));
+    // A bot gone, or listed without a picture, is forgotten: a picture put back is asked for, and a late answer to the
+    // old ask is dropped.
+    for (const profile of asks.keys()) if (!withPicture.has(profile)) asks.delete(profile);
+    for (const profile of withPicture) {
+      if (asks.has(profile)) continue;
+      const ask = {};
+      asks.set(profile, ask);
+      this.track(
+        this.botAvatar(profile).then((url) => {
+          if (url && gen === this.generation && asks.get(profile) === ask) this.update({ botPictures: { ...this.snapshot.botPictures, [profile]: url } });
+        }),
+      );
+    }
   }
 
   /** A bot's picture, as a data URL, or none when it has none or Hermes sent something that isn't an image. */
@@ -1985,7 +2055,8 @@ export class Hermes {
 
   /**
    * Reads the roster once per connection, for the Bot Chats' ids, so search can leave them out before the Bots view
-   * has ever opened. A Hermes without Bot Mode, or a read that fails, leaves only the title to go by.
+   * has ever opened, and so the view shows the bots and their pictures as soon as it opens. A Hermes without Bot Mode,
+   * or a read that fails, leaves only the title to go by.
    */
   private knownBotChats(): Promise<void> {
     const gen = this.generation;
@@ -4121,6 +4192,8 @@ export class Hermes {
           messages?: unknown;
           /** A live session's turn is still going. */
           running?: boolean;
+          /** That turn's reply as streamed so far (`_inflight_snapshot`); its later deltas go on from there. */
+          inflight?: { assistant?: unknown };
           /** What a live session is still waiting on, oldest first. */
           open_requests?: ServerRequest[];
           info?: unknown;
@@ -4153,6 +4226,7 @@ export class Hermes {
           if (i.kind === "approval" && (i.answer || i.ended)) this.closedApprovals.set(profile, i.id, i);
         // The Saved copy, if shown, is among the stale items. Messages sent from here that Hermes hasn't confirmed go
         // last, and the history settles any that may have reached it (`reconcile`): read back, it wins.
+        const streamed = res.running && typeof res.inflight?.assistant === "string" ? res.inflight.assistant : "";
         this.patchChat(chatId, (c) => ({
           ...c,
           runtimeId: res.session_id,
@@ -4161,7 +4235,12 @@ export class Hermes {
           running: c.running || !!res.running,
           savedAt: undefined,
           items: withRows(
-            [...history, ...lost(c.items.slice(0, stale)), ...withoutLoadError(c.items.slice(stale)).filter((i) => !isOutgoing(i))],
+            [
+              ...history,
+              ...(streamed ? [{ kind: "assistant" as const, id: nextId([...history, ...c.items], "a"), text: streamed }] : []),
+              ...lost(c.items.slice(0, stale)),
+              ...withoutLoadError(c.items.slice(stale)).filter((i) => !isOutgoing(i)),
+            ],
             reconcile(c.items.filter(isOutgoing), readBack),
           ),
         }));
@@ -4457,6 +4536,7 @@ export class Hermes {
       this.update({ chats, syncError: undefined, switching: undefined });
     this.kanbanWatch.chatsListed();
     this.placeRoster();
+    this.track(this.knownBotChats());
     for (const chatId of readOnScreen) this.seen(chatId);
     this.saveList(profile, chats);
     if (switched) this.cache.rememberProfile(profile);
@@ -4704,7 +4784,7 @@ export class Hermes {
             (l) => ({ entries: l.entries.map((e) => ({ name: e.name, isDirectory: e.kind === "dir" })) }),
             (e: unknown) => {
               const status = e instanceof RemoteFilesError ? e.status : undefined;
-              const message = e instanceof Error ? e.message : String(e);
+              const message = errorText(e);
               if (status === 404 && /isn't on the server/.test(message)) return { entries: [], error: "ENOENT" };
               if (status === 400 && /not a folder/.test(message)) return { entries: [], error: "ENOTDIR" };
               if (status === 403) return { entries: [], error: "EACCES" };
@@ -4770,9 +4850,11 @@ export class Hermes {
   private relay(pipe: Pipe, method: RestMethod, pathAndQuery: string, body?: unknown): Promise<string> {
     const refused = this.capabilities.refuses({ rest: method, path: pathAndQuery });
     if (refused) return Promise.reject(new CapabilityUnsupportedError(refused));
+    const lacking = method === "GET" ? undefined : this.capabilities.lacks({ rest: method, path: pathAndQuery });
+    if (lacking) return Promise.reject(new RouteMissingError(lacking));
     const answer = pipe.request(method, pathAndQuery, body === undefined ? undefined : JSON.stringify(body));
     if (method === "GET") this.observe({ route: pathAndQuery }, answer);
-    else this.observeWrite({ route: pathAndQuery }, answer);
+    else this.observeWrite({ route: pathAndQuery, verb: method }, answer);
     return answer;
   }
 
@@ -4798,7 +4880,7 @@ export class Hermes {
   }
 
   /** Tells diagnostics when a change the screens sent failed, so a route or method Hermes lacks isn't sent to again. */
-  private observeWrite(call: { route: string } | { method: string }, answer: Promise<unknown>) {
+  private observeWrite(call: { route: string; verb?: string } | { method: string }, answer: Promise<unknown>) {
     const gen = this.generation;
     answer.catch((e: unknown) => this.capabilities.observeWrite(gen, call, e));
   }
@@ -5074,7 +5156,7 @@ const LIST_MAX_BYTES = 8 * 1024 * 1024;
  */
 export function outputFound(e: unknown): { state: "missing" | "folder" | "forbidden" | "available" | "unknown"; why?: string } | undefined {
   if (sessionNotFound(e)) return undefined;
-  if (!(e instanceof RestError)) return { state: "unknown", why: e instanceof Error ? e.message : String(e) };
+  if (!(e instanceof RestError)) return { state: "unknown", why: errorText(e) };
   const { status, detail } = e;
   if (status === 404 && detail.startsWith(SANDBOX_NOT_FOUND_PREFIX)) return { state: "missing", why: SANDBOX_MISSING };
   if (status === 404 && detail === "File not found") return { state: "missing", why: "It isn't at this path where its chat's tools ran: it was deleted, moved or renamed." };

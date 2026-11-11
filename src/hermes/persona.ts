@@ -13,6 +13,7 @@
 // started from, then reads it back to check it holds what was sent (ADR 0014). The `tui_gateway` twin,
 // `profiles.configure {soul}`, is not used: it writes with a bare `write_text` that can leave a truncated file.
 import { RestError, type RestMethod } from "./pipe";
+import { errorText } from "./values";
 
 /** SOUL.md as Hermes has it. `exists` false: there is no file, and `content` is empty. */
 export type Soul = { exists: boolean; content: string };
@@ -86,7 +87,7 @@ const DENIED = /permission denied|errno 13\b|errno 1\b|operation not permitted|r
 /** Sorts an error from a read or write of `profile`'s SOUL.md. */
 export function personaError(e: unknown, profile: string, writing: boolean): PersonaError {
   if (e instanceof PersonaError) return e;
-  const message = e instanceof Error ? e.message : String(e);
+  const message = errorText(e);
   const verb = writing ? "save" : "read";
   if (/^Not connected to Hermes|^The chat connection is closed/.test(message))
     return new PersonaError("disconnected", "Not connected to Hermes.", undefined, true);

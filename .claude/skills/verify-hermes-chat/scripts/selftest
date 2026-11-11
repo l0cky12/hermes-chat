@@ -4,6 +4,7 @@
 #   hv up:  a failed start stops every process it started (and a child its driver left behind) and deletes its run dir;
 #           an interrupted start (TERM) does the same;
 #           three concurrent `hv up`s each get their own display (their own Xvfb holds its lock), and `hv down` stops them.
+#           its private D-Bus activates nothing (no Secret Service with the owner's HOME) and runs with the run's HOME.
 # Runs under a throwaway HV_HOME with a fake app and a fake tauri-driver, so it never touches a real run.
 set -euo pipefail
 
@@ -127,6 +128,18 @@ uniq_displays=$(printf '%s\n' "${displays[@]}" | sort -u | wc -l)
 [ "${#runs[@]}" = 3 ] && [ "$uniq_displays" = 3 ] && pass "three concurrent hv up got displays ${displays[*]}" || fail "concurrent displays: ${displays[*]:-none}"
 raced=$(cat "$HV_HOME"/evidence/*/xvfb.log | grep -c "trying display" || true)
 echo "--   the three runs tried $raced displays to get 3 (more than 3 means a lost race was retried)"
+# The private bus activates nothing: an app asking for the keyring with none running gets no daemon started for it,
+# least of all one with the owner's HOME (#497).
+if [ "${#runs[@]}" -gt 0 ]; then
+  r=${runs[0]}
+  bus=$(. "$r/state.env"; echo "$DBUS_ADDR") bus_pid=$(. "$r/state.env"; echo "$DBUS_PID")
+  names=$(dbus-send --bus="$bus" --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListActivatableNames 2>&1 | grep -o 'string "[^"]*"' | tr '\n' ' ')
+  [ "$names" = 'string "org.freedesktop.DBus" ' ] && pass "the private D-Bus can activate nothing" || fail "the private D-Bus can activate: $names"
+  start=$(dbus-send --bus="$bus" --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.StartServiceByName string:org.freedesktop.secrets uint32:0 2>&1 || true)
+  grep -q "ServiceUnknown" <<<"$start" && pass "asking it for a Secret Service starts none" || fail "StartServiceByName org.freedesktop.secrets: $start"
+  bus_home=$(tr '\0' '\n' <"/proc/$bus_pid/environ" | sed -n 's/^HOME=//p')
+  [ "$bus_home" = "$r/home" ] && pass "the private D-Bus runs with the run's HOME" || fail "the private D-Bus's HOME is ${bus_home:-unset}, not $r/home"
+fi
 for r in "${runs[@]}"; do
   # The doctor exits non-zero here anyway (fake driver, no build); only its Xvfb line matters.
   doc=$(HV_RUN=$r hv doctor 2>&1 || true)

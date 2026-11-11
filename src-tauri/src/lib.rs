@@ -1,8 +1,12 @@
+pub mod annotate;
+mod backlog;
 pub mod backup;
 #[cfg(target_os = "linux")]
 pub mod browser;
 pub mod connect_steps;
 pub mod connection_attempts;
+#[cfg(target_os = "linux")]
+pub mod copied_files;
 pub mod defaults_file;
 pub mod dev_servers;
 pub mod display;
@@ -12,6 +16,7 @@ pub mod gtk_clipboard;
 pub mod links;
 pub mod live;
 pub mod local_stt;
+pub mod lock;
 mod loopback_owner;
 mod loopback_peer;
 pub mod main_window;
@@ -35,6 +40,7 @@ pub mod tunnel;
 pub mod update;
 pub mod web_page;
 
+use crate::lock::Locked;
 use connect_steps::{Step, Steps};
 use live::{ConnectionId, Live, Slot, Slots};
 use saved_password::{Address, TokenEntry};
@@ -224,7 +230,7 @@ struct Screenshots {
 
 impl Screenshots {
     fn captures(&self) -> Result<Arc<screenshot::Captures>, screenshot::CaptureError> {
-        let mut slot = self.captures.lock().unwrap();
+        let mut slot = self.captures.locked();
         if let Some(c) = &*slot {
             return Ok(c.clone());
         }
@@ -376,7 +382,7 @@ async fn hermes_reopen(
     };
     match opened {
         Ok(pipe) if state.slots.is_current(&id, &slot) => {
-            live.pipe = Arc::new(pipe);
+            live.pipe = pipe;
             Ok(())
         }
         // Replaced or closed while its socket reopened: the new socket is dropped, and whoever took the connection
@@ -405,7 +411,7 @@ async fn as_attempt<T: Send + 'static>(
     opening: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
 ) -> Attempt<T> {
     let task = {
-        let mut connecting = state.connecting.lock().unwrap();
+        let mut connecting = state.connecting.locked();
         if let Some(i) = connecting.stopped.iter().position(|a| *a == attempt) {
             connecting.stopped.remove(i);
             return Attempt::StoppedFirst;
@@ -416,7 +422,7 @@ async fn as_attempt<T: Send + 'static>(
         task
     };
     let opened = task.await;
-    state.connecting.lock().unwrap().now.remove(&attempt);
+    state.connecting.locked().now.remove(&attempt);
     Attempt::Ran(match opened {
         Ok(opened) => opened,
         Err(e) if e.is_cancelled() => Err(CONNECT_STOPPED.into()),
@@ -454,14 +460,14 @@ async fn open_connection(
         Route::Url { .. } => ssh_route.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty() && !t.starts_with('-')),
     };
     let typed_token = typed_token.map(|t| (t, address));
-    Ok((Live { dashboard: Arc::new(dashboard), pipe: Arc::new(pipe), _tunnel: tunnel, ssh_target, typed_token }, route))
+    Ok((Live { dashboard: Arc::new(dashboard), pipe, _tunnel: tunnel, ssh_target, typed_token }, route))
 }
 
 /// Stops the opening running as `attempt`, a connect or a reopen, or, if it hasn't begun, stops it before it does.
 /// Another attempt's is left alone.
 #[tauri::command]
 fn hermes_connect_cancel(state: State<'_, AppState>, attempt: String) {
-    let mut connecting = state.connecting.lock().unwrap();
+    let mut connecting = state.connecting.locked();
     match connecting.now.get(&attempt) {
         Some(task) => task.abort(),
         None => {
@@ -501,7 +507,7 @@ async fn hermes_probe(
             transport::probe_expecting(&base, &sign_in, &profile, transport::PROBE_STEP_TIMEOUT, reach_within(quick), expect_server.as_deref()).await?;
         Ok(ProbeResult { route: route.with_server(probed.server.clone()), probed })
     });
-    if let Some(before) = state.probe.lock().unwrap().replace(task.abort_handle()) {
+    if let Some(before) = state.probe.locked().replace(task.abort_handle()) {
         before.abort();
     }
     match task.await {
@@ -540,7 +546,7 @@ async fn hermes_reach(target: Target, expect_server: Option<String>, quick: Opti
 
 #[tauri::command]
 fn hermes_probe_cancel(state: State<'_, AppState>) {
-    if let Some(task) = state.probe.lock().unwrap().take() {
+    if let Some(task) = state.probe.locked().take() {
         task.abort();
     }
 }
@@ -588,8 +594,9 @@ async fn hermes_save_endpoint(
 
 #[tauri::command]
 async fn hermes_send(state: State<'_, AppState>, attempt: String, frame: String) -> Result<(), String> {
-    let sent = state.slots.read(&live::Attempt::new(attempt), |_, live| live.pipe.send(frame)).await;
-    sent.and_then(|sent| sent).map_err(|e| e.to_string())
+    // The send waits while the pipe's queue is full; don't hold the connection meanwhile.
+    let pipe = state.slots.read(&live::Attempt::new(attempt), |_, live| live.pipe.sender()).await.map_err(|e| e.to_string())?;
+    pipe.send(frame).await.map_err(|e| e.to_string())
 }
 
 /// Sends a frame with a file the owner attached (`Attachable`) in it.
@@ -605,10 +612,8 @@ async fn hermes_send_file(
 ) -> Result<(), String> {
     attachable.check(&path).map_err(|e| e.to_string())?;
     // Reading a big file takes a while; don't hold the lock, so a Stop can still go out.
-    let pipe = state.slots.read(&live::Attempt::new(attempt), |_, live| live.pipe.clone()).await.map_err(|e| e.to_string())?;
+    let pipe = state.slots.read(&live::Attempt::new(attempt), |_, live| live.pipe.sender()).await.map_err(|e| e.to_string())?;
     let written = pipe.send_file(&head, &path, &tail, max_bytes).await.map_err(|e| e.to_string())?;
-    // Let go of the pipe while the frame is written: replacing the connection drops it, which stops the write.
-    drop(pipe);
     written.wait().await.map_err(|e| e.to_string())
 }
 
@@ -643,6 +648,21 @@ async fn attach_picked_files(app: tauri::AppHandle, attachable: State<'_, Attach
     Ok(paths)
 }
 
+/// Attaches the files the owner copied in a file manager and pasted into the composer, by path, as a drop does (ADR
+/// 0143). `[]`: the clipboard holds no local files. Elsewhere than Linux the webview's paste event carries the files.
+#[tauri::command]
+async fn attach_copied_files(app: tauri::AppHandle, attachable: State<'_, Attachable>) -> Result<Vec<String>, String> {
+    #[cfg(target_os = "linux")]
+    let paths = copied_files::read(&app).await?;
+    #[cfg(not(target_os = "linux"))]
+    let paths = {
+        let _ = app;
+        Vec::new()
+    };
+    attachable.add(paths.clone());
+    Ok(paths)
+}
+
 /// Takes a screenshot of a region or window the owner picks, staged privately as `<name>.png` for the composer.
 #[tauri::command]
 async fn screenshot_capture(
@@ -656,12 +676,16 @@ async fn screenshot_capture(
     Ok(capture)
 }
 
-/// Deletes a staged screenshot: removed from the composer, or its message sent. Paths that aren't one are ignored.
+/// Deletes a staged screenshot: removed from the composer, or its message sent. Paths that aren't one are ignored. The
+/// folder is deleted off the main thread.
 #[tauri::command]
-fn screenshot_discard(state: State<'_, Screenshots>, path: String) {
-    if let Some(c) = &*state.captures.lock().unwrap() {
-        c.discard(std::path::Path::new(&path));
-    }
+async fn screenshot_discard(app: tauri::AppHandle, path: String) {
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Some(c) = &*app.state::<Screenshots>().captures.locked() {
+            c.discard(std::path::Path::new(&path));
+        }
+    })
+    .await;
 }
 
 /// How screenshots are taken on this desktop, for Settings.
@@ -670,13 +694,17 @@ async fn screenshot_support() -> screenshot::Support {
     tokio::task::spawn_blocking(screenshot::support).await.unwrap_or_else(|e| screenshot::Support { ok: false, summary: e.to_string() })
 }
 
-/// The renderer supplies all persisted outboxes at startup and whenever they change, before cleanup.
+/// The renderer supplies all persisted outboxes at startup and whenever they change, before cleanup. The folders are
+/// swept off the main thread.
 #[tauri::command]
-fn screenshot_sync_outbox(app: tauri::AppHandle, state: State<'_, Screenshots>, paths: Vec<String>) -> Result<(), screenshot::CaptureError> {
-    // Also those of drafts an update's restart couldn't put back (update.rs).
-    let saved = update::saved_attachment_paths(&app);
-    state.captures()?.retain_outbox(paths.into_iter().map(std::path::PathBuf::from).chain(saved));
-    Ok(())
+async fn screenshot_sync_outbox(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), screenshot::CaptureError> {
+    let sync = move || {
+        // Also those of drafts an update's restart couldn't put back (update.rs).
+        let saved = update::saved_attachment_paths(&app);
+        app.state::<Screenshots>().captures()?.retain_outbox(paths.into_iter().map(std::path::PathBuf::from).chain(saved));
+        Ok(())
+    };
+    tokio::task::spawn_blocking(sync).await.map_err(|e| screenshot::CaptureError::Failed(e.to_string()))?
 }
 
 /// Peeking leaves the request pending if the signed-in window goes away before handling it.
@@ -923,8 +951,8 @@ fn asked(app: &tauri::AppHandle, attempt: &str) -> Result<Asked, String> {
 impl Transfers {
     /// Stops `connection`'s transfers, and keeps those asked for before now from starting. Another connection's go on.
     fn stop(&self, connection: &ConnectionId) {
-        let mut tasks = self.tasks.lock().unwrap();
-        *self.epochs.lock().unwrap().entry(connection.clone()).or_default() += 1;
+        let mut tasks = self.tasks.locked();
+        *self.epochs.locked().entry(connection.clone()).or_default() += 1;
         tasks.retain(|_, (_, on, task)| {
             let stays = on != connection;
             if !stays {
@@ -935,7 +963,7 @@ impl Transfers {
     }
 
     fn epoch(&self, connection: &ConnectionId) -> u64 {
-        self.epochs.lock().unwrap().get(connection).copied().unwrap_or(0)
+        self.epochs.locked().get(connection).copied().unwrap_or(0)
     }
 
     /// Refuses work once its connection was closed, replaced or reopened since it was asked for.
@@ -959,7 +987,7 @@ impl Transfers {
     ) -> Result<T, E> {
         let run = self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let task = {
-            let mut tasks = self.tasks.lock().unwrap();
+            let mut tasks = self.tasks.locked();
             if self.still(asked).is_err() {
                 return Err(TRANSFER_STOPPED.to_owned().into());
             }
@@ -970,7 +998,7 @@ impl Transfers {
             task
         };
         let ended = task.await;
-        let mut tasks = self.tasks.lock().unwrap();
+        let mut tasks = self.tasks.locked();
         if tasks.get(&id).is_some_and(|(r, _, _)| *r == run) {
             tasks.remove(&id);
         }
@@ -1033,7 +1061,7 @@ async fn files_download(
     let asked = asked(&app, &attempt)?;
     let since = asked.clone();
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let mut dialog = app.dialog().file().set_title("Download from the Hermes server").set_file_name(name);
+    let mut dialog = app.dialog().file().set_title("Download from the Hermes server").set_file_name(suggested_name(&name, "download"));
     if let Some(window) = app.get_webview_window("main") {
         dialog = dialog.set_parent(&window);
     }
@@ -1098,7 +1126,7 @@ async fn files_pick_upload(
         return Err("That isn't a file.".into());
     }
     let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
-    let mut picks = picks.0.lock().unwrap();
+    let mut picks = picks.0.locked();
     picks.0 += 1;
     let token = picks.0;
     // Picks never sent are let go once the connection they were picked for is gone.
@@ -1110,7 +1138,7 @@ async fn files_pick_upload(
 /// Lets go of a pick that won't be sent: the owner cancelled the upload dialog. A token already taken or let go is fine.
 #[tauri::command]
 fn files_discard_pick(picks: State<'_, UploadPicks>, token: u64) {
-    picks.0.lock().unwrap().1.remove(&token);
+    picks.0.locked().1.remove(&token);
 }
 
 /// Uploads the file picked as `token` to the server path `path` (`Dashboard::upload`, ADR 0023). `overwrite` false:
@@ -1129,7 +1157,7 @@ async fn files_upload(
     on_progress: Channel<TransferProgress>,
 ) -> Result<String, RelayError> {
     // Taken, not looked up: a pick is good for one upload.
-    let (local, asked) = picks.0.lock().unwrap().1.remove(&token).ok_or("That file wasn't picked in the Open dialog, or was already sent.")?;
+    let (local, asked) = picks.0.locked().1.remove(&token).ok_or("That file wasn't picked in the Open dialog, or was already sent.")?;
     let since = asked.clone();
     let dest = path.clone();
     // Registered before it waits for the connection, so a stop meanwhile reaches it; and only the connection that was
@@ -1311,7 +1339,7 @@ async fn context_git_exclude(
 /// Stops transfer `id`, if it is still running. A download's part file is removed; `dest` is left as it was.
 #[tauri::command]
 fn files_cancel(transfers: State<'_, Transfers>, id: u64) {
-    if let Some((_, _, task)) = transfers.tasks.lock().unwrap().remove(&id) {
+    if let Some((_, _, task)) = transfers.tasks.locked().remove(&id) {
         task.abort();
     }
 }
@@ -1382,6 +1410,29 @@ async fn token_delete(connection: Option<String>) -> Result<(), String> {
     saved_password::delete(saved_password::account(saved_password::TOKEN, connection.as_deref())?).await
 }
 
+/// A file name the webview or the server suggests, made fit to show in a Save dialog (#481): only its last part on
+/// either separator, so it names no folder; without control, invisible or direction-changing characters, which can make
+/// `invoice\u{202E}fdp.exe` read `invoiceexe.pdf`; and without `:` or the other characters Windows refuses, where `:`
+/// would name a drive or a stream. Leading and trailing spaces and dots go too. `fallback` when nothing is left.
+fn suggested_name(name: &str, fallback: &str) -> String {
+    let hidden = |c: char| {
+        c.is_control()
+            || matches!(c, '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}')
+    };
+    let last = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let kept: String = last.chars().filter(|&c| !hidden(c) && !matches!(c, ':' | '<' | '>' | '"' | '|' | '?' | '*')).collect();
+    let mut kept = kept.trim_matches(|c: char| c.is_whitespace() || c == '.').to_owned();
+    if kept.len() > 200 {
+        let end = (0..=200).rev().find(|&i| kept.is_char_boundary(i)).unwrap_or(0);
+        kept.truncate(end);
+    }
+    if kept.is_empty() {
+        fallback.to_owned()
+    } else {
+        kept
+    }
+}
+
 /// Writes `contents` where the owner picks in the native Save dialog, which asks before replacing a file. The webview
 /// never names the path. `None`: the owner cancelled, and nothing was written.
 async fn save_with_dialog(
@@ -1392,6 +1443,7 @@ async fn save_with_dialog(
     contents: impl AsRef<[u8]>,
 ) -> Result<Option<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
+    let file_name = suggested_name(&file_name, filter.1.first().map_or("export".to_owned(), |ext| format!("export.{ext}")).as_str());
     let mut dialog = app.dialog().file().set_title(title).set_file_name(file_name).add_filter(filter.0, filter.1);
     if let Some(window) = app.get_webview_window("main") {
         dialog = dialog.set_parent(&window);
@@ -1455,7 +1507,7 @@ fn read_transcript(path: &std::path::Path, max_bytes: u64) -> Result<String, Str
         return Err(too_big());
     }
     let mut bytes = Vec::new();
-    file.take(max_bytes + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    file.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     if bytes.len() as u64 > max_bytes {
         return Err(too_big());
     }
@@ -1463,12 +1515,13 @@ fn read_transcript(path: &std::path::Path, max_bytes: u64) -> Result<String, Str
     Ok(text.strip_prefix('\u{feff}').map(str::to_owned).unwrap_or(text))
 }
 
-/// The formats a chat exports as text (src/hermes/exportChat.ts `ExportFormat`). Any other is refused.
+/// The formats a chat exports as text, an HTML page among them (src/hermes/exportChat.ts `ExportFormat`). Any other is refused.
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(rename_all = "lowercase")]
 enum ExportFormat {
     Markdown,
     Json,
+    Html,
 }
 
 impl ExportFormat {
@@ -1476,6 +1529,7 @@ impl ExportFormat {
         match self {
             ExportFormat::Markdown => ("Markdown", &["md"]),
             ExportFormat::Json => ("JSON", &["json"]),
+            ExportFormat::Html => ("HTML page", &["html"]),
         }
     }
 }
@@ -1503,12 +1557,6 @@ fn png_bytes(base64: &str) -> Result<Vec<u8>, String> {
 async fn chat_export_image(app: tauri::AppHandle, png_base64: String, file_name: String) -> Result<Option<String>, String> {
     let png = png_bytes(&png_base64)?;
     save_with_dialog(&app, EXPORT_TITLE, file_name, ("PNG image", &["png"]), png).await
-}
-
-/// Saves the owner's message templates (src/hermes/templates.ts `exportFile`) where the owner picks.
-#[tauri::command]
-async fn templates_export(app: tauri::AppHandle, json: String) -> Result<Option<String>, String> {
-    save_with_dialog(&app, "Export templates", "hermes-chat-templates.json".into(), ("JSON", &["json"]), json).await
 }
 
 /// Saves Usage analytics' CSV where the owner picks in the native Save dialog (ADR 0026). `None`: cancelled.
@@ -1568,6 +1616,12 @@ async fn preview_check_web(url: String, user_agent: String) -> Result<web_page::
     web_page::check(&url, &user_agent).await
 }
 
+/// Whether a typed address's https:// form answers, so the address box opens it rather than http:// (ADR 0103).
+#[tauri::command]
+async fn preview_https_answers(url: String) -> Result<bool, String> {
+    web_page::https_answers(&url).await
+}
+
 /// A Markdown image the owner clicked to load, as a `data:` URL (`markdown_image::load`, ADR 0136).
 #[tauri::command]
 async fn markdown_image_load(url: String) -> Result<String, String> {
@@ -1607,6 +1661,52 @@ fn preview_page_place(app: tauri::AppHandle, key: String, placement: Option<page
 #[tauri::command]
 fn preview_page_close(app: tauri::AppHandle, key: String) {
     page_view::close(&app, key)
+}
+
+/// Takes a still of the page in the Preview to annotate (ADR 0094), kept in the captures folder until it is staged or
+/// discarded (`screenshot_discard`).
+#[tauri::command]
+async fn preview_annotate_still(app: tauri::AppHandle, state: State<'_, Screenshots>, key: String) -> Result<annotate::Still, annotate::AnnotateError> {
+    let captures = state.captures().map_err(|e| annotate::AnnotateError::Failed(e.to_string()))?;
+    page_view::annotate_still(&app, key, captures).await
+}
+
+/// What the page says is under a point of its still, for the outline while the owner points.
+#[tauri::command]
+async fn preview_annotate_query(
+    app: tauri::AppHandle,
+    key: String,
+    still: u64,
+    x: f64,
+    y: f64,
+    up: u32,
+) -> Result<Option<annotate::Answer>, annotate::AnnotateError> {
+    page_view::annotate_query(&app, key, still, x, y, up).await
+}
+
+/// The element the owner picked on the still, or its box as a region when the page changed there since.
+#[tauri::command]
+async fn preview_annotate_pick(app: tauri::AppHandle, key: String, still: u64, x: f64, y: f64, up: u32) -> Result<annotate::Pick, annotate::AnnotateError> {
+    page_view::annotate_pick(&app, key, still, x, y, up).await
+}
+
+/// Stages a still as annotation `n`, marked at `rect`, as a Screenshot the composer can send, and deletes the still.
+#[tauri::command]
+async fn preview_annotate_stage(
+    state: State<'_, Screenshots>,
+    attachable: State<'_, Attachable>,
+    still_path: String,
+    n: u32,
+    rect: annotate::Rect,
+    scale: f64,
+) -> Result<screenshot::Capture, screenshot::CaptureError> {
+    let captures = state.captures()?;
+    let staged = tokio::task::spawn_blocking(move || annotate::stage(&captures, std::path::Path::new(&still_path), n, rect, scale))
+        .await
+        .map_err(|e| screenshot::CaptureError::Failed(e.to_string()))??;
+    let path = staged.to_string_lossy().into_owned();
+    attachable.add([path.clone()]);
+    Ok(screenshot::Capture { path, note: None })
 }
 
 #[tauri::command]
@@ -1655,7 +1755,8 @@ async fn terminal_open(
     })
 }
 
-/// Async, so a terminal that isn't reading can't hold up the window.
+/// Hands what the owner typed to terminal `id`'s writing thread (terminal.rs), so a program that isn't reading holds
+/// up neither the window nor the runtime.
 #[tauri::command]
 async fn terminal_write(terminals: State<'_, terminal::Terminals>, id: u64, data: String) -> Result<(), terminal::TerminalError> {
     terminals.write(id, data.as_bytes())
@@ -1769,6 +1870,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
     if screenshot {
         screenshots.requests.ask();
     }
+    std::thread::spawn(local_stt::sweep_scratch);
     let context = tauri::generate_context!();
     let mut builder = tauri::Builder::default();
     // The updater needs a public key to start, so it is there only in a build given one (README, "Updates").
@@ -1851,6 +1953,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             hermes_stat_files,
             hermes_read_preview,
             attach_picked_files,
+            attach_copied_files,
             stage_clipboard_file,
             hermes_request,
             hermes_transcribe,
@@ -1907,13 +2010,13 @@ pub fn run(screenshot: bool, link: Option<String>) {
             chat_export,
             chat_export_image,
             import_pick_file,
-            templates_export,
             usage_export,
             logs_export,
             preview_pick_local,
             preview_read_local,
             preview_read_local_image,
             preview_check_web,
+            preview_https_answers,
             markdown_image_load,
             preview_open_in_browser,
             preview_page_open,
@@ -1921,6 +2024,10 @@ pub fn run(screenshot: bool, link: Option<String>) {
             preview_page_reload,
             preview_page_place,
             preview_page_close,
+            preview_annotate_still,
+            preview_annotate_query,
+            preview_annotate_pick,
+            preview_annotate_stage,
             preview_server_open,
             preview_server_close,
             preview_dev_servers,
@@ -1988,6 +2095,7 @@ mod test_common;
 mod tests {
     use super::live::{Attempt, ConnectionId, Live, Slot, Slots};
     use super::{AppState, Asked, Transfers};
+    use crate::lock::Locked;
     use std::time::Duration;
 
     fn id(connection: &str) -> ConnectionId {
@@ -1999,11 +2107,30 @@ mod tests {
     }
 
     #[test]
-    fn a_chat_exports_only_as_markdown_or_json_each_with_its_own_extension() {
+    fn a_suggested_save_name_is_one_plain_file_name() {
+        let name = |s: &str| super::suggested_name(s, "download");
+        assert_eq!(name("invoice\u{202E}fdp.exe"), "invoicefdp.exe");
+        assert_eq!(name("a\u{2066}b\u{2069}c\u{200F}d\u{FEFF}e\u{0007}f\nġ.txt"), "abcdefġ.txt");
+        assert_eq!(name(r"..\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\x.bat"), "x.bat");
+        assert_eq!(name("../../etc/passwd"), "passwd");
+        assert_eq!(name("C:x.txt"), "Cx.txt");
+        assert_eq!(name("report.txt:stream"), "report.txtstream");
+        assert_eq!(name(r#"a<b>c"d|e?f*g.md"#), "abcdefg.md");
+        assert_eq!(name("  .hidden. "), "hidden");
+        for nothing in ["", "..", "/", r"dir\", "\u{202E}", " . "] {
+            assert_eq!(name(nothing), "download", "{nothing:?}");
+        }
+        assert_eq!(name("Chat — notes 2026.md"), "Chat — notes 2026.md");
+        assert_eq!(name(&"é".repeat(150)).len(), 200);
+    }
+
+    #[test]
+    fn a_chat_exports_only_as_markdown_json_or_an_html_page_each_with_its_own_extension() {
         let format = |s: &str| serde_json::from_str::<super::ExportFormat>(s);
         assert_eq!(format("\"markdown\"").unwrap().filter(), ("Markdown", &["md"][..]));
         assert_eq!(format("\"json\"").unwrap().filter(), ("JSON", &["json"][..]));
-        for other in ["\"png\"", "\"Markdown\"", "\"md\"", "\"\""] {
+        assert_eq!(format("\"html\"").unwrap().filter(), ("HTML page", &["html"][..]));
+        for other in ["\"png\"", "\"Markdown\"", "\"md\"", "\"htm\"", "\"HTML\"", "\"\""] {
             assert!(format(other).is_err(), "{other} should be refused");
         }
     }
@@ -2067,11 +2194,11 @@ mod tests {
         let elsewhere = forever(9, asked_now(&transfers, "server-two"));
         assert_eq!(old.await.unwrap(), Err(super::TRANSFER_STOPPED.to_owned()));
         // The old run ended after the new one registered; the new one must still be reachable.
-        assert!(transfers.tasks.lock().unwrap().contains_key(&7));
+        assert!(transfers.tasks.locked().contains_key(&7));
         transfers.stop(&id("server-one"));
         assert_eq!(new.await.unwrap(), Err(super::TRANSFER_STOPPED.to_owned()));
         assert_eq!(transfers.epoch(&id("server-one")), asked.epoch + 1);
-        let running: Vec<u64> = transfers.tasks.lock().unwrap().keys().copied().collect();
+        let running: Vec<u64> = transfers.tasks.locked().keys().copied().collect();
         assert_eq!(running, [9], "only the stopped connection's transfers ended");
         // Asked for before that stop: it never starts.
         let started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -2125,7 +2252,7 @@ mod tests {
                         let _ = ws.send(Message::text(ready)).await;
                         while let Some(Ok(message)) = ws.recv().await {
                             if let Message::Text(text) = message {
-                                got.lock().unwrap().push(text.to_string());
+                                got.locked().push(text.to_string());
                             }
                         }
                     })
@@ -2134,7 +2261,7 @@ mod tests {
             )
             .layer(axum::middleware::from_fn(move |req: axum::extract::Request, next: axum::middleware::Next| {
                 let auth = req.headers().get(axum::http::header::AUTHORIZATION).and_then(|v| v.to_str().ok()).map(str::to_owned);
-                note.lock().unwrap().push((req.uri().path().to_owned(), auth));
+                note.locked().push((req.uri().path().to_owned(), auth));
                 next.run(req)
             }));
         let count = accepted.clone();
@@ -2166,7 +2293,7 @@ mod tests {
             let _connection = connect(&base, credential).await;
             let want = [("/api/status", None), (sign_in, auth.clone()), ("/api/auth/ws-ticket", auth), ("/api/ws", None)];
             // The shared client never carries the token: the status read and the socket go without it.
-            assert_eq!(*heard.lock().unwrap(), want.map(|(p, a)| (p.to_owned(), a)));
+            assert_eq!(*heard.locked(), want.map(|(p, a)| (p.to_owned(), a)));
             assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2, "one HTTP connection plus the WebSocket, for {sign_in}");
         }
     }
@@ -2278,7 +2405,7 @@ mod tests {
         for i in 0..10_000 {
             super::hermes_connect_cancel(app.state(), format!("finished-{i}"));
         }
-        let kept = app.state::<AppState>().connecting.lock().unwrap().stopped.len();
+        let kept = app.state::<AppState>().connecting.locked().stopped.len();
         assert!(kept < 1000, "{kept} stops kept");
     }
 
@@ -2333,7 +2460,7 @@ mod tests {
         let attached = dir.join("notes.txt");
         std::fs::write(&attached, "MEETING NOTES").unwrap();
         app.state::<super::Attachable>().add([attached.to_string_lossy().into_owned()]);
-        let heard = |bytes: &str| frames.lock().unwrap().iter().any(|f| f.contains(&base64::engine::general_purpose::STANDARD.encode(bytes)));
+        let heard = |bytes: &str| frames.locked().iter().any(|f| f.contains(&base64::engine::general_purpose::STANDARD.encode(bytes)));
 
         let sent = send_through_ipc(&webview, &secret);
         send_through_ipc(&webview, &attached).expect("an attached file is sent");
@@ -2364,10 +2491,10 @@ mod tests {
     /// Whether the stub that keeps `frames` got `frame`, given a while.
     async fn heard(frames: &Frames, frame: &str) -> bool {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !frames.lock().unwrap().iter().any(|f| f == frame) && std::time::Instant::now() < deadline {
+        while !frames.locked().iter().any(|f| f == frame) && std::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        frames.lock().unwrap().iter().any(|f| f == frame)
+        frames.locked().iter().any(|f| f == frame)
     }
 
     /// Every command that names its connection is refused as `Closed` for `attempt`.
@@ -2392,7 +2519,7 @@ mod tests {
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
         connect_command(&app, &x, "server-one", "A1").await.expect("signs in");
         connect_command(&app, &x, "server-one", "A2").await.expect("signs in again");
-        let tickets = |heard: &Heard| heard.lock().unwrap().iter().filter(|(p, _)| p == "/api/auth/ws-ticket").count();
+        let tickets = |heard: &Heard| heard.locked().iter().filter(|(p, _)| p == "/api/auth/ws-ticket").count();
         let before = tickets(&heard_by_x);
 
         refused_as_closed(&webview, "A1").await;
@@ -2406,8 +2533,8 @@ mod tests {
         assert_eq!(tickets(&heard_by_y), before, "the new server was asked for a ticket for a reopen meant for the one replaced");
         send(&webview, "B", "FOR B").await.expect("a frame for the connection held is sent");
         assert!(heard(&to_y, "FOR B").await);
-        assert_eq!(*to_y.lock().unwrap(), ["FOR B"], "the new server heard a frame meant for the one replaced");
-        assert_eq!(*to_x.lock().unwrap(), ["FOR A2"], "a replaced connection still sent a frame");
+        assert_eq!(*to_y.locked(), ["FOR B"], "the new server heard a frame meant for the one replaced");
+        assert_eq!(*to_x.locked(), ["FOR A2"], "a replaced connection still sent a frame");
     }
 
     /// ADR 0125: with room for two, each connection's commands reach its own server, and closing one leaves the
@@ -2427,7 +2554,7 @@ mod tests {
         send(&webview, "A", "FOR A").await.expect("a's frame is sent");
         send(&webview, "B", "FOR B").await.expect("b's frame is sent");
         assert!(heard(&to_a, "FOR A").await && heard(&to_b, "FOR B").await);
-        assert_eq!((to_a.lock().unwrap().clone(), to_b.lock().unwrap().clone()), (vec!["FOR A".to_owned()], vec!["FOR B".to_owned()]));
+        assert_eq!((to_a.locked().clone(), to_b.locked().clone()), (vec!["FOR A".to_owned()], vec!["FOR B".to_owned()]));
 
         let close_a = || call(&webview, "hermes_disconnect", serde_json::json!({"attempt": "A"}));
         close_a().await.expect("a closes");
@@ -2442,7 +2569,7 @@ mod tests {
         let page = |attempt: &str| serde_json::json!({"url": "http://localhost:3000/", "key": "next", "attempt": attempt, "onEvent": "__CHANNEL__:1"});
         assert!(call(&webview, "preview_server_open", page("A")).await.unwrap_err().contains("notConnected"));
         assert!(call(&webview, "preview_server_open", page("B")).await.unwrap_err().contains("noSshTarget"));
-        assert_eq!(*to_a.lock().unwrap(), ["FOR A"]);
+        assert_eq!(*to_a.locked(), ["FOR A"]);
     }
 
     /// ADR 0125: a connect that waits on its server holds up no other connection's commands, and its own stop still
@@ -2503,7 +2630,7 @@ mod tests {
         let sent = tokio::time::timeout(Duration::from_secs(2), send(&webview, "A", "MEANT FOR A")).await.expect("the send waited for the slow connect");
         let refused = sent.expect_err("a frame for the replaced connection was sent");
         assert!(refused.contains("closed"), "refused for another reason: {refused}");
-        assert!(to_a.lock().unwrap().is_empty(), "the replaced connection still sent it");
+        assert!(to_a.locked().is_empty(), "the replaced connection still sent it");
 
         super::hermes_connect_cancel(app.state(), "B".into());
         assert_eq!(connecting.await.unwrap().err().as_deref(), Some(super::CONNECT_STOPPED));

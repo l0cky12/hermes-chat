@@ -24,6 +24,8 @@ export const tauriLocalFiles: LocalFiles = {
 export type WebPages = {
   /** Whether the site refuses to be shown in the pane's frame, asked the way the frame asks. */
   check(url: string): Promise<Framing>;
+  /** Whether an https:// address answers at all, so a typed address opens over https:// rather than http:// (ADR 0103). */
+  httpsAnswers(url: string): Promise<boolean>;
   /** Opens the page in the owner's default browser, and gives the browser's name where it is known. Rejects with why it couldn't. */
   openInBrowser(url: string): Promise<string | null>;
   /** Where there is one (Linux), the Preview's own page view, which takes the frame's place (ADR 0081). */
@@ -75,6 +77,7 @@ export const tauriNativePages: NativePages = {
 
 export const tauriWebPages: WebPages = {
   check: (url) => invoke<Framing>("preview_check_web", { url, userAgent: navigator.userAgent }).catch(asError),
+  httpsAnswers: (url) => invoke<boolean>("preview_https_answers", { url }).catch(asError),
   openInBrowser: (url) => invoke<string | null>("preview_open_in_browser", { url }).catch(asError),
   ...(/\bLinux\b/.test(navigator.userAgent) && { native: tauriNativePages }),
   devServers: (attempt) => invoke<DevServers>("preview_dev_servers", { attempt: attempt ?? "" }).catch(asError),

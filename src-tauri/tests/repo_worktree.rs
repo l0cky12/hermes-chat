@@ -5,6 +5,7 @@
 mod common;
 
 use common::write_executable;
+use hermes_chat::lock::Locked;
 use hermes_chat::repo_git::{self, RepoError, Request};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -159,9 +160,9 @@ async fn a_new_branch_worktree_is_made_beside_the_repository_from_the_base_shown
 
     let lines = Arc::new(Mutex::new(Vec::<Value>::new()));
     let seen = lines.clone();
-    let made = repo_git::run_streaming(helper(&[]), &create_req(&app, ID, &p, false), &move |v| seen.lock().unwrap().push(v)).await.unwrap();
+    let made = repo_git::run_streaming(helper(&[]), &create_req(&app, ID, &p, false), &move |v| seen.locked().push(v)).await.unwrap();
     assert_eq!(made["worktree"]["state"], "ready");
-    assert!(lines.lock().unwrap().iter().any(|l| l["step"] == "create"), "progress came as it went");
+    assert!(lines.locked().iter().any(|l| l["step"] == "create"), "progress came as it went");
 
     let wt = d.path().join("app-feature-login");
     assert_eq!(git(&wt, &["rev-parse", "HEAD"]), base);
@@ -310,13 +311,13 @@ async fn a_creation_cut_off_part_way_is_found_and_can_be_finished_or_forgotten()
         Duration::from_secs(4),
         repo_git::run_streaming(helper(&[("HERMES_REPO_TEST_SETUP_DELAY", "30")]), &req, &move |l| {
             if l["step"] == "setup" {
-                *flag.lock().unwrap() = true;
+                *flag.locked() = true;
             }
         }),
     )
     .await;
     assert!(cut.is_err(), "it was cut off");
-    assert!(*started.lock().unwrap());
+    assert!(*started.locked());
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Reconnected: the list finds it, and says what happened.
@@ -628,12 +629,12 @@ async fn two_retries_of_setup_cant_both_run() {
         // Long enough for the second Retry and the removal plan to run inside it, on a busy machine too.
         repo_git::run_streaming(helper(&[("HERMES_REPO_TEST_SETUP_DELAY", "5")]), &req, &move |l| {
             if l["step"] == "setup" {
-                *flag.lock().unwrap() = true;
+                *flag.locked() = true;
             }
         })
         .await
     });
-    while !*started.lock().unwrap() {
+    while !*started.locked() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert_eq!(kind(ask(Request::WorktreeSetup { repo: s(&app), id: ID.into() }).await.unwrap_err()), "busy");

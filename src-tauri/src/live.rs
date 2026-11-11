@@ -1,6 +1,7 @@
 //! The connections Rust holds open, each under the saved connection it belongs to (ADR 0125, step 1). A command
 //! reaches its connection by the attempt that opened it (ADR 0142), so one replaced or closed since is refused.
 
+use crate::lock::Locked;
 use crate::saved_password::{self, Address};
 use crate::transport::{Dashboard, Pipe, TransportError};
 use crate::tunnel::Tunnel;
@@ -34,7 +35,7 @@ impl Attempt {
 /// What one open connection holds. Dropping it closes its socket and its tunnel.
 pub(crate) struct Live {
     pub(crate) dashboard: Arc<Dashboard>,
-    pub(crate) pipe: Arc<Pipe>,
+    pub(crate) pipe: Pipe,
     pub(crate) _tunnel: Option<Tunnel>,
     /// The SSH target the sign-in went through, if it did: where the Preview's server pages go (server_page.rs).
     pub(crate) ssh_target: Option<String>,
@@ -75,20 +76,20 @@ impl<L> Slots<L> {
 
     /// The slot opened as `attempt`. An attempt with no name opens a connection no command can reach.
     pub(crate) fn find(&self, attempt: &Attempt) -> Result<(ConnectionId, Arc<Slot<L>>), TransportError> {
-        let map = self.map.lock().unwrap();
+        let map = self.map.locked();
         let found = map.iter().find(|(_, s)| !attempt.0.is_empty() && s.attempt == *attempt);
         found.map(|(id, s)| (id.clone(), s.clone())).ok_or(TransportError::Closed)
     }
 
     /// Whether `slot` is still the one held for `id`: false once it was replaced or closed.
     pub(crate) fn is_current(&self, id: &ConnectionId, slot: &Arc<Slot<L>>) -> bool {
-        self.map.lock().unwrap().get(id).is_some_and(|s| Arc::ptr_eq(s, slot))
+        self.map.locked().get(id).is_some_and(|s| Arc::ptr_eq(s, slot))
     }
 
     /// Takes out the connections that give way to a new one for `id`, and names them: every one at a limit of 1, as
     /// one connection replaces another; above it only `id`'s own, since which other gives way is not decided yet.
     pub(crate) fn evict_for(&self, id: &ConnectionId) -> Vec<ConnectionId> {
-        let mut map = self.map.lock().unwrap();
+        let mut map = self.map.locked();
         if self.limit <= 1 {
             map.drain().map(|(id, _)| id).collect()
         } else {
@@ -97,12 +98,12 @@ impl<L> Slots<L> {
     }
 
     pub(crate) fn insert(&self, id: ConnectionId, slot: Arc<Slot<L>>) {
-        self.map.lock().unwrap().insert(id, slot);
+        self.map.locked().insert(id, slot);
     }
 
     /// Takes `slot` out if it is still the one held for `id`, and says whether it was.
     pub(crate) fn remove_if(&self, id: &ConnectionId, slot: &Arc<Slot<L>>) -> bool {
-        let mut map = self.map.lock().unwrap();
+        let mut map = self.map.locked();
         let current = map.get(id).is_some_and(|s| Arc::ptr_eq(s, slot));
         if current {
             map.remove(id);
@@ -130,7 +131,7 @@ impl<L> Slots<L> {
 
     #[cfg(test)]
     pub(crate) fn ids(&self) -> Vec<ConnectionId> {
-        self.map.lock().unwrap().keys().cloned().collect()
+        self.map.locked().keys().cloned().collect()
     }
 }
 
