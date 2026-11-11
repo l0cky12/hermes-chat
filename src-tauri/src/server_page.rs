@@ -13,14 +13,15 @@
 //!   Linux, a connection from a program run by another account is closed unanswered (`loopback_peer`, ADR 0105).
 //!
 //! The webview names only the page's address. Rust parses it again and refuses anything that isn't an http(s) address
-//! on the server's loopback; it never takes an ssh host, option or socket path from the webview.
+//! on the server's loopback, or is on a port that isn't for web pages; it never takes an ssh host, option or socket
+//! path from the webview.
 //!
 //! A tunnel is registered before ssh starts, and ends when the webview closes it (the page leaves the Preview, even
 //! while it is still connecting), when ssh exits, when the sign-in goes or moves to another SSH target, and when the
 //! app exits: ssh is started with `PR_SET_PDEATHSIG` from a thread that lives as long as the app (on Windows, in a job
 //! object that is closed with the app), so even an app that crashes takes it along.
 
-use crate::loopback_peer;
+use crate::loopback_peer::{self, Peers};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -159,8 +160,17 @@ impl ServerPage {
     }
 }
 
+/// The Fetch standard's bad ports: browsers never load a page from them. The frame loads every server page from an
+/// ephemeral port on this computer, so WebKit's own block never sees the server's port (ADR 0138).
+const BAD_PORTS: &[u16] = &[
+    1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137,
+    139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723,
+    2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080,
+];
+
 /// Parses a page address the webview sent and keeps it only if it is an http(s) address, without a username or
-/// password, on `localhost`, `127.0.0.1`, `[::1]` or `0.0.0.0`.
+/// password, on `localhost`, `127.0.0.1`, `[::1]` or `0.0.0.0`, at a port for web pages: not the dashboard's, a
+/// database's (`dev_servers::NOT_WEB`) or a bad port (`BAD_PORTS`).
 pub fn server_page(raw: &str) -> Result<ServerPage, ServerPageError> {
     let url = Url::parse(raw.trim()).map_err(|_| ServerPageError::NotWeb("That isn't a web address.".into()))?;
     if !matches!(url.scheme(), "http" | "https") {
@@ -179,6 +189,12 @@ pub fn server_page(raw: &str) -> Result<ServerPage, ServerPageError> {
     let port = url.port_or_known_default().ok_or_else(|| ServerPageError::NotWeb("That isn't a web address.".into()))?;
     if port == 0 {
         return Err(ServerPageError::NotWeb("Port 0 isn't a port a page can be on.".into()));
+    }
+    if port == crate::DASHBOARD_PORT {
+        return Err(ServerPageError::NotWeb(format!("Port {port} is the Hermes dashboard's own, and the Preview doesn't open it.")));
+    }
+    if BAD_PORTS.contains(&port) || crate::dev_servers::NOT_WEB.contains(&port) {
+        return Err(ServerPageError::NotWeb(format!("Port {port} is for a service other than web pages, so the Preview doesn't open it.")));
     }
     Ok(ServerPage { url, host, port })
 }
@@ -716,7 +732,7 @@ impl ServerPages {
             // Everything the tunnel holds lives in this task: ending it drops the listener, the copies, ssh (killed on
             // drop) and the socket's folder.
             let _end = end;
-            let serving = serve(listener, address);
+            let serving = serve(listener, address, Peers::Account(loopback_peer::this_account()));
             tokio::pin!(serving);
             let why = tokio::select! {
                 status = child.wait() => {
@@ -924,15 +940,9 @@ fn client_hello() -> Vec<u8> {
     [&[0x16, 0x03, 0x01][..], &sized(&handshake)].concat()
 }
 
-/// Accepts the frame's connections on `listener` and copies each one to and from ssh's `socket`. Runs until dropped;
-/// returns only if accepting fails. A connection from a program run by another account on this computer is closed
-/// unanswered (ADR 0105).
-pub(crate) async fn serve(listener: TcpListener, socket: Address) {
-    serve_for(listener, socket, loopback_peer::this_account()).await
-}
-
-/// `serve`, for programs run by `account`.
-async fn serve_for(listener: TcpListener, socket: Address, account: loopback_peer::Account) {
+/// Accepts connections on `listener` and copies each one to and from ssh's `socket`. Runs until dropped; returns only
+/// if accepting fails. A connection from anyone but `peers` is closed unanswered (ADR 0105, ADR 0138).
+pub(crate) async fn serve(listener: TcpListener, socket: Address, peers: Peers) {
     let mut conns = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
@@ -940,7 +950,7 @@ async fn serve_for(listener: TcpListener, socket: Address, account: loopback_pee
                 let Ok((mut tcp, _)) = accepted else { return };
                 let socket = socket.clone();
                 conns.spawn(async move {
-                    if !loopback_peer::runs_as(&tcp, account) {
+                    if !loopback_peer::admits(peers, &tcp) {
                         return;
                     }
                     if let Ok(mut unix) = connect(&socket).await {
@@ -986,6 +996,17 @@ mod tests {
         assert!(matches!(server_page("http://localhost:0/"), Err(ServerPageError::NotWeb(_))));
         for raw in ["https://example.com/", "http://10.0.0.5:3000/", "http://127.0.0.2:3000/", "http://localhost.evil.com/", "http://app.localhost:3000/"] {
             assert_eq!(server_page(raw), Err(ServerPageError::NotLoopback), "{raw}");
+        }
+    }
+
+    #[test]
+    fn ports_for_the_dashboard_and_other_services_than_web_pages_are_refused() {
+        for port in [9119, 22, 25, 110, 6000, 10080, 5432, 6379, 27017] {
+            let raw = format!("http://localhost:{port}/");
+            assert!(matches!(server_page(&raw), Err(ServerPageError::NotWeb(ref m)) if m.contains(&port.to_string())), "{raw}");
+        }
+        for port in [80, 443, 3000, 5173, 8000, 8080, 9118, 9120] {
+            assert_eq!(page(&format!("http://127.0.0.1:{port}/")).port, port);
         }
     }
 
@@ -1707,7 +1728,7 @@ while True:
         });
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        tokio::spawn(serve_for(listener, dir.socket(), account));
+        tokio::spawn(serve(listener, dir.socket(), Peers::Account(account)));
         (port, dir)
     }
 

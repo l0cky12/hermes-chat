@@ -2505,6 +2505,7 @@ export function Main({
           started={!!listed}
           picked={p.picked}
           jump={p.jump}
+          focusItem={focusItem?.pane === p.key && focusItem.chatId === p.chatId ? focusItem : undefined}
           showSubagent={p.subagent?.chatId === p.chatId ? p.subagent : undefined}
           active={!covered && !covering && !previewCovers && (!split || isActive)}
           split={split}
@@ -3446,6 +3447,7 @@ function ChatView({
   started,
   picked,
   jump,
+  focusItem,
   showSubagent,
   active,
   split,
@@ -3501,6 +3503,8 @@ function ChatView({
   picked?: { found: Found; at: number };
   /** A tool call to go to, from Outputs. */
   jump?: JumpTarget;
+  /** The card or message an Inbox entry is about, which Main scrolls to and focuses once the chat shows it. */
+  focusItem?: { itemId?: string; approval: boolean };
   /** A subagent to open in the chat's Subagents panel, from the agent office. */
   showSubagent?: { id: SubagentId; at: number };
   active: boolean;
@@ -3926,6 +3930,7 @@ function ChatView({
       notLoaded={started && status !== "connected" && !chat.runtimeId && chat.items.every(isOutgoing)}
       findTarget={findTarget}
       jumpTo={jump}
+      reveal={focusItem}
       showSubagent={showSubagent}
       onJumpMissed={() =>
         onToast(jump?.rowId !== undefined ? "Couldn't find the message this branch was made from in the chat's history." : "Couldn't find the tool call that made this file in the chat's history.")

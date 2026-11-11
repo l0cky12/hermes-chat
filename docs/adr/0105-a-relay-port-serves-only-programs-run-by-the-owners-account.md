@@ -1,5 +1,7 @@
 # A relay port serves only programs run by the owner's account
 
+> **Partly superseded by [ADR 0138](0138-a-preview-page-reaches-only-its-own-tunnel-and-runs-in-webkits-sandbox.md)** (#470). The sign-in tunnel's relay now admits only this process's own sockets, so "One check for both tunnels" no longer holds, and a program run by the owner's account can use only a server page's relay. The rest of this ADR stands.
+
 The sign-in tunnel (ADR 0098) and every server-page tunnel (ADR 0114) relay through a TCP listener Rust holds on `127.0.0.1:<ephemeral>`. Until this change, `server_page::serve` accepted every connection. Any program on the computer, under any account, could connect while the app was signed in. It could then reach the dashboard on the server's loopback, or a page's dev server. A dashboard with sign-in off, because it listens only on the server's loopback (`transport.rs`, `GateOff`), is then an unauthenticated Hermes that can run agent tools (#355).
 
 ## Decisions

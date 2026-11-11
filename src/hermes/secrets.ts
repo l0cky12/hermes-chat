@@ -26,18 +26,21 @@ const hasDigit = (value: string) => /\d/.test(value);
 // as written, or escaped in JSON, as a tool call's arguments are.
 const RULES: { kind: string; re: RegExp; ok?: (value: string, m: RegExpMatchArray) => boolean }[] = [
   { kind: "private key", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g },
-  { kind: "password in a link", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s/?#@:]+:([^\s/?#@]+)@/gi, ok: (v) => !PLACEHOLDER.test(v) },
+  // A scheme is at most 32 characters, and the JWT can't start just after a `-`: either way, a run like `a.a.a.…` or
+  // `eyJa-eyJa-…` would be scanned again from each of its words, which takes seconds on 40 KB (#490).
+  { kind: "password in a link", re: /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s/?#@:]+:([^\s/?#@]+)@/gi, ok: (v) => !PLACEHOLDER.test(v) },
   { kind: "API key", re: new RegExp(`\\b${PROVIDER_KEY}`, "g") },
-  { kind: "sign-in token (JWT)", re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
+  { kind: "sign-in token (JWT)", re: /\b(?<!-)eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
   // In a header any token counts; in prose, "Bearer" and a long word must have a digit too.
   { kind: "bearer token", re: /\bauthorization(?:\\?["'])?\s*[:=]\s*(?:\\?["'])?Bearer\s+([A-Za-z0-9._~+/-]{16,}=*)/gi },
   { kind: "bearer token", re: /\bBearer\s+([A-Za-z0-9._~+/-]{16,}=*)/gi, ok: hasDigit },
   { kind: "bot token", re: /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/g },
   {
     kind: "password or key",
-    // A quoted value runs to its closing quote, past escaped characters (`\"`) in it. Inside a JSON string (`\"…\"`), an
+    // At most eight words name it (`aws_secret_access_key`), so `a-a-a-…` isn't scanned again from each word. A quoted
+    // value runs to its closing quote, past escaped characters (`\"`) in it. Inside a JSON string (`\"…\"`), an
     // escaped backslash is `\\` and an escaped quote of the inner text is `\\\"`.
-    re: /\b(?:[A-Za-z0-9]+[_-])*(?:password|passwd|pwd|passphrase|secret(?:[_-]?key)?|api[_-]?key|apikey|access[_-]?key|private[_-]?key|token)(?:\\?["'])?\s*[:=]\s*(?:\\"((?:[^"\\\n]|\\\\\\"|\\\\)+)\\"|"((?:[^"\\\n]|\\.)+)"|'((?:[^'\\\n]|\\.)+)'|(?<bare>(?:[^\s,;&"'`()[\]{}<>\\]|\\(?!["']))+))/gi,
+    re: /\b(?:[A-Za-z0-9]+[_-]){0,8}(?:password|passwd|pwd|passphrase|secret(?:[_-]?key)?|api[_-]?key|apikey|access[_-]?key|private[_-]?key|token)(?:\\?["'])?\s*[:=]\s*(?:\\"((?:[^"\\\n]|\\\\\\"|\\\\)+)\\"|"((?:[^"\\\n]|\\.)+)"|'((?:[^'\\\n]|\\.)+)'|(?<bare>(?:[^\s,;&"'`()[\]{}<>\\]|\\(?!["']))+))/gi,
     ok: (value, m) => looksSecret(value, m.groups?.bare !== undefined),
   },
 ];

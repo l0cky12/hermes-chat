@@ -47,7 +47,7 @@ use tunnel::Tunnel;
 
 /// The owner's `hermes dashboard` port on the server's loopback (research doc, "SSH tunnel, Host header
 /// and protocol generation").
-const DASHBOARD_PORT: u16 = 9119;
+pub(crate) const DASHBOARD_PORT: u16 = 9119;
 
 struct Connection {
     dashboard: Arc<Dashboard>,

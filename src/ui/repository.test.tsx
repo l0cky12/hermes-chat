@@ -369,6 +369,63 @@ describe("Repository screen, staging", () => {
   });
 });
 
+describe("Repository screen, a file name that isn't UTF-8", () => {
+  it("lists it, but offers no way to stage it, and says why", async () => {
+    const user = userEvent.setup();
+    const odd = "caf\ufffd.txt";
+    const { api, calls } = fakeApi((_t, r) => {
+      if (r.op === "status") return statusOf({ entries: [...STAMPED().entries, { kind: "untracked", x: "?", y: "?", sub: false, path: odd, binary: false, nameLossy: true }] });
+      if (r.op === "publishInfo") return NO_REMOTE;
+      if (r.op === "diff") return diffOf("");
+      throw new Error(`unexpected ${r.op}`);
+    });
+    show(api);
+    await screen.findByText(TOP);
+    expect(screen.getByText("name not UTF-8")).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: `Tick ${odd} to stage it` })).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Tick notes.txt to stage it" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: new RegExp(`${odd}`) }));
+    expect(await screen.findByText(/This file's name isn't UTF-8/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Stage file/ })).toBeNull();
+    // A file it can name does get the button.
+    await user.click(screen.getByRole("button", { name: /notes\.txt/ }));
+    expect(await screen.findByRole("button", { name: /Stage file/ })).toBeTruthy();
+    expect(count(calls, "stage")).toBe(0);
+  });
+
+  it("drops a tick kept across a refresh once the change can't be named", async () => {
+    const user = userEvent.setup();
+    let renamed = false;
+    const { api, calls } = fakeApi((_t, r) => {
+      if (r.op === "status")
+        return statusOf({
+          entries: [
+            renamed
+              ? { kind: "renamed", x: "R", y: ".", sub: false, path: "dest.txt", origPath: "caf\ufffd.txt", staged: [0, 0], nameLossy: true }
+              : { kind: "ordinary", x: "M", y: ".", sub: false, path: "dest.txt", staged: [1, 0] },
+          ],
+        });
+      if (r.op === "publishInfo") return NO_REMOTE;
+      if (r.op === "diff") return diffOf("");
+      if (r.op === "unstage") return { head: "h", index: "i2" };
+      throw new Error(`unexpected ${r.op}`);
+    });
+    show(api);
+    await screen.findByText(TOP);
+    await user.click(screen.getByRole("checkbox", { name: "Tick dest.txt to unstage it" }));
+    const staged = () => within(screen.getByRole("region", { name: "Staged" }));
+    expect((staged().getByRole("button", { name: /Unstage 1 ticked/ }) as HTMLButtonElement).disabled).toBe(false);
+    // Another tool makes it a rename from a file whose name isn't UTF-8.
+    renamed = true;
+    const reads = count(calls, "status");
+    await user.click(screen.getAllByRole("button", { name: /Refresh/ })[0]);
+    await waitFor(() => expect(count(calls, "status")).toBe(reads + 1));
+    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "Tick dest.txt to unstage it" })).toBeNull());
+    expect((staged().getByRole("button", { name: /Unstage ticked/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(count(calls, "unstage")).toBe(0);
+  });
+});
+
 describe("Repository screen, committing", () => {
   async function review(api: RepoApi, user: ReturnType<typeof userEvent.setup>, message = "Lengthen sessions") {
     show(api);
@@ -444,7 +501,12 @@ describe("Repository screen, committing", () => {
     await waitFor(() => expect(count(calls, "preview")).toBe(previews + 1));
   });
 
-  it("reads HEAD again when the commit's answer is lost", async () => {
+  // A garbled answer counts as lost too: the server's python can be killed while a hook runs, and Git finish the commit.
+  it.each([
+    ["lost", () => Promise.reject(new RepoFailure("timeout", "The server didn't answer within 660 s."))],
+    ["garbled", () => Promise.reject(new RepoFailure("bad-reply", "The server's answer couldn't be read: no answer."))],
+    ["not a commit", () => Promise.resolve({ ok: "yes" })],
+  ])("reads HEAD again when the commit's answer is %s", async (_why, answer) => {
     const user = userEvent.setup();
     let committed = false;
     const { api } = fakeApi((_t, r) => {
@@ -452,13 +514,27 @@ describe("Repository screen, committing", () => {
       if (r.op === "preview") return PREVIEW;
       if (r.op === "commit") {
         committed = true;
-        throw new RepoFailure("timeout", "The server didn't answer within 660 s.");
+        return answer();
       }
       return diffOf("");
     });
     const dialog = within(await review(api, user));
     await user.click(await dialog.findByRole("button", { name: "Commit" }));
     expect(await dialog.findByText(/HEAD is now fedcba987654: a commit was made/)).toBeTruthy();
+  });
+
+  it("says so when Git made the commit but then exited with an error", async () => {
+    const user = userEvent.setup();
+    const { api } = fakeApi((_t, r) => {
+      if (r.op === "status") return STAMPED();
+      if (r.op === "preview") return PREVIEW;
+      if (r.op === "commit") return { head: "fedcba9876543210", subject: "s", output: "fatal: unable to write new index file", exitCode: 128, matches: true, files: [], branch: "feature/login" };
+      return diffOf("");
+    });
+    const dialog = within(await review(api, user));
+    await user.click(await dialog.findByRole("button", { name: "Commit" }));
+    expect(await dialog.findByText(/Git made the commit, then exited with an error \(status 128\)/)).toBeTruthy();
+    expect(dialog.getByText(/unable to write new index file/)).toBeTruthy();
   });
 
   it("can't be reviewed with nothing staged, and fills in Hermes's suggestion to edit", async () => {
@@ -796,10 +872,10 @@ describe("Repository screen, publishing when things half work", () => {
     expect(screen.queryByText(/The push was refused/)).toBeNull();
   });
 
-  it("asks the remote itself when a push's answer is lost", async () => {
+  it.each(["timeout", "bad-reply", "ssh"])("asks the remote itself when a push's answer is lost (%s)", async (kind) => {
     const user = userEvent.setup();
     const { api, calls } = publishing((r) => {
-      if (r.op === "push") throw new RepoFailure("timeout", "The server didn't answer within 400 s.");
+      if (r.op === "push") throw new RepoFailure(kind, "The answer was lost.");
       if (r.op === "remoteHead") return { remoteHead: HEAD, head: HEAD };
       return {};
     });

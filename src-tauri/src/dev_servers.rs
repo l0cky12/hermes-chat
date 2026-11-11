@@ -22,7 +22,7 @@ pub struct DevServers {
     pub local: Vec<Listening>,
 }
 
-const NOT_WEB: &[u16] = &[5432, 3306, 6379, 11211, 27017, 5672, 9092, 2181];
+pub(crate) const NOT_WEB: &[u16] = &[5432, 3306, 6379, 11211, 27017, 5672, 9092, 2181];
 const NOT_DEV: &[&str] = &["ssh", "sshd"];
 /// Where Linux hands out a port to a program that asks for any free one (`ip_local_port_range`): a listener from here
 /// up is a tool's, such as a test driver or a tunnel's end, not a dev server someone started on its port.
@@ -103,15 +103,7 @@ pub fn local() -> Vec<Listening> {
     use std::collections::HashMap;
     let listeners: Vec<Socket> =
         ["/proc/net/tcp", "/proc/net/tcp6"].iter().filter_map(|p| std::fs::read_to_string(p).ok()).flat_map(|t| parse_proc_net_tcp(&t)).collect();
-    let socket_inodes = |fd_dir: &std::path::Path| -> Vec<u64> {
-        std::fs::read_dir(fd_dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|fd| std::fs::read_link(fd.path()).ok())
-            .filter_map(|link| link.to_str()?.strip_prefix("socket:[")?.strip_suffix(']')?.parse().ok())
-            .collect()
-    };
+    use crate::loopback_peer::socket_inodes;
     let own = socket_inodes(std::path::Path::new("/proc/self/fd"));
     let me = std::process::id().to_string();
     let mut owners: HashMap<u64, String> = HashMap::new();

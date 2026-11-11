@@ -1,7 +1,7 @@
 // Automations (GLOSSARY.md "Automation", ADR 0108): Hermes webhook routes that start a task on the server when GitHub
 // sends an event. Hermes verifies, filters and runs them in its gateway, also while Hermes Chat is closed; this screen
 // sets them up, previews what an event would do, and shows what became of the events that arrived.
-import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { type RefObject, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowLeft, Check, CircleAlert, Copy, History, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, Trash2, Webhook, X } from "lucide-react";
 import {
   type Automation,
@@ -31,7 +31,10 @@ import {
   stateLabel,
   stockGaps,
   typedFilterValue,
+  type Preview,
+  type Verdict,
 } from "../hermes/automations";
+import { appPatterns } from "../hermes/patternRunner";
 import { Spinner } from "./bits";
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -295,6 +298,40 @@ export function Automations({
       </div>
     </div>
   );
+}
+
+const VERDICT_CLASS = { true: "pass", false: "fail", checking: "checking", "too-slow": "too-slow" } as const;
+const NOT_STARTING = {
+  false: "Hermes would record it as filtered out and start nothing.",
+  checking: "Testing the pattern on this event…",
+  "too-slow": "The preview can't tell whether Hermes would start a task.",
+} as const;
+
+function VerdictMark({ v }: { v: Verdict }) {
+  return v === true ? <Check size={13} /> : v === false ? <X size={13} /> : v === "checking" ? <Spinner /> : <CircleAlert size={13} />;
+}
+
+const stillChecking = (p: Preview) => p.starts === "checking" || p.filters.some((f) => f.matches === "checking");
+
+/**
+ * The preview to show: while a pattern is being tested, the last one with nothing left to test, for up to `HOLD_MS`.
+ * A pattern usually comes back within a millisecond, and showing "checking" for that long would only flicker.
+ */
+function useSettledPreview(live: Preview | undefined): Preview | undefined {
+  const HOLD_MS = 150;
+  const last = useRef(live);
+  const [waited, setWaited] = useState(false);
+  const settled = !live || !stillChecking(live);
+  useEffect(() => {
+    if (settled) {
+      last.current = live;
+      setWaited(false);
+      return;
+    }
+    const t = setTimeout(() => setWaited(true), HOLD_MS);
+    return () => clearTimeout(t);
+  }, [live, settled]);
+  return settled || waited ? live : last.current;
 }
 
 function describeFilter(spec: FilterSpec): string {
@@ -848,7 +885,9 @@ function Editor({
     deliver,
     deliverChatId: base?.deliverChatId ?? "",
   };
-  const shownPreview = useMemo(() => (example ? preview(fields, example.payload, example.event) : undefined), [JSON.stringify(fields), example?.event, example?.payload]);
+  const tested = useSyncExternalStore(appPatterns.subscribe, appPatterns.version);
+  const livePreview = useMemo(() => (example ? preview(fields, example.payload, example.event, appPatterns.test) : undefined), [JSON.stringify(fields), example?.event, example?.payload, tested]);
+  const shownPreview = useSettledPreview(livePreview);
   const paths = useMemo(() => (example ? fieldPaths(example.payload) : []), [example?.payload]);
 
   const nameProblem = !base && !NAME_RE.test(fields.name) ? "Up to 64 lowercase letters, digits, - and _, starting with a letter or digit." : !base && list.automations.some((a) => a.name === fields.name) ? "There's already an automation with this name." : undefined;
@@ -1102,8 +1141,8 @@ function Editor({
                   {shownPreview.eventTaken ? <Check size={13} /> : <X size={13} />} A <span className="mono">{example.event}</span> event {shownPreview.eventTaken ? "is one it takes" : "isn't one it takes"}
                 </li>
                 {shownPreview.filters.map((f, i) => (
-                  <li key={i} className={f.matches ? "pass" : "fail"}>
-                    {f.matches ? <Check size={13} /> : <X size={13} />} {describeFilter(f.spec)}
+                  <li key={i} className={VERDICT_CLASS[`${f.matches}`]}>
+                    <VerdictMark v={f.matches} /> {describeFilter(f.spec)}
                   </li>
                 ))}
                 {coalesceOn && (
@@ -1120,21 +1159,27 @@ function Editor({
                   </li>
                 )}
               </ul>
-              <p className={shownPreview.starts ? "automation-verdict good" : "automation-verdict muted"}>
-                {shownPreview.starts
+              {shownPreview.slow && (
+                <p className="field-hint block warn-note">
+                  <CircleAlert size={13} />
+                  A pattern takes too long to test on this event, so the preview can't say whether it matches. Hermes may stall on it too.
+                </p>
+              )}
+              <p className={shownPreview.starts === true ? "automation-verdict good" : "automation-verdict muted"}>
+                {shownPreview.starts === true
                   ? coalesceOn && !shownPreview.ungrouped
                     ? `Hermes would wait ${coalesce.windowSeconds} s for more events about it, then start one task with this prompt:`
                     : "Hermes would start a task with this prompt:"
-                  : "Hermes would record it as filtered out and start nothing."}
+                  : NOT_STARTING[`${shownPreview.starts}`]}
               </p>
-              {shownPreview.starts && <pre className="job-prompt automation-rendered">{shownPreview.prompt}</pre>}
-              {shownPreview.starts && shownPreview.missing.length > 0 && (
+              {shownPreview.starts === true && <pre className="job-prompt automation-rendered">{shownPreview.prompt}</pre>}
+              {shownPreview.starts === true && shownPreview.missing.length > 0 && (
                 <p className="field-hint block warn-note">
                   <CircleAlert size={13} />
                   This event has no {shownPreview.missing.map((m) => `{${m}}`).join(", ")}: Hermes leaves {shownPreview.missing.length === 1 ? "it" : "them"} in the prompt as typed.
                 </p>
               )}
-              {shownPreview.starts && (
+              {shownPreview.starts === true && (
                 <p className="field-hint block">
                   <CircleAlert size={13} />
                   Text from the event (titles, bodies, comments) is written by whoever opened the issue, and goes into the prompt as it is. Hermes runs webhook

@@ -1403,6 +1403,8 @@ impl Dashboard {
     /// (`provider_account_write`, ADR 0133).
     /// `DELETE api/env` is refused whatever the body: a key leaves the server only through
     /// `Dashboard::remove_provider_key`, which checks that it is a model provider's (ADR 0095).
+    /// `GET api/config` comes back without its credentials, and `GET` on the raw config and on the sign-in and endpoint
+    /// lists is refused (ADR 0138).
     /// Returns the response body on 2xx.
     pub async fn request(&self, method: &str, path_and_query: &str, body: Option<String>) -> Result<String, TransportError> {
         let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
@@ -1443,6 +1445,12 @@ impl Dashboard {
         if method == Method::DELETE && is_env_route(&routed) {
             return Err(TransportError::NotRelayed(format!("{method} {path}")));
         }
+        let segments: Vec<&str> = routed.split('/').filter(|seg| !seg.is_empty()).collect();
+        // The config as written, and the two lists Rust reads without their previews (ADR 0133, ADR 0138).
+        if method == Method::GET && matches!(segments.as_slice(), ["api", "config", "raw"] | ["api", "providers", "oauth" | "custom-endpoints"]) {
+            return Err(TransportError::NotRelayed(format!("{method} {path}")));
+        }
+        let config = method == Method::GET && segments == ["api", "config"];
         let list = method == Method::GET && is_session_list(&routed);
         // Hermes answers removing an endpoint with the endpoints left, each with its key's preview (ADR 0133).
         let answer_unread = method == Method::DELETE && routed.starts_with("api/providers/custom-endpoints/");
@@ -1455,6 +1463,7 @@ impl Dashboard {
         match resp.status() {
             s if s.is_success() && list => text_unless_stalled(resp, SESSION_LIST_IDLE_LIMIT).await,
             s if s.is_success() && answer_unread => Ok(r#"{"ok":true}"#.to_owned()),
+            s if s.is_success() && config => config_without_credentials(&resp.text().await.map_err(unreachable)?),
             s if s.is_success() => resp.text().await.map_err(unreachable),
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
             _ if list => Err(unexpected_sent(resp, &self.hide, "", Some(SESSION_LIST_IDLE_LIMIT)).await),
@@ -1871,12 +1880,23 @@ pub fn protected_server_path(path: &str) -> bool {
         "bws_cache.enc.json",
         ".git-credentials",
     ];
-    let name = path.rsplit('/').next().unwrap_or_default().to_lowercase();
+    // The path as the server resolves it: `/x/.env/.` is `.env`.
+    let mut parts: Vec<String> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(part.to_lowercase()),
+        }
+    }
+    let name = parts.last().map(String::as_str).unwrap_or_default();
     name == ".env"
         || name.starts_with(".env.")
         || name == ".envrc"
-        || NAMES.contains(&name.as_str())
-        || path.split('/').any(|part| matches!(part.to_lowercase().as_str(), "mcp-tokens" | "pairing"))
+        || NAMES.contains(&name)
+        || parts.iter().any(|part| matches!(part.as_str(), "mcp-tokens" | "pairing"))
 }
 
 /// A download's hidden part file beside its destination, removed when dropped unless `keep` was called: a failed,
@@ -2078,7 +2098,10 @@ pub fn import_body_allowed(body: Option<&str>) -> bool {
 /// for and the routed one must stay under `api/` without `.` or `..` segments.
 fn relay_url(base: &Url, path: &str, query: &str) -> Result<(Url, String), TransportError> {
     let refused = || TransportError::NotRelayed(path.to_owned());
-    let under_api = |p: &str| p.starts_with("api/") && !p.split('/').any(|seg| seg == ".." || seg == ".");
+    // The allow-lists judge the path as given, so the URL parser mustn't change it: it resolves `.` and `..` spelled
+    // as `%2e` too, and reads `\` as `/`.
+    let dot = |seg: &str| matches!(percent_encoding::percent_decode_str(seg).decode_utf8_lossy().as_ref(), "." | "..");
+    let under_api = |p: &str| p.starts_with("api/") && !p.split(['/', '\\']).any(dot);
     if !under_api(path) {
         return Err(refused());
     }
@@ -2092,6 +2115,50 @@ fn relay_url(base: &Url, path: &str, query: &str) -> Result<(Url, String), Trans
         return Err(refused());
     }
     Ok((url, routed))
+}
+
+/// `GET api/config`'s answer without the values Hermes treats as credentials (`_is_secret_config_key` in
+/// `hermes_cli/config.py`): Hermes sends the config as written, provider keys and all (ADR 0138).
+fn config_without_credentials(text: &str) -> Result<String, TransportError> {
+    fn drop_credentials(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.retain(|key, v| v.is_object() || v.is_array() || !credential_key(key));
+                map.values_mut().for_each(drop_credentials);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(drop_credentials),
+            _ => {}
+        }
+    }
+    let mut config: serde_json::Value =
+        serde_json::from_str(text).map_err(|_| TransportError::Unexpected { status: 200, body: "the profile's config isn't JSON".into() })?;
+    drop_credentials(&mut config);
+    Ok(config.to_string())
+}
+
+/// A config key whose value Hermes treats as a credential: one of its names, or ending in one of its suffixes, with
+/// `-` read as `_` (`X-API-Key`).
+fn credential_key(key: &str) -> bool {
+    const NAMES: [&str; 15] = [
+        "api_key",
+        "apikey",
+        "key",
+        "token",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "secret",
+        "client_secret",
+        "password",
+        "passwd",
+        "authorization",
+        "private_key",
+        "bearer",
+        "jwt",
+    ];
+    const SUFFIXES: [&str; 6] = ["_api_key", "_token", "_secret", "_password", "_key", "_access_key"];
+    let key = key.to_lowercase().replace('-', "_");
+    NAMES.contains(&key.as_str()) || SUFFIXES.iter().any(|suffix| key.ends_with(suffix))
 }
 
 /// The dashboard's routes that write or delete files on the server: managed files (`api/files...`) and the agent's
