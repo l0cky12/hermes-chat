@@ -405,9 +405,11 @@ kbd {
 mark.hit { background: rgba(245, 184, 74, 0.28); color: inherit; border-radius: 3px; padding: 0 1px; }
 mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2px rgba(245, 184, 74, 0.35); }
 
-.transcript { flex: 1; overflow-y: auto; }
+/* The transcript keeps its own place when chunks come and go (ADR 0138), so a WebKitGTK that anchors must not also. */
+.transcript { flex: 1; overflow-y: auto; overflow-anchor: none; }
 .transcript-inner { max-width: var(--chat-width); margin: 0 auto; padding: 28px 32px 56px; display: flex; flex-direction: column; gap: 22px; }
 .transcript-chunk { display: flex; flex-direction: column; gap: 22px; }
+.transcript-gap { flex: none; }
 .imported-note {
   display: flex; align-items: center; gap: 6px; font-size: calc(12rem / 14); color: var(--faint); justify-content: center; padding-bottom: 6px;
 }

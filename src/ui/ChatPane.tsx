@@ -21,6 +21,7 @@ import { SideQuestionPair } from "./SideQuestions";
 import { Markdown } from "./Markdown";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { chunkBlocks } from "./transcriptChunks";
+import { useTranscriptWindow } from "./transcriptWindow";
 import { SourceIcon, Spinner, StoredTime, composing, escapeRe, highlight } from "./bits";
 import { caretAfter, editStep, inputKind, type EditStep } from "./editKeys";
 import type { EditKind } from "../hermes/editHistory";
@@ -520,8 +521,16 @@ export function ChatPane({
   const canRetry = status === "connected" && !chat.loading && !chat.running;
   const findRef = useRef<HTMLInputElement>(null);
   const stickToBottom = useRef(true);
+  const itemsRef = useRef(chat.items);
+  itemsRef.current = chat.items;
+  /** Renders the chunk of the first block `has` picks, when it is far from the view, so a lookup in the DOM finds it. */
+  const revealRef = useRef<(has: (b: Block | SideBlock) => boolean) => void>(() => {});
   // For the status bar's context inspector: a stored time to the message there, marked as a jump to a tool call is.
   const showInChat = useCallback<ShowInChat>((at) => {
+    const first = itemsRef.current.find((i) =>
+      at === undefined ? i.kind === "user" || i.kind === "assistant" || i.kind === "error" : (i.kind === "user" || i.kind === "assistant") && i.at !== undefined && i.at >= at,
+    );
+    if (first) revealRef.current((b) => b.id === first.id);
     const msgs = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>(".msg[data-item]") ?? []);
     const el = at === undefined ? msgs[0] : msgs.find((m) => m.dataset.at !== undefined && Number(m.dataset.at) >= at);
     if (!el) return false;
@@ -670,6 +679,27 @@ export function ChatPane({
   // Rebuilt only when the chat changes, so a reply streaming in the other pane costs this one little.
   const blocks = useMemo(() => toBlocks(chat.items, chat.sideQuestions), [chat.items, chat.sideQuestions]);
   const chunks = useMemo(() => chunkBlocks(blocks), [blocks]);
+  // The message or tool call being gone to is found in the chat, not the DOM: its chunk may be far from the view.
+  const jumpChunk = useMemo(() => {
+    if (!jumping) return undefined;
+    let has: (b: Block | SideBlock) => boolean;
+    if (jumping.callId !== undefined) {
+      const callId = jumping.callId;
+      has = (b) => b.kind === "tools" && b.tools.some((t) => t.callId === callId);
+    } else {
+      const { rowId, turn } = jumping;
+      const id =
+        rowId !== undefined
+          ? chat.items.find((i) => (i.kind === "user" || i.kind === "assistant") && i.rowId === rowId)?.id
+          : [...turns.anchor].find(([, t]) => t === turn)?.[0];
+      has = (b) => b.id === id;
+    }
+    const at = chunks.findIndex((c) => c.some(has));
+    return at < 0 ? undefined : at;
+  }, [jumping, chunks, chat.items, turns]);
+  // Find marks and counts its matches in the DOM, so it renders the whole chat.
+  const shown = useTranscriptWindow({ scroller: scrollRef, chunks, all: !!q, stuck: stickToBottom, target: jumpChunk });
+  revealRef.current = (has) => shown.reveal(chunks.findIndex((c) => c.some(has)));
   // Cards ignore clicks for a moment after the transcript changes, since it may have moved them under the pointer.
   const movedAt = useMemo(() => performance.now(), [chat.items, chat.sideQuestions]);
   const last = chat.items[chat.items.length - 1];
@@ -821,11 +851,12 @@ export function ChatPane({
               </ul>
             </div>
           )}
-          {chunks.map((c, i) => (
+          {shown.from > 0 && <div className="transcript-gap" aria-hidden style={{ height: shown.before }} />}
+          {chunks.slice(shown.from, shown.to + 1).map((c, i) => (
             <TranscriptChunk
               key={c[0].id}
               blocks={c}
-              live={i === liveChunk ? live : undefined}
+              live={shown.from + i === liveChunk ? live : undefined}
               q={q}
               finds={finds}
               offline={status !== "connected" || !!chat.loading}
@@ -845,6 +876,7 @@ export function ChatPane({
               onDismissSideQuestion={onDismissSideQuestion && dismissSide}
             />
           ))}
+          {shown.to < chunks.length - 1 && <div className="transcript-gap" aria-hidden style={{ height: shown.after }} />}
           {/* A reply waiting on the owner isn't thinking, and streamed thinking shows its own row. */}
           {chat.running && last?.kind !== "assistant" && last?.kind !== "thinking" && !(last && isWaiting(last)) && (
             <div className="msg assistant thinking">
@@ -864,6 +896,7 @@ export function ChatPane({
         show={showSubagent}
         onGoToApproval={() => {
           const id = chat.items.find(isWaiting)?.id;
+          shown.reveal(chunks.findIndex((c) => c.some((b) => b.id === id)));
           const card = id && rootRef.current?.querySelector<HTMLElement>(`.approval[data-item="${CSS.escape(id)}"]`);
           if (!card) return;
           card.scrollIntoView({ block: "center" });
@@ -1112,7 +1145,7 @@ const TranscriptChunk = memo(
     onDismissSideQuestion?: (id: string) => void;
   }) {
     return (
-      <div className="transcript-chunk">
+      <div className="transcript-chunk" data-chunk={blocks[0].id}>
         {blocks.map((b) => {
           const message = b.kind === "user" || b.kind === "assistant";
           return (
