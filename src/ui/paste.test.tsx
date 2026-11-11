@@ -73,6 +73,7 @@ async function setUp(draft = "", screenshots = noCaptures()) {
       onSend={onSend}
       onStop={() => {}}
       onAnswer={() => {}}
+      onQuestion={() => {}}
       screenshots={screenshots}
     />,
   );

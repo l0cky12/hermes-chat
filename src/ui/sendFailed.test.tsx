@@ -43,6 +43,7 @@ function pane(items: Item[], { status = "connected" as ConnectionStatus, over = 
       onSend={() => {}}
       onStop={() => {}}
       onAnswer={() => {}}
+      onQuestion={() => {}}
     />,
   );
   return on;

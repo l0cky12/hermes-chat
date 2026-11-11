@@ -53,6 +53,7 @@ function pane(chat: Chat, findTarget?: FindTarget) {
       onSend={() => {}}
       onStop={() => {}}
       onAnswer={() => {}}
+      onQuestion={() => {}}
       onDismissSideQuestion={(id) => dismissed.push(id)}
     />
   );

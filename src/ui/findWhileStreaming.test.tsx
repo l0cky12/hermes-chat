@@ -77,6 +77,7 @@ function Pane() {
       onSend={() => {}}
       onStop={() => {}}
       onAnswer={() => {}}
+      onQuestion={() => {}}
     />
   );
 }

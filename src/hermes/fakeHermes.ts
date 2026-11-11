@@ -17,8 +17,14 @@ import { skillInvocationText } from "./skillCommands";
 type Request = { jsonrpc: "2.0"; id: number; method: string; params: Record<string, unknown> };
 /** The client's answer to a server→client request (`tui_gateway/server_requests.py`). */
 type Response = { jsonrpc: "2.0"; id: string; result?: Record<string, unknown>; error?: { code: number; message: string } };
-/** A server→client request still waiting for its answer. `stored`: its session, which outlives the connection. */
-type OpenRequest = { sid: string; stored: string; method: string; params: Record<string, unknown> };
+/**
+ * A server→client request still waiting for its answer. `stored`: its session, which outlives the connection. `locked`:
+ * a batch clarify's answers locked so far with `clarify.lock` (`null`: skipped), by question id.
+ */
+/** `child`: asked in the turn-isolation compute-host child, which the parent process only mirrors (`inChild`). */
+type OpenRequest = { sid: string; stored: string; method: string; params: Record<string, unknown>; locked?: Record<string, string | null>; child?: true; mirrored?: boolean };
+/** How a server→client request was settled, and the result Hermes took (`tui_gateway/server_requests.py`). */
+export type Settled = { id: string; method: string; result: Record<string, unknown>; via: "response" | "request.answer" | "clarify.lock" };
 type Handler = (req: Request) => void;
 export type RestRequest = { method: string; path: string; query: URLSearchParams; body?: Record<string, unknown> };
 type RestHandler = (req: RestRequest) => unknown;
@@ -513,6 +519,8 @@ export class FakeHermes {
   readonly openRequests = new Map<string, OpenRequest>();
   /** The client's answers to server→client requests, in order. */
   readonly responses: Response[] = [];
+  /** The requests this client settled, in order, with the result Hermes took for each (`settle`). */
+  readonly settled: Settled[] = [];
   /**
    * False: a Hermes without `approval.respond`, which answers "method not found", so an Approval can be answered only
    * in a response frame to its request.
@@ -801,8 +809,7 @@ export class FakeHermes {
         const sid = open[0][1].sid;
         this.runtime.set(sid, stored);
         const messages = this.transcripts[stored] ?? [];
-        const open_requests = open.map(([id, q]) => ({ id, method: q.method, params: { session_id: sid, ...q.params } }));
-        return this.respond(r.id, { session_id: sid, stored_session_id: stored, message_count: messages.length, messages, info: this.sessionInfo, running: true, open_requests });
+        return this.respond(r.id, { session_id: sid, stored_session_id: stored, message_count: messages.length, messages, info: this.sessionInfo, running: true, open_requests: this.openRequestsOf(sid) });
       }
       const busy = this.reattachTurns && [...this.inflight].find(([sid, t]) => t.stored === stored && this.turns.has(sid));
       if (busy) {
@@ -1074,6 +1081,41 @@ export class FakeHermes {
         this.cancelRequest(id, "resolved");
       }
       this.respond(r.id, { resolved: settled.length });
+    },
+    // `tui_gateway/methods_prompt.py` `clarify.lock` at the deployed `bf0203a`: locks one answer of a batch clarify
+    // (`server_requests.lock_answer`). The last lock settles the request with every answer, `outcome: submitted`. A wait
+    // that already ended is `expired`, not an error.
+    "clarify.lock": (r) => {
+      const requestId = String(r.params.request_id ?? "");
+      const questionId = String(r.params.question_id ?? "");
+      if (!requestId || !questionId) return this.fail(r.id, 4002, "request_id and question_id required");
+      const q = this.openRequests.get(requestId);
+      if (!q || q.method !== "clarify") return this.respond(r.id, { status: "expired" });
+      const qids = (q.params.questions as { qid: string }[]).map((x) => x.qid);
+      if (!qids.includes(questionId)) return this.fail(r.id, 4002, `unknown question_id '${questionId}'`);
+      const answer = r.params.answer === null || typeof r.params.answer === "string" ? r.params.answer : JSON.stringify(r.params.answer);
+      q.locked = { ...q.locked, [questionId]: answer };
+      const remaining = qids.filter((id) => !(id in q.locked!));
+      if (!remaining.length) this.settle(requestId, { answers: { ...q.locked }, outcome: "submitted" }, "clarify.lock");
+      this.respond(r.id, { status: "ok", remaining });
+    },
+    // `tui_gateway/methods_session.py` `session.events.since` at `f0d94882`: the events after `last_seen`, of which this
+    // fake keeps none, and the requests still open for the live session. Any session id answers, an unknown one with
+    // none open. Other params are refused, as the contract refuses unknown keys.
+    "session.events.since": (r) => {
+      const { session_id, last_seen, ...rest } = r.params;
+      if (Object.keys(rest).length || (last_seen !== undefined && !Number.isInteger(last_seen))) return this.fail(r.id, -32602, "invalid params");
+      this.respond(r.id, { events: [], latest_seq: 0, truncated: false, count: 0, epoch: "fake", open_requests: this.openRequestsOf(String(session_id ?? "")) });
+    },
+    // `tui_gateway/methods_prompt.py` `request.answer` at the deployed `bf0203a`: the proxy for a response frame. A
+    // request no longer open is `expired`.
+    "request.answer": (r) => {
+      const id = String(r.params.id ?? "");
+      const result = r.params.result;
+      if (!id || !result || typeof result !== "object" || Array.isArray(result)) return this.fail(r.id, 4002, "id and an object result required");
+      if (!this.openRequests.has(id)) return this.respond(r.id, { status: "expired" });
+      this.settle(id, result as Record<string, unknown>, "request.answer");
+      this.respond(r.id, { status: "ok" });
     },
     // `tui_gateway/methods_prompt.py` at the deployed `bf0203a`: records that a client has the card on screen.
     "approval.received": (r) => {
@@ -1654,6 +1696,7 @@ export class FakeHermes {
       if (!("method" in req)) {
         this.responses.push(req);
         if (this.openRequests.get(req.id)?.method === "approval" && req.result) this.approvalAnswers.push({ id: req.id, choice: req.result.choice, via: "response" });
+        if (req.result) this.settle(req.id, req.result, "response");
         this.openRequests.delete(req.id);
         return;
       }
@@ -2384,6 +2427,35 @@ export class FakeHermes {
     return id;
   }
 
+  /**
+   * Settles an open request with `result`, as `server_requests.resolve_response` does: a batch clarify's locks belong to
+   * the final set (`tools/clarify_batch.settle_batch`). Like Hermes, it tells no other client (no `request.cancel`).
+   */
+  private settle(id: string, result: Record<string, unknown>, via: Settled["via"]) {
+    const q = this.openRequests.get(id);
+    if (!q) return;
+    this.openRequests.delete(id);
+    const answers = result.answers && typeof result.answers === "object" ? (result.answers as Record<string, unknown>) : undefined;
+    const settled = q.method === "clarify" ? { ...result, answers: { ...q.locked, ...answers }, outcome: answers ? (result.outcome ?? "submitted") : "cancelled" } : result;
+    this.settled.push({ id, method: q.method, result: settled, via });
+  }
+
+  /** A batch `clarify` request as `server._clarify_block` sends it: one to five questions, each with its `qid`. */
+  askClarify(sid: string, questions: { question: string; choices?: string[] | null; multi_select?: boolean }[]) {
+    const wire = questions.map((q, n) => ({ qid: `q${n}`, question: q.question, choices: q.choices ?? null, multi_select: !!q.multi_select }));
+    return this.ask(sid, "clarify", { questions: wire });
+  }
+
+  /** A `sudo` request as `agent_callbacks` sends it: the command, redacted. */
+  askSudo(sid: string, command = "sudo apt-get install -y ripgrep") {
+    return this.ask(sid, "sudo", { command });
+  }
+
+  /** A `secret` request as `agent_callbacks.secret_cb` sends it, for a skill's missing env var. */
+  askSecret(sid: string, over: Record<string, unknown> = {}) {
+    return this.ask(sid, "secret", { prompt: "Enter your OpenWeather API key", env_var: "OPENWEATHER_API_KEY", metadata: { skill_name: "weather" }, ...over });
+  }
+
   /** An `approval` request as `server._approval_request_payload` renders it: the command redacted, the choices set. */
   askApproval(sid: string, over: Record<string, unknown> = {}) {
     const params = {
@@ -2397,6 +2469,20 @@ export class FakeHermes {
       ...over,
     };
     return { id: this.ask(sid, "approval", params), requestId: params.request_id };
+  }
+
+  /**
+   * The requests Hermes still waits on in the live session `sid`, oldest first, as `open_requests` lists them
+   * (`server_requests.open_requests`): each as sent, a batch clarify's with the answers locked so far.
+   */
+  openRequestsOf(sid: string) {
+    const open = [...this.openRequests].filter(([, q]) => q.sid === sid);
+    // `server._open_requests`: the parent's own requests if it has any, else the one child request it mirrors, the
+    // child's newest (`compute_host_bridge` keeps a single `_compute_host_open_request` per session).
+    const own = open.filter(([, q]) => !q.child);
+    const mirrored = open.filter(([, q]) => q.child && q.mirrored).slice(-1);
+    return (own.length ? own : mirrored)
+      .map(([id, q]) => ({ id, method: q.method, params: { session_id: sid, ...q.params, ...(q.locked && Object.keys(q.locked).length && { answers: { ...q.locked } }) } }));
   }
 
   /** Hermes stops waiting for an answer (timeout, interrupt, answered elsewhere) and withdraws the request. */
@@ -2427,6 +2513,24 @@ export class FakeHermes {
   answerElsewhere(id: string, via: "approval.respond" | "response") {
     if (via === "approval.respond") return this.cancelRequest(id, "resolved");
     this.openRequests.delete(id);
+  }
+
+  /**
+   * Marks an open request as asked in the turn-isolation compute-host child (`turnIsolation`): `open_requests` lists it
+   * only while the parent process has none of its own, and only while it is the child's newest.
+   */
+  inChild(id: string) {
+    const q = this.openRequests.get(id);
+    if (!q) return;
+    q.child = true;
+    for (const other of this.openRequests.values()) if (other.sid === q.sid && other.child) other.mirrored = other === q;
+  }
+
+  /** Another Hermes client locks one answer of a batch clarify (`clarify.lock`), which Hermes tells no other client. */
+  lockElsewhere(id: string, qid: string, answer: string | null) {
+    const q = this.openRequests.get(id);
+    if (!q) return;
+    q.locked = { ...q.locked, [qid]: answer };
   }
 
   drop(reason = "closed by the server (1006 )") {

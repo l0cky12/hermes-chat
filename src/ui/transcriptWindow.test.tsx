@@ -119,6 +119,7 @@ function pane(chat: Chat, over: Over = {}) {
       onSend={() => {}}
       onStop={() => {}}
       onAnswer={() => {}}
+      onQuestion={() => {}}
     />
   );
   const { rerender } = render(view(over));

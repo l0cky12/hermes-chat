@@ -225,6 +225,7 @@ describe("Import transcripts", () => {
         onSend={() => {}}
         onStop={() => {}}
         onAnswer={() => {}}
+        onQuestion={() => {}}
       />,
     );
     expect(screen.queryByRole("textbox")).toBeNull();

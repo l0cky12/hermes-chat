@@ -5,11 +5,12 @@ import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRi
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { decodeString } from "micromark-util-decode-string";
-import type { ApprovalChoice, AttachCheck, Attachment, Chat, ChatQueue, ConnectionStatus, Item, OutgoingItem, SideQuestion, Source } from "../hermes/model";
+import type { ApprovalChoice, AttachCheck, Attachment, Chat, ChatQueue, ConnectionStatus, Item, OutgoingItem, QuestionAnswer, SideQuestion, Source } from "../hermes/model";
 import { SOURCE_LABEL, isOutgoing, isWaiting } from "../hermes/model";
 import type { SkillCall } from "../hermes/skillCommands";
 import type { ScreenshotDesk } from "../hermes/screenshots";
 import { ApprovalCard } from "./ApprovalCard";
+import { QuestionCard } from "./QuestionCard";
 import { Menu, PinItem, type ChatPin } from "./ChatMenu";
 import { isBotChat } from "../hermes/bots";
 import { DeleteChatDialog } from "./DeleteChat";
@@ -335,8 +336,8 @@ const savedWhen = (at: number) => new Date(at).toLocaleString(undefined, { dateS
 
 /**
  * `alsoPostsIn`: the Telegram or Discord chat Hermes will also post its replies in. `draft`: the composer's text, kept
- * outside the pane so it survives switching chats. `onAnswer` answers an Approval card. `onSettle`, `onArchive`,
- * `onExport` and `onCopyLink` are left out for a chat not started yet. `notLoaded`: the chat has no Saved copy and can't load until
+ * outside the pane so it survives switching chats. `onAnswer` answers an Approval card, and `onQuestion` any other
+ * Question card. `onSettle`, `onArchive`, `onExport` and `onCopyLink` are left out for a chat not started yet. `notLoaded`: the chat has no Saved copy and can't load until
  * Hermes is connected. `onRetry`, `onEdit` and `onDismiss` act on failed or unconfirmed messages. `modelControls`
  * contains the model picker; `footer` contains the status bar. Only the active pane answers Ctrl+F and takes focus as
  * it opens. Native drops attach to the pane under the pointer. Export, Copy chat link, Settle and Archive are in the header's More menu.
@@ -371,6 +372,7 @@ export function ChatPane({
   onSend,
   onStop,
   onAnswer,
+  onQuestion,
   pin,
   onSettle,
   onArchive,
@@ -433,6 +435,7 @@ export function ChatPane({
   onSend: (text: string, attachments: Attachment[], skill?: SkillCall) => void;
   onStop: () => void;
   onAnswer: (approvalId: string, choice: ApprovalChoice, confirmed?: boolean) => void;
+  onQuestion: (itemId: string, answer: QuestionAnswer) => void;
   /** Pinning the chat to the top of the list (ADR 0085); left out for a chat not started yet. */
   pin?: ChatPin;
   onSettle?: (settled: boolean) => void;
@@ -517,6 +520,9 @@ export function ChatPane({
     (approvalId: string, choice: ApprovalChoice, confirmed?: boolean) => onAnswerRef.current(approvalId, choice, confirmed),
     [],
   );
+  const onQuestionRef = useRef(onQuestion);
+  onQuestionRef.current = onQuestion;
+  const question = useCallback((itemId: string, a: QuestionAnswer) => onQuestionRef.current(itemId, a), []);
   // So do failed messages, one handler for all three actions.
   const outgoingRef = useRef({ retry: onRetry, edit: onEdit, dismiss: onDismiss });
   outgoingRef.current = { retry: onRetry, edit: onEdit, dismiss: onDismiss };
@@ -763,7 +769,7 @@ export function ChatPane({
   // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const movedAt = useMemo(() => performance.now(), [chat.items, chat.sideQuestions]);
   const last = chat.items[chat.items.length - 1];
-  const waiting = chat.items.some(isWaiting);
+  const waiting = chat.items.find(isWaiting);
   // The streaming block is the chat's last item, so it is in the last chunk that holds more than side questions.
   let liveChunk = chunks.length - 1;
   while (liveChunk > 0 && chunks[liveChunk].every((b) => b.kind === "side")) liveChunk--;
@@ -920,8 +926,9 @@ export function ChatPane({
               q={q}
               finds={finds}
               offline={status !== "connected" || !!chat.loading}
-              movedAt={waiting && c.some((b) => b.kind === "approval" && isWaiting(b)) ? movedAt : 0}
+              movedAt={waiting && c.some((b) => b.kind !== "side" && b.kind !== "tools" && isWaiting(b)) ? movedAt : 0}
               onAnswer={answer}
+              onQuestion={question}
               listen={listen}
               canRetry={canRetry}
               onOutgoing={onOutgoing}
@@ -952,7 +959,7 @@ export function ChatPane({
       <SubagentsPanel
         tree={chat.subagents}
         api={subagents}
-        approvalWaiting={waiting}
+        approvalWaiting={waiting?.kind}
         show={showSubagent}
         onGoToApproval={() => {
           const id = chat.items.find(isWaiting)?.id;
@@ -978,7 +985,7 @@ export function ChatPane({
         running={!!chat.running}
         stopping={!!chat.stopping}
         note={STATUS_NOTE[status]}
-        hint={waiting ? "Hermes is waiting for your approval above." : undefined}
+        hint={waiting && (waiting.kind === "approval" ? "Hermes is waiting for your approval above." : "Hermes is waiting for your answer above.")}
         alsoPostsIn={alsoPostsIn}
         text={draft}
         draftKey={draftKey}
@@ -1025,7 +1032,7 @@ type OutgoingAction = "retry" | "edit" | "dismiss";
 
 /**
  * One block of the transcript. Memoized, so a streamed delta re-renders only the block it changes. `live`: the reply
- * or thinking is still streaming. `offline` and `movedAt` are for an Approval card; other blocks get `movedAt` 0, so
+ * or thinking is still streaming. `offline` and `movedAt` are for a Question card; other blocks get `movedAt` 0, so
  * the transcript changing doesn't re-render them. `canRetry` and `onOutgoing` are for a message Hermes didn't take, or
  * may not have; other blocks get `canRetry` false.
  */
@@ -1037,6 +1044,7 @@ const BlockView = memo(
     offline,
     movedAt,
     onAnswer,
+    onQuestion,
     listen,
     canRetry,
     onOutgoing,
@@ -1055,6 +1063,7 @@ const BlockView = memo(
     offline: boolean;
     movedAt: number;
     onAnswer: (approvalId: string, choice: ApprovalChoice, confirmed?: boolean) => void;
+    onQuestion: (itemId: string, answer: QuestionAnswer) => void;
     listen?: Listen;
     canRetry: boolean;
     onOutgoing: (itemId: string, action: OutgoingAction) => void;
@@ -1135,6 +1144,8 @@ const BlockView = memo(
     if (block.kind === "thinking") return <Thought item={block} live={live} query={query} />;
     if (block.kind === "approval")
       return <ApprovalCard item={block} offline={offline} movedAt={movedAt} onAnswer={(c, confirmed) => onAnswer(block.id, c, confirmed)} />;
+    if (block.kind === "clarify" || block.kind === "sudo" || block.kind === "secret")
+      return <QuestionCard item={block} offline={offline} movedAt={movedAt} onAnswer={(a) => onQuestion(block.id, a)} />;
     return <ToolGroup tools={block.tools} />;
   },
   (a, b) =>
@@ -1144,6 +1155,7 @@ const BlockView = memo(
     a.offline === b.offline &&
     a.movedAt === b.movedAt &&
     a.onAnswer === b.onAnswer &&
+    a.onQuestion === b.onQuestion &&
     a.listen?.speaker === b.listen?.speaker &&
     a.listen?.blocked === b.listen?.blocked &&
     a.canRetry === b.canRetry &&
@@ -1161,7 +1173,7 @@ const BlockView = memo(
 /**
  * A run of the transcript's blocks (`chunkBlocks`). Memoized, so a streamed delta re-renders only the chunk that holds
  * the block it changes. `live`: the id of the block still streaming, for the chunk that holds it. `movedAt` is for a
- * waiting Approval card, and 0 for a chunk without one.
+ * waiting Question card, and 0 for a chunk without one.
  */
 const TranscriptChunk = memo(
   function TranscriptChunk({
@@ -1172,6 +1184,7 @@ const TranscriptChunk = memo(
     offline,
     movedAt,
     onAnswer,
+    onQuestion,
     listen,
     canRetry,
     onOutgoing,
@@ -1192,6 +1205,7 @@ const TranscriptChunk = memo(
     offline: boolean;
     movedAt: number;
     onAnswer: (approvalId: string, choice: ApprovalChoice, confirmed?: boolean) => void;
+    onQuestion: (itemId: string, answer: QuestionAnswer) => void;
     listen?: Listen;
     canRetry: boolean;
     onOutgoing: (itemId: string, action: OutgoingAction) => void;
@@ -1219,8 +1233,9 @@ const TranscriptChunk = memo(
                   live={b.id === live}
                   query={finds && mayMatch(b, finds) ? q : ""}
                   offline={offline}
-                  movedAt={b.kind === "approval" && isWaiting(b) ? movedAt : 0}
+                  movedAt={b.kind !== "tools" && isWaiting(b) ? movedAt : 0}
                   onAnswer={onAnswer}
+                  onQuestion={onQuestion}
                   listen={b.kind === "assistant" ? listen : undefined}
                   canRetry={b.kind === "user" && !!b.outgoing && canRetry}
                   onOutgoing={onOutgoing}
@@ -1249,6 +1264,7 @@ const TranscriptChunk = memo(
     a.offline === b.offline &&
     a.movedAt === b.movedAt &&
     a.onAnswer === b.onAnswer &&
+    a.onQuestion === b.onQuestion &&
     a.listen?.speaker === b.listen?.speaker &&
     a.listen?.blocked === b.listen?.blocked &&
     a.canRetry === b.canRetry &&

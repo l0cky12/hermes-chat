@@ -7,7 +7,7 @@
 // The spine (`_visible_branch_history`): the parent's user and assistant rows that have text, in order, hidden ones
 // included. Tool rows aren't in it, and an assistant row keeps its text and reasoning but not its tool calls. Probed
 // live on 2026-11-03 against a throwaway HERMES_HOME (docs/research/hermes-gateway-api.md, "Branching").
-import type { Chat, Item } from "./model";
+import { isWaiting, type Chat, type Item } from "./model";
 import type { ModelPick } from "./models";
 
 /** A stored row of dashboard REST `GET /api/sessions/{id}/messages`, as far as branching reads it. */
@@ -215,13 +215,14 @@ export function previewOf(
 }
 
 /**
- * Why no branch can be made from the chat now, or nothing. A reply running, an Approval waiting, or a message not yet
+ * Why no branch can be made from the chat now, or nothing. A reply running, a Question waiting, or a message not yet
  * confirmed would leave it unclear where the chat ends, so Hermes Chat waits for them.
  */
 export function branchBlocked(chat: Chat, connected: boolean): string | undefined {
   if (!connected) return "Not connected to Hermes.";
   if (chat.running || chat.stopping) return "Wait for the reply to finish: while Hermes is replying, it isn't clear where this chat ends.";
-  if (chat.items.some((i) => i.kind === "approval" && !i.answer && !i.ended)) return "Hermes is waiting for an Approval in this chat. Answer it first.";
+  const asked = chat.items.find(isWaiting);
+  if (asked) return asked.kind === "approval" ? "Hermes is waiting for an Approval in this chat. Answer it first." : "Hermes is waiting for your answer to a question in this chat. Answer it first.";
   if (chat.items.some((i) => i.kind === "user" && i.outgoing && i.outgoing.state !== "failed"))
     return "A message to this chat isn't confirmed yet. Wait until Hermes has it.";
   if (chat.loading || chat.savedAt !== undefined) return "This chat is still loading from Hermes.";

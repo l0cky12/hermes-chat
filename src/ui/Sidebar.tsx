@@ -642,15 +642,17 @@ function OtherBadge({ info }: { info?: OtherProfile }) {
 }
 
 /**
- * What the owner leaves behind in `profile` by switching away now, if anything: an Approval waiting, or a reply
- * running. Hermes keeps running the reply; an Approval waits only until Hermes stops waiting (its timeout).
+ * What the owner leaves behind in `profile` by switching away now, if anything: an Approval or another Question
+ * waiting, or a reply running. Hermes keeps running the reply; a Question waits only until Hermes stops waiting (its
+ * timeout).
  */
 /** A profile's name as the switcher shows it: `default`'s display name first, when Hermes keeps one (ADR 0144). */
 export const profileLabel = (l: Locale, name: string, defaultName?: string) => (name === "default" && defaultName ? l.profiles.named(defaultName, name) : name);
 
 /** What switching away from `profile` leaves behind, in `words` (the catalogue's; English where the screen isn't converted). */
 export function leavingNote(profile: string, chats: Chat[], words: Locale["profiles"]["leaving"] = en.profiles.leaving): string | undefined {
-  if (chats.some((c) => c.items.some(isWaiting))) return words.approval(profile);
+  const asked = chats.flatMap((c) => c.items).find(isWaiting);
+  if (asked) return asked.kind === "approval" ? words.approval(profile) : words.question(profile);
   if (chats.some((c) => c.running)) return words.reply(profile);
 }
 

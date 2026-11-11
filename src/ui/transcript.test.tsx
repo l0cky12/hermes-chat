@@ -42,6 +42,7 @@ function pane(chat: Chat, findTarget?: FindTarget, onAnswer: Answer = () => {}) 
       onSend={() => {}}
       onStop={() => {}}
       onAnswer={a}
+      onQuestion={() => {}}
     />
   );
   const r = render(el(chat, findTarget));
@@ -277,6 +278,7 @@ describe("A message that can't be drawn (#476)", () => {
         onSend={onSend}
         onStop={() => {}}
         onAnswer={() => {}}
+        onQuestion={() => {}}
       />,
     );
     expect(item("u-0")?.textContent).toContain("List the backup folder.");

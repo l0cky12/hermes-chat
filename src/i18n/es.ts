@@ -196,6 +196,7 @@ export const es: Catalogue = {
       stay: "Quedarse",
       go: "Cambiar de todos modos",
       approval: (profile) => `Hay una aprobación esperando en ${profile}. Hermes espera tu respuesta solo hasta que se agote el tiempo: vuelve y abre el chat para responder.`,
+      question: (profile) => `Hay una pregunta de Hermes esperando en ${profile}. Hermes espera tu respuesta solo hasta que se agote el tiempo: vuelve y abre el chat para responder.`,
       reply: (profile) => `Todavía hay una respuesta en curso en ${profile}. Hermes la sigue, y se verá aquí cuando vuelvas.`,
     },
     form: {
