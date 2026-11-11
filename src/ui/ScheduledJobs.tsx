@@ -69,6 +69,7 @@ function useSequence() {
     live.current = true;
     return () => {
       live.current = false;
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
       seq.current++;
     };
   }, []);
@@ -249,6 +250,7 @@ export function ScheduledJobs({
     const before = new Set(endedSeen.current.split(" "));
     endedSeen.current = endedKey;
     if (connected && endedKey.split(" ").some((k) => k && !before.has(k))) void load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [endedKey]);
 
   useEffect(() => {
@@ -259,6 +261,7 @@ export function ScheduledJobs({
       listing.current = false;
       setLoading(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected]);
 
   /** Moves to another view, putting focus where the owner can carry on with the keyboard. */
@@ -617,6 +620,7 @@ function JobDetail({
   };
   useEffect(() => {
     if (ask && troubleshoot && connected) prepare();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, []);
   const startChat = async () => {
     if (!troubleshoot || typeof prep !== "object" || !("input" in prep)) return;
@@ -635,6 +639,7 @@ function JobDetail({
     if (!connected) return;
     const n = copyReads.next();
     void api.copiesOf(profile, job.id).then((c) => copyReads.current(n) && setCopies(c));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected, job.id]);
   const copyNote =
     copies.length > 0 &&
@@ -655,6 +660,7 @@ function JobDetail({
   useEffect(() => {
     if (connected) readRuns();
     else historyReads.next();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected, job.lastRunAt, runLimit, trouble?.endedAt]);
 
   /** Each run's latest result read: a newer read, a Hide, or the run changing supersedes an older one. */
@@ -687,6 +693,7 @@ function JobDetail({
       seen.current[r.id] = now;
       if (was !== undefined && was !== now && results[r.id] !== undefined && connected) readResult(r);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [runs]);
 
   const act = async (what: NonNullable<typeof busy>, fn: () => Promise<void>) => {
@@ -1260,6 +1267,7 @@ function JobEditor({
       (names) => profileReads.current(n) && setProfiles(names.includes(profile) ? names : [profile, ...names]),
       () => {},
     );
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected]);
   const ctx = typeof context === "object" ? context : undefined;
   const zone = (ctx ?? loaded).zone;
@@ -1288,15 +1296,15 @@ function JobEditor({
   const choose = (p: string) => {
     setWhere(p);
     const n = contextReads.next();
-    const use = (got: Loaded) => {
+    const take = (got: Loaded) => {
       setContext(got);
       // A delivery the chosen profile doesn't offer would go nowhere there.
       setForm((f) => (f.deliver === "local" || got.targets?.some((t) => t.id === f.deliver) ? f : { ...f, deliver: "local" }));
     };
-    if (p === profile) return use(loaded);
+    if (p === profile) return take(loaded);
     setContext(undefined);
     void readProfile(api, p).then(
-      (got) => contextReads.current(n) && use(got),
+      (got) => contextReads.current(n) && take(got),
       (e) => contextReads.current(n) && setContext(`Hermes Chat couldn't read the ${p} profile's jobs: ${errorText(e)}`),
     );
   };

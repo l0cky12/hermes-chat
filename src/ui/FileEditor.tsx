@@ -114,6 +114,7 @@ export function FileEditor({
       (e) => current && setMode({ kind: "refused", why: errorText(e) }),
     );
     return () => void (current = false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [entry.path]);
 
   const dirty = !!base && draft !== base.text;

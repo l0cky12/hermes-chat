@@ -161,7 +161,10 @@ describe("across a restart", () => {
     s.openPipe = async (onEvent, profile) => {
       const pipe = await rest(onEvent, profile);
       const request = pipe.request.bind(pipe);
-      return { ...pipe, request: async (method, path, body) => (path.includes("api/sessions?") && await gate, request(method, path, body)) } as typeof pipe;
+      return { ...pipe, request: async (method, path, body) => {
+        if (path.includes("api/sessions?")) await gate;
+        return request(method, path, body);
+      } } as typeof pipe;
     };
     const hermes = await connect(s.openPipe);
     running.push(hermes);

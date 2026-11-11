@@ -214,6 +214,7 @@ export function McpSettings({
       }
     }, pollMs);
     return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [signIns]);
 
   const signIn = async (s: McpServer) => {
@@ -816,6 +817,7 @@ function CatalogDialog({
       (e) => open.current && setError(errorText(e)),
     );
     return () => void (open.current = false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, []);
 
   const missing = picked?.requiredEnv.filter((v) => v.required && !env.get(v.name)?.trim()) ?? [];

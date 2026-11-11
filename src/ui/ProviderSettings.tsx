@@ -77,6 +77,7 @@ export function ProviderSettings({ hermes, profile, connected, openModel }: { he
     setAddKey("");
     setNote(undefined);
     if (connected) void load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [hermes, profile, connected]);
 
   const busy = ui.kind === "saving" || ui.kind === "removing";

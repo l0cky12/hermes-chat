@@ -64,7 +64,9 @@ export function EndpointSettings({ api, profile, connected }: { api: EndpointApi
     setForm(EMPTY);
     setNote(undefined);
     if (connected) void load(scope);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
     return () => void scopes.current++;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [api, profile, connected]);
 
   const busy = ui.kind === "adding" || ui.kind === "activating" || ui.kind === "removing";

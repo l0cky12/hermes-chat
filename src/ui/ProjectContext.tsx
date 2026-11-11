@@ -125,6 +125,7 @@ export function ContextCard({
   }, [key, connected]);
   useEffect(() => {
     if (connected && state.kind === "ready") void refreshRef.current();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [model.window]);
 
   useDismiss(adder, doing.kind === "menu", () => setDoing((d) => (d.kind === "menu" ? { kind: "idle" } : d)));

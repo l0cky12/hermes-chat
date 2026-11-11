@@ -95,6 +95,7 @@ export function OfficeBuilding({
     const b = officeFloors(rooms, memory.current.floors, Date.now());
     memory.current = { ...memory.current, floors: b.memory };
     return b;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [rooms, memory, wake]);
   useEffect(() => {
     if (built.wakeAt === undefined) return;
@@ -186,6 +187,7 @@ export function OfficeBuilding({
       live = false;
       made?.dispose();
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, []);
 
   const started = useRef<OfficeScene>(undefined);

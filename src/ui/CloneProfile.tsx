@@ -113,6 +113,7 @@ export function CloneProfileDialog({
   }, [api, sourceName, reads]);
   useEffect(() => {
     if (profiles && !named) setName(suggestName(sourceName, profiles));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [profiles, sourceName]);
 
   const onStage = (stage: Stage, state: StageState, note?: string) => live.current && setStages((s) => ({ ...s, [stage]: { state, note } }));

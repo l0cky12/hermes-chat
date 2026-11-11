@@ -157,6 +157,7 @@ export function FileBrowser({
       listed.current = true;
       load(path);
     } else load(listing?.path ?? path, true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected]);
 
   const entries = useMemo(() => {

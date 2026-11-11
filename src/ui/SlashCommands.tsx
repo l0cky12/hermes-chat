@@ -97,6 +97,7 @@ export function useSlashCommands(host: CommandHost | undefined, text: string, on
   const refresh = host?.refreshSkills;
   useEffect(() => {
     if (asking) refresh?.();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [asking]);
   // How the text runs skills when sent; a command of the app's runs instead when the text is one.
   const toRun = host?.skills && !typedCommand(text) ? skillRun(text.trim(), host.skills) : undefined;
@@ -112,6 +113,7 @@ export function useSlashCommands(host: CommandHost | undefined, text: string, on
     if (!to || to.text !== text) return;
     caretTo.current = undefined;
     taRef.current?.setSelectionRange(to.at, to.at);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [text]);
   const accept = (row: Row) => {
     let next: string;

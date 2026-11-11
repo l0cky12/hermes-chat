@@ -143,6 +143,7 @@ export function MemoryProviderSettings({
   const dirty = Object.keys(edits).length > 0;
   useEffect(() => {
     onDirtyChange(dirty);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [dirty]);
   useEffect(() => {
     alive.current = true;
@@ -150,6 +151,7 @@ export function MemoryProviderSettings({
       alive.current = false;
       onDirtyChange(false);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, []);
   const discards = useRef(discardSignal);
   useEffect(() => {
@@ -203,6 +205,7 @@ export function MemoryProviderSettings({
     if (!connected || memory || unsupported) return;
     void loadOverview();
     void loadProfile(target);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected]);
 
   /** Runs `go` now, or once the owner agrees to drop unsaved changes. */
@@ -230,9 +233,11 @@ export function MemoryProviderSettings({
       setConfirmSetup(false);
       switchTo(targetProp);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [targetProp, busy]);
   useEffect(() => {
     if (rows) onProfiles?.(rows.map((r) => r.profile));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [rows]);
   const switchTo = (who: string) => {
     {

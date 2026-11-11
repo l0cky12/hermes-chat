@@ -399,6 +399,7 @@ export function ToolsetSettings({
     const onFocus = () => connected && shownList.current && (void read(false), void readChatNow.current(), readGuards());
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected, read]);
 
   /** The config facts (inherited, forced off, no_mcp) read again; only the latest read's answer is shown. */

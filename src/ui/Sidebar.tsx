@@ -703,6 +703,7 @@ function ProfileSwitcher({
       current = false;
       window.removeEventListener("mousedown", onDown);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [open]);
 
   const elsewhere = totalUnread(others).unread > 0;
@@ -1116,6 +1117,7 @@ export function ChatList({
   const selectedIn = shown.find((k) => sections[k].some((c) => c.id === selectedId));
   useEffect(() => {
     if (selectedIn) setCollapsed(selectedIn, false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [selectedId]);
   const l = useLocale();
   const latest = { chats, onOpen, onOpenIn, onOpenTab, onSettle, onArchive, onRename, onRegenTitle, onCopyLink, onTextGenerationSettings, projectsOf, tagsOf, onPin, onStopWaiting, onSnooze, onWake };

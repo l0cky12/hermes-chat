@@ -193,6 +193,7 @@ function TextGeneration({
     heading.tabIndex = -1;
     heading.scrollIntoView({ block: "start" });
     heading.focus({ preventScroll: true });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [show]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();

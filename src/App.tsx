@@ -325,6 +325,7 @@ function Screens({ links }: { links: LinkInbox }) {
     if (parsed.ok) return setBadLink(undefined);
     setBadLink({ reason: parsed.reason, at: arrived.at });
     links.clear(arrived.at);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [arrived]);
   const linkNotice = badLink ? (
     <ChatLinkNotice view={{ kind: "error", text: `Hermes Chat didn't open that link. ${badLink.reason}` }} onClose={() => setBadLink(undefined)} />
@@ -403,6 +404,7 @@ function Screens({ links }: { links: LinkInbox }) {
       setError(l.error);
       if (l.firstRun) setSetup({ mode: "first-run", initial: BLANK, target: store.draft(BLANK) });
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, []);
 
   const use = (h: Hermes | null) => {
@@ -418,6 +420,7 @@ function Screens({ links }: { links: LinkInbox }) {
     const id = connection?.id;
     if (!hermes || !id || !d?.routes || routesOf(d).filter((r) => !r.off).length < 2) return;
     return new PreferredRoutes(hermes, d, reachRoute, healthOf(id), () => store.get(id)?.server ?? d.server).start();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [hermes, connection?.id]);
 
   /** The sign-in screen, for `c` with `d` filled in, or with none picked. */
@@ -1092,6 +1095,7 @@ export function Main({
   // This app's diagnostics for the Logs screen (ADR 0033): the connection's changes, and the failures the app showed.
   useEffect(() => {
     note(status === "connected" ? "INFO" : "WARNING", `Connection to ${routeLabel(route) ?? "Hermes"}, profile ${profile}: ${STATUS_LABEL[status]}${status !== "connected" && closedReason ? ` (${closedReason})` : ""}`);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [status, closedReason, profile]);
   useEffect(() => {
     if (syncError) note("WARNING", `Chat list: ${syncError}`);
@@ -1102,6 +1106,7 @@ export function Main({
   // What became of a branch whose answer was lost, once the chat list settled it (ADR 0027).
   useEffect(() => {
     if (branchNews) setToast({ text: branchNews.text, at: branchNews.at });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [branchNews?.at]);
   const [searchOpen, setSearchOpen] = useState(false);
   // The Saved filter the search palette opened with, if any; and the tag editor.
@@ -1172,6 +1177,7 @@ export function Main({
   const scope = projectScope(connection, profile);
   // Troubleshooting chats started from the Jobs screen, for this app run (troubleshoot.ts, ADR 0053). The store sees
   // every change in the chats, to tell when a troubleshooting reply has ended.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const troubleshoots = useMemo(() => new TroubleshootStore(), [hermes]);
   useEffect(() => hermes.subscribe(() => troubleshoots.observe(hermes.getSnapshot())), [hermes, troubleshoots]);
   // Idle compaction (idleCompact.ts, ADR 0119): a chat open on Hermes here that has sat idle with its context window
@@ -1200,6 +1206,7 @@ export function Main({
   }, [hermes, compactor]);
   // Keep the same store and request queue when returning to a profile: a write still finishing for that profile
   // must share ordering with its new reads and writes, rather than commit from an abandoned snapshot.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const projectStores = useMemo(() => new Map<string, ProjectsStore>(), [hermes]);
   const projects = useMemo(() => {
     let store = projectStores.get(scope);
@@ -1208,6 +1215,7 @@ export function Main({
       projectStores.set(scope, store);
     }
     return store;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [hermes, scope, projectStores]);
   const proj = useSyncExternalStore(projects.subscribe, projects.getSnapshot);
   const newChatDraftKey = draftKey(connection, profile, null);
@@ -1259,6 +1267,7 @@ export function Main({
     [hermes, profile, snoozeStore],
   );
   // When each chat last stopped working, so the list puts it at the top then (snooze.ts). Noted on every change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const attention = useMemo(() => new AttentionClock(), [scope]);
   // Pinned chats: kept on this computer for each connection and profile, like snoozes (ADR 0085).
   const pinStore = useMemo(() => new PinStore(localStorage, scope), [scope]);
@@ -1282,6 +1291,7 @@ export function Main({
   };
   // A pinned chat the list doesn't reach (quiet for over a month) is looked up once and kept in the list; one Hermes no
   // longer has is unpinned.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const pinsLookedUp = useMemo(() => new Set<string>(), [scope]);
   useEffect(() => {
     if (status !== "connected" || switching || !hermes.hasListed()) return;
@@ -1293,6 +1303,7 @@ export function Main({
         () => pinsLookedUp.delete(id),
       );
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [pins, chats, status, switching, pinStore]);
   attention.observe(chats, Date.now(), status === "connected", handoffMap);
   const tagChange = (fn: () => Promise<unknown>) =>
@@ -1342,6 +1353,7 @@ export function Main({
 
   // Outputs: one index for each connection and profile, like projects (outputs.ts, ADR 0016). Leaving a profile, or
   // signing out, stops its run and drops whatever it reads afterwards.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const outputsIndex = useMemo(() => new OutputsIndex(hermes.outputsIo(profile), localStorage, scope), [hermes, scope]);
   useEffect(() => {
     outputsIndex.resume();
@@ -1359,6 +1371,7 @@ export function Main({
     // Every chat in the profile also takes in the files added without a chat; a chat deleted since isn't listed.
     return shownOutputsScope === "profile" ? outputsIn(snap).filter((o) => o.chatId === undefined || ids.has(o.chatId)) : outputsIn(snap, ids);
   };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const shownOutputs = useMemo(() => scopedOutputs(outSnap), [outSnap, outputsChatKey, shownOutputsScope]);
   const outputsRefs = () => outputsChats.map((c) => ({ id: c.id, updatedAt: c.updatedAt }));
   // Reads the chats that changed, then checks where every file shown is now, so a file deleted since (a chat's own
@@ -1377,10 +1390,12 @@ export function Main({
     if (!listedFromHermes || status !== "connected" || !Object.keys(cleared).length) return;
     for (const id of heldClears(chats, snoozes, Date.now(), attention.since, cleared, pins)) void hermes.settle(id);
     clearedStore.dropAll();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [listedFromHermes, status, cleared, clearedStore]);
   const allChatsKey = chats.map((c) => c.id).join("\n");
   useEffect(() => {
     if (listedFromHermes) outputsIndex.keepOnly(new Set(chats.map((c) => c.id)));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [outputsIndex, listedFromHermes, allChatsKey]);
   // Opening Outputs, or picking another scope, reads the chats in it that changed since they were last read. A chat
   // changing while it is open (a reply streaming) waits for Refresh, so a reply doesn't set off a read per word.
@@ -1388,6 +1403,7 @@ export function Main({
   useEffect(() => {
     if (!outputsOpen || status !== "connected") return;
     void refreshOutputs();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [outputsOpen, status, outputsIndex, shownOutputsScope, outputsChatKey]);
   const where = routeLabel(route) ?? addressLabel(connection);
   const inbox = inboxEntries({ profile, chats, connected: status === "connected", others, live, seen, handoffs: handoffMap });
@@ -1518,6 +1534,7 @@ export function Main({
           });
         }
       }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
     [troubleshoots],
   );
 
@@ -1848,6 +1865,7 @@ export function Main({
       // deleted meanwhile says so once it fails to load.
       hermes.reveal({ chatId: e.chatId, title: e.title, source: e.source ?? "app", settled: true, updatedAt: e.at || Date.now(), snippet: [] });
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [goTo, profile, chats, switching]);
 
   // A bot's row opens its Bot Chat, in the bot's own profile (ADR 0066): another profile is switched to first, as the
@@ -1888,6 +1906,7 @@ export function Main({
       .openBotChat(go.bot)
       .then((id) => still() && openChat(id, { remember: false }))
       .catch((e: unknown) => still() && setToast({ text: (e as Error).message, at: Date.now() }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [botGo, profile, switching, chats]);
 
   // The Approval card or message an entry is about is scrolled to and focused once its chat shows it. Focus goes to
@@ -2013,8 +2032,10 @@ export function Main({
   // another client, leaves its panes as one deleted here does, and its Draft goes with them to the New chat pane: a
   // send there starts a chat instead of reaching none, and nothing typed is lost (#467). A check that can't reach Hermes
   // changes nothing, and the next list read asks again.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const askedGone = useMemo(() => new Set<string>(), [scope]);
   // The chats Hermes said it no longer has, whose panes gave way: known at once, before the panes render again.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const goneChats = useMemo(() => new Set<string>(), [scope]);
   const clearChatRef = useRef(clearChat);
   clearChatRef.current = clearChat;
@@ -2043,6 +2064,7 @@ export function Main({
   useEffect(() => {
     if (switching || reopening || status !== "connected" || !hermes.hasListed()) return;
     for (const id of new Set(panes.flatMap((p) => p.tabs))) if (id !== null && !chats.some((c) => c.id === id)) chatGone(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [chats, panes, switching, reopening, status]);
 
   // The chat to reopen opens as soon as the list has it, the saved one at first, and stays open once the list read from
@@ -2198,6 +2220,7 @@ export function Main({
     const job: LinkJob = { link: link.link, at: link.at, attempt: 0, stage: "check" };
     linkJobRef.current = job;
     setLinkJob(job);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [link?.at]);
 
   // An unsaved edit in Settings asks first. Its answer may come after the link was cancelled or replaced, so the link
@@ -2308,6 +2331,7 @@ export function Main({
     if (linkJob?.stage === "check") void runLink(linkJob);
     // Hermes connected (or came back) while the link waited.
     else if (linkJob?.stage === "wait" && status === "connected") retryLink(linkJob);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [linkJob, status]);
 
   // The switch to the linked chat's profile: it opens once that profile's list has been read. The owner going to
@@ -2322,6 +2346,7 @@ export function Main({
     }
     if (switching?.error) return failLink(`Hermes Chat switched to ${profile} but couldn't load its chats: ${switching.error}`);
     if (!switching) openLinked(linkJob, linkJob.found);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [linkJob, profile, switching]);
 
   const linkView: LinkNoticeView | undefined =
@@ -3714,6 +3739,7 @@ function ChatView({
     onAutoSent();
     const text = savedDrafts.get(shownDraft).trim();
     if (text) void send(text, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [autoSend]);
   // The chat's queue, shared by every pane showing it (ADR 0018). A chat not started yet has none.
   const queue = useSyncExternalStore(hermes.subscribe, () => hermes.getSnapshot().queues[chat.id]);

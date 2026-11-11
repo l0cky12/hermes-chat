@@ -137,6 +137,7 @@ export function useReturnFocus() {
       const now = document.activeElement;
       if ((!now || now === document.body) && opener instanceof HTMLElement && opener.isConnected) opener.focus();
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
     [],
   );
 }

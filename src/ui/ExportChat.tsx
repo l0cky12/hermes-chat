@@ -80,6 +80,7 @@ export function ExportChatDialog({
   const [note, setNote] = useState<string>();
   const [saving, setSaving] = useState(false);
   const pre = useRef<HTMLPreElement>(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const preview = useMemo(() => exportPreview(shot, draft, at, format), [draft, format]);
   const messages = shot.items.filter(isMessage);
   const tools = shot.items.filter((i) => i.kind === "tool" || i.kind === "approval").length;
@@ -101,6 +102,7 @@ export function ExportChatDialog({
     return () => {
       live = false;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [isImage, preview.text]);
 
   // Text selected in the preview goes in Text to redact, which can also be typed or pasted into from the keyboard.

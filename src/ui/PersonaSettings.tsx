@@ -91,6 +91,7 @@ export function PersonaPage({
   // Listed once connected; a list that failed for want of a connection is tried again once it is back.
   useEffect(() => {
     if (connected && !listed) void list();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected]);
 
   const pick = (profile: string) => {
@@ -270,6 +271,7 @@ export function PersonaSettings({
     return () => {
       current = false;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [earlierSave]);
 
   const loaded = load.state === "loaded" ? load : undefined;
@@ -290,6 +292,7 @@ export function PersonaSettings({
   useEffect(() => {
     if (!loaded || recover) return;
     setKept(store.setDraft(storeKey, dirty ? { text, base: loaded.base, at: now() } : undefined));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [text, dirty, loaded?.base, recover]);
 
   const read = useCallback(
@@ -319,6 +322,7 @@ export function PersonaSettings({
         if (alive.current && mine === seq.current) setReloading(false);
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
     [api, profile],
   );
 
@@ -326,6 +330,7 @@ export function PersonaSettings({
   useEffect(() => {
     if (!connected) return;
     if (load.state !== "loaded") void read();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected]);
 
   // A kept edit that matches what Hermes has now is nothing to restore.
@@ -334,6 +339,7 @@ export function PersonaSettings({
       setRecover(undefined);
       store.setDraft(storeKey, undefined);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [loaded?.server, recover]);
 
   const reload = () => {

@@ -94,6 +94,7 @@ export function Onboarding({
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
       run.current++;
       if (testing.current) probe.cancel();
       dialing.current?.abort();
@@ -769,6 +770,7 @@ function ProviderKeys({
     setKeySaved(false);
     setSaving(false);
     void load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [hermes, profile]);
 
   const pick: ProviderKey | undefined = setup?.keys.find((k) => k.provider === chosen);

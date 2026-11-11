@@ -107,6 +107,7 @@ export function MemorySettings({
       setConfirmBulk(false);
       setBulkDone(undefined);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [sourceProp, busy]);
   const [notice, setNotice] = useState<Notice>();
   // The owner's texts that Hermes didn't take (a conflict, or a save that read back differently), each kept to copy or
@@ -127,6 +128,7 @@ export function MemorySettings({
   const openKey = useRef<{ id: string; key: string }>(undefined);
 
   const dirty = memoryDirty(editing, kept);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => onDirtyChange(dirty), [dirty]);
   const discards = useRef(discardSignal);
   useEffect(() => {
@@ -145,6 +147,7 @@ export function MemorySettings({
       alive.current = false;
       onDirtyChange(false);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, []);
 
   /** Puts a fresh read on screen, keeping the open edit if its entry is still there as it was. */
@@ -249,6 +252,7 @@ export function MemorySettings({
   // Read once connected; after a drop, the screen keeps what it read, and the owner's edit, until Reload.
   useEffect(() => {
     if (connected && !view && !problem && !loading) void load("first");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected]);
 
   /** Runs `go` now, or once the owner agrees to drop the open entry's unsaved edit. A kept edit stays either way. */

@@ -122,12 +122,14 @@ export function SkillSettings({
   const focusAfter = useRef<string | undefined>(undefined);
 
   const dirty = !!editing && editing.draft !== editing.base.content;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => onDirtyChange(dirty), [dirty]);
   const discards = useRef(discardSignal);
   useEffect(() => {
     if (discardSignal === discards.current) return;
     discards.current = discardSignal;
     close();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [discardSignal]);
   useEffect(() => {
     alive.current = true;
@@ -135,6 +137,7 @@ export function SkillSettings({
       alive.current = false;
       onDirtyChange(false);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, []);
   // Back in the list, focus returns to the skill's Edit button.
   useEffect(() => {
@@ -167,6 +170,7 @@ export function SkillSettings({
   // Read once connected; after a drop, the screen keeps what it read, and the owner's edit, until Reload.
   useEffect(() => {
     if (connected && !view && !problem && !loading) void load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected]);
 
   function close() {

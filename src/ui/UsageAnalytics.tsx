@@ -181,6 +181,7 @@ export function UsageAnalytics({ io, profile, listProfiles, projects, projectCha
 
   const shownChats = useMemo(() => (data ? filterChats(data.chats, { model, project }, projectsOf) : []), [data, model, project, projectsOf]);
   const totals = useMemo(() => totalsOf(shownChats), [shownChats]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const groups = useMemo(() => sortGroups(groupBy(shownChats, dim, ctx), sort), [shownChats, dim, sort, zone, projectsOf, listable]);
   const models = useMemo(() => [...new Set((data?.chats ?? []).map((c) => c.model ?? NO_MODEL))].sort(), [data]);
   const drilled = drill && groupBy(shownChats, drill.dim, ctx).find((g) => g.key === drill.key);

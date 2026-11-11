@@ -226,7 +226,13 @@ describe("Asking a side question", () => {
     Object.defineProperties(transcript, {
       clientHeight: { configurable: true, get: () => 100 },
       scrollHeight: { configurable: true, get: () => 1000 },
-      scrollTop: { configurable: true, get: () => top, set: (v: number) => (top = Math.max(0, Math.min(v, 900))) },
+      scrollTop: {
+        configurable: true,
+        get: () => top,
+        set: (v: number) => {
+          top = Math.max(0, Math.min(v, 900));
+        },
+      },
     });
     transcript.scrollTop = 0;
     fireEvent.scroll(transcript);

@@ -78,11 +78,13 @@ export function SignInSettings({
     setNote(undefined);
     if (connected) void load(scope);
     return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
       scopes.current++;
       const s = session.current;
       session.current = undefined;
       if (s) void api.cancelSignIn(profile, s);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [api, profile, connected]);
 
   const busy = ui.kind !== "idle" && ui.kind !== "confirmSignOut";
