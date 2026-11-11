@@ -340,6 +340,25 @@ describe("Server files: Download", () => {
     expect(s.managedFiles.local).toEqual({});
   });
 
+  it("shows a name's direction overrides as marks, in the list, the trail, the preview and the transfer (#481)", async () => {
+    const s = server();
+    s.managedFiles.nodes["/home/liam/in\u202Ebox/invoice\u202Efdp.exe"] = { size: 3 * MiB };
+    const { user } = await launch(s);
+    await openFiles(user);
+    expect(names()).toContain("in\uFFFDbox");
+    await user.click(row_("in\uFFFDbox"));
+    await waitFor(() => expect(trail()).toEqual(["/", "home", "/liam", "/in\uFFFDbox"]));
+    expect(names()).toEqual(["invoice\uFFFDfdp.exe"]);
+    await user.click(row_("invoice\uFFFDfdp.exe"));
+    const pane = await screen.findByRole("complementary", { name: "Preview of invoice\uFFFDfdp.exe" });
+    expect(within(pane).getByRole("heading").textContent).toBe("invoice\uFFFDfdp.exe");
+    await user.click(within(pane).getByRole("button", { name: /Download/ }));
+    await waitFor(() => expect(transfer().getByText("Downloaded, 3.0 MB")).toBeTruthy());
+    expect(transfer().getByText("/home/liam/in\uFFFDbox/invoice\uFFFDfdp.exe")).toBeTruthy();
+    const raw = [...document.querySelectorAll("*")].filter((n) => [...n.childNodes].some((c) => c.nodeType === 3 && /[\u202a-\u202e\u2066-\u2069]/.test(c.textContent!))).map((n) => n.outerHTML.slice(0, 300));
+    expect(raw).toEqual([]);
+  });
+
   it("offers no download of a file over Hermes's 100 MB, or of a folder", async () => {
     const s = server();
     s.managedFiles.nodes["/home/liam/disk.img"] = { size: 101 * MiB };
