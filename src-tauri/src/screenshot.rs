@@ -986,6 +986,23 @@ impl Captures {
         Ok(path)
     }
 
+    /// Writes an image the app made into a slot, as `<name>.png` (or `.jpg`), readable only by this user.
+    pub fn write(&self, name: &str, bytes: &[u8]) -> Result<PathBuf, CaptureError> {
+        use std::io::Write;
+        let ext = image_ext(bytes).ok_or_else(|| CaptureError::Failed("The screenshot isn't a PNG or JPEG image.".into()))?;
+        let path = self.slot(&format!("{}.{ext}", capture_stem(name)))?;
+        let written = (|| -> std::io::Result<()> {
+            let mut to = private::create_file(&path)?;
+            to.write_all(bytes)?;
+            to.sync_all()
+        })();
+        if let Err(e) = written {
+            self.discard(&path);
+            return Err(failed("Couldn't save the screenshot", e));
+        }
+        Ok(path)
+    }
+
     /// `path` is a capture this process staged. Only names inside its own folder count, so the webview can't use
     /// discarding to delete anything else.
     pub fn owns(&self, path: &Path) -> bool {
