@@ -124,6 +124,7 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
     const route = await opening<Route>("hermes_connect", args, onEvent, signal, opts.onStep, attempt);
     const pipe: Pipe = {
       route,
+      connectionId: attempt,
       send: (frame) => invoke("hermes_send", { attempt, frame }),
       request: (method, path, body) => invoke<string>("hermes_request", { attempt, method, path, body }).catch(asError),
       getLimited: (path, maxBytes) => invoke<string>("hermes_get_limited", { attempt, path, maxBytes }).catch(asError),
@@ -190,7 +191,7 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
         };
       },
       reopen: async (onEvent, profile, signal, onStep) => {
-        await opening<void>("hermes_reopen", { profile }, onEvent, signal, onStep);
+        await opening<void>("hermes_reopen", { profile, connection: attempt }, onEvent, signal, onStep);
         return pipe;
       },
       close: () => invoke("hermes_disconnect"),

@@ -12,12 +12,13 @@ afterEach(() => invoke.mockReset());
 const audio = new Uint8Array([82, 73, 70, 70]);
 
 describe("transcribing through Rust", () => {
-  it("sends the recording with its run id, profile and side, and answers what Rust said", async () => {
+  it("sends the recording with its run id, profile, connection and side, and answers what Rust said", async () => {
     invoke.mockResolvedValue({ text: "hi", ran: "local" });
-    await expect(tauriLocalStt.transcribe({ audio, mime: "audio/wav", profile: "work", side: "local" })).resolves.toEqual({ text: "hi", ran: "local" });
+    const req = { audio, mime: "audio/wav", profile: "work", connection: "conn-1", side: "local" as const };
+    await expect(tauriLocalStt.transcribe(req)).resolves.toEqual({ text: "hi", ran: "local" });
     const [cmd, body, opts] = invoke.mock.calls[0];
     expect([cmd, body]).toEqual(["hermes_transcribe", audio]);
-    expect(opts.headers).toMatchObject({ "x-mime": "audio%2Fwav", "x-profile": "work", "x-stt-side": "local" });
+    expect(opts.headers).toMatchObject({ "x-mime": "audio%2Fwav", "x-profile": "work", "x-attempt": "conn-1", "x-stt-side": "local" });
     expect(opts.headers["x-stt-run"]).toBeTruthy();
   });
 

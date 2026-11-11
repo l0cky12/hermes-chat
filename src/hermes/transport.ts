@@ -1144,6 +1144,11 @@ export class Hermes {
     () => this.generation,
   );
 
+  /** Rust's name for the connection open now, for a command made outside the pipe (`Pipe.connectionId`). */
+  get connectionId(): string | undefined {
+    return this.pipe?.connectionId;
+  }
+
   /** The profile whose chats are shown. */
   get profile(): string {
     return this.snapshot.profile;

@@ -119,6 +119,11 @@ export interface Pipe {
   readonly route: Route;
   /** The record of this connection attempt (attempts.ts, #270), when one is kept: `dial()` adds the wait for `gateway.ready` and how it ended. */
   readonly attempt?: AttemptTrace;
+  /**
+   * Rust's name for the connection this pipe opened. Every command that reaches it names it, so one sent after the
+   * connection was replaced reaches nothing (#474). A command made outside the pipe, such as Dictation's, names it too.
+   */
+  readonly connectionId?: string;
   send(frame: string): Promise<void>;
   /**
    * One dashboard REST call with the sign-in cookies, e.g. `request("GET", "api/sessions?order=recent")`.

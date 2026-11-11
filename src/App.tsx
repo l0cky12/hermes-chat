@@ -973,7 +973,7 @@ export function Main({
             ? { ...setup, sttLocal: { label: local.label ?? undefined, problem: local.problem ?? undefined, backup: !!local.backup } }
             : setup;
         }),
-      transcribe: (audio, mime, signal) => localStt.transcribe({ audio, mime, profile: hermes.profile, signal }),
+      transcribe: (audio, mime, signal) => localStt.transcribe({ audio, mime, profile: hermes.profile, connection: hermes.connectionId, signal }),
       speak: (text) => hermes.speak(text),
       onChange: (fn) => {
         const offHermes = hermes.onVoiceChange(fn);
@@ -3004,7 +3004,7 @@ export function Main({
             onVoiceChange={voice.onChange}
             showVoice={showVoice}
             localStt={localStt}
-            transcribe={(audio, mime, side, signal) => localStt.transcribe({ audio, mime, profile: hermes.profile, side, signal })}
+            transcribe={(audio, mime, side, signal) => localStt.transcribe({ audio, mime, profile: hermes.profile, connection: hermes.connectionId, side, signal })}
             showTextGeneration={showTextGeneration}
             showMemory={showMemory}
             capabilities={hermes.capabilities}

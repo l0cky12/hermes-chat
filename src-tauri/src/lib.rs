@@ -317,26 +317,31 @@ impl From<&str> for RelayError {
 /// answers, and when it doesn't, opening it all again soon beats waiting.
 const REOPEN_LIMITS: transport::StepLimits = transport::StepLimits { ticket: QUICK_REACH, socket: QUICK_REACH, ..transport::StepLimits::ROUTES };
 
-/// Opens `/api/ws` for `profile` again on the connection held now, after its socket closed. The SSH tunnel and the
+/// Opens `/api/ws` for `profile` again on the connection the webview opened as `connection`, after its socket closed. The SSH tunnel and the
 /// sign-in are kept, so this mints a ticket and opens the socket, nothing more. Transfers stop as on any reconnect (ADR
 /// 0023), and so do Screens, whose lease came over the closed socket. Any failure, a stop included, closes the whole
-/// connection, so the webview opens it again from the start with `hermes_connect`.
+/// connection, so the webview opens it again from the start with `hermes_connect`. `attempt` names this reopen, for
+/// `hermes_connect_cancel`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn hermes_reopen(
     state: State<'_, AppState>,
     transfers: State<'_, Transfers>,
     displays: State<'_, display::Displays>,
     profile: String,
+    connection: String,
     attempt: String,
     on_event: Channel<PipeEvent>,
     on_step: Channel<connect_steps::Started>,
 ) -> Result<(), String> {
     let mut slot = state.0.lock().await;
-    transfers.stop_all();
-    displays.close_all();
+    // Only the connection whose socket closed reopens: one replaced meanwhile isn't touched (`held`, #474).
+    held(&slot, &connection)?;
     let Some(conn) = slot.as_mut() else {
         return Err(transport::TransportError::Closed.to_string());
     };
+    transfers.stop_all();
+    displays.close_all();
     let dashboard = conn.dashboard.clone();
     let opened = as_attempt(&state, attempt, async move {
         let steps = Steps::reporting(move |s| drop(on_step.send(s)));
@@ -1257,16 +1262,13 @@ async fn headers_delete(connection: Option<String>) -> Result<(), String> {
     saved_password::delete(saved_password::account(saved_password::HEADERS, connection.as_deref())?).await
 }
 
-/// Saves the token the connection in use signed in with, when it was typed for this sign-in, in the keyring as
+/// Saves the token the connection the webview opened as `attempt` signed in with, when it was typed for this sign-in, in the keyring as
 /// `dashboard-token/<id>` for `addresses`: the routes it was entered for, which must include the one it signed in at.
 /// Nothing typed: nothing to save. The webview never reads the token back (ADR 0058).
 #[tauri::command]
-async fn token_keep(state: State<'_, AppState>, connection: Option<String>, addresses: Vec<Address>) -> Result<(), String> {
+async fn token_keep(state: State<'_, AppState>, connection: Option<String>, attempt: String, addresses: Vec<Address>) -> Result<(), String> {
     let account = saved_password::account(saved_password::TOKEN, connection.as_deref())?;
-    let typed = match &*state.0.lock().await {
-        Some(conn) => conn.typed_token.clone(),
-        None => return Err(transport::TransportError::Closed.to_string()),
-    };
+    let typed = held(&*state.0.lock().await, &attempt)?.typed_token.clone();
     let Some((token, at)) = typed else { return Ok(()) };
     let mut keep: Vec<Address> = Vec::new();
     for a in addresses.into_iter().map(|[mode, target]| [mode, target.trim().to_owned()]) {
@@ -2180,5 +2182,43 @@ mod tests {
         let heard_by_b = to_b.lock().unwrap().clone();
         assert_eq!(heard_by_b, ["MEANT FOR B"], "server B heard a frame meant for server A");
         assert!(!to_a.lock().unwrap().iter().any(|f| f == "MEANT FOR A"), "the replaced connection still sent it");
+    }
+
+    /// Issue #474: a reopen, or a token keep, asked for server A after a switch to server B leaves B alone.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_reopen_or_token_keep_for_a_replaced_connection_leaves_the_new_one_alone() {
+        use tauri::Manager;
+        let password = super::SignInWith::Password { username: "liam".into(), password: "hunter2".into(), provider: None };
+        let (b, _, heard_by_b, to_b) = counting_dashboard().await;
+        let app = tauri::test::mock_builder()
+            .manage(super::AppState::default())
+            .manage(super::Transfers::default())
+            .manage(super::display::Displays::default())
+            .invoke_handler(tauri::generate_handler![super::hermes_reopen, super::hermes_send, super::token_keep])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
+        *app.state::<super::AppState>().0.lock().await = Some(super::Connection { attempt: "B".into(), ..connect(&b, password).await });
+        let tickets = || heard_by_b.lock().unwrap().iter().filter(|(p, _)| p == "/api/auth/ws-ticket").count();
+        let before = tickets();
+
+        let call = |cmd: &'static str, body: serde_json::Value| {
+            let webview = webview.clone();
+            tokio::task::spawn_blocking(move || invoke_through_ipc(&webview, cmd, body))
+        };
+        let reopen = serde_json::json!({"profile": "default", "connection": "A", "attempt": "reopen-1", "onEvent": "__CHANNEL__:1", "onStep": "__CHANNEL__:2"});
+        let refused = call("hermes_reopen", reopen).await.unwrap().expect_err("a reopen for the replaced connection went ahead");
+        assert!(refused.contains("closed"), "refused for another reason: {refused}");
+        let keep = serde_json::json!({"connection": null, "attempt": "A", "addresses": []});
+        let refused = call("token_keep", keep).await.unwrap().expect_err("a token keep for the replaced connection went ahead");
+        assert!(refused.contains("closed"), "refused for another reason: {refused}");
+
+        assert_eq!(tickets(), before, "server B was asked for a ticket for a reopen meant for server A");
+        call("hermes_send", serde_json::json!({"attempt": "B", "frame": "STILL B"})).await.unwrap().expect("server B's connection is still held");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !to_b.lock().unwrap().iter().any(|f| f == "STILL B") && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(to_b.lock().unwrap().iter().any(|f| f == "STILL B"), "server B's socket was replaced");
     }
 }

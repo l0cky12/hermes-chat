@@ -49,7 +49,11 @@ describe("The Tauri pipe (#474, #486)", () => {
     expect(after.map((c) => c.cmd)).toEqual(["hermes_send", "hermes_request", "hermes_get_limited", "hermes_voice_setup", "hermes_speak", "hermes_request"]);
     for (const c of after) expect(c.args.attempt, c.cmd).toBe(attempt);
     expect(calls.find((c) => c.cmd === "hermes_transcribe")?.headers?.["x-attempt"]).toBe(attempt);
-    expect(calls.find((c) => c.cmd === "hermes_reopen")?.args.attempt).not.toBe(attempt);
+    expect(pipe.connectionId).toBe(attempt);
+    const reopen = calls.find((c) => c.cmd === "hermes_reopen")!;
+    expect(reopen.args.connection).toBe(attempt);
+    // Its own name, so stopping the reopen can't stop another opening.
+    expect(reopen.args.attempt).not.toBe(attempt);
   });
 
   it("gives each connection opened its own name", async () => {

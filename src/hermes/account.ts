@@ -27,7 +27,8 @@ export type Keyring = { load(): Promise<string | undefined>; save(value: string)
  * for, none when there is none. `keep`: saves the token the connection in use signed in with, if it was typed for this
  * sign-in, for `routes`. `delete`: deletes it.
  */
-export type TokenKeyring = { saved(): Promise<string[] | undefined>; keep(routes: string[]): Promise<void>; delete(): Promise<void> };
+/** `keep`: saves the token typed for the connection `connection` names (`Hermes.connectionId`), for `routes`. */
+export type TokenKeyring = { saved(): Promise<string[] | undefined>; keep(routes: string[], connection?: string): Promise<void>; delete(): Promise<void> };
 
 /** A connection's keyring entries. */
 export type Secrets = { password: Keyring; headers: Keyring; token: TokenKeyring };
@@ -152,7 +153,7 @@ export async function signIn(
   // A connection keeps one way to sign in: the other's secret goes.
   if (d.method === "token") {
     if (d.token?.trim())
-      await secrets.token.keep(routesOf(d).filter((r) => !r.locked).map(routeKey)).catch((e: Error) => {
+      await secrets.token.keep(routesOf(d).filter((r) => !r.locked).map(routeKey), hermes.connectionId).catch((e: Error) => {
         kept.password = false;
         notSaved.push(`Couldn't save the token in the system keyring: ${e.message}`);
       });
