@@ -231,7 +231,8 @@ describe("The Keyboard Shortcuts page", () => {
     const s = await signedIn();
     await s.user.click(button("Settings"));
     await screen.findByRole("heading", { name: "Settings" });
-    await s.user.type(screen.getByRole("searchbox", { name: "Search settings" }), "chat below");
+    await s.user.click(screen.getByRole("searchbox", { name: "Search settings" }));
+    await s.user.paste("chat below");
     await screen.findByRole("group", { name: "Keyboard Shortcuts" });
     expect(screen.getByText("Open the chat below")).toBeTruthy();
   });

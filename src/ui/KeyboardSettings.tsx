@@ -3,7 +3,7 @@
 // Save. A changed command shows Custom and a Reset; two commands on one chord show a warning naming the other. Keys
 // that stay as they are (undo, the screenshot shortcut, Escape in a dialog) are listed so they can be found. Changes
 // are kept in the display preferences (uiPrefs.ts), on this computer only, and apply at once.
-import { type KeyboardEvent, useState, useSyncExternalStore } from "react";
+import { type KeyboardEvent, memo, useState, useSyncExternalStore } from "react";
 import { CircleAlert, RotateCcw } from "lucide-react";
 import { getUIPrefs, subscribe } from "../hermes/uiPrefs";
 import { composing } from "./bits";
@@ -44,7 +44,8 @@ function KeyChips({ parts }: { parts: readonly string[] }) {
   );
 }
 
-export function KeyboardSettings() {
+/** Memoized: a Settings search re-renders every searched tab on each key typed, and nothing here reads the query. */
+export const KeyboardSettings = memo(function KeyboardSettings() {
   const bindings = useBindings();
   const { screenshotShortcut } = useSyncExternalStore(subscribe, getUIPrefs);
   const clashes = conflicts(bindings, screenshotShortcut);
@@ -189,4 +190,4 @@ export function KeyboardSettings() {
   };
 
   return <>{GROUPS.map((g) => section(g.id))}</>;
-}
+});
