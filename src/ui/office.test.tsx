@@ -535,6 +535,22 @@ describe("The building", () => {
     expect(shown()).toEqual([]);
   });
 
+  it("keeps a tag the pointer reaches straight from its character's head, though the canvas lets go of it after", async () => {
+    office("building");
+    await waitFor(() => expect(drawn.scene?.floor).toBeTruthy());
+    const tag = () => document.querySelector<HTMLElement>('[data-desk="default audit a"]')!;
+    const shown = () => Array.from(document.querySelectorAll("[data-hover]")).map((t) => t.getAttribute("data-desk"));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    act(() => drawn.scene!.events.onHover("default audit a"));
+    // WebKitGTK's order for one move from the head onto the tag (probed for #459): React's enter, from the canvas's
+    // pointerout; then the canvas's pointerleave, which the scene reports as no character; then the move, on the tag.
+    fireEvent.pointerEnter(tag());
+    act(() => drawn.scene!.events.onHover(undefined));
+    fireEvent.pointerMove(tag());
+    act(() => void vi.advanceTimersByTime(1_000));
+    expect(shown()).toEqual(["default audit a"]);
+  });
+
   it("moves the shown tag straight to the next character the pointer reaches", async () => {
     office("building");
     await waitFor(() => expect(drawn.scene?.floor).toBeTruthy());

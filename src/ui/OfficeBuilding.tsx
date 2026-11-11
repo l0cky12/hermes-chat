@@ -292,6 +292,9 @@ export function OfficeBuilding({
               ref={(el) => void (el ? tags.current.set(c.key, el) : tags.current.delete(c.key))}
               onClick={() => setSelected(c.key)}
               onPointerEnter={() => hover(c.key)}
+              // Straight from the head onto its tag, React's enter comes before the canvas's own leave lets go of the
+              // character; the move that follows both keeps the tag.
+              onPointerMove={() => hover(c.key)}
               onPointerLeave={() => hover(undefined)}
             >
               <span className="office-dot" aria-hidden />
