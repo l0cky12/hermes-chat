@@ -1,7 +1,7 @@
 // Icon rail beside a chat list (ADR 0001), ported from the prototype's variants C and A, with the profile's tools in one
 // Server group and tips that show at once (ADR 0050, 0116). Server files and the Terminal live in the side panel only. The list's header is the profile switcher. Settings opens from the
 // rail's foot. Right-clicking a chat opens its menu (ChatMenu.tsx).
-import { memo, useCallback, useEffect, useId, useReducer, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Hourglass, LockOpen, PanelLeftClose, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
 import { waitingLabel, type Handoff } from "../hermes/dispatched";
@@ -18,7 +18,7 @@ import { DeleteChatDialog } from "./DeleteChat";
 import { SettleAllDialog } from "./SettleAll";
 import { CloneProfileDialog } from "./CloneProfile";
 import type { ProfileCloneApi } from "../hermes/profileClone";
-import { Age, ArchiveButton, STATUS_LABEL, SettleButton, SourceIcon, Spinner, ago, composing, routeLabel, useReturnFocus } from "./bits";
+import { Age, ArchiveButton, Ticking, STATUS_LABEL, SettleButton, SourceIcon, Spinner, ago, composing, routeLabel, useReturnFocus } from "./bits";
 import { useLocale, type Locale } from "../i18n/locale";
 import { viaLabel } from "../hermes/routes";
 import { dragChat, dragChatEnd, rowDragged } from "./Tabs";
@@ -380,7 +380,6 @@ const ChatRow = memo(function ChatRow({
   section,
   hidden,
   sleepsUntil,
-  wake,
 }: {
   chat: Chat;
   selected: boolean;
@@ -412,9 +411,8 @@ const ChatRow = memo(function ChatRow({
   section?: string;
   /** In a collapsed section: kept, with its rename box or menu, but out of sight. */
   hidden?: boolean;
+  /** When the snoozed chat wakes; the row shows it. */
   sleepsUntil?: number;
-  /** When the snoozed chat wakes, as the row shows it. */
-  wake?: string;
 }) {
   const l = useLocale();
   const [renaming, setRenaming] = useState(false);
@@ -500,7 +498,11 @@ const ChatRow = memo(function ChatRow({
           </span>
         )}
         <span className="row-meta">
-          {wake && <span className="row-wake">{wake}</span>}
+          {sleepsUntil !== undefined && (
+            <span className="row-wake">
+              <Ticking>{() => wakeLabel(sleepsUntil, Date.now(), l.tag)}</Ticking>
+            </span>
+          )}
           {handoff?.kind === "needsOwner" && (
             <span className="row-owner" role="img" aria-label={handoff.reason} title={handoff.reason}>
               <CircleAlert size={12} />
@@ -1126,10 +1128,12 @@ export function ChatList({
     if (selectedIn) setCollapsed(selectedIn, false);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [selectedId]);
-  const l = useLocale();
   const latest = { chats, onOpen, onOpenIn, onOpenTab, onSettle, onArchive, onRename, onRegenTitle, onCopyLink, onTextGenerationSettings, projectsOf, tagsOf, onPin, onStopWaiting, onSnooze, onWake };
   const live = useRef(latest);
-  live.current = latest;
+  // After the commit, not during render: a render React throws away would leave its props here (#436).
+  useLayoutEffect(() => {
+    live.current = latest;
+  });
   const handlersFor = (id: string) => {
     const chat = () => live.current.chats.find((c) => c.id === id);
     return {
@@ -1190,7 +1194,6 @@ export function ChatList({
         tags={tags && { ...tags, onToggle: on.toggleTag, onManage: on.manageTags }}
         snooze={snooze}
         sleepsUntil={sleepsUntil}
-        wake={sleepsUntil === undefined ? undefined : wakeLabel(sleepsUntil, now, l.tag)}
         pin={onPin && !c.archived ? { pinned: pins[c.id] !== undefined, onPin: on.pin } : undefined}
         handoff={handoffs?.get(c.id)}
         onStopWaiting={onStopWaiting && on.stopWaiting}

@@ -220,6 +220,15 @@ export function Age({ at }: { at: number }) {
   return useLocale().fmt.age(at);
 }
 
+/**
+ * Text that depends on the time, worked out again on Age's minute clock without the rest of its parent rendering:
+ * a snoozed chat's wake time loses its weekday once midnight passes (#438).
+ */
+export function Ticking({ children }: { children: () => string }) {
+  useSyncExternalStore(ageClock.subscribe, ageClock.ticks);
+  return children();
+}
+
 /** How long ago, as a phrase: "just now" (or `justNow`), "5m ago". */
 export function ago(l: Locale, at: number, justNow = "just now") {
   const age = l.fmt.age(at);
