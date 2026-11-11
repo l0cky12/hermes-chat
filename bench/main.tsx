@@ -10,6 +10,7 @@ import { ChatPane } from "../src/ui/ChatPane";
 import { Split } from "../src/ui/Split";
 import { PaneDrop, TabStrip } from "../src/ui/Tabs";
 import { codeReply, makeChat, makeReply } from "./fixture";
+import { REPLIES, hostile } from "./hostile";
 
 const root = createRoot(document.getElementById("root")!);
 let setChat: (c: Chat) => void = () => {};
@@ -106,12 +107,17 @@ async function stream(chunk = 4) {
  * `lastMs`: the mean update of the last 20 deltas, when the reply is longest.
  */
 async function streamCode(blocks: number, tagged: boolean, chunk = 12) {
+  return { blocks, tagged, ...(await streamReply((salt) => codeReply(blocks, tagged, salt), chunk)) };
+}
+
+/** Streams the reply `make` returns into a short chat, `chunk` characters a delta and one delta a frame. */
+async function streamReply(make: (salt: string) => string, chunk: number) {
   root.render(<></>);
   await painted();
   current = makeChat(4);
   flushSync(() => root.render(<Host key={++opened} initial={current} />));
   await painted();
-  const reply = codeReply(blocks, tagged, String(opened));
+  const reply = make(String(opened));
   const before: Item[] = [...current.items, { kind: "user", id: "u-live", text: "Stream something." }];
   flushSync(() => setChat({ ...current, items: before, running: true }));
   await painted();
@@ -134,8 +140,6 @@ async function streamCode(blocks: number, tagged: boolean, chunk = 12) {
   const r1 = (x: number) => Math.round(x * 10) / 10;
   const tail = update.slice(-20);
   return {
-    blocks,
-    tagged,
     deltas: update.length,
     updateMs: stats(update),
     lastMs: r1(tail.reduce((a, b) => a + b, 0) / tail.length),
@@ -144,6 +148,24 @@ async function streamCode(blocks: number, tagged: boolean, chunk = 12) {
     endMs,
     highlighted: document.querySelectorAll(`[data-item="a-live"] pre code:has([class^="hljs-"])`).length,
   };
+}
+
+/** Opens a short chat whose last reply is hostile reply `name` (hostile.ts) at size `n`. `commitMs` as in `open`. */
+async function hostileOpen(name: string, n: number) {
+  root.render(<></>);
+  await painted();
+  current = makeChat(4);
+  current = { ...current, items: [...current.items, { kind: "assistant", id: "a-hostile", text: REPLIES[name](n) }] };
+  const t0 = performance.now();
+  flushSync(() => root.render(<Host key={++opened} initial={current} />));
+  const t1 = performance.now();
+  const t2 = await painted();
+  return { name, n, commitMs: Math.round(t1 - t0), paintMs: Math.round(t2 - t0) };
+}
+
+/** Streams hostile reply `name` at size `n`, as `streamCode` streams code. */
+async function hostileStream(name: string, n: number, chunk = 12) {
+  return { name, n, ...(await streamReply(() => REPLIES[name](n), chunk)) };
 }
 
 /**
@@ -364,4 +386,4 @@ const dragWatch = {
   },
 };
 
-Object.assign(window, { bench: { open, stream, streamCode, find, scroll, splitOpen, splitStream, splitResize, dragWatch } });
+Object.assign(window, { bench: { open, stream, streamCode, hostile, hostileOpen, hostileStream, find, scroll, splitOpen, splitStream, splitResize, dragWatch } });
