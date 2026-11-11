@@ -161,6 +161,7 @@ describe("parseManifest", () => {
         "toolsets",
         "toolsetSwitches",
         "persona",
+        "profiles",
         "skills",
         "serverFiles",
         "scheduledJobs",
