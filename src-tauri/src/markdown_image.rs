@@ -18,7 +18,8 @@ pub async fn load(url: &str) -> Result<String, String> {
     if !url.username().is_empty() || url.password().is_some() {
         return Err("Image addresses with a username or password in them don't load.".into());
     }
-    let http = reqwest::Client::builder().timeout(TIMEOUT).build().map_err(|e| e.to_string())?;
+    // A redirect would otherwise send the clicked address, query string included, to the next host as its `Referer`.
+    let http = reqwest::Client::builder().timeout(TIMEOUT).referer(false).build().map_err(|e| e.to_string())?;
     let mut resp = http.get(url).send().await.map_err(failed)?;
     if !resp.status().is_success() {
         return Err(format!("The site answered {}.", resp.status()));
@@ -70,6 +71,25 @@ mod tests {
     async fn an_image_comes_back_as_a_data_url() {
         let url = serve("Image/PNG; charset=binary", b"\x89PNG".to_vec()).await;
         assert_eq!(load(&url).await.unwrap(), "data:image/png;base64,iVBORw==");
+    }
+
+    #[tokio::test]
+    async fn a_redirect_sends_the_next_host_no_referer() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None::<Option<String>>));
+        let target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_addr = target.local_addr().unwrap();
+        let record = seen.clone();
+        let app = axum::Router::new().fallback(move |headers: axum::http::HeaderMap| {
+            *record.lock().unwrap() = Some(headers.get("referer").and_then(|v| v.to_str().ok()).map(str::to_owned));
+            async { ([(CONTENT_TYPE, "image/png")], b"\x89PNG".to_vec()) }
+        });
+        tokio::spawn(async move { axum::serve(target, app).await.unwrap() });
+        let first = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let first_addr = first.local_addr().unwrap();
+        let hop = axum::Router::new().fallback(move || async move { axum::response::Redirect::temporary(&format!("http://{target_addr}/p.png")) });
+        tokio::spawn(async move { axum::serve(first, hop).await.unwrap() });
+        load(&format!("http://{first_addr}/p.png?token=SECRET")).await.unwrap();
+        assert_eq!(*seen.lock().unwrap(), Some(None));
     }
 
     #[tokio::test]

@@ -72,6 +72,14 @@ describe("Markdown", () => {
     expect(preview).toHaveBeenCalledWith({ kind: "web", url: "https://example.test/page" });
   });
 
+  it("loads an image with no scheme in its address over https", async () => {
+    invoke.mockResolvedValueOnce(PNG);
+    const { container } = renderDom(<Markdown text="![x](//example.test/p.png)" />);
+    await userEvent.click(screen.getByRole("button", { name: /example\.test/ }));
+    expect(invoke).toHaveBeenCalledWith("markdown_image_load", { url: "https://example.test/p.png" });
+    await waitFor(() => expect(container.querySelector("img")?.getAttribute("src")).toBe(PNG));
+  });
+
   it("says why a clicked image didn't load, and tries again on the next click", async () => {
     invoke.mockRejectedValueOnce("That address isn't an image.").mockResolvedValueOnce(PNG);
     const preview = vi.fn();

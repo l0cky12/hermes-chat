@@ -117,7 +117,8 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
         e.stopPropagation();
         if (load === "loading") return;
         setLoad("loading");
-        invoke<string>("markdown_image_load", { url: src }).then(
+        // `//host/p.png` has no scheme for Rust to read; the app's own page is `tauri:` on Linux, so it can't lend one.
+        invoke<string>("markdown_image_load", { url: src.startsWith("//") ? `https:${src}` : src }).then(
           (dataUrl) => setLoad({ dataUrl }),
           (error: unknown) => setLoad({ failed: error instanceof Error ? error.message : String(error) }),
         );
