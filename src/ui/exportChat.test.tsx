@@ -272,6 +272,43 @@ describe("The Export dialog", () => {
     expect((screen.getByRole("button", { name: "Save…" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it("shows the HTML page in a sandboxed frame holding exactly the bytes it saves, with typed redactions gone", async () => {
+    const { saves, user } = open();
+    await user.click(screen.getByRole("radio", { name: "HTML page" }));
+    await user.click(screen.getByRole("textbox", { name: "Text to redact" }));
+    await user.paste("Larch Lane");
+    await user.keyboard("{Enter}");
+    const frame = screen.getByTitle("The page, exactly as it will be saved");
+    expect(frame.localName).toBe("iframe");
+    expect(frame.getAttribute("sandbox")).toBe("");
+    expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(screen.getByText(/everywhere it appears in the page/)).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Save…" }));
+    const [[bytes, name, format]] = saves;
+    expect(format).toBe("html");
+    expect(name).toBe("Moving house.html");
+    expect(bytes).toBe(frame.getAttribute("srcdoc"));
+    expect(bytes.startsWith("<!doctype html>")).toBe(true);
+    expect(bytes).not.toContain("Larch");
+    expect(bytes).not.toContain("Mov3rs!2026");
+    expect(bytes).toContain("Ship the boxes to 14 [redacted], Duluth.");
+  });
+
+  it("won't save an HTML page that would still show a redaction formatting splits, and says why", async () => {
+    const { saves, user } = open(chat({ items: [{ kind: "user", id: "u1", text: "The gate code is 48*21*93." }] }));
+    await user.click(screen.getByRole("radio", { name: "HTML page" }));
+    await user.click(screen.getByRole("textbox", { name: "Text to redact" }));
+    await user.paste("482193");
+    await user.keyboard("{Enter}");
+    expect((await screen.findByRole("alert")).textContent).toContain("splits text you redacted");
+    expect(screen.queryByTitle("The page, exactly as it will be saved")).toBeNull();
+    const save = screen.getByRole("button", { name: "Save…" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    await user.click(save);
+    expect(saves).toEqual([]);
+  });
+
   it("keeps the chat as it was when it opened", () => {
     const { rerender } = open();
     const before = preview().textContent;
