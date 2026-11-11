@@ -11,7 +11,7 @@ Issue #222 asked for Hermes's Bot Mode, as the official Hermes desktop app has i
   - its Bot Chat's last message, as `profiles.list` reports it in `canonical_session`;
   - **Replying** or **Needs you** when its Bot Chat has a reply running or an Approval waiting, else how long ago it was last active.
 
-  The view reads `profiles.list` when it opens and every 15 seconds while it is open. It also asks for the inbox's check of live sessions, as the Inbox does.
+  The app reads `profiles.list` and the bots' pictures once after each connection. The view shows the roster and pictures last read at once, then reads `profiles.list` again in the background when it opens and every 15 seconds while it is open. It also asks for the inbox's check of live sessions, as the Inbox does.
 - **A row opens its Bot Chat, found by title every time** (`src/hermes/bots.ts` `BotChats`). The rules are Hermes's own:
   1. Every open asks `session.list {profile, title: "Bot Chat", include_hidden: true}`. The row that comes back opens, at its compression lineage's tip.
   2. Only when there is none is one created: `session.create {title: "Bot Chat", hidden: true, follow_profile_config: true}`, then `session.title` on the new session. The title stores the session at once, so the next lookup finds it.

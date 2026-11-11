@@ -889,7 +889,7 @@ export function Main({
   tray?: TrayWiring;
 }) {
   const connection: SavedConnection = "id" in given ? given : { ...given, id: "", name: defaultName(given), addedAt: 0 };
-  const { profile, chats, olderPulled, archivedListed, status, route, unsecure, closedReason, syncError, others, live, models, switching, branchNews } = useSyncExternalStore(
+  const { profile, chats, olderPulled, archivedListed, status, route, unsecure, closedReason, syncError, others, live, models, switching, branchNews, bots, botPictures } = useSyncExternalStore(
     hermes.subscribe,
     hermes.getSnapshot,
   );
@@ -1855,7 +1855,6 @@ export function Main({
   // switcher does, and once its list has loaded the Bot Chat is looked up by title and opened in the active pane. It isn't
   // remembered for the next launch: what reopens a Bot Chat is its bot's row. The pen starts an ordinary chat there.
   const loadBots = useCallback(() => hermes.bots(), [hermes]);
-  const botAvatar = useCallback((p: string) => hermes.botAvatar(p), [hermes]);
   const activityOf = (b: Bot, roster: readonly Bot[]) => {
     const ids = b.botChat ? [b.botChat.id, b.botChat.resolvedId] : [];
     const open = b.profile === profile ? chats.find((c) => ids.includes(c.id)) : undefined;
@@ -2847,8 +2846,9 @@ export function Main({
           server={where ?? "the server"}
           profile={profile}
           connected={status === "connected"}
+          last={bots}
+          pictures={botPictures}
           load={loadBots}
-          avatar={botAvatar}
           activity={activityOf}
           leaving={leavingNote(profile, chats)}
           onOpen={(b) => openBot(b, "open")}

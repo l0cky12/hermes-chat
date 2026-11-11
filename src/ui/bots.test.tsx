@@ -9,7 +9,7 @@ import { FakeHermes, row } from "../hermes/fakeHermes";
 import { memoryCache } from "../hermes/memoryCache";
 import { BOT_CHAT_TITLE, BotModeUnsupportedError } from "../hermes/bots";
 import { getUIPrefs } from "../hermes/uiPrefs";
-import { Bots } from "./Bots";
+import { Bots, BOTS_REFRESH_MS } from "./Bots";
 import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
 
@@ -154,6 +154,65 @@ describe("The Bots view", () => {
   });
 });
 
+describe("Opening the Bots view", () => {
+  const PNG = "data:image/png;base64,iVBORw0KGgo=";
+  const names = () => botRows().map((r) => r.querySelector(".bots-name")?.textContent);
+  const picture = (i: number) => botRows()[i].querySelector("img")?.getAttribute("src");
+  /** Holds every later `profiles.list` until `release`, so the view can show only what the app already read. */
+  function holdRosters(server: FakeHermes) {
+    const list = server.handlers["profiles.list"];
+    const held: (() => void)[] = [];
+    server.handlers["profiles.list"] = (r) => void held.push(() => list(r));
+    return () => {
+      server.handlers["profiles.list"] = list;
+      held.splice(0).forEach((f) => f());
+    };
+  }
+
+  it("shows the bots and their pictures at once after connecting, before Hermes answers again", async () => {
+    const { server, user } = await launch((s) => (s.botAvatars = { scribe: PNG }));
+    holdRosters(server);
+    await user.click(botsButton()!);
+    expect(names()).toEqual(["Hermes", "Scribe"]);
+    expect(picture(1)).toBe(PNG);
+    expect(screen.queryByText("Reading the bots…")).toBeNull();
+    expect(document.activeElement).toBe(botRows()[0]);
+  });
+
+  it("shows them at once on reopening, and doesn't ask for the pictures again on the same connection", async () => {
+    const { server, hermes, user } = await launch((s) => (s.botAvatars = { scribe: PNG }));
+    await openBots(user);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: /Bots/ })).toBeNull();
+    const release = holdRosters(server);
+    await user.click(botsButton()!);
+    expect(names()).toEqual(["Hermes", "Scribe"]);
+    expect(picture(1)).toBe(PNG);
+    await act(async () => release());
+    await act(async () => void (await hermes.idle()));
+    expect(server.requests.filter((r) => r.method === "profiles.get_asset")).toHaveLength(1);
+  });
+
+  it("shows the roster read last, then a change on the server once it is read again", async () => {
+    const { server, user } = await launch();
+    const scribe = server.profileMeta.scribe.ui_meta!["hermes-bots"] as { title: string };
+    scribe.title = "Quill";
+    const release = holdRosters(server);
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      await user.click(botsButton()!);
+      expect(names()).toEqual(["Hermes", "Scribe"]);
+      await act(async () => release());
+      await waitFor(() => expect(names()).toEqual(["Hermes", "Quill"]));
+      scribe.title = "Inkwell";
+      await act(async () => void vi.advanceTimersByTime(BOTS_REFRESH_MS));
+      await waitFor(() => expect(names()).toEqual(["Hermes", "Inkwell"]));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("A Hermes without Bot Mode", () => {
   it("shows no Bots button once the check finds no profiles.list", async () => {
     const { hermes } = await launch((s) => (s.botMode = "none"));
@@ -177,10 +236,10 @@ describe("A Hermes without Bot Mode", () => {
         server="hermes"
         profile="default"
         connected
+        pictures={{}}
         load={async () => {
           throw new BotModeUnsupportedError("This Hermes lists its profiles but doesn't report their Bot Chats, so it has no Bot Mode.");
         }}
-        avatar={async () => undefined}
         activity={() => undefined}
         onOpen={() => {}}
         onNewChat={() => {}}

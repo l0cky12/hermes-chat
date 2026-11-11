@@ -13,16 +13,18 @@ export const BOTS_REFRESH_MS = 15_000;
 const ACTIVITY_LABEL: Record<NonNullable<BotActivity>, string> = { replying: "Replying", "needs-you": "Needs you" };
 
 /**
- * `load`: reads the roster (`Hermes.bots`). `avatar`: a bot's picture, read once per bot that has one. `activity`: what
- * the bot is doing in its Bot Chat. `leaving`: what switching away from the shown profile leaves behind, asked about
- * before a row in another profile opens. `onUnsupported`: this Hermes turned out to have no Bot Mode.
+ * `last`: the roster as last read, and when, shown until `load` reads it again (`Hermes.bots`). `pictures`: each bot's
+ * picture, by profile. `activity`: what the bot is doing in its Bot Chat. `leaving`: what switching away from the shown
+ * profile leaves behind, asked about before a row in another profile opens. `onUnsupported`: this Hermes turned out to
+ * have no Bot Mode.
  */
 export function Bots({
   server,
   profile,
   connected,
+  last,
+  pictures,
   load,
-  avatar,
   activity,
   leaving,
   onOpen,
@@ -34,8 +36,9 @@ export function Bots({
   server: string;
   profile: string;
   connected: boolean;
-  load: () => Promise<Bot[]>;
-  avatar: (profile: string) => Promise<string | undefined>;
+  last?: { roster: Bot[]; at: number };
+  pictures: Record<string, string>;
+  load: () => Promise<unknown>;
   activity: (bot: Bot, roster: readonly Bot[]) => BotActivity;
   leaving?: string;
   onOpen: (bot: Bot) => void;
@@ -45,19 +48,16 @@ export function Bots({
   onUnsupported?: (why: string) => void;
 }) {
   const l = useLocale();
-  const [bots, setBots] = useState<Bot[]>();
+  const bots = last?.roster;
   const [error, setError] = useState<string>();
   /** This Hermes turned out to have no Bot Mode, and why. */
   const [unsupported, setUnsupported] = useState<string>();
-  const [checkedAt, setCheckedAt] = useState<number>();
   const [loading, setLoading] = useState(false);
-  const [pictures, setPictures] = useState<Record<string, string>>({});
   const [showHidden, setShowHidden] = useState(false);
   const [asking, setAsking] = useState<{ bot: Bot; then: "open" | "new" }>();
   const root = useRef<HTMLElement>(null);
   const list = useRef<HTMLUListElement>(null);
   const headId = useId();
-  const asked = useRef(new Set<string>());
   const reads = useRef(0);
   useReturnFocus();
 
@@ -65,11 +65,9 @@ export function Bots({
     const n = ++reads.current;
     setLoading(true);
     try {
-      const got = await load();
+      await load();
       if (n !== reads.current) return;
-      setBots(got);
       setError(undefined);
-      setCheckedAt(Date.now());
     } catch (e) {
       if (n !== reads.current) return;
       if (e instanceof BotModeUnsupportedError) {
@@ -87,17 +85,6 @@ export function Bots({
     const every = setInterval(() => void read(), BOTS_REFRESH_MS);
     return () => clearInterval(every);
   }, [connected, load, unsupported]);
-
-  // Each picture is asked for once while the view is open; a bot without one, or one that fails, shows its initial.
-  useEffect(() => {
-    for (const b of bots ?? []) {
-      if (!b.hasAvatar || asked.current.has(b.profile)) continue;
-      asked.current.add(b.profile);
-      avatar(b.profile)
-        .then((url) => url && setPictures((p) => ({ ...p, [b.profile]: url })))
-        .catch(() => {});
-    }
-  }, [bots, avatar]);
 
   useEffect(() => {
     const away = (e: PointerEvent) => {
@@ -176,7 +163,7 @@ export function Bots({
       {!unsupported && (error || !connected) && (
         <p className={`inbox-note bots-note ${error ? "err" : ""}`} role={error ? "alert" : undefined}>
           {!connected ? "Not connected to Hermes." : `Couldn't read the bots: ${error}`}
-          {checkedAt && bots ? ` Showing them as of ${ago(l, checkedAt)}.` : ""}
+          {last ? ` Showing them as of ${ago(l, last.at)}.` : ""}
         </p>
       )}
       {asking && (
