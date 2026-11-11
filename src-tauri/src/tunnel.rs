@@ -6,10 +6,9 @@
 //! sends the password to is never free for another program to take while ssh signs in. On Windows ssh listens on a
 //! loopback port instead, and each connection to it is checked to reach ssh before anything is sent (ADR 0138).
 
-use crate::server_page::{self, LocalEnd};
+use crate::server_page::{self, LocalEnd, Stderr};
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
 
@@ -73,6 +72,11 @@ async fn open_through(program: &str, target: &str, remote_port: u16, quick: Opti
             "-N",
             "-o",
             "BatchMode=yes",
+            // With the owner's ControlMaster, the forward would live in their shared connection and outlive this ssh.
+            "-o",
+            "ControlMaster=no",
+            "-o",
+            "ControlPath=none",
             "-o",
             "ExitOnForwardFailure=yes",
             "-o",
@@ -96,14 +100,16 @@ async fn open_through(program: &str, target: &str, remote_port: u16, quick: Opti
         .map_err(|e| TunnelError::Spawn(e.to_string()))?;
 
     let address = end.address(&child).map_err(|e| TunnelError::Spawn(e.to_string()))?;
+    let stderr = Stderr::default();
+    if let Some(e) = child.stderr.take() {
+        stderr.drain(e);
+    }
     let deadline = tokio::time::Instant::now() + ready_within;
     loop {
-        if let Some(_status) = child.try_wait().map_err(|e| TunnelError::Spawn(e.to_string()))? {
-            let mut err = String::new();
-            if let Some(mut stderr) = child.stderr.take() {
-                let _ = stderr.read_to_string(&mut err).await;
-            }
-            return Err(TunnelError::Ssh(err.trim().to_owned()));
+        if child.try_wait().map_err(|e| TunnelError::Spawn(e.to_string()))?.is_some() {
+            // Let the drain catch ssh's last words.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            return Err(TunnelError::Ssh(stderr.text()));
         }
         match server_page::connect(&address).await {
             Ok(_) => break,
@@ -151,7 +157,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
     /// A stand-in for ssh: it writes its arguments to `<dir>/args`, one per line, and the local end it was told to
@@ -391,20 +397,25 @@ fn main() {
         let opened = opening.await.unwrap();
 
         if let Ok(tunnel) = &opened {
-            let body = format!(r#"{{"username":"liam","password":"{PASSWORD}"}}"#);
-            let mut s = TcpStream::connect(("127.0.0.1", tunnel.local_port)).await.unwrap();
-            s.write_all(
-                format!("POST /api/auth/password-login HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
-                    .as_bytes(),
-            )
-            .await
-            .unwrap();
-            let mut answer = String::new();
-            let _ = tokio::time::timeout(Duration::from_secs(5), s.read_to_string(&mut answer)).await;
+            post_password(tunnel.local_port).await;
         }
         let stolen = thief.map(|t| t.lock().unwrap().clone()).unwrap_or_default();
         let dashboard = dashboard.lock().unwrap().clone();
         SignIn { opened, dashboard, stolen }
+    }
+
+    /// Posts the password to the tunnel on `port` and waits up to five seconds for an answer.
+    async fn post_password(port: u16) {
+        let body = format!(r#"{{"username":"liam","password":"{PASSWORD}"}}"#);
+        let mut s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        s.write_all(
+            format!("POST /api/auth/password-login HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
+        let mut answer = String::new();
+        let _ = tokio::time::timeout(Duration::from_secs(5), s.read_to_string(&mut answer)).await;
     }
 
     #[tokio::test]
@@ -457,6 +468,46 @@ fn main() {
         for option in ["ControlMaster=no", "ControlPath=none"] {
             assert!(args[..target].windows(2).any(|w| w == ["-o", option]), "ssh got -o {option}: {args:?}");
         }
+    }
+
+    /// The processes whose command line names `needle`.
+    #[cfg(target_os = "linux")]
+    fn running_with(needle: &str) -> Vec<String> {
+        let Ok(procs) = std::fs::read_dir("/proc") else { return Vec::new() };
+        procs
+            .filter_map(|p| std::fs::read(p.ok()?.path().join("cmdline")).ok())
+            .map(|c| String::from_utf8_lossy(&c).replace('\0', " "))
+            .filter(|c| c.contains(needle))
+            .collect()
+    }
+
+    /// A real ssh and sshd, with the owner's config free to turn on `ControlMaster auto` and `ControlPersist`:
+    /// `HERMES_TEST_SSH` runs ssh (a wrapper that adds `-F <config>` is fine), and `HERMES_TEST_SSH_TARGET` is a host
+    /// it signs in to without a prompt. The sign-in reaches the dashboard, and no ssh is left holding the tunnel's
+    /// forward once it closes (#479).
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "needs a real ssh and sshd: set HERMES_TEST_SSH and HERMES_TEST_SSH_TARGET"]
+    async fn through_a_real_ssh_the_sign_in_works_and_nothing_outlives_the_tunnel() {
+        let ssh = std::env::var("HERMES_TEST_SSH").expect("HERMES_TEST_SSH");
+        let target = std::env::var("HERMES_TEST_SSH_TARGET").expect("HERMES_TEST_SSH_TARGET");
+        let dashboard = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let dashboard_port = dashboard.local_addr().unwrap().port();
+        let dashboard = serve_http(dashboard);
+
+        let tunnel = open_through(&ssh, &target, dashboard_port, None).await.expect("the tunnel opens");
+        post_password(tunnel.local_port).await;
+        assert!(dashboard.lock().unwrap().iter().any(|r| r.contains(PASSWORD)), "the sign-in reached the dashboard through ssh");
+
+        let forward = tunnel._end.listen();
+        assert!(!running_with(&forward).is_empty(), "the tunnel's ssh is found by its forward");
+        drop(tunnel);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !running_with(&forward).is_empty() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let left = running_with(&forward);
+        assert!(left.is_empty(), "ssh still holds the closed tunnel's forward: {left:?}");
     }
 
     /// Scoop and Chocolatey put a shim named ssh.exe on PATH that runs the real ssh.exe as its child.

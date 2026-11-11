@@ -561,10 +561,10 @@ mod job {
 
 /// The last `STDERR_KEPT` bytes ssh printed, read as it prints, so a chatty ssh never blocks on a full pipe.
 #[derive(Clone, Default)]
-struct Stderr(Arc<Mutex<Vec<u8>>>);
+pub(crate) struct Stderr(Arc<Mutex<Vec<u8>>>);
 
 impl Stderr {
-    fn drain(&self, mut from: tokio::process::ChildStderr) {
+    pub(crate) fn drain(&self, mut from: tokio::process::ChildStderr) {
         let kept = self.0.clone();
         tokio::spawn(async move {
             let mut buf = [0u8; 1024];
@@ -580,7 +580,7 @@ impl Stderr {
         });
     }
 
-    fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         String::from_utf8_lossy(&self.0.lock().unwrap()).trim().to_owned()
     }
 
