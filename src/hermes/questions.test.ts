@@ -292,15 +292,71 @@ describe("Questions on a chat another Hermes app also has open", () => {
     const { server, hermes, runtime, card } = await replying();
     server.event(runtime, "tool.start", { tool_id: "t1", name: "terminal" });
     const sudo = server.askSudo(runtime)!;
-    const secret = server.askSecret(runtime)!;
     server.event(runtime, "tool.start", { tool_id: "t2", name: "web_search" });
     server.answerElsewhere(sudo, "response");
     server.event(runtime, "tool.complete", { tool_id: "t1" });
     await hermes.idle();
-    // t2, started after both cards, still runs.
+    // t2, started after the card, still runs.
     expect(card("sudo")).toMatchObject({ ended: "resolved" });
-    expect(card("secret")).toMatchObject({ id: secret });
+  });
+
+  // With turn isolation Hermes lists a child process's request only while the parent has none of its own
+  // (`server._open_requests`), so a list with any request in it may hide one: the app closes cards only on an empty list.
+  it("keeps every card while Hermes lists any request, since a turn-isolated child's request may not be listed", async () => {
+    const { server, hermes, id: chatId, runtime, card } = await replying();
+    server.turnIsolation = true;
+    const sudo = server.askSudo(runtime)!;
+    server.inChild(sudo);
+    // A background task in the parent process asks too, so Hermes lists only the parent's secret.
+    const secret = server.askSecret(runtime)!;
+    expect(server.openRequestsOf(runtime).map((r) => r.id)).toEqual([secret]);
+    server.event(runtime, "tool.complete", { tool_id: "t1" });
+    await hermes.idle();
+    expect(card("sudo")).not.toHaveProperty("ended");
+
+    await hermes.answerQuestion(chatId, sudo, { kind: "value", value: "hunter2" });
+    expect(server.settled).toEqual([{ id: sudo, method: "sudo", result: { value: "hunter2" }, via: "request.answer" }]);
+    expect(card("sudo")).toMatchObject({ answer: "answered" });
+  });
+
+  it("closes the cards the other app answered once Hermes lists no request at all", async () => {
+    const { server, hermes, runtime, card } = await replying();
+    const sudo = server.askSudo(runtime)!;
+    const secret = server.askSecret(runtime)!;
+    server.answerElsewhere(sudo, "response");
+    server.event(runtime, "tool.complete", { tool_id: "t1" });
+    await hermes.idle();
+    expect(card("sudo")).not.toHaveProperty("ended");
     expect(card("secret")).not.toHaveProperty("ended");
+
+    server.answerElsewhere(secret, "response");
+    server.event(runtime, "tool.complete", { tool_id: "t2" });
+    await hermes.idle();
+    expect(card("sudo")).toMatchObject({ ended: "resolved" });
+    expect(card("secret")).toMatchObject({ ended: "resolved" });
+  });
+
+  it("closes a card the other app answered in an idle chat at the next periodic check, with no tool call or turn after it", async () => {
+    const { server, hermes, runtime, chat, card } = await replying();
+    server.event(runtime, "message.complete", { status: "complete", text: "Done." });
+    // A plugin command asks in the idle chat, and the other app answers it.
+    const id = server.askClarify(runtime, [WHEN])!;
+    server.answerElsewhere(id, "response");
+    await hermes.idle();
+    expect(chat().running).toBe(false);
+    expect(card()).not.toHaveProperty("ended");
+
+    await hermes.checkOtherProfiles();
+    await hermes.idle();
+    expect(card()).toMatchObject({ ended: "resolved" });
+  });
+
+  it("asks Hermes nothing at the periodic check while no Clarify, Sudo password or Secret card waits", async () => {
+    const { server, hermes, runtime } = await replying();
+    server.askApproval(runtime);
+    await hermes.checkOtherProfiles();
+    await hermes.idle();
+    expect(server.requests.filter((r) => r.method === "session.events.since")).toEqual([]);
   });
 
   it("leaves a card that arrives while Hermes is being asked", async () => {

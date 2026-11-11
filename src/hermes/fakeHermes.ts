@@ -21,7 +21,8 @@ type Response = { jsonrpc: "2.0"; id: string; result?: Record<string, unknown>; 
  * A server→client request still waiting for its answer. `stored`: its session, which outlives the connection. `locked`:
  * a batch clarify's answers locked so far with `clarify.lock` (`null`: skipped), by question id.
  */
-type OpenRequest = { sid: string; stored: string; method: string; params: Record<string, unknown>; locked?: Record<string, string | null> };
+/** `child`: asked in the turn-isolation compute-host child, which the parent process only mirrors (`inChild`). */
+type OpenRequest = { sid: string; stored: string; method: string; params: Record<string, unknown>; locked?: Record<string, string | null>; child?: true; mirrored?: boolean };
 /** How a server→client request was settled, and the result Hermes took (`tui_gateway/server_requests.py`). */
 export type Settled = { id: string; method: string; result: Record<string, unknown>; via: "response" | "request.answer" | "clarify.lock" };
 type Handler = (req: Request) => void;
@@ -2339,8 +2340,12 @@ export class FakeHermes {
    * (`server_requests.open_requests`): each as sent, a batch clarify's with the answers locked so far.
    */
   openRequestsOf(sid: string) {
-    return [...this.openRequests]
-      .filter(([, q]) => q.sid === sid)
+    const open = [...this.openRequests].filter(([, q]) => q.sid === sid);
+    // `server._open_requests`: the parent's own requests if it has any, else the one child request it mirrors, the
+    // child's newest (`compute_host_bridge` keeps a single `_compute_host_open_request` per session).
+    const own = open.filter(([, q]) => !q.child);
+    const mirrored = open.filter(([, q]) => q.child && q.mirrored).slice(-1);
+    return (own.length ? own : mirrored)
       .map(([id, q]) => ({ id, method: q.method, params: { session_id: sid, ...q.params, ...(q.locked && Object.keys(q.locked).length && { answers: { ...q.locked } }) } }));
   }
 
@@ -2372,6 +2377,17 @@ export class FakeHermes {
   answerElsewhere(id: string, via: "approval.respond" | "response") {
     if (via === "approval.respond") return this.cancelRequest(id, "resolved");
     this.openRequests.delete(id);
+  }
+
+  /**
+   * Marks an open request as asked in the turn-isolation compute-host child (`turnIsolation`): `open_requests` lists it
+   * only while the parent process has none of its own, and only while it is the child's newest.
+   */
+  inChild(id: string) {
+    const q = this.openRequests.get(id);
+    if (!q) return;
+    q.child = true;
+    for (const other of this.openRequests.values()) if (other.sid === q.sid && other.child) other.mirrored = other === q;
   }
 
   /** Another Hermes client locks one answer of a batch clarify (`clarify.lock`), which Hermes tells no other client. */

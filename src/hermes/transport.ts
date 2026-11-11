@@ -1626,10 +1626,11 @@ export class Hermes {
    * Hermes which sessions are working or waiting in any profile (`session.active_list`). Only reads: nothing is marked
    * read, resumed or answered. Runs at most every 15 seconds; the app calls it every `CHECK_EVERY_MS`, and more often
    * while the inbox is open. Results land in the snapshot's `others` and `live`, and only when they changed; when
-   * each was read lands in `checkTimes`.
+   * each was read lands in `checkTimes`. It also closes the question cards another Hermes app answered
+   * (`settleAllQuestions`).
    */
   checkOtherProfiles(): Promise<void> {
-    return Promise.all([this.others.check(), this.checkLive()]).then(() => {});
+    return Promise.all([this.others.check(), this.checkLive(), this.settleAllQuestions()]).then(() => {});
   }
 
   /**
@@ -3406,22 +3407,32 @@ export class Hermes {
   }
 
   /**
-   * Asks Hermes which requests it still waits on in the chat's session (`open_requests`), and closes the Clarify, Sudo
-   * password and Secret cards that were waiting when the read went out and that Hermes no longer lists. Hermes withdraws
-   * a request it stops waiting on itself with `request.cancel`, so one it dropped without a word was answered in another
-   * Hermes client, which Hermes tells no other client of (#390). A Hermes that can't list them closes nothing here.
+   * Asks Hermes which requests it still waits on in the chat's session (`open_requests`), and once it lists none, closes
+   * the Clarify, Sudo password and Secret cards that were waiting when the read went out. Hermes withdraws a request it
+   * stops waiting on itself with `request.cancel`, so one it dropped without a word was answered in another Hermes
+   * client, which Hermes tells no other client of (#390). A list with any request in it closes nothing: with turn
+   * isolation Hermes lists a child process's request only while the parent has none of its own (`server._open_requests`),
+   * so an unlisted card may still wait. A Hermes that can't list them closes nothing here.
    */
   private async settleQuestions(chatId: string) {
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
     const asked = new Set(chat?.items.filter((i) => isWaiting(i) && i.kind !== "approval").map((i) => i.id));
     const runtimeId = chat?.runtimeId;
     if (!runtimeId || !asked.size) return;
-    // Past any event Hermes numbered, so it replays none.
-    const res = obj(await this.request("session.events.since", { session_id: runtimeId, last_seen: Number.MAX_SAFE_INTEGER }).catch(() => undefined));
-    if (!Array.isArray(res?.open_requests)) return;
-    const listed = new Set(res.open_requests.map((r) => obj(r)?.id));
-    const answered = (i: QuestionItem) => asked.has(i.id) && !listed.has(i.id);
-    this.patchChat(chatId, (c) => (c.runtimeId === runtimeId ? { ...c, items: endWaiting(c.items, "resolved", answered) } : c));
+    // Past any event Hermes numbered, so it replays none. The app's own check, not a screen's request (`observe`).
+    const read = this.request("session.events.since", { session_id: runtimeId, last_seen: Number.MAX_SAFE_INTEGER }, undefined, false);
+    const res = obj(await read.catch(() => undefined));
+    if (!Array.isArray(res?.open_requests) || res.open_requests.length) return;
+    this.patchChat(chatId, (c) => (c.runtimeId === runtimeId ? { ...c, items: endWaiting(c.items, "resolved", (i) => asked.has(i.id)) } : c));
+  }
+
+  /**
+   * `settleQuestions` for every chat with a Clarify, Sudo password or Secret card waiting, so a card another app answered
+   * closes in a chat where no tool call finishes or turn ends after it, such as a plugin command's in an idle chat.
+   */
+  private settleAllQuestions(): Promise<unknown> {
+    const asking = this.snapshot.chats.filter((c) => c.runtimeId && c.items.some((i) => isWaiting(i) && i.kind !== "approval"));
+    return Promise.all(asking.map((c) => this.settleQuestions(c.id)));
   }
 
   /**
