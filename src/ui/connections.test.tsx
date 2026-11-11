@@ -207,7 +207,7 @@ describe("Saved connections", () => {
     // If local cleanup fails after closing the active transport, Main cannot keep using it.
     const { savedDefaults } = await import("../hermes/projectDefaults");
     let failCleanup: (error: Error) => void = () => {};
-    const unreadable = vi.spyOn(savedDefaults, "forgetScopes").mockImplementationOnce(() => new Promise((_, reject) => { failCleanup = reject; }));
+    const unreadable = vi.spyOn(savedDefaults, "moveScopes").mockImplementationOnce(() => new Promise((_, reject) => { failCleanup = reject; }));
     await userEvent.click(screen.getByRole("button", { name: "Remove Home" }));
     await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: /Remove connection/ }));
     expect(await screen.findByText("Removing Home…")).toBeTruthy();

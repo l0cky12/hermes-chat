@@ -98,6 +98,30 @@ export class PersonaStore {
     }
   }
 
+  /**
+   * Waits for the saves of the keys `move` moves, then moves each kept copy where it says (null: drops it), in storage
+   * and memory: a profile renamed or deleted (profileLocalData.ts). Keys only in storage are the caller's to move.
+   */
+  async move(move: (key: string) => string | null | undefined): Promise<void> {
+    await Promise.all([...this.saves].filter(([key]) => move(key) !== undefined).map(([, done]) => done));
+    for (const [key, raw] of [...this.memory]) {
+      const to = move(key);
+      if (to === undefined) continue;
+      this.storage.removeItem(key);
+      this.memory.delete(key);
+      const notStored = this.notStored.delete(key);
+      if (to === null) continue;
+      this.memory.set(to, raw);
+      if (raw === null) continue;
+      try {
+        this.storage.setItem(to, raw);
+        if (notStored) this.notStored.add(to);
+      } catch {
+        this.notStored.add(to);
+      }
+    }
+  }
+
   /** Notes a save of `key` under way until `done` settles. */
   trackSave(key: string, done: Promise<unknown>) {
     const settled = done.then(

@@ -41,10 +41,13 @@ export function PersonaPage({
   keyOf,
   onDirty,
   now,
+  start,
 }: {
   api: PersonaApi;
-  /** `profile`: the profile in use, which the picker starts on. */
+  /** `profile`: the profile in use, which the picker starts on unless `start` names another. */
   where: PersonaWhere;
+  /** The profile the picker starts on, when Settings → Profiles opened Persona at one (ADR 0144). */
+  start?: string;
   connected: boolean;
   store: PersonaStore;
   /** Where a profile's edits are kept for this connection (personaStore.ts `personaKey`). */
@@ -53,7 +56,7 @@ export function PersonaPage({
   now?: () => number;
 }) {
   const inUse = where.profile;
-  const [picked, setPicked] = useState(inUse);
+  const [picked, setPicked] = useState(start ?? inUse);
   /** The server's profiles by name, once listed. */
   const [listed, setListed] = useState<string[]>();
   const [listProblem, setListProblem] = useState<string>();

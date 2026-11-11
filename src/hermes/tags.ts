@@ -10,7 +10,7 @@
 // another instance's.
 import { invoke } from "@tauri-apps/api/core";
 import { toFilter, tidyFilter, type ChatFilter } from "./chatFilter";
-import { storageDefaultsFile, type DefaultsFile } from "./projectDefaults";
+import { moveScopeKeys, storageDefaultsFile, type DefaultsFile } from "./projectDefaults";
 import { migrateUIPrefs as migrateDoc, type UIPrefsDoc, type UIPrefsMigrations } from "./uiPrefs";
 
 export const TAGS_KEY = "hermes-chat.tags";
@@ -296,16 +296,20 @@ function parse(raw: string | null): UIPrefsDoc {
  * Forgets every scope `match` picks, after the owner removed their connection (forgetConnection.ts, ADR 0112). Other
  * scopes, and fields a newer app wrote, are kept as stored.
  */
-export async function forgetTagScopes(file: TagsFile, match: (scope: string) => boolean): Promise<void> {
+/**
+ * Moves each scope of the tags file to where `move` says (null drops it; undefined keeps it), after a profile was
+ * renamed or deleted (profileLocalData.ts). A moved scope replaces any already there.
+ */
+export async function moveTagScopes(file: TagsFile, move: (scope: string) => string | null | undefined): Promise<void> {
   let raw = await file.read();
   for (let i = 0; i < SWAP_TRIES; i++) {
     const doc = parse(raw);
-    const scopes = isDoc(doc.scopes) ? doc.scopes : {};
-    const kept = Object.fromEntries(Object.entries(scopes).filter(([s]) => !match(s)));
-    if (Object.keys(kept).length === Object.keys(scopes).length) return;
-    const res = await file.swap(raw, JSON.stringify({ ...doc, scopes: kept }));
+    const scopes = moveScopeKeys(isDoc(doc.scopes) ? doc.scopes : {}, move);
+    if (!scopes) return;
+    const res = await file.swap(raw, JSON.stringify({ ...doc, scopes }));
     if (res.swapped) return;
     raw = res.current;
   }
-  throw new Error("Another Hermes Chat kept changing the tags; they weren't removed. Try again.");
+  throw new Error("Another Hermes Chat kept changing the tags; they weren't moved. Try again.");
 }
+

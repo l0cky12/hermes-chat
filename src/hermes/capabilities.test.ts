@@ -39,6 +39,7 @@ const NEW: Record<string, unknown> = {
   "RPC profiles.list": { profiles: [{ name: "default", is_default: true, canonical_session: null }], bot_mode_protocol: true },
   "GET api/tools/toolsets": [],
   "GET api/profiles/default/soul": { content: "", exists: false },
+  "GET api/profiles": { profiles: [{ name: "default", is_default: true }] },
   "GET api/skills": [],
   "GET api/files": { path: "/", entries: [] },
   "GET api/cron/jobs": [],
@@ -142,6 +143,7 @@ describe("a check of a new Hermes (upstream 74b2ed6)", () => {
       // Only Settings → Toolsets can learn this, with its own check.
       toolsetSwitches: "unknown",
       persona: "supported",
+      profiles: "supported",
       skills: "supported",
       serverFiles: "supported",
       scheduledJobs: "supported",

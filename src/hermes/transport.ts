@@ -29,6 +29,7 @@ import { McpApi } from "./mcp";
 import { GatewaysApi } from "./gateways";
 import { PersonaApi } from "./persona";
 import { ProfileCloneApi } from "./profileClone";
+import { ProfilesApi, toProfileRows } from "./profiles";
 import { APPROVAL_CHOICES, isBroadGrant, isOutgoing, isWaiting, offeredChoices, sameFields, turnStart, type ApprovalChoice, type ApprovalItem, type AttachCheck, type Attachment, type Chat, type ChatQueue, type ConnectionStatus, type ContextUse, type Found, type Item, type ListedChat, type LiveSession, type LiveSessions, type OtherProfiles, type Outgoing, type OutgoingItem, type Queued, type SavedSend, type SeenFailure, type SessionLive, type SideQuestion, type Source, QUEUE_LIMIT } from "./model";
 import { catalogFromServer, fallbackCatalog, isEffort, modelKey, pickFromInfo, type ModelCatalog, type ModelPick } from "./models";
 import { approvalsOf, isApprovalMode, writesFor, type ApprovalPick } from "./approvals";
@@ -49,7 +50,7 @@ import { readBack, sendImport, type PlannedChat } from "./importTranscripts";
 import { memoryApi, type MemoryApi } from "./memory";
 import { MemoryProvidersApi } from "./memoryProviders";
 import { SkillsApi } from "./skills";
-import { CapabilityStore, CapabilityUnsupportedError, failureOf, isNoRoute, sharesChats, specOf, type CapabilityId, type ServerFacts } from "./capabilities";
+import { CapabilityStore, CapabilityUnsupportedError, RouteMissingError, failureOf, isNoRoute, sharesChats, specOf, type CapabilityId, type ServerFacts } from "./capabilities";
 import { BOT_CHAT_TITLE, BotChats, BotModeUnsupportedError, isBotChat, isBotChatTitle, rosterOf, type Bot } from "./bots";
 import { RestError, conflictOf, sessionNotFound, statusOf, type OpenPipe, type Pipe, type PipeEvent, type RestMethod, type Route, type Speech, type Transcript, type VoiceSetup } from "./pipe";
 import { projectContextFiles, type ChatContext, type ProjectContextFiles } from "./projectContextFiles";
@@ -530,6 +531,8 @@ export type Snapshot = {
   models?: ModelCatalog;
   /** The switch to `profile` from `from`, until the new profile's list has been read. `error`: why it hasn't yet. */
   switching?: { from: string; error?: string };
+  /** The display name Hermes keeps for its built-in `default` profile, as last listed; none when it has none. */
+  defaultName?: string;
   /** The shown profile's branches made here, and those asked for whose answer was lost (ADR 0027). */
   branches: BranchStore;
   /**
@@ -1148,6 +1151,17 @@ export class Hermes {
   });
   /** The Clone profile dialog's profile list, create and delete (profileClone.ts, ADR 0074). Each call names its profiles. */
   readonly profileClone = new ProfileCloneApi((method, pathAndQuery, body) => this.rest(method, pathAndQuery, body), this.persona, this.skills);
+  /**
+   * Settings → Profiles' list, create, rename, description, model and delete (profiles.ts, ADR 0144). Each call names its
+   * profile. Every list read keeps `default`'s display name for the rest of the app.
+   */
+  readonly manageProfiles = new ProfilesApi(async (method, pathAndQuery, body) => {
+    const res = await this.rest(method, pathAndQuery, body);
+    if (method === "GET" && pathAndQuery === "api/profiles") this.keepDefaultName(res);
+    if (method === "PATCH" && pathAndQuery === "api/profiles/default" && typeof (res as { display_name?: unknown })?.display_name === "string")
+      this.update({ defaultName: (res as { display_name: string }).display_name.trim() || undefined });
+    return res;
+  });
 
   /**
    * What this Hermes server can do, for Connection diagnostics and the screens that depend on it (capabilities.ts,
@@ -1361,7 +1375,24 @@ export class Hermes {
   /** The server's profiles by name, as dashboard REST lists them. One sign-in covers them all (research doc). */
   async profiles(): Promise<string[]> {
     const res = (await this.rest("GET", "api/profiles")) as ProfileList;
+    this.keepDefaultName(res);
     return res.profiles.map((p) => p.name);
+  }
+
+  /**
+   * The Queued and Failed messages holding text that this computer keeps for `profile`, which deleting the profile
+   * loses (Settings → Profiles, ADR 0144).
+   */
+  heldMessagesIn(profile: string): number {
+    const queues = profile === this.profile ? this.snapshot.queues : loadQueues(this.cache, profile);
+    const queued = Object.values(queues).reduce((n, q) => n + q.items.filter((i) => i.text.trim()).length, 0);
+    return queued + this.sendsIn(profile).length;
+  }
+
+  /** Keeps the display name a `GET /api/profiles` answer gives `default`, for the switcher and the profile pickers. */
+  private keepDefaultName(res: unknown) {
+    const row = toProfileRows(res).find((p) => p.name === "default");
+    if (row && row.displayName !== this.snapshot.defaultName) this.update({ defaultName: row.displayName });
   }
 
   /**
@@ -4770,9 +4801,11 @@ export class Hermes {
   private relay(pipe: Pipe, method: RestMethod, pathAndQuery: string, body?: unknown): Promise<string> {
     const refused = this.capabilities.refuses({ rest: method, path: pathAndQuery });
     if (refused) return Promise.reject(new CapabilityUnsupportedError(refused));
+    const lacking = method === "GET" ? undefined : this.capabilities.lacks({ rest: method, path: pathAndQuery });
+    if (lacking) return Promise.reject(new RouteMissingError(lacking));
     const answer = pipe.request(method, pathAndQuery, body === undefined ? undefined : JSON.stringify(body));
     if (method === "GET") this.observe({ route: pathAndQuery }, answer);
-    else this.observeWrite({ route: pathAndQuery }, answer);
+    else this.observeWrite({ route: pathAndQuery, verb: method }, answer);
     return answer;
   }
 
@@ -4798,7 +4831,7 @@ export class Hermes {
   }
 
   /** Tells diagnostics when a change the screens sent failed, so a route or method Hermes lacks isn't sent to again. */
-  private observeWrite(call: { route: string } | { method: string }, answer: Promise<unknown>) {
+  private observeWrite(call: { route: string; verb?: string } | { method: string }, answer: Promise<unknown>) {
     const gen = this.generation;
     answer.catch((e: unknown) => this.capabilities.observeWrite(gen, call, e));
   }

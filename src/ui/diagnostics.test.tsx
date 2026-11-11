@@ -56,6 +56,7 @@ const NEW = {
   "RPC profiles.list": { profiles: [{ name: "default", is_default: true, canonical_session: null }] },
   "GET api/tools/toolsets": [],
   "GET api/profiles/default/soul": {},
+  "GET api/profiles": { profiles: [] },
   "GET api/skills": [],
   "GET api/files": {},
   "GET api/cron/jobs": [],
