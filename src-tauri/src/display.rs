@@ -8,8 +8,10 @@
 //! close (1000): the viewer left, so control the owner took goes back to the agent. The connection being replaced or
 //! closed (`close_all`, as transfers are stopped, ADR 0023) abandons every socket with no close frame: to Hermes that
 //! is a dropped link, which keeps the owner in control, since they may be part-way through a sign-in. Leaving on
-//! purpose hands control back over `/api/ws` first (transport.ts `releaseScreen`).
+//! purpose hands control back over `/api/ws` first (transport.ts `releaseScreen`). Hermes not reading the owner's input
+//! ends a socket the second way too, once `INPUT_BUDGET` waits: the owner is still there, so control stays theirs.
 
+use crate::backlog::Backlog;
 use crate::transport::{Dashboard, TransportError};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
@@ -17,7 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::Message;
@@ -37,25 +39,42 @@ pub enum DisplayEvent {
     Closed { code: u16, reason: String },
 }
 
-enum Out {
-    Bytes(Vec<u8>),
-    /// Ends the socket with no close frame.
-    Abandon,
-}
+/// How much of the owner's input may wait for Hermes to read it: about 130,000 pointer events, far past any backlog
+/// worth sending. One message larger than this, such as a big clipboard paste, still goes when nothing waits.
+const INPUT_BUDGET: usize = 1024 * 1024;
+const FELL_BEHIND: &str = "Hermes stopped taking the screen's input";
 
 /// One open screen socket. Dropping it closes the socket normally; `abandon` ends it as a dropped link.
 pub struct DisplaySocket {
-    outgoing: mpsc::UnboundedSender<Out>,
+    outgoing: mpsc::UnboundedSender<Vec<u8>>,
+    waiting: Arc<Backlog>,
+    /// Set, the socket ends at once with no close frame, as a dropped link, and this as its reason.
+    drop_link: watch::Sender<Option<&'static str>>,
 }
 
 impl DisplaySocket {
+    /// Sends RFB bytes. RFB is one stream, so input can't be left out to catch up: past `INPUT_BUDGET` waiting, the
+    /// socket ends as a dropped link, and the Screen watches again as it does after one.
     pub fn send(&self, bytes: Vec<u8>) -> Result<(), TransportError> {
-        self.outgoing.send(Out::Bytes(bytes)).map_err(|_| TransportError::Closed)
+        if !self.waiting.take(bytes.len()) {
+            self.drop_link.send_replace(Some(FELL_BEHIND));
+            return Err(TransportError::Closed);
+        }
+        self.outgoing.send(bytes).map_err(|_| TransportError::Closed)
     }
 
     /// Ends the socket without a close frame, so Hermes keeps control with the owner if they hold it.
     pub fn abandon(self) {
-        let _ = self.outgoing.send(Out::Abandon);
+        self.drop_link.send_replace(Some("the connection to Hermes closed"));
+    }
+}
+
+/// Why the socket is to end as a dropped link, once it is. Never, if its `DisplaySocket` went without saying.
+async fn dropped(drop_link: &mut watch::Receiver<Option<&'static str>>) -> &'static str {
+    let why = drop_link.wait_for(Option::is_some).await.map(|why| why.unwrap_or_default());
+    match why {
+        Ok(why) => why,
+        Err(_) => std::future::pending().await,
     }
 }
 
@@ -86,19 +105,31 @@ fn relay<S>(ws: WebSocketStream<S>, hides: impl Fn(&str) -> bool + Send + 'stati
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let (outgoing, mut to_server) = mpsc::unbounded_channel::<Out>();
+    let (outgoing, mut to_server) = mpsc::unbounded_channel::<Vec<u8>>();
+    let waiting = Arc::new(Backlog::new(INPUT_BUDGET));
+    let (drop_link, mut link_dropped) = watch::channel(None);
+    let written = waiting.clone();
     tokio::spawn(async move {
         let (mut sink, mut stream) = ws.split();
         let (code, reason) = loop {
             tokio::select! {
+                biased;
+                // The socket is dropped below with no close frame.
+                why = dropped(&mut link_dropped) => break (1006, why.into()),
                 out = to_server.recv() => match out {
-                    Some(Out::Bytes(bytes)) => {
-                        if let Err(e) = sink.send(Message::binary(bytes)).await {
+                    Some(bytes) => {
+                        let len = bytes.len();
+                        // Hermes not reading leaves this waiting, so dropping the link mustn't wait for it.
+                        let sent = tokio::select! {
+                            biased;
+                            why = dropped(&mut link_dropped) => break (1006, why.into()),
+                            sent = sink.send(Message::binary(bytes)) => sent,
+                        };
+                        written.written(len);
+                        if let Err(e) = sent {
                             break (1006, e.to_string());
                         }
                     }
-                    // The socket is dropped below with no close frame.
-                    Some(Out::Abandon) => break (1006, "the connection to Hermes closed".into()),
                     None => {
                         let close = CloseFrame { code: CloseCode::Normal, reason: "".into() };
                         let _ = tokio::time::timeout(CLOSE_WAIT, sink.send(Message::Close(Some(close)))).await;
@@ -117,7 +148,7 @@ where
         let reason = if hides(&reason) { String::new() } else { reason };
         on_event(DisplayEvent::Closed { code, reason });
     });
-    DisplaySocket { outgoing }
+    DisplaySocket { outgoing, waiting, drop_link }
 }
 
 /// The screen sockets open now, by id.
@@ -211,22 +242,29 @@ mod tests {
         assert!(matches!(closed, Some(DisplayEvent::Closed { code: 1006, .. })), "{closed:?}");
     }
 
+    /// A socket with no relay behind it: what it sends, and whether it was abandoned.
+    fn unrelayed() -> (DisplaySocket, mpsc::UnboundedReceiver<Vec<u8>>, watch::Receiver<Option<&'static str>>) {
+        let (outgoing, sent) = mpsc::unbounded_channel();
+        let (drop_link, dropped) = watch::channel(None);
+        (DisplaySocket { outgoing, waiting: Arc::new(Backlog::new(INPUT_BUDGET)), drop_link }, sent, dropped)
+    }
+
     #[test]
     fn a_socket_kept_after_close_all_is_closed_instead() {
         let displays = Displays::default();
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (socket, _, dropped) = unrelayed();
         let epoch = displays.epoch();
         displays.close_all();
-        assert_eq!(displays.keep(epoch, DisplaySocket { outgoing: tx }), None);
+        assert_eq!(displays.keep(epoch, socket), None);
         // Abandoned, as the connection it was opened on went: no normal close for Hermes to take as leaving.
-        assert!(matches!(rx.try_recv(), Ok(Out::Abandon)));
+        assert!(dropped.borrow().is_some());
 
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let id = displays.keep(displays.epoch(), DisplaySocket { outgoing: tx }).unwrap();
+        let (socket, mut sent, dropped) = unrelayed();
+        let id = displays.keep(displays.epoch(), socket).unwrap();
         displays.send(id, vec![1, 2]).unwrap();
         displays.close_all();
-        assert!(matches!(rx.try_recv(), Ok(Out::Bytes(b)) if b == [1, 2]));
-        assert!(matches!(rx.try_recv(), Ok(Out::Abandon)), "the connection going abandons the socket");
+        assert_eq!(sent.try_recv().ok(), Some(vec![1, 2]));
+        assert!(dropped.borrow().is_some(), "the connection going abandons the socket");
         assert!(matches!(displays.send(id, vec![3]), Err(TransportError::Closed)));
     }
 }
