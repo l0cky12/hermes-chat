@@ -1,6 +1,6 @@
 // A Clarify, Sudo password or Secret card (#390): what Hermes asks, and the owner's answer. A password or secret lives
 // only in the card's masked field until it goes to Hermes; the card then keeps only that it was answered (ADR 0136).
-import { useCallback, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useId, useRef, useState, type KeyboardEvent } from "react";
 import { KeyRound, MessageCircleQuestion } from "lucide-react";
 import type { ClarifyQuestion, QuestionAnswer, QuestionItem } from "../hermes/model";
 import { endedNote, useDeliberate, visible } from "./ApprovalCard";
@@ -153,8 +153,28 @@ function ClarifyAnswer({ q, offline, deliberate, keepFocus, lock }: Pick<Parts, 
   );
 }
 
-/** A Sudo password or Secret: what it is for, and a masked field whose value goes to Hermes and is then dropped. */
-function Masked({ item, open, offline, deliberate, keepFocus, send }: Parts & { item: Exclude<Card, { kind: "clarify" }> }) {
+/** A Sudo password or Secret: what it is for, and while it waits, the masked field. */
+function Masked({ item, open, ...parts }: Parts & { item: Exclude<Card, { kind: "clarify" }> }) {
+  return (
+    <>
+      {item.kind === "sudo" ? (
+        item.command && <pre className="approval-cmd">{visible(item.command)}</pre>
+      ) : (
+        <>
+          {item.prompt && <div className="approval-desc question-prompt">{visible(item.prompt)}</div>}
+          {item.skill && <div className="approval-desc">For the {visible(item.skill)} skill.</div>}
+        </>
+      )}
+      {open && <MaskedField item={item} {...parts} />}
+    </>
+  );
+}
+
+/**
+ * The masked field, whose value goes to Hermes and nowhere else. It shows only while the card waits, so the value goes
+ * however the card closes, and Send clears it as it goes.
+ */
+function MaskedField({ item, offline, deliberate, keepFocus, send }: Omit<Parts, "open"> & { item: Exclude<Card, { kind: "clarify" }> }) {
   const [value, setValue] = useState("");
   const fieldId = useId();
   const go = () => {
@@ -162,49 +182,35 @@ function Masked({ item, open, offline, deliberate, keepFocus, send }: Parts & { 
     send({ kind: "value", value });
     setValue("");
   };
-  const about: ReactNode =
-    item.kind === "sudo" ? (
-      <>{item.command && <pre className="approval-cmd">{visible(item.command)}</pre>}</>
-    ) : (
-      <>
-        {item.prompt && <div className="approval-desc question-prompt">{visible(item.prompt)}</div>}
-        {item.skill && <div className="approval-desc">For the {visible(item.skill)} skill.</div>}
-      </>
-    );
   return (
-    <>
-      {about}
-      {open && (
-        <div className="question-masked" ref={keepFocus}>
-          <label htmlFor={fieldId} className="sr-only">
-            {item.kind === "sudo" ? "Sudo password" : `Value for ${item.envVar}`}
-          </label>
-          <div className="question-own">
-            <input
-              id={fieldId}
-              className="question-field"
-              type="password"
-              value={value}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder={item.kind === "sudo" ? "Sudo password" : item.envVar}
-              onChange={(e) => setValue(e.target.value)}
-              onKeyDown={onEnter(go)}
-            />
-            <button className="btn primary" aria-disabled={offline || !value || undefined} onClick={deliberate(go)}>
-              Send
-            </button>
-            <button className="btn" aria-disabled={offline || undefined} onClick={deliberate(() => send({ kind: "skip" }))}>
-              Skip
-            </button>
-          </div>
-          <div className="approval-desc question-note">
-            {item.kind === "sudo"
-              ? "It goes only to Hermes, which keeps it in memory for this chat's later sudo commands. Hermes Chat doesn't keep it."
-              : `Hermes saves it as ${item.envVar} in this profile on the server. Hermes Chat doesn't keep it.`}
-          </div>
-        </div>
-      )}
-    </>
+    <div className="question-masked" ref={keepFocus}>
+      <label htmlFor={fieldId} className="sr-only">
+        {item.kind === "sudo" ? "Sudo password" : `Value for ${item.envVar}`}
+      </label>
+      <div className="question-own">
+        <input
+          id={fieldId}
+          className="question-field"
+          type="password"
+          value={value}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={item.kind === "sudo" ? "Sudo password" : item.envVar}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={onEnter(go)}
+        />
+        <button className="btn primary" aria-disabled={offline || !value || undefined} onClick={deliberate(go)}>
+          Send
+        </button>
+        <button className="btn" aria-disabled={offline || undefined} onClick={deliberate(() => send({ kind: "skip" }))}>
+          Skip
+        </button>
+      </div>
+      <div className="approval-desc question-note">
+        {item.kind === "sudo"
+          ? "It goes only to Hermes, which keeps it in memory for this chat's later sudo commands. Hermes Chat doesn't keep it."
+          : `Hermes saves it as ${item.envVar} in this profile on the server. Hermes Chat doesn't keep it.`}
+      </div>
+    </div>
   );
 }
