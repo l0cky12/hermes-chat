@@ -54,6 +54,10 @@ gdkx11 = "0.18"
 x11 = { version = "2.21", features = ["xlib"] }
 # Already comes with tauri (wry turns on `v2_40`); used to turn on WebKitGTK's media capture for dictation.
 webkit2gtk = { version = "2.0", features = ["v2_40"] }
+# Already comes with webkit2gtk; reads the string the annotation query returns (page_view.rs).
+javascriptcore-rs = "1.1"
+# Already comes with gtk; `png` writes an annotation's still and its marked image (annotate.rs).
+cairo-rs = { version = "0.18", features = ["png"] }
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3.6", features = ["windows-native"] }

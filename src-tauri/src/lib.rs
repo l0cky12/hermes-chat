@@ -1,3 +1,4 @@
+pub mod annotate;
 pub mod backup;
 #[cfg(target_os = "linux")]
 pub mod browser;
@@ -1599,6 +1600,52 @@ fn preview_page_close(app: tauri::AppHandle, key: String) {
     page_view::close(&app, key)
 }
 
+/// Takes a still of the page in the Preview to annotate (ADR 0094), kept in the captures folder until it is staged or
+/// discarded (`screenshot_discard`).
+#[tauri::command]
+async fn preview_annotate_still(app: tauri::AppHandle, state: State<'_, Screenshots>, key: String) -> Result<annotate::Still, annotate::AnnotateError> {
+    let captures = state.captures().map_err(|e| annotate::AnnotateError::Failed(e.to_string()))?;
+    page_view::annotate_still(&app, key, captures).await
+}
+
+/// What the page says is under a point of its still, for the outline while the owner points.
+#[tauri::command]
+async fn preview_annotate_query(
+    app: tauri::AppHandle,
+    key: String,
+    still: u64,
+    x: f64,
+    y: f64,
+    up: u32,
+) -> Result<Option<annotate::Answer>, annotate::AnnotateError> {
+    page_view::annotate_query(&app, key, still, x, y, up).await
+}
+
+/// The element the owner picked on the still, or its box as a region when the page changed there since.
+#[tauri::command]
+async fn preview_annotate_pick(app: tauri::AppHandle, key: String, still: u64, x: f64, y: f64, up: u32) -> Result<annotate::Pick, annotate::AnnotateError> {
+    page_view::annotate_pick(&app, key, still, x, y, up).await
+}
+
+/// Stages a still as annotation `n`, marked at `rect`, as a Screenshot the composer can send, and deletes the still.
+#[tauri::command]
+async fn preview_annotate_stage(
+    state: State<'_, Screenshots>,
+    attachable: State<'_, Attachable>,
+    still_path: String,
+    n: u32,
+    rect: annotate::Rect,
+    scale: f64,
+) -> Result<screenshot::Capture, screenshot::CaptureError> {
+    let captures = state.captures()?;
+    let staged = tokio::task::spawn_blocking(move || annotate::stage(&captures, std::path::Path::new(&still_path), n, rect, scale))
+        .await
+        .map_err(|e| screenshot::CaptureError::Failed(e.to_string()))??;
+    let path = staged.to_string_lossy().into_owned();
+    attachable.add([path.clone()]);
+    Ok(screenshot::Capture { path, note: None })
+}
+
 #[tauri::command]
 async fn notify_desktop(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
     notify::show(app, title, body).await
@@ -1911,6 +1958,10 @@ pub fn run(screenshot: bool, link: Option<String>) {
             preview_page_reload,
             preview_page_place,
             preview_page_close,
+            preview_annotate_still,
+            preview_annotate_query,
+            preview_annotate_pick,
+            preview_annotate_stage,
             preview_server_open,
             preview_server_close,
             preview_dev_servers,
