@@ -172,8 +172,12 @@ struct AppState(Mutex<Option<Connection>>, std::sync::Mutex<Option<tokio::task::
 #[derive(Default)]
 struct Connecting {
     now: Option<(String, tokio::task::AbortHandle)>,
-    stopped: std::collections::HashSet<String>,
+    stopped: std::collections::VecDeque<String>,
 }
+
+/// The most attempts stopped before they began kept. A stop can also come just after its attempt finished, and then
+/// nothing ever takes it out.
+const STOPPED_KEPT: usize = 256;
 
 /// How long opening a connection may take, all steps together, so a server that stops answering midway can't keep
 /// the app, or Sign out, waiting for good.
@@ -251,10 +255,12 @@ async fn hermes_connect(
     on_step: Channel<connect_steps::Started>,
 ) -> Result<Route, String> {
     let mut slot = state.0.lock().await;
-    *slot = None;
-    transfers.stop_all();
-    displays.close_all();
-    let (connection, route) = as_attempt(&state, attempt.unwrap_or_default(), async move {
+    let leave = || {
+        *slot = None;
+        transfers.stop_all();
+        displays.close_all();
+    };
+    let opened = as_attempt(&state, attempt.unwrap_or_default(), leave, async move {
         // Which step it is on, for the record of connection attempts (#270).
         let steps = Steps::reporting(move |s| drop(on_step.send(s)));
         let opening = open_connection(target, credential, profile, on_event, expect_server, quick.unwrap_or(false), ssh_route, steps);
@@ -262,11 +268,22 @@ async fn hermes_connect(
             .await
             .unwrap_or_else(|_| Err(format!("Hermes didn't finish connecting within {}s.", CONNECT_TIMEOUT.as_secs())))
     })
-    .await?;
-    // Server pages opened through another SSH target, or for a URL sign-in none, belong to the server left behind.
-    pages.close_other_targets(connection.ssh_target.as_deref(), SIGNED_IN_ELSEWHERE);
-    *slot = Some(connection);
-    Ok(route)
+    .await;
+    match opened {
+        Ok((connection, route)) => {
+            // Server pages opened through another SSH target, or for a URL sign-in none, belong to the server left behind.
+            pages.close_other_targets(connection.ssh_target.as_deref(), SIGNED_IN_ELSEWHERE);
+            *slot = Some(connection);
+            Ok(route)
+        }
+        Err(e) => {
+            // An attempt stopped before it began left the connection, and its pages, as they were.
+            if slot.is_none() {
+                pages.close_all(SIGNED_OUT);
+            }
+            Err(e)
+        }
+    }
 }
 
 /// How long a reopen's ticket and socket may each take: a closed socket usually means the rest of the connection still
@@ -282,6 +299,7 @@ async fn hermes_reopen(
     state: State<'_, AppState>,
     transfers: State<'_, Transfers>,
     displays: State<'_, display::Displays>,
+    pages: State<'_, Arc<server_page::ServerPages>>,
     profile: String,
     attempt: String,
     on_event: Channel<PipeEvent>,
@@ -294,7 +312,7 @@ async fn hermes_reopen(
         return Err(transport::TransportError::Closed.to_string());
     };
     let dashboard = conn.dashboard.clone();
-    let opened = as_attempt(&state, attempt, async move {
+    let opened = as_attempt(&state, attempt, || {}, async move {
         let steps = Steps::reporting(move |s| drop(on_step.send(s)));
         dashboard.open_pipe_within(&profile, move |e| drop(on_event.send(e)), Some(REOPEN_LIMITS), &steps).await.map_err(|e| e.to_string())
     })
@@ -306,22 +324,27 @@ async fn hermes_reopen(
         }
         Err(e) => {
             *slot = None;
+            pages.close_all(SIGNED_OUT);
             Err(e)
         }
     }
 }
 
-/// Runs `opening` apart as the attempt the webview names `attempt`, so `hermes_connect_cancel` can stop it.
+/// Runs `opening` apart as the attempt the webview names `attempt`, so `hermes_connect_cancel` can stop it. `begin`
+/// runs first, unless the attempt was stopped before it began.
 async fn as_attempt<T: Send + 'static>(
     state: &AppState,
     attempt: String,
+    begin: impl FnOnce(),
     opening: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
 ) -> Result<T, String> {
     let task = {
         let mut connecting = state.2.lock().unwrap();
-        if connecting.stopped.remove(&attempt) {
+        if let Some(i) = connecting.stopped.iter().position(|a| *a == attempt) {
+            connecting.stopped.remove(i);
             return Err(CONNECT_STOPPED.into());
         }
+        begin();
         let task = tokio::spawn(opening);
         connecting.now = Some((attempt.clone(), task.abort_handle()));
         task
@@ -381,7 +404,10 @@ fn hermes_connect_cancel(state: State<'_, AppState>, attempt: String) {
     match &connecting.now {
         Some((now, task)) if *now == attempt => task.abort(),
         _ => {
-            connecting.stopped.insert(attempt);
+            if connecting.stopped.len() >= STOPPED_KEPT {
+                connecting.stopped.pop_front();
+            }
+            connecting.stopped.push_back(attempt);
         }
     }
 }
@@ -2104,6 +2130,7 @@ mod tests {
 
         super::hermes_connect_cancel(app.state(), "r".into());
         let reopened = super::hermes_reopen(
+            app.state(),
             app.state(),
             app.state(),
             app.state(),
