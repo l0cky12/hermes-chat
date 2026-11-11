@@ -7,8 +7,8 @@ import type { Link } from "../hermes/membership";
 import type { MembershipSync, Project } from "../hermes/projects";
 import { Spinner } from "./bits";
 import { useModal } from "./modal";
+import { errorText, plural } from "../hermes/values";
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const clock = (at: number) => new Date(at).toLocaleTimeString(undefined, { timeStyle: "short" });
 
 /** The membership sync wants the owner: a move to preview, or a conflict to settle. */
@@ -133,7 +133,7 @@ export function MembershipDialog({
       () => onClose(),
       (e) => {
         setMoving(false);
-        setError(e instanceof Error ? e.message : String(e));
+        setError(errorText(e));
       },
     );
   };

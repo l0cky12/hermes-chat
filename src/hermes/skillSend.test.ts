@@ -6,7 +6,7 @@ import type { SavedSignIn } from "./account";
 import { localChatCache } from "./chatCache";
 import { FakeHermes, row } from "./fakeHermes";
 import { isOutgoing } from "./model";
-import { type Hermes, SKILL_COMMANDS_FRESH_MS, connect } from "./transport";
+import { SKILL_COMMANDS_FRESH_MS, connect } from "./transport";
 
 const nas: SavedSignIn = { mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" };
 const SKILLS = "/home/liam/.hermes/skills";

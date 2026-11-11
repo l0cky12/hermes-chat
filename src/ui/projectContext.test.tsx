@@ -23,7 +23,6 @@ vi.mock("@tauri-apps/api/webview", () => ({
     },
   }),
 }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};

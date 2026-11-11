@@ -10,11 +10,12 @@
 // (PersonaSettings.tsx). Memory: what Hermes remembers for the profile (MemorySettings.tsx). Skills: the profile's
 // skills, switched and edited on Hermes (SkillSettings.tsx). Diagnostics: what the connected Hermes is and what it
 // supports (Diagnostics.tsx), and Logs, this app's and the profile's Hermes logs (Logs.tsx, ADR 0087); a tab whose
-// feature Hermes lacks says so in its place.
-// Profiles are switched in the list's header, not here (ADR 0001). The search box (Ctrl+F) shows the sections of every
+// feature Hermes lacks says so in its place. Profiles: every profile on the server, made, renamed, described, given a
+// model and deleted (ProfileSettings.tsx, ADR 0144).
+// Profiles are switched in the list's header, not here (ADR 0001); Profiles' Open goes through the same question. The search box (Ctrl+F) shows the sections of every
 // tab whose text holds what was typed (settingsSearch.ts).
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowLeft, AudioLines, Brain, Camera, Cpu, Database, Download, HardDrive, Keyboard, KeyRound, Lock, LogOut, MessagesSquare, NotebookPen, Palette, PlugZap, Power, Puzzle, RadioTower, ScrollText, Search, Server, Settings2, ShieldCheck, Sparkles, Stethoscope, Trash2, User, Wrench, X } from "lucide-react";
+import { ArrowLeft, AudioLines, Brain, Camera, Cpu, Database, Download, HardDrive, Keyboard, KeyRound, Lock, LogOut, MessagesSquare, NotebookPen, Palette, PlugZap, Power, Puzzle, RadioTower, ScrollText, Search, Server, Settings2, ShieldCheck, Sparkles, Stethoscope, Trash2, User, Users, Wrench, X } from "lucide-react";
 import type { MemorySource } from "../hermes/memory";
 import { SubNav, type SubNavItem } from "./SubNav";
 import { SettingRow, SettingsSearching, SettingsSection } from "./SettingRows";
@@ -74,8 +75,10 @@ import { ProviderSettings, type ProviderKeysApi } from "./ProviderSettings";
 import { SignInSettings, type SignInApi } from "./SignInSettings";
 import { EndpointSettings, type EndpointApi } from "./EndpointSettings";
 import { useLocale } from "../i18n/locale";
+import { ProfileSettings, type ProfilesWiring } from "./ProfileSettings";
+import { errorText } from "../hermes/values";
 
-type Tab = "general" | "appearance" | "keyboard" | "model" | "providers" | "voice" | "toolsets" | "mcp" | "gateways" | "persona" | "memory" | "skills" | "diagnostics";
+type Tab = "general" | "appearance" | "keyboard" | "model" | "providers" | "voice" | "toolsets" | "mcp" | "gateways" | "profiles" | "persona" | "memory" | "skills" | "diagnostics";
 /**
  * General's five groups, shown one at a time beside a sub-nav (ADR 0113); a search shows every group's sections at once.
  * Voice moved to its own tab with the speech providers (ADR 0115), so the third group holds screenshots.
@@ -105,6 +108,7 @@ const TABS = [
   { id: "toolsets", Icon: Wrench },
   { id: "mcp", Icon: Server },
   { id: "gateways", Icon: RadioTower },
+  { id: "profiles", Icon: Users },
   { id: "persona", Icon: Sparkles },
   { id: "memory", Icon: Brain },
   { id: "skills", Icon: Puzzle },
@@ -212,6 +216,8 @@ export function SettingsScreen({
   logs,
   connectionManager,
   listProfiles,
+  profilesTab,
+  defaultName,
 }: {
   status: ConnectionStatus;
   route?: Route;
@@ -318,6 +324,10 @@ export function SettingsScreen({
   screen?: Pick<ScreenApi, "status">;
   /** Diagnostics → Logs (ADR 0033, 0087); without it Diagnostics has no Logs. */
   logs?: LogsWiring;
+  /** Settings → Profiles (ADR 0144); without it there is no Profiles tab. Settings adds where its menu's tab jumps go. */
+  profilesTab?: Omit<ProfilesWiring, "showTab">;
+  /** The display name Hermes keeps for `default`, for the profile pickers (ADR 0144). */
+  defaultName?: string;
 }) {
   const frame = useLocale().settings;
   const tabLabels = frame.tabs;
@@ -335,7 +345,9 @@ export function SettingsScreen({
     memoryParts.current[part] = dirty;
     onMemoryDirty(memoryParts.current.entries || memoryParts.current.providers);
   };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const onEntriesDirty = useCallback(memoryPart("entries"), [onMemoryDirty]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const onProvidersDirty = useCallback(memoryPart("providers"), [onMemoryDirty]);
   const [tab, setTabNow] = useState<Tab>(
     showTextGeneration ? "model" : showMemory && memory ? "memory" : showDiagnostics && capabilities ? "diagnostics" : showVoice ? "voice" : "general",
@@ -356,6 +368,8 @@ export function SettingsScreen({
   // (PersonaPage, ADR 0117).
   const [profiles, setProfiles] = useState<string[]>();
   const [shownIn, setShownIn] = useState({ skills: profile, memory: profile, mcp: profile, gateways: profile, of: profile });
+  /** The profile Persona's picker starts on when Profiles opened it at one; none starts it on the profile in use. */
+  const [personaStart, setPersonaStart] = useState<{ profile: string; of: string }>();
   const tabProfile = shownIn.of === profile ? shownIn : { skills: profile, memory: profile, mcp: profile, gateways: profile, of: profile };
   useEffect(() => setShownIn({ skills: profile, memory: profile, mcp: profile, gateways: profile, of: profile }), [profile]);
   const connected = status === "connected";
@@ -373,12 +387,13 @@ export function SettingsScreen({
   const pickProfile = (which: "skills" | "memory" | "mcp" | "gateways", p: string) =>
     p !== tabProfile[which] && guard(() => setShownIn((cur) => ({ ...(cur.of === profile ? cur : tabProfile), [which]: p })));
   const picker = (which: "skills" | "memory" | "mcp" | "gateways", label: string) =>
-    listProfiles && <ProfilePicker value={tabProfile[which]} shown={profile} profiles={profiles} label={label} onPick={(p) => pickProfile(which, p)} />;
+    listProfiles && <ProfilePicker value={tabProfile[which]} shown={profile} profiles={profiles} label={label} defaultName={defaultName} onPick={(p) => pickProfile(which, p)} />;
   const tabs = TABS.filter(
     (t) =>
       (t.id !== "toolsets" || toolsets) &&
       (t.id !== "mcp" || mcp) &&
       (t.id !== "gateways" || gateways) &&
+      (t.id !== "profiles" || profilesTab) &&
       (t.id !== "providers" || providers) &&
       (t.id !== "voice" || voiceSetup || voiceSettings || localStt) &&
       (t.id !== "persona" || persona) &&
@@ -393,16 +408,19 @@ export function SettingsScreen({
     if (!showTextGeneration) return;
     setQuery("");
     setTab("model");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [showTextGeneration]);
   useEffect(() => {
     if (!showMemory || !memory) return;
     setQuery("");
     setTab("memory");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [showMemory]);
   useEffect(() => {
     if (!showVoice) return;
     setQuery("");
     setTab("voice");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [showVoice]);
   useEffect(() => {
     if (!showDiagnostics || !capabilities) return;
@@ -410,6 +428,7 @@ export function SettingsScreen({
     setDiagFocus(showDiagnostics.id ? { id: showDiagnostics.id } : undefined);
     setDiagGroup("server");
     setTab("diagnostics");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [showDiagnostics]);
   /** A tab's note about a feature Hermes lacks opens Diagnostics at it. */
   const toDiagnostics = (id: CapabilityId) =>
@@ -435,7 +454,7 @@ export function SettingsScreen({
     try {
       setPulled(pulledText(await onPullOlder()));
     } catch (e) {
-      setPullError(`Couldn't pull older history: ${e instanceof Error ? e.message : String(e)}`);
+      setPullError(`Couldn't pull older history: ${errorText(e)}`);
     } finally {
       setPulling(false);
     }
@@ -497,7 +516,16 @@ export function SettingsScreen({
     setQuery("");
     setTabNow(t);
   };
-  const elsewhere = tabs.filter((t) => ABOUT[t.id] && textMatches(`${t.label} ${ABOUT[t.id]}`, words));
+  /** What a search reads of a tab it names: Profiles' words in the language shown, with the profiles' names. */
+  const aboutOf = (id: Tab) => (id === "profiles" ? `${frame.about.profiles} ${(profiles ?? []).join(" ")}` : ABOUT[id]);
+  const elsewhere = tabs.filter((t) => aboutOf(t.id) && textMatches(`${t.label} ${aboutOf(t.id)}`, words));
+  /** Profiles' menu: Persona, Memory or Skills, showing `name`. Leaving Profiles asks nothing, as it holds no edit. */
+  const showTabFor = (t: "persona" | "memory" | "skills", name: string) => {
+    if (t === "persona") setPersonaStart({ profile: name, of: profile });
+    else setShownIn((cur) => ({ ...(cur.of === profile ? cur : tabProfile), [t]: name }));
+    setQuery("");
+    setTabNow(t);
+  };
 
   const generalGroups: Record<GenGroup, ReactNode> = {
     connection: (
@@ -749,7 +777,9 @@ export function SettingsScreen({
           gated(
             "persona",
             <PersonaPage
-              key={persona.keyOf(persona.where.profile)}
+              key={`${persona.keyOf(persona.where.profile)} ${personaStart?.of === profile ? personaStart.profile : ""}`}
+              start={personaStart?.of === profile ? personaStart.profile : undefined}
+              defaultName={defaultName}
               api={persona.api}
               store={persona.store}
               keyOf={persona.keyOf}
@@ -935,6 +965,8 @@ export function SettingsScreen({
           </div>
         );
       }
+      case "profiles":
+        return profilesTab && gated("profiles", <ProfileSettings wiring={{ ...profilesTab, showTab: showTabFor }} />);
       case "general":
         return general;
     }
@@ -1013,10 +1045,10 @@ export function SettingsScreen({
                   <div className="settings-search-tab">
                     <Icon size={13} /> {label}
                   </div>
-                  <div className="muted small">{ABOUT[id]}</div>
+                  <div className="muted small">{aboutOf(id)}</div>
                 </div>
                 <button className="btn" onClick={() => pick(id)}>
-                  Open {label}
+                  {id === "profiles" ? frame.about.open(label) : `Open ${label}`}
                 </button>
               </div>
             ))}

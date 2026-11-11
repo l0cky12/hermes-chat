@@ -1,6 +1,6 @@
 // Transcript, thinking, tool-call groups, Approval cards, find bar, composer and the Settle button, ported from the prototype.
 // Dictation and Read aloud come from Voice.tsx.
-import { createContext, memo, type ReactNode, type RefObject, useCallback, useContext, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, memo, type ReactNode, type RefObject, useCallback, startTransition, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, Columns2, CornerDownRight, EyeOff, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Square, Trash2, Wrench, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -49,6 +49,7 @@ import { CopyButton, replyMarkdown } from "./CopyMessage";
 import { turnsOf, type ReplayKind, type Variant } from "../hermes/replay";
 import type { FollowUp } from "../hermes/uiPrefs";
 import { sttRoute } from "../hermes/sttRoute";
+import { errorText } from "../hermes/values";
 
 /**
  * What a message sent while the chat's reply runs does (ADR 0057). `mode`: what Enter does, the Follow-up behavior
@@ -139,6 +140,9 @@ const sameVersions = (a?: Map<number, Variant[]>, b?: Map<number, Variant[]>) =>
  */
 export type FindTarget = { query: string; itemId?: string; at: number };
 
+/** How long a new find query may wait for the transcript to mark it in the background before a streamed delta marks it. */
+const FIND_WAITS_MS = 200;
+
 /**
  * What to go to: a tool call, opened, by its call id (`Item.callId`), or a message by its stored row (`rowId`), as a
  * branch's link back does. `at` tells one request from the next.
@@ -182,6 +186,28 @@ export function refuseStrayFileDrops(target: Window = window) {
   };
   target.addEventListener("dragover", refuse);
   target.addEventListener("drop", refuse);
+}
+
+/**
+ * What a paste into the composer attaches. The webview pastes the text itself, except for a file copy, whose text is
+ * only the files' paths.
+ */
+export type PasteAttaches =
+  /** Files copied in a file manager: a `text/uri-list` of `file://` URIs, which WebKitGTK names but hides. Rust reads it. */
+  | { kind: "copied files" }
+  /** Files the paste event carries as bytes: a screenshot, or files copied in Explorer (Chromium). */
+  | { kind: "files"; files: File[]; keepText: boolean }
+  /** No text the page can see: WebKitGTK hides a clipboard image, and the text beside it, from the paste event. */
+  | { kind: "clipboard images" }
+  | { kind: "nothing" };
+
+export function pasteAttaches(data: { types: readonly string[]; files: ArrayLike<File>; getData(type: string): string }): PasteAttaches {
+  const files = Array.from(data.files);
+  const text = data.getData("text/plain");
+  if (files.length) return { kind: "files", files, keepText: !!text };
+  const uris = data.getData("text/uri-list").split(/\r?\n/).filter((l) => l && !l.startsWith("#"));
+  if (data.types.includes("text/uri-list") && uris.every((u) => u.startsWith("file:"))) return { kind: "copied files" };
+  return text ? { kind: "nothing" } : { kind: "clipboard images" };
 }
 
 /**
@@ -232,6 +258,7 @@ function MoreMenu({
   const [exporting, setExporting] = useState(false);
   useEffect(() => {
     if (!onDelete) setAskDelete(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [!onDelete]);
   const item = (label: string, icon: ReactNode, run: () => void, title?: string, danger?: boolean) => (
     <button
@@ -468,6 +495,7 @@ export function ChatPane({
     const s = new Speaker((text) => voiceRef.current!.speak(text));
     setSpeaker(s);
     return () => s.dispose();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [!voice]);
   const listen = speaker && { speaker, blocked: listenBlocked(status, voiceSetup) };
   useEffect(() => { if (!active) speaker?.stop(); }, [active, speaker]);
@@ -567,6 +595,7 @@ export function ChatPane({
     setQuery(findTarget.query);
     setLanding(true);
     stickToBottom.current = false;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [findTarget?.at]);
 
   const openFind = () => {
@@ -584,11 +613,26 @@ export function ChatPane({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // The transcript catches up with the find bar in the background, so re-marking a long chat doesn't hold up typing.
+  // The query the transcript marks. A new one is marked in the background, so re-marking a long chat doesn't hold up
+  // typing. A streamed delta renders the pane at once and starts that work again, so once a query has waited a moment
+  // the next delta marks it with it; useDeferredValue would wait for the reply to end (#435). Closing clears at once.
   const typed = findOpen ? query : "";
-  const q = useDeferredValue(typed);
+  const [q, setQ] = useState("");
+  /** The query being marked in the background, and since when; "" when none is. */
+  const asked = useRef({ query: "", at: 0 });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- every render on purpose, so each streamed delta checks the query
+  useLayoutEffect(() => {
+    if (q === typed) asked.current.query = "";
+    else if (!typed) setQ("");
+    else if (asked.current.query !== typed) {
+      asked.current = { query: typed, at: performance.now() };
+      startTransition(() => setQ(typed));
+    } else if (performance.now() - asked.current.at > FIND_WAITS_MS) setQ(typed);
+  });
+  const finding = q !== typed;
   const finds = useMemo(() => (q ? new RegExp(escapeRe(q), "i") : undefined), [q]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useLayoutEffect(() => {
     if (q !== typed) return;
     const marks = q ? Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("mark.hit") ?? []) : [];
@@ -616,7 +660,9 @@ export function ChatPane({
     if (!jumpTo) return;
     stickToBottom.current = false;
     setJumping(jumpTo);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [jumpTo?.at]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useLayoutEffect(() => {
     if (!jumping) return;
     let el: HTMLElement | null | undefined;
@@ -674,7 +720,7 @@ export function ChatPane({
   }, []);
 
   const step = (d: number) => {
-    if (!count) return;
+    if (!count || finding) return;
     setMatchIndex((i) => (Math.min(i, count - 1) + d + count) % count);
     scrollToMatch.current = true;
     stickToBottom.current = false;
@@ -715,6 +761,7 @@ export function ChatPane({
   const shown = useTranscriptWindow({ scroller: scrollRef, chunks, all: !!q, stuck: stickToBottom, target: jumpChunk ?? revealChunk });
   revealRef.current = (has) => shown.reveal(chunks.findIndex((c) => c.some(has)));
   // Cards ignore clicks for a moment after the transcript changes, since it may have moved them under the pointer.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const movedAt = useMemo(() => performance.now(), [chat.items, chat.sideQuestions]);
   const last = chat.items[chat.items.length - 1];
   const waiting = chat.items.some(isWaiting);
@@ -793,12 +840,12 @@ export function ChatPane({
               }}
             />
             <span className="find-count" aria-live="polite">
-              {query ? `${count ? Math.min(matchIndex, count - 1) + 1 : 0} of ${count}` : ""}
+              {!query ? "" : finding ? "Finding…" : `${count ? Math.min(matchIndex, count - 1) + 1 : 0} of ${count}`}
             </span>
-            <button className="icon-btn" title={`Previous (${labels(keys.findPrev)})`} disabled={!count} onClick={() => step(-1)}>
+            <button className="icon-btn" title={`Previous (${labels(keys.findPrev)})`} disabled={!count || finding} onClick={() => step(-1)}>
               <ChevronUp size={16} />
             </button>
-            <button className="icon-btn" title={`Next (${labels(keys.findNext)})`} disabled={!count} onClick={() => step(1)}>
+            <button className="icon-btn" title={`Next (${labels(keys.findNext)})`} disabled={!count || finding} onClick={() => step(1)}>
               <ChevronDown size={16} />
             </button>
             <button className="icon-btn" title={`Close (${labels(keys.findClose)})`} onClick={closeFind}>
@@ -1288,6 +1335,7 @@ function ToolRow({ t }: { t: ToolItem }) {
   const jump = useContext(JumpContext);
   useEffect(() => {
     if (jump?.callId && t.callId === jump.callId) setOpen(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [jump?.at]);
   const summary = t.status === "stopped" ? "stopped" : t.summary;
   return (
@@ -1361,6 +1409,7 @@ function ToolGroup({ tools }: { tools: ToolItem[] }) {
   const jump = useContext(JumpContext);
   useEffect(() => {
     if (jump?.callId && tools.some((t) => t.callId === jump.callId)) setOpen(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [jump?.at]);
   if (tools.length === 1)
     return (
@@ -1459,7 +1508,9 @@ function Composer({
   const keys = useBindings();
   // What an update's restart would drop, for Settings to name (unsaved.ts).
   const me = useRef({}).current;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => stagedFiles.set(me, attachments), [attachments]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => () => stagedFiles.set(me, []), []);
   const focused = useRef(autoFocus);
   focused.current = autoFocus;
@@ -1502,12 +1553,15 @@ function Composer({
   useEffect(() => {
     if (wasDictating.current && !dictation.active && autoFocus) taRef.current?.focus();
     wasDictating.current = dictation.active;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [dictation.active]);
   // Leaving a pane (including Settings or the narrow switcher) releases its microphone and drops late transcripts.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => { if (!autoFocus) dictation.cancel(); }, [autoFocus]);
   // So does hiding the window to the tray: the microphone never stays open behind a hidden window (ADR 0034). The
   // recording is dropped, as Cancel drops it; nothing is sent to Hermes to transcribe.
   const windowHidden = useWindowHidden();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => { if (windowHidden) dictation.cancel(); }, [windowHidden]);
 
   // Files still being read, saved or checked: sending waits for them, so none misses the message it was added for.
@@ -1531,7 +1585,7 @@ function Composer({
       return got.attachments.map((a) => a.path);
     } catch (e) {
       if (!stillHere()) return [];
-      setRefused([`Couldn't attach files: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't attach files: ${errorText(e)}`]);
       return [];
     }
   });
@@ -1613,7 +1667,17 @@ function Composer({
       const notes = tooBig.map((f) => overLimitNote(nameOf(f), f.size, LIMITS.file));
       if (notes.length) setRefused((cur) => (paths.length ? [...cur, ...notes] : notes));
     } catch (e) {
-      setRefused([`Couldn't attach the files: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't attach the files: ${errorText(e)}`]);
+    }
+  });
+  // Files copied in a file manager attach by path, as a drop does. Rust reads them, since WebKitGTK hides them.
+  const attachCopied = () => busy(async () => {
+    try {
+      const paths = await invoke<string[]>("attach_copied_files");
+      if (paths.length) await add(paths, () => open.current);
+      else setRefused(["Only files on this computer can be attached."]);
+    } catch (e) {
+      setRefused([`Couldn't attach the files: ${errorText(e)}`]);
     }
   });
   const stageRef = useRef(stageFiles);
@@ -1656,7 +1720,7 @@ function Composer({
     try {
       await add(await invoke<string[]>("attach_picked_files"));
     } catch (e) {
-      setRefused([`Couldn't open the file picker: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't open the file picker: ${errorText(e)}`]);
     }
   };
 
@@ -1709,7 +1773,7 @@ function Composer({
       const out = await followUp!.steer(words);
       if (out) setRefused([out]);
     } catch (e) {
-      setRefused([`Couldn't steer the reply, so nothing was sent: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't steer the reply, so nothing was sent: ${errorText(e)}`]);
     } finally {
       setSteering(false);
     }
@@ -1842,13 +1906,12 @@ function Composer({
           {...slash.inputProps}
           onChange={(e) => onText(e.target.value, inputKind(e.nativeEvent))}
           onPaste={(e) => {
-            // Only files are taken over; text pastes as it always has.
             if (dragging) return;
-            const files = Array.from(e.clipboardData.files);
-            if (files.length) {
-              e.preventDefault();
-              void stageFiles(files);
-            } else if (!e.clipboardData.getData("text/plain")) void stageFiles(clipboardImages());
+            const paste = pasteAttaches(e.clipboardData);
+            if (paste.kind === "copied files" || (paste.kind === "files" && !paste.keepText)) e.preventDefault();
+            if (paste.kind === "copied files") void attachCopied();
+            else if (paste.kind === "files") void stageFiles(paste.files);
+            else if (paste.kind === "clipboard images") void stageFiles(clipboardImages());
           }}
           onKeyDown={(e) => {
             if (slash.onKeyDown(e)) return;

@@ -6,6 +6,7 @@
 import type { DownloadProgress, FoundEngine, LocalModels, LocalSttApi, LocalSttChange, LocalSttState, TranscribeRequest } from "./localStt";
 import type { Transcript } from "./pipe";
 import { SttCancelled, couldnt, other, untilAborted, type HeardTranscript, type SttPrefs, type SttSide } from "./sttRoute";
+import { errorText } from "./values";
 
 export const FAKE_MODELS = [
   { name: "tiny", bytes: 77_691_713 },
@@ -185,7 +186,7 @@ export class FakeLocalStt implements LocalSttApi {
         return { ...got, ran: s, ...(tried.length && { fellBack: { from: tried[0].side, why: tried[0].why } }) };
       } catch (e) {
         if (e instanceof SttCancelled) throw e;
-        tried.push({ side: s, why: e instanceof Error ? e.message : String(e) });
+        tried.push({ side: s, why: errorText(e) });
       }
     }
     const [a, b] = tried;

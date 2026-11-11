@@ -36,8 +36,8 @@ import {
 } from "../hermes/automations";
 import { appPatterns } from "../hermes/patternRunner";
 import { Spinner } from "./bits";
+import { errorText } from "../hermes/values";
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const when = (at: number) => new Date(at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
 
 type View = { kind: "list" } | { kind: "detail"; name: string } | { kind: "edit"; name?: string };
@@ -111,6 +111,7 @@ export function Automations({
   useEffect(() => {
     if (connected) void load();
     else setLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected]);
 
   // Each view starts at its heading; back on the list, at the row it came from.
@@ -205,7 +206,7 @@ export function Automations({
             )}
             {error && (
               <div className="job-error" role="alert">
-                <p>{messageOf(error)}</p>
+                <p>{errorText(error)}</p>
                 {!unsupported && connected && (
                   <button className="btn" onClick={() => void load()}>
                     Try again
@@ -381,7 +382,7 @@ function Detail({
     try {
       await fn();
     } catch (e) {
-      setError(messageOf(e));
+      setError(errorText(e));
       if (e instanceof AutomationError && e.secret) onSecret(e.secret);
       if (e instanceof AutomationError && e.kind === "gone") onChanged(a.name, null);
     } finally {
@@ -590,11 +591,12 @@ function Deliveries({
     const mine = ++seq.current;
     void api.history(profile, a, contract).then(
       (h) => mine === seq.current && (setHistory(h), setOlder([])),
-      (e) => mine === seq.current && setHistory(messageOf(e)),
+      (e) => mine === seq.current && setHistory(errorText(e)),
     );
   };
   useEffect(() => {
     if (connected) read();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected, a.name, a.revision, a.enabled]);
 
   const retry = async (d: Delivery, confirmed: boolean) => {
@@ -617,7 +619,7 @@ function Deliveries({
       read();
     } catch (e) {
       if (e instanceof AutomationError && e.kind === "confirm") setAsking(d);
-      else setSaid({ id: d.deliveryId, text: messageOf(e), bad: true });
+      else setSaid({ id: d.deliveryId, text: errorText(e), bad: true });
     } finally {
       setRetrying(undefined);
     }
@@ -844,6 +846,7 @@ function Editor({
     });
   const [rows, setRows] = useState<Row[]>(() => rowsOf(start?.filters ?? []));
   /** Filters the editor can't show as rows (all/any/not groups): kept as they are. */
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const kept = useMemo(() => (start?.filters ?? []).filter((s) => !filterRow(s)), [base]);
   const [coalesceOn, setCoalesceOn] = useState(!!start?.coalesce);
   const [coalesce, setCoalesce] = useState<Coalesce>(start?.coalesce ?? { key: "{repository.full_name}#{issue.number}", windowSeconds: 30, maxWaitSeconds: 300 });
@@ -867,7 +870,7 @@ function Editor({
     try {
       return sanitizeEvent(JSON.parse(pasted));
     } catch (e) {
-      return new Error(`That isn't JSON: ${messageOf(e)}`);
+      return new Error(`That isn't JSON: ${errorText(e)}`);
     }
   }, [pasting, pasted]);
   const example = pasting ? (pastedParse && !(pastedParse instanceof Error) ? { event: pastedEvent.trim() || "unknown", payload: pastedParse.payload, notes: pastedParse.notes } : undefined) : { event: sample, payload: SAMPLE_EVENTS[sample].payload, notes: [] as string[] };
@@ -886,8 +889,10 @@ function Editor({
     deliverChatId: base?.deliverChatId ?? "",
   };
   const tested = useSyncExternalStore(appPatterns.subscribe, appPatterns.version);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const livePreview = useMemo(() => (example ? preview(fields, example.payload, example.event, appPatterns.test) : undefined), [JSON.stringify(fields), example?.event, example?.payload, tested]);
   const shownPreview = useSettledPreview(livePreview);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const paths = useMemo(() => (example ? fieldPaths(example.payload) : []), [example?.payload]);
 
   const nameProblem = !base && !NAME_RE.test(fields.name) ? "Up to 64 lowercase letters, digits, - and _, starting with a letter or digit." : !base && list.automations.some((a) => a.name === fields.name) ? "There's already an automation with this name." : undefined;
@@ -1204,7 +1209,7 @@ function Editor({
         )}
         {error && (
           <div className="job-error" role="alert">
-            <p>{messageOf(error)}</p>
+            <p>{errorText(error)}</p>
             {error instanceof AutomationError && error.kind === "conflict" && error.current && (
               <button type="button" className="btn" onClick={onReload}>
                 Reload

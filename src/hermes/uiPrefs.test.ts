@@ -42,7 +42,7 @@ afterEach(() => {
 
 describe("reading", () => {
   it("is the defaults when nothing is stored", () => {
-    expect(getUIPrefs()).toEqual({ theme: "system", reopenLastChat: true, checkUpdatesOnLaunch: true, lastOpenChat: {}, reasoningBlocks: true, modelPicker: null, modelPicks: {}, modelFavorites: [], statusBar: ["context", "model", "status"], previewWidth: null, screenshotShortcut: "Ctrl+Shift+S", templates: [], terminalKind: "server", followUp: "queue", idleCompact: { enabled: false, percent: 70, idleMinutes: 15 }, chatSectionsShown: ["pinned", "inbox", "snoozed", "working", "settled"], chatSectionsCollapsed: ["snoozed", "archived", "settled"], agentOffice: "building", officeQuality: "normal", inboxAutoDismissDays: null, keybindings: {} });
+    expect(getUIPrefs()).toEqual({ theme: "system", reopenLastChat: true, checkUpdatesOnLaunch: true, lastOpenChat: {}, modelPicker: null, modelPicks: {}, modelFavorites: [], statusBar: ["context", "model", "status"], previewWidth: null, screenshotShortcut: "Ctrl+Shift+S", templates: [], terminalKind: "server", followUp: "queue", idleCompact: { enabled: false, percent: 70, idleMinutes: 15 }, chatSectionsShown: ["pinned", "inbox", "snoozed", "working", "settled"], chatSectionsCollapsed: ["snoozed", "archived", "settled"], agentOffice: "building", officeQuality: "normal", inboxAutoDismissDays: null, keybindings: {} });
     expect(getUIPrefs()).toEqual(DEFAULT_UI_PREFS);
   });
 
@@ -61,7 +61,6 @@ describe("reading", () => {
         theme: "neon",
         reopenLastChat: false,
         checkUpdatesOnLaunch: "yes",
-        reasoningBlocks: "no",
         modelPicker: { provider: "anthropic", model: "claude-opus-5-5", effort: "max", fast: true, extra: 1 },
         modelFavorites: ["openai/gpt-5", "no-slash", 7, "openai/gpt-5", "anthropic/claude-opus-5-5"],
         statusBar: ["model", 3, "", "tokens", "model"],
@@ -83,7 +82,6 @@ describe("reading", () => {
       reopenLastChat: false,
       checkUpdatesOnLaunch: true,
       lastOpenChat: { default: "c1" },
-      reasoningBlocks: true,
       modelPicker: { provider: "anthropic", model: "claude-opus-5-5", effort: "max", fast: true },
       modelPicks: {},
       modelFavorites: ["openai/gpt-5", "anthropic/claude-opus-5-5"],
@@ -241,8 +239,8 @@ describe("writing", () => {
 
   it("merges a patch, leaving fields not given, or given as undefined, as they were", () => {
     setUIPrefs({ theme: "dark", reopenLastChat: false });
-    setUIPrefs({ reasoningBlocks: false, theme: undefined });
-    expect(getUIPrefs()).toEqual({ ...DEFAULT_UI_PREFS, theme: "dark", reopenLastChat: false, reasoningBlocks: false });
+    setUIPrefs({ checkUpdatesOnLaunch: false, theme: undefined });
+    expect(getUIPrefs()).toEqual({ ...DEFAULT_UI_PREFS, theme: "dark", reopenLastChat: false, checkUpdatesOnLaunch: false });
   });
 
   it("replaces the status bar and model pick whole, and forgets the pick on null", () => {
@@ -270,8 +268,8 @@ describe("writing", () => {
 
   it("keeps fields a newer version of the app wrote", () => {
     localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ v: UI_PREFS_VERSION, theme: "dark", density: "compact" }));
-    setUIPrefs({ reasoningBlocks: false });
-    expect(stored()).toMatchObject({ v: UI_PREFS_VERSION, theme: "dark", density: "compact", reasoningBlocks: false });
+    setUIPrefs({ checkUpdatesOnLaunch: false });
+    expect(stored()).toMatchObject({ v: UI_PREFS_VERSION, theme: "dark", density: "compact", checkUpdatesOnLaunch: false });
   });
 
   it("holds a change until the app closes when storage won't take it", () => {
@@ -289,8 +287,8 @@ describe("migration", () => {
   it("reads a document written without a version as version 1, and stamps the version on the next write", () => {
     localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ theme: "light", reopenLastChat: false }));
     expect(getUIPrefs()).toMatchObject({ theme: "light", reopenLastChat: false });
-    setUIPrefs({ reasoningBlocks: false });
-    expect(stored()).toEqual({ ...DEFAULT_UI_PREFS, theme: "light", reopenLastChat: false, reasoningBlocks: false, v: UI_PREFS_VERSION });
+    setUIPrefs({ checkUpdatesOnLaunch: false });
+    expect(stored()).toEqual({ ...DEFAULT_UI_PREFS, theme: "light", reopenLastChat: false, checkUpdatesOnLaunch: false, v: UI_PREFS_VERSION });
   });
 
   it("runs each step from the stored version up to the current one, in order", () => {
@@ -357,9 +355,9 @@ describe("subscribe", () => {
 
   it("fires when another window changes the document", () => {
     const heard = listen();
-    writeFromOtherWindow(JSON.stringify({ v: 1, theme: "light", reasoningBlocks: false }));
+    writeFromOtherWindow(JSON.stringify({ v: 1, theme: "light", checkUpdatesOnLaunch: false }));
     expect(heard).toHaveBeenCalledOnce();
-    expect(heard).toHaveBeenLastCalledWith(expect.objectContaining({ theme: "light", reasoningBlocks: false }));
+    expect(heard).toHaveBeenLastCalledWith(expect.objectContaining({ theme: "light", checkUpdatesOnLaunch: false }));
     expect(getUIPrefs().theme).toBe("light");
   });
 

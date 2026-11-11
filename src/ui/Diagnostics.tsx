@@ -22,6 +22,7 @@ import { BROWSER_FIX, browserOf, isUnavailable, type ScreenApi, type ServerBrows
 import { CopyCommand, Spinner, ago, storedTime } from "./bits";
 import { useLocale } from "../i18n/locale";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { errorText } from "../hermes/values";
 
 /** Opens a compatibility guide page in the owner's browser. */
 export type OpenGuide = (url: string) => void;
@@ -249,6 +250,7 @@ export function DiagnosticsSettings({
                     </td>
                     <td className="small">
                       {cap.why && <div>{cap.why}</div>}
+                      {cap.lacking?.length ? <div>Hermes has no route for {cap.lacking.join(", ")}, so that change is disabled.</div> : null}
                       {cap.state !== "supported" && (
                         <div className="muted">
                           Needs: {spec.needs} Without it: {spec.without}{" "}
@@ -300,7 +302,7 @@ function BotDesktopSection({ screen, connected, profile }: { screen: Pick<Screen
     try {
       next = { kind: "read", browser: browserOf(await screen.status()) };
     } catch (e) {
-      next = isUnavailable(e) ? { kind: "read", browser: { kind: "unknown", why: "older-hermes" } } : { kind: "failed", why: e instanceof Error ? e.message : String(e) };
+      next = isUnavailable(e) ? { kind: "read", browser: { kind: "unknown", why: "older-hermes" } } : { kind: "failed", why: errorText(e) };
     }
     if (ask === asked.current) setCheck(next);
   }, [screen]);

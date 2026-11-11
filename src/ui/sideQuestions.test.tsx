@@ -10,7 +10,6 @@ import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -227,7 +226,13 @@ describe("Asking a side question", () => {
     Object.defineProperties(transcript, {
       clientHeight: { configurable: true, get: () => 100 },
       scrollHeight: { configurable: true, get: () => 1000 },
-      scrollTop: { configurable: true, get: () => top, set: (v: number) => (top = Math.max(0, Math.min(v, 900))) },
+      scrollTop: {
+        configurable: true,
+        get: () => top,
+        set: (v: number) => {
+          top = Math.max(0, Math.min(v, 900));
+        },
+      },
     });
     transcript.scrollTop = 0;
     fireEvent.scroll(transcript);

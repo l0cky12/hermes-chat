@@ -13,7 +13,6 @@ import { Speaker } from "./speaker";
 import { setWindowHidden } from "./windowState";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 /** A stand-in microphone: `getUserMedia` either fails with `fail` or opens one track, and `say` feeds it samples. */
 class FakeMic {

@@ -8,7 +8,7 @@ const stubs = fileURLToPath(new URL("../../bench/stubs.ts", import.meta.url));
 export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
   plugins: [react()],
-  resolve: { alias: { "@tauri-apps/api/webview": stubs, "@tauri-apps/plugin-dialog": stubs } },
+  resolve: { alias: { "@tauri-apps/api/webview": stubs } },
   build: { outDir: "dist", emptyOutDir: true },
   logLevel: "warn",
 });

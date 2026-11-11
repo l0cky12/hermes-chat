@@ -92,6 +92,10 @@ Needs `GET` and `PUT /api/profiles/{name}/soul`. Checked with the `GET`. Without
 
 Needs `POST /api/profiles`, which isn't checked ahead: the Clone dialog sends it only when the owner clones. A fresh clone needs its `soul`, `description` and `provider`/`model` fields (Hermes `f0d94882`). An older Hermes that ignores one of them makes the profile without it, and the dialog's read-back shows that category as not copied. Without the route Hermes answers 405, and the dialog says the server can't create profiles. Deleting a clone needs `DELETE /api/profiles/{name}`.
 
+## Profiles
+
+Needs `GET /api/profiles` for Settings → Profiles, checked with that read; without it the tab shows a note in its place. Each change has its own route, none checked ahead, since a check never writes: `POST /api/profiles` (New profile), `PATCH /api/profiles/{name}` (rename, and `default`'s display name), `PUT /api/profiles/{name}/description`, `POST /api/profiles/{name}/describe-auto` (Write for me), `PUT /api/profiles/{name}/model` and `DELETE /api/profiles/{name}` (Hermes `f0d94882`). A Hermes that answers one of them with no such route (its 404, or a 405) has that change disabled for the rest of the sign-in, with the route named in the tab and in diagnostics; the others still work. Check again in diagnostics lets it be tried again.
+
 ## Provider keys
 
 Settings → Providers and Setup's key step need `GET /api/env`, which lists each provider's key as a row with `provider`, `is_password`, `channel_managed`, `is_set` and a redacted preview. Checked with that `GET`. Without it, both show a note that this server doesn't let Hermes Chat set provider keys, and offer no change; the keys are set on the server instead.

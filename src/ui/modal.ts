@@ -22,9 +22,11 @@ export function useModal(box: RefObject<HTMLElement | null>, returnTo?: RefObjec
     return () => {
       const now = document.activeElement;
       held.current = now instanceof HTMLElement && root?.contains(now) ? now : null;
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
       const back = returnTo?.current ?? before;
       if (back?.isConnected) back.focus();
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, []);
   return (e: KeyboardEvent) => {
     if (!isTextEdit(e)) e.stopPropagation();

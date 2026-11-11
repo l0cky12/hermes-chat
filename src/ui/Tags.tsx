@@ -5,8 +5,7 @@ import { ListFilter, Pencil, Tag as TagIcon, Trash2 } from "lucide-react";
 import type { SavedFilter, TagsStore } from "../hermes/tags";
 import { composing } from "./bits";
 import { useModal } from "./modal";
-
-const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+import { errorText } from "../hermes/values";
 
 /**
  * The profile's tags: create, rename and delete. Deleting asks first and says how many chats lose the tag. Closing it

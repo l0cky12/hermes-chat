@@ -7,6 +7,7 @@
 // here, `Chat.roster` from Hermes's `subagent.roster` counts (issue #311).
 import type { Chat } from "./model";
 import { hasEnded, tally, type Subagent } from "./subagents";
+import { isObj } from "./values";
 
 export const KANBAN_STATUSES = ["triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done", "archived"] as const;
 export type KanbanStatus = (typeof KANBAN_STATUSES)[number];
@@ -193,7 +194,6 @@ export function nextHandoffChange(chats: readonly Chat[], stops: StopWaiting, no
   return next;
 }
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
 const isStatus = (v: unknown): v is KanbanStatus => typeof v === "string" && (KANBAN_STATUSES as readonly string[]).includes(v);
 
