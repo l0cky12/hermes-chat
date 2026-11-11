@@ -619,11 +619,41 @@ describe("A chat that leaves the list under a pane (#467)", () => {
     });
 
     await user.type(composerIn(0), "Unlock the restic repo{Enter}");
+    // The send waits out the reconnect first.
+    await waitFor(() => expect(vi.mocked(hermes.sendTracked).mock.settledResults).toHaveLength(1), { timeout: 10_000 });
     await settle(hermes);
     await waitFor(() => expect(titleIn(0)).toBe("New chat"));
     expect(composerIn(0).value).toBe("Unlock the restic repo");
     expect(prompts(server)).toHaveLength(0);
     expect(pane(0).textContent).toContain("no longer on Hermes");
+  });
+
+  it("a message sent as Hermes is found to have deleted its chat lands in New chat, even when the next check fails", async () => {
+    const { server, hermes, user } = await signedIn();
+    await user.clear(composerIn(0));
+    await user.click(rowButton("Nightly backup"));
+    await settle(hermes);
+    await user.clear(composerIn(0));
+    // While the message is on its way, the list read drops the chat, Hermes answers that it has no such chat, and the
+    // pane gives way. A later look-up of the chat fails.
+    const sendTracked = hermes.sendTracked.bind(hermes);
+    vi.spyOn(hermes, "sendTracked").mockImplementation(async (...args) => {
+      server.sessions = server.sessions.filter((s) => s.id !== "backup");
+      server.drop();
+      await vi.waitFor(() => expect(hermes.getSnapshot().status).toBe("connected"), { timeout: 5_000 });
+      await hermes.idle();
+      await vi.waitFor(() => expect(titleIn(0)).toBe("New chat"), { timeout: 5_000 });
+      server.rest["GET /api/sessions/backup"] = () => Promise.reject(new Error("The dashboard answered 500: busy"));
+      return sendTracked(...args);
+    });
+
+    await user.type(composerIn(0), "Unlock the restic repo{Enter}");
+    // The send waits out the reconnect first.
+    await waitFor(() => expect(vi.mocked(hermes.sendTracked).mock.settledResults).toHaveLength(1), { timeout: 10_000 });
+    await settle(hermes);
+    await waitFor(() => expect(composerIn(0).value).toBe("Unlock the restic repo"));
+    expect(titleIn(0)).toBe("New chat");
+    expect(prompts(server)).toHaveLength(0);
   });
 
   it("a chat in a tab, older than the list reaches, keeps its tab and Draft when a list read leaves it out", async () => {

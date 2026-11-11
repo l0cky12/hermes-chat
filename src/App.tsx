@@ -2015,10 +2015,15 @@ export function Main({
   // send there starts a chat instead of reaching none, and nothing typed is lost (#467). A check that can't reach Hermes
   // changes nothing, and the next list read asks again.
   const askedGone = useMemo(() => new Set<string>(), [scope]);
+  // The chats Hermes said it no longer has, whose panes gave way: known at once, before the panes render again.
+  const goneChats = useMemo(() => new Set<string>(), [scope]);
   const clearChatRef = useRef(clearChat);
   clearChatRef.current = clearChat;
-  const chatGone = (id: string) => {
-    if (askedGone.has(id)) return;
+  /** `typed`: the words of a send that found the chat out of the list, back to the Draft the owner will see. */
+  const chatGone = (id: string, typed = "") => {
+    const shown = !goneChats.has(id) && panesRef.current.some((p) => p.tabs.includes(id));
+    keepDraft(draftKey(connection, profile, shown ? id : null), typed);
+    if (askedGone.has(id) || !shown) return;
     askedGone.add(id);
     const at = profile;
     hermes
@@ -2026,6 +2031,7 @@ export function Main({
       .then((found) => {
         if (hermes.profile !== at) return;
         if (found) return void hermes.reveal(found);
+        goneChats.add(id);
         keepDraft(draftKey(connection, at, null), savedDrafts.take(draftKey(connection, at, id)));
         const shown = panesRef.current.filter((p) => p.chatId === id).map((p) => p.key);
         clearChatRef.current(id);
@@ -3525,8 +3531,9 @@ function ChatView({
   onOpenWorktree: (w: WorktreeChat) => void;
   onStarted: (id: string) => void;
   onDraftError: (reason: string) => void;
-  /** A send found its chat out of the list: asks Hermes whether it is still there (#467). */
-  onChatGone: (id: string) => void;
+  /** A send found its chat out of the list: puts `typed` back where the owner will see it, and asks Hermes whether
+   * the chat is still there (#467). */
+  onChatGone: (id: string, typed: string) => void;
   /** Where this pane keeps its `deliver`, by `paneKey`, for a compared pane to send through. */
   delivers: Map<string, RefObject<Deliver>>;
   /** One of two compared panes (ADR 0101): a send here goes to `partner` too. `startModel`: what this New chat pane starts on. */
@@ -3661,11 +3668,13 @@ function ChatView({
       return false;
     }
     const { delivery, itemId } = await hermes.sendTracked(to.id, text, attachments, skill);
-    // No item: the chat left the list before the message went in, so it is in no outbox. Its words go back to its Draft,
-    // and the chat is asked for: back in the list if Hermes still has it, else the Draft moves to New chat (#467).
+    // No item: the chat left the list before the message went in, so it is in no outbox. Its words go back to its Draft
+    // while a pane still shows it, and the chat is asked for: back in the list if Hermes still has it, else the Draft
+    // moves to New chat. Once its panes have given way, they go straight to New chat (#467).
     if (itemId === undefined && delivery.delivery !== "accepted") {
-      if (!mirrored) keepDraft(draftOf(to.id), typed);
-      onChatGone(to.id);
+      // After a profile switch, the words stay with their own profile's chat.
+      if (!stillIn()) keepDraft(draftOf(to.id), mirrored ? "" : typed);
+      else onChatGone(to.id, mirrored ? "" : typed);
       if (stillIn())
         onDraftError(`Your message wasn't sent: ${delivery.reason} Its words are back in the composer${attachments.length ? "; attach again any of its files that aren't" : ""}.`);
       return false;
