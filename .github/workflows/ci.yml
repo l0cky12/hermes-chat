@@ -55,10 +55,12 @@ jobs:
       - run: xvfb-run -a cargo test --test clipboard -- --ignored
         working-directory: src-tauri
       # The preview's native page view: WebKitGTK needs a display and a session bus, and GTK takes one thread for the
-      # whole process, so each ignored page_view test runs in a process of its own.
+      # whole process, so each ignored page_view test runs in a process of its own. WebKit sandboxes the page with
+      # bubblewrap, which needs the unprivileged user namespaces Ubuntu 24.04's AppArmor turns off by default.
       - name: Page view tests, each on its own display
         working-directory: src-tauri
         run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           tests=$(cargo test --lib page_view -- --ignored --list --format=terse | sed -n 's/: test$//p')
           [ -n "$tests" ] || { echo "::error::No ignored page_view tests were found."; exit 1; }
           for t in $tests; do
