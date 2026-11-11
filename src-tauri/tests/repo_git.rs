@@ -1525,7 +1525,9 @@ async fn a_name_that_isnt_utf8_is_listed_but_never_staged() {
     assert_eq!(e["nameLossy"], true, "{e}");
     assert_eq!(entry(&s, "notes.txt").get("nameLossy"), None);
     // Asked anyway, by the name shown: that names no file, so nothing is staged and the helper says so.
-    let err = ask(Request::Stage { repo: d.s(), files: vec![FileStamp { path: "caf\u{fffd}.txt".into(), worktree: None }], expect: expect_of(&s) }).await.unwrap_err();
+    let err = ask(Request::Stage { repo: d.s(), files: vec![FileStamp { path: "caf\u{fffd}.txt".into(), worktree: None }], expect: expect_of(&s) })
+        .await
+        .unwrap_err();
     assert_eq!(kind(err), "stale");
     assert_eq!(staged_names(&d), "");
 }
@@ -1627,7 +1629,7 @@ async fn a_hook_that_prints_a_lot_is_cut_to_its_end() {
     git(d.path(), &["add", "notes.txt"]);
     let p = preview(&d).await;
     let e = serde_json::to_value(commit(&d, &p, "Loud").await.unwrap_err()).unwrap();
-    assert_eq!(e["kind"], "hook", "{}", &e["message"]);
+    assert_eq!(e["kind"], "hook", "{}", e["message"]);
     let out = e["output"].as_str().unwrap();
     assert!(out.len() < 300 * 1024, "{} bytes", out.len());
     assert!(out.starts_with("[The first ") && out.trim_end().ends_with("the reason is at the end"));
@@ -1662,4 +1664,50 @@ async fn a_stop_while_git_is_starting_still_stops_it() {
     assert_eq!(head(&d), before, "nor commit");
     let git_dir = std::fs::read_dir(d.path().join(".git")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
     assert!(!git_dir.iter().any(|n| n.starts_with("index.") || n.ends_with(".lock")), "no lock or index copy is left: {git_dir:?}");
+}
+
+#[tokio::test]
+async fn a_drop_while_a_stubborn_command_is_being_stopped_still_ends_it() {
+    // A commit hits its time limit, and the helper starts stopping Git: SIGTERM, then up to 5 s before SIGKILL. The
+    // connection drops during those 5 s. That stop must not cut the first one short: this Git ignores SIGTERM, so only
+    // the SIGKILL at the end ends it.
+    let d = busy("drop-during-grace");
+    let bin = Dir::new("drop-during-grace-bin");
+    let git_pid = bin.path().join("git-pid");
+    let real = String::from_utf8(StdCommand::new("sh").arg("-c").arg("command -v git").output().unwrap().stdout).unwrap();
+    write_executable(
+        &bin.path().join("git"),
+        &format!(
+            "#!/bin/sh\nfor a; do [ \"$a\" = commit ] && {{ trap '' TERM; echo $$ > '{}'; exec sleep 300; }}; done\nexec '{}' \"$@\"\n",
+            git_pid.display(),
+            real.trim()
+        ),
+    );
+    git(d.path(), &["add", "notes.txt"]);
+    let p = preview(&d).await;
+    let helper_pid = bin.path().join("helper-pid");
+    let mut command = behind_sshd(&helper_pid);
+    command.env("PATH", format!("{}:{}", bin.s(), std::env::var("PATH").unwrap())).env("HERMES_REPO_TEST_COMMIT_TIMEOUT", "1");
+    let req = Request::Commit {
+        repo: d.s(),
+        message: "Stuck".into(),
+        expect: Expect { raw_sha: p["rawSha"].as_str().map(Into::into), head_ref: p["headRef"].as_str().map(Into::into), ..expect_of(&p) },
+    };
+    let task = tokio::spawn(async move { repo_git::run(command, &req).await });
+    let stuck = pid_in(&git_pid).await;
+    let helper = pid_in(&helper_pid).await;
+    // Past the 1 s time limit, and inside the 5 s grace that follows.
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    assert!(!ended(stuck) && !ended(helper), "the helper is still waiting out the grace");
+    task.abort();
+    let _ = task.await;
+    for _ in 0..300 {
+        if ended(stuck) && ended(helper) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(ended(stuck), "the Git that ignored SIGTERM was ended");
+    assert!(ended(helper), "and the helper with it");
+    assert!(!d.path().join(".git/index.lock").exists());
 }

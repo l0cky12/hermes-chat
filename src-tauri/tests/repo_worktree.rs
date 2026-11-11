@@ -879,7 +879,11 @@ async fn a_connection_dropped_between_unlocking_and_removing_leaves_the_worktree
     let real = String::from_utf8(StdCommand::new("sh").arg("-c").arg("command -v git").output().unwrap().stdout).unwrap();
     write_executable(
         &bin.path().join("git"),
-        &format!("#!/bin/sh\n'{}' \"$@\" || exit $?\nfor a; do [ \"$a\" = unlock ] && {{ touch '{}'; exec sleep 300; }}; done\nexit 0\n", real.trim(), marker.display()),
+        &format!(
+            "#!/bin/sh\n'{}' \"$@\" || exit $?\nfor a; do [ \"$a\" = unlock ] && {{ touch '{}'; exec sleep 300; }}; done\nexit 0\n",
+            real.trim(),
+            marker.display()
+        ),
     );
     let pidfile = bin.path().join("helper-pid");
     let path = format!("{}:{}", s(bin.path()), std::env::var("PATH").unwrap());

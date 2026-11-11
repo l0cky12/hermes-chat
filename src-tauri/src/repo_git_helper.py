@@ -84,7 +84,8 @@ def run(argv, cwd, read_only=True, stdin=None, timeout=60, merge_output=False, e
         end_child(proc)
         raise
     finally:
-        if proc in CHILDREN:
+        # Only once it has ended: a child still running stays for main() to stop.
+        if proc.returncode is not None and proc in CHILDREN:
             CHILDREN.remove(proc)
     return proc.returncode, out, err or b""
 
@@ -109,20 +110,23 @@ def end_child(proc):
     """Stops a child that's still running, and everything it started (its process group: Git's hooks too). SIGTERM
     first, so Git removes its lock files on the way out; then, once Git has ended or after STOP_GRACE, SIGKILL for
     whatever is left, such as a hook that ignores SIGTERM. (subprocess.run would SIGKILL Git alone, at once, which
-    leaves a lock such as index.lock or a ref's behind, and the hook running.)"""
+    leaves a lock such as index.lock or a ref's behind, and the hook running.) A stop signal that arrives meanwhile,
+    as when the connection drops during the grace, waits until the child has ended: cut short, it would leave a child
+    that ignores SIGTERM running."""
     def signal_group(sig):
         try:
             os.killpg(proc.pid, sig)
         except OSError:
             pass
 
-    signal_group(signal.SIGTERM)
-    try:
-        proc.wait(timeout=STOP_GRACE)
-    except subprocess.TimeoutExpired:
-        pass
-    signal_group(signal.SIGKILL)
-    proc.wait()
+    with no_stop():
+        signal_group(signal.SIGTERM)
+        try:
+            proc.wait(timeout=STOP_GRACE)
+        except subprocess.TimeoutExpired:
+            pass
+        signal_group(signal.SIGKILL)
+        proc.wait()
 
 
 # Settings the owner's config could change that would make a diff read, or a patch apply, differently from what the
@@ -1445,11 +1449,13 @@ def main():
         sys.stdout.write("\x1ehermes-repo\x1e" + json.dumps(reply))
         sys.stdout.flush()
     finally:
-        # Children first: Git lets go of its own locks as it ends, then the helper's are let go.
-        for proc in list(CHILDREN):
-            end_child(proc)
-        for idx in list(HELD):
-            idx.__exit__()
+        # Children first: Git lets go of its own locks as it ends, then the helper's are let go. A stop signal that
+        # arrives meanwhile waits until all of it is done.
+        with no_stop():
+            for proc in list(CHILDREN):
+                end_child(proc)
+            for idx in list(HELD):
+                idx.__exit__()
 
 
 # main() runs at the end of repo_worktree_helper.py, which Rust sends after this file as one program.
