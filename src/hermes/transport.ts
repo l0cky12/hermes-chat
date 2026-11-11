@@ -580,6 +580,21 @@ export function openSaved(openPipe: OpenPipe, cache: ChatCache, notify?: Notify)
   return Hermes.openSaved(openPipe, cache, notify);
 }
 
+/**
+ * What the app keeps by chat (or request) id, apart for each profile: a copied profile keeps its chats' ids, so one
+ * profile's chat must never stand for another's. A profile name has no spaces.
+ */
+class PerProfile<V> {
+  private readonly byKey = new Map<string, V>();
+  get = (profile: string, id: string) => this.byKey.get(`${profile} ${id}`);
+  has = (profile: string, id: string) => this.byKey.has(`${profile} ${id}`);
+  set = (profile: string, id: string, value: V) => void this.byKey.set(`${profile} ${id}`, value);
+  delete = (profile: string, id: string) => this.byKey.delete(`${profile} ${id}`);
+  get size() {
+    return this.byKey.size;
+  }
+}
+
 export class Hermes {
   private pipe?: Pipe;
   /** The profile the pipe's `/api/ws` was opened for. */
@@ -622,7 +637,7 @@ export class Hermes {
   private snapshot: Snapshot;
   /** Chats this app moved between Active and Settled that Hermes hasn't stored yet: the `pinned` flag each should
    * have (ADR 0002). While a chat is here, this flag beats the one the server lists. */
-  private pinWanted = new Map<string, boolean>();
+  private pinWanted = new PerProfile<boolean>();
   /** The latest write of each chat's pinned flag, so a chat's writes go out one at a time, in order. */
   private pinWrites = new Map<string, Promise<boolean>>();
   /** Chats whose pinned flag was written since the list sync under way read the list, which may predate the write. */
@@ -658,14 +673,14 @@ export class Hermes {
   private botChatsRead?: { gen: number; done: Promise<void> };
   /** Chats archived or restored here whose flag Hermes hasn't confirmed yet: the `archived` flag each should have.
    * While a chat is here, this flag beats the one the server lists. */
-  private archiveWanted = new Map<string, boolean>();
+  private archiveWanted = new PerProfile<boolean>();
   /** The latest archive or restore of each chat, so a chat's writes go out one at a time, in order. */
   private archiveWrites = new Map<string, Promise<boolean>>();
   /** Archives and restores whose outcome couldn't be read back, and the profile and title of each. The next refresh
    * reads them back before saying how they went. */
   private archiveUnsure = new Map<string, { profile: string; title: string }>();
   /** Chats the owner deleted here, or is deleting. A list read before the delete can't bring one back. */
-  private deleted = new Set<string>();
+  private deleted = new PerProfile<true>();
   /** Chats that had a turn running, or an Approval waiting, when the connection dropped. Reconnecting resumes them,
    * which brings back what Hermes is still waiting on. */
   private resumeOnReconnect = new Set<string>();
@@ -673,7 +688,7 @@ export class Hermes {
   private earlyRequests = new Map<string, ServerRequest[]>();
   /** Closed Approval cards, answered here or that Hermes stopped waiting on, by request id. A resume replaces the
    * chat's cards with what Hermes lists, so this keeps one it lists again from coming back. */
-  private closedApprovals = new Map<string, ApprovalItem>();
+  private closedApprovals = new PerProfile<ApprovalItem>();
   /** Approvals Hermes has been told are on screen (`approval.received`), by request id. */
   private shownApprovals = new Set<string>();
   /**
@@ -693,9 +708,9 @@ export class Hermes {
   /** Hermes answered that it has no `approval.received`. */
   private noApprovalReceived = false;
   /** Messages Hermes hasn't accepted yet, so a Stop waits for the turn it stops. */
-  private submitting = new Map<string, Promise<unknown>>();
+  private submitting = new PerProfile<Promise<unknown>>();
   /** Each chat's last message sent from here, until a turn ends, with the stored row Hermes gave it, if any. */
-  private turns = new Map<string, { userId: string; rowId: Promise<number | undefined> }>();
+  private turns = new PerProfile<{ userId: string; rowId: Promise<number | undefined> }>();
   /**
    * Each live session's usage counters as its next turn starts, by runtime id: what that turn's reply is measured from.
    * `unknown` when they can't be known, such as after reattaching mid-turn, so that reply shows no usage.
@@ -716,7 +731,7 @@ export class Hermes {
   private sideAwaiting = new Map<string, number>();
   /** The newest stored row each chat is known to have, from its history and the turns sent from here. A message that
    * may have reached Hermes is looked for only past the row its chat had when it went out. */
-  private knownRow = new Map<string, number>();
+  private knownRow = new PerProfile<number>();
   /** The list sync under way. `next`, once `detach` has ended it: the next sync to begin, whose outcome it reports. */
   private syncing?: { done: Promise<Error | undefined>; next?: Promise<Error | undefined> };
   private abandonedSyncs: ((next: Promise<Error | undefined>) => void)[] = [];
@@ -1766,7 +1781,7 @@ export class Hermes {
     // Search rows don't say whether a chat is pinned, and the list leaves out pinned chats older than its month.
     const pinned = res.results.some((r) => !listed.has(r.id)) ? await this.pinnedIds(profile) : new Set<string>();
     const found = res.results
-      .filter((r) => (archived || !this.isArchived(r)) && !this.deleted.has(r.id) && !this.isBotChatRow(profile, r))
+      .filter((r) => (archived || !this.isArchived(profile, r)) && !this.deleted.has(profile, r.id) && !this.isBotChatRow(profile, r))
       .map((r): Found => {
         const snippet = snippetParts(r.snippet ?? "");
         const role = r.role === "user" || r.role === "assistant" ? r.role : undefined;
@@ -1799,9 +1814,9 @@ export class Hermes {
     const seen = new Set<string>();
     const found = rows.flatMap((r): Found[] => {
       // Every page carries the pinned rows too, archived or not.
-      if (seen.has(r.id) || this.deleted.has(r.id)) return [];
+      if (seen.has(r.id) || this.deleted.has(profile, r.id)) return [];
       seen.add(r.id);
-      const archivedNow = this.isArchived(r);
+      const archivedNow = this.isArchived(profile, r);
       if (archived === "exclude" ? archivedNow : archived === "only" ? !archivedNow : false) return [];
       return [{ ...this.toFound(r, listed.get(r.id), !r.pinned), snippet: [] }];
     });
@@ -1818,7 +1833,7 @@ export class Hermes {
       // A canonical local chat whose starting surface the row doesn't name can't be placed by source.
       ...(r.source === "local" && !localSurface(r.created_source) && { sourceUnknown: true }),
       settled: c?.settled ?? settled,
-      ...(this.isArchived(r) && { archived: true }),
+      ...(this.isArchived(this.profile, r) && { archived: true }),
       updatedAt: Math.max(c?.updatedAt ?? 0, lastActive(r)),
       ...(r.model && { model: r.model }),
     };
@@ -2067,7 +2082,7 @@ export class Hermes {
     // A new session's agent starts its counters from zero.
     this.usageFrom.set(res.session_id, countersOf((res.info as { usage?: unknown } | undefined)?.usage) ?? ZERO_COUNTERS);
     this.runtimeOwners.set(res.session_id, { profile: this.profile, chatId: chat.id });
-    this.pinWanted.set(chat.id, true);
+    this.pinWanted.set(profile, chat.id, true);
     this.update({ chats: [chat, ...this.snapshot.chats] });
     return chat.id;
   }
@@ -2091,10 +2106,13 @@ export class Hermes {
     this.seen(chatId);
     // A chat the list didn't bring totals for, such as an older one opened from a search, reads its own.
     if (!this.snapshot.chats.find((c) => c.id === chatId)?.usage) this.track(this.refreshUsage(chatId));
+    const profile = this.profile;
     try {
       await this.resume(chatId);
       if (this.isViewing(chatId)) this.tellShown(chatId);
     } catch (e) {
+      // Switching profile ends the load; another profile's chat with the same id isn't this one.
+      if (this.profile !== profile) return;
       // A reply sent meanwhile shares this resume and reports the failure itself.
       this.patchChat(chatId, (c) =>
         c.running ? c : { ...c, items: [...withoutLoadError(c.items), { kind: "error", id: LOAD_ERROR_ID, text: `Couldn't load this chat: ${(e as Error).message}` }] },
@@ -2434,7 +2452,7 @@ export class Hermes {
       if (this.generation !== generation || now.runtimeId !== sid) throw new Error("The connection to Hermes changed meanwhile. Nothing was sent; finish it from the top of the branch.");
       const why =
         replayBlocked(now, this.snapshot.status === "connected") ??
-        (this.submitting.has(chatId) ? "A message to this branch is on its way. Nothing else was sent; look at the branch before you finish it." : undefined);
+        (this.submitting.has(profile, chatId) ? "A message to this branch is on its way. Nothing else was sent; look at the branch before you finish it." : undefined);
       if (why) throw new Error(why);
     };
     let spine = await read();
@@ -2555,7 +2573,7 @@ export class Hermes {
     const links = this.profile === profile ? this.snapshot.branches.links : this.cache.loadBranches(profile).links;
     const { rows, complete } = await this.listedSince(profile, a.startedAt);
     const fresh = [...new Map(rows.map((r) => [r.id, r])).values()].filter(
-      (r) => r.parent_session_id === a.parentId && !a.before.includes(r.id) && !links[r.id] && !this.deleted.has(r.id),
+      (r) => r.parent_session_id === a.parentId && !a.before.includes(r.id) && !links[r.id] && !this.deleted.has(profile, r.id),
     );
     // Exactly the rows asked for, and no more: a longer branch from a later message shares the same first rows.
     const exact: SessionRow[] = [];
@@ -2636,7 +2654,7 @@ export class Hermes {
       return [];
     }
     this.updateBranches(profile, (b) => ({ links: { ...b.links, [chat.id]: link }, attempts: b.attempts.filter((x) => x.key !== a.key) }));
-    this.pinWanted.set(chat.id, true);
+    this.pinWanted.set(profile, chat.id, true);
     this.revealed.add(chat.id);
     this.update({ chats: [chat, ...this.snapshot.chats.filter((c) => c.id !== chat.id)] });
     this.saveList(profile, this.snapshot.chats);
@@ -2662,7 +2680,7 @@ export class Hermes {
   private keepElsewhere(chatId: string, a: BranchAttempt, profile: string) {
     const link: BranchLink = { parentId: a.parentId, parentTitle: a.parentTitle, point: a.point, at: Date.now(), ...(a.variant && { variant: a.variant }) };
     this.updateBranches(profile, (b) => ({ links: { ...b.links, [chatId]: link }, attempts: b.attempts.filter((x) => x.key !== a.key) }));
-    this.pinWanted.set(chatId, true);
+    this.pinWanted.set(profile, chatId, true);
     this.track(this.writePin(chatId, profile));
   }
 
@@ -2757,7 +2775,7 @@ export class Hermes {
   async retry(chatId: string, itemId: string): Promise<Delivery | undefined> {
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
     const first = chat?.items.find((i): i is OutgoingItem => i.id === itemId && isOutgoing(i));
-    if (!chat || !first || first.outgoing.state === "sending" || chat.running || this.submitting.has(chatId)) return undefined;
+    if (!chat || !first || first.outgoing.state === "sending" || chat.running || this.submitting.has(this.profile, chatId)) return undefined;
     const profile = this.profile;
     this.setOutgoing(profile, chatId, itemId, () => null);
     const { delivery, itemId: again } = await this.deliver(chatId, first.text, first.outgoing.attachments ?? [], undefined, first.outgoing.skill);
@@ -2878,7 +2896,7 @@ export class Hermes {
     for (const [chatId, q] of Object.entries(this.snapshot.queues)) {
       if (!q.items.length || q.paused !== undefined || this.queueHolds.has(chatId)) continue;
       const chat = this.snapshot.chats.find((c) => c.id === chatId);
-      if (!chat || chat.running || chat.loading || this.resuming.has(chatId) || this.submitting.has(chatId)) continue;
+      if (!chat || chat.running || chat.loading || this.resuming.has(chatId) || this.submitting.has(this.profile, chatId)) continue;
       if (chat.items.some((i) => isOutgoing(i) || isWaiting(i))) continue;
       const profile = this.profile;
       if (!chat.runtimeId) {
@@ -2928,8 +2946,10 @@ export class Hermes {
     if (skill) text = callText(skill);
     const profile = this.profile;
     const activating = chat.settled;
-    const wantedBefore = this.pinWanted.get(chatId);
-    if (activating) this.pinWanted.set(chatId, true);
+    // A message that goes nowhere leaves a reply already running as it is, and ended if it ended meanwhile.
+    const stillRunning = (c: Chat) => !!chat.running && !!c.running;
+    const wantedBefore = this.pinWanted.get(profile, chatId);
+    if (activating) this.pinWanted.set(profile, chatId, true);
     const user: OutgoingItem = {
       kind: "user",
       id: nextId(chat.items, "u"),
@@ -2953,10 +2973,10 @@ export class Hermes {
     if (queued && !kept) {
       // Not sent: its queue keeps it instead.
       if (activating) {
-        if (wantedBefore === undefined) this.pinWanted.delete(chatId);
-        else this.pinWanted.set(chatId, wantedBefore);
+        if (wantedBefore === undefined) this.pinWanted.delete(profile, chatId);
+        else this.pinWanted.set(profile, chatId, wantedBefore);
       }
-      this.patchChat(chatId, (c) => ({ ...c, running: false, settled: activating || c.settled, items: c.items.filter((i) => i.id !== user.id) }));
+      this.patchChat(chatId, (c) => ({ ...c, running: stillRunning(c), settled: activating || c.settled, items: c.items.filter((i) => i.id !== user.id) }));
       this.saveOutbox(chatId);
       return { delivery: { delivery: "unsent", reason: PAUSED.unsaved } };
     }
@@ -2966,7 +2986,7 @@ export class Hermes {
       let shown: string | undefined;
       const goingOut = (prompt: string) =>
         this.setOutgoing(profile, chatId, user.id, (r) =>
-          withOutgoing(r, { sent: { prompt: shown ?? prompt, ...(this.knownRow.has(chatId) && { after: this.knownRow.get(chatId) }) } }),
+          withOutgoing(r, { sent: { prompt: shown ?? prompt, ...(this.knownRow.has(profile, chatId) && { after: this.knownRow.get(profile, chatId) }) } }),
         );
       let told: ChatContext | undefined;
       // A compaction Hermes hasn't answered yet goes first: the message mustn't land while it rewrites the context.
@@ -2984,37 +3004,37 @@ export class Hermes {
         const compacting = this.compacting.get(chatId);
         return compacting ? compacting.then(go) : go();
       });
-      this.submitting.set(chatId, submitting);
+      this.submitting.set(profile, chatId, submitting);
       const rowId = submitting.then(
         (r) => (typeof r.user_row_id === "number" ? r.user_row_id : undefined),
         () => undefined,
       );
-      this.turns.set(chatId, { userId: user.id, rowId });
+      this.turns.set(profile, chatId, { userId: user.id, rowId });
       let res: Submitted;
       try {
         res = await submitting;
         if (res.status === "queued") queued?.held();
       } finally {
-        if (this.submitting.get(chatId) === submitting) this.submitting.delete(chatId);
+        if (this.submitting.get(profile, chatId) === submitting) this.submitting.delete(profile, chatId);
       }
       this.setOutgoing(profile, chatId, user.id, confirmed);
       told?.accepted(chatId);
-      this.noteRows(chatId, [res.user_row_id]);
+      this.noteRows(profile, chatId, [res.user_row_id]);
       // Pin now if Hermes has stored the session; a new chat may not have its row yet, so the end of the turn
       // tries again.
-      if (this.pinWanted.get(chatId)) this.track(this.writePin(chatId, profile));
+      if (this.pinWanted.get(profile, chatId)) this.track(this.writePin(chatId, profile));
       return { delivery: { delivery: "accepted" }, itemId: user.id };
     } catch (e) {
       const unknown = e instanceof PromptUnconfirmedError;
       const reason = unknown ? `The connection dropped before Hermes confirmed it (${(e as Error).message}).` : (e as Error).message;
       if (activating) {
-        if (wantedBefore === undefined) this.pinWanted.delete(chatId);
-        else this.pinWanted.set(chatId, wantedBefore);
+        if (wantedBefore === undefined) this.pinWanted.delete(profile, chatId);
+        else this.pinWanted.set(profile, chatId, wantedBefore);
       }
       this.setOutgoing(profile, chatId, user.id, (r) => withOutgoing(r, { state: unknown ? "unknown" : "failed", reason }));
       // A message Hermes turned down begins no turn, so the next turn there isn't taken for its.
-      if (!unknown && this.turns.get(chatId)?.userId === user.id) this.turns.delete(chatId);
-      this.patchChat(chatId, (c) => ({ ...c, running: false, settled: activating || c.settled }));
+      if (!unknown && this.turns.get(profile, chatId)?.userId === user.id) this.turns.delete(profile, chatId);
+      if (this.profile === profile) this.patchChat(chatId, (c) => ({ ...c, running: stillRunning(c), settled: activating || c.settled }));
       return { delivery: { delivery: unknown ? "unknown" : "unsent", reason }, itemId: user.id };
     }
   }
@@ -3030,12 +3050,13 @@ export class Hermes {
    * counts as settled.
    */
   async settleAll(chatIds: string[]): Promise<string[]> {
+    const profile = this.profile;
     const wrote = await Promise.all(
       chatIds.map(async (id) => {
         if (await this.setSettled(id, true)) return true;
-        if (this.pinWanted.get(id) === false) {
-          this.pinWanted.delete(id);
-          this.patchChat(id, (c) => ({ ...c, settled: false }));
+        if (this.pinWanted.get(profile, id) === false) {
+          this.pinWanted.delete(profile, id);
+          if (this.profile === profile) this.patchChat(id, (c) => ({ ...c, settled: false }));
         }
         return false;
       }),
@@ -3079,9 +3100,9 @@ export class Hermes {
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
     if (!chat || chat.running) return false;
     const profile = this.profile;
-    this.deleted.add(chatId);
-    this.pinWanted.delete(chatId);
-    this.archiveWanted.delete(chatId);
+    this.deleted.set(profile, chatId, true);
+    this.pinWanted.delete(profile, chatId);
+    this.archiveWanted.delete(profile, chatId);
 
     this.archiveUnsure.delete(chatId);
     this.revealed.delete(chatId);
@@ -3110,7 +3131,7 @@ export class Hermes {
       else this.cache.saveQueue(profile, chatId, undefined);
       return true;
     } catch (e) {
-      this.deleted.delete(chatId);
+      this.deleted.delete(profile, chatId);
       if (this.profile !== profile) return false;
       const chats = this.snapshot.chats.some((c) => c.id === chatId) ? this.snapshot.chats : [...this.snapshot.chats, chat];
       this.update({ chats, syncError: `Couldn't delete "${chat.title}": ${(e as Error).message}` });
@@ -3216,7 +3237,7 @@ export class Hermes {
     };
     if (!stoppable()) return;
     try {
-      await this.submitting.get(chatId);
+      await this.submitting.get(this.profile, chatId);
     } catch {
       return; // send() has shown why the message didn't go.
     }
@@ -3377,7 +3398,7 @@ export class Hermes {
   async compact(chatId: string): Promise<CompactResult> {
     const { runtimeId, still } = this.liveScope(chatId);
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
-    if (chat?.running || this.submitting.has(chatId)) throw new Error("Wait for the reply to finish: Hermes compacts only between replies.");
+    if (chat?.running || this.submitting.has(this.profile, chatId)) throw new Error("Wait for the reply to finish: Hermes compacts only between replies.");
     if (this.compacting.has(chatId)) return { kind: "busy", message: "Hermes is already compacting this chat." };
     const asked = this.request("session.compress", { session_id: runtimeId });
     const settled = asked.catch(() => undefined);
@@ -3669,12 +3690,12 @@ export class Hermes {
     }
     if (type === "message.start") {
       this.turnStart.set(chat.id, chat.items.at(-1)?.id ?? null);
-      if (this.turns.has(chat.id)) this.unprompted.delete(chat.id);
+      if (this.turns.has(this.profile, chat.id)) this.unprompted.delete(chat.id);
       else this.unprompted.add(chat.id);
       this.kanbanWatch.turnStarted([chat.id, ...(chat.lineage ?? [])]);
     }
     if (type === "tool.complete") {
-      const call = chat.items.find((i) => i.kind === "tool" && i.id === textOf(payload.tool_id));
+      const call = chat.items[runningCall(chat.items, payload.tool_id)];
       const task = call?.kind === "tool" && call.name === "kanban_create" ? parseKanbanCreate(call.args, payload.result, Date.now(), this.kanbanWatch.currentBoard()) : undefined;
       if (task) this.kanbanWatch.add(task, chat.id);
     }
@@ -3700,14 +3721,14 @@ export class Hermes {
     );
     if (type === "message.complete") {
       const receipt = (payload.persisted_turn ?? {}) as PersistedTurn;
-      this.noteRows(chat.id, [receipt.user_row_id, receipt.final_assistant_row_id, ...(Array.isArray(receipt.row_ids) ? receipt.row_ids : [])]);
+      this.noteRows(this.profile, chat.id, [receipt.user_row_id, receipt.final_assistant_row_id, ...(Array.isArray(receipt.row_ids) ? receipt.row_ids : [])]);
       // Such a turn leaves alone a message sent from here meanwhile, which Hermes holds until the turn ends.
       if (unprompted) this.track(this.showUnsentPrompt(chat.id, receipt, from));
       else this.stampTurn(chat.id, receipt);
     }
     if (type === "message.complete") this.track(this.refreshUsage(chat.id));
     // By the end of a turn Hermes has stored the session, so a pin that failed earlier can succeed.
-    if (type === "message.complete" && this.pinWanted.has(chat.id)) this.track(this.writePin(chat.id));
+    if (type === "message.complete" && this.pinWanted.has(this.profile, chat.id)) this.track(this.writePin(chat.id));
     // The finished reply is newer than the read watermark, though the owner watched it come in.
     if (type === "message.complete" && this.isViewing(chat.id)) this.seen(chat.id);
     // A turn ends once; a repeated end finds the chat no longer running.
@@ -3761,8 +3782,8 @@ export class Hermes {
    * Anything not found that way keeps no time; reopening the chat after a reconnect reads every time from history.
    */
   private stampTurn(chatId: string, receipt: PersistedTurn) {
-    const turn = this.turns.get(chatId);
-    this.turns.delete(chatId);
+    const turn = this.turns.get(this.profile, chatId);
+    this.turns.delete(this.profile, chatId);
     const items = this.snapshot.chats.find((c) => c.id === chatId)?.items ?? [];
     const from = turn ? items.findIndex((i) => i.id === turn.userId) : -1;
     if (!turn || from < 0) return;
@@ -3856,7 +3877,7 @@ export class Hermes {
       const shown = new Set(c.items.map((i) => i.id));
       const items = [...c.items];
       for (const r of reqs.filter((r) => r.method === "approval" && !shown.has(r.id) && shown.add(r.id))) {
-        const closed = this.closedApprovals.get(r.id);
+        const closed = this.closedApprovals.get(this.profile, r.id);
         if (!closed) items.push(approvalItem(r));
         else if (closed.answer)
           items.push(
@@ -4091,7 +4112,7 @@ export class Hermes {
           i.kind === "assistant" && i.rowId !== undefined && measured.has(i.rowId) ? { ...i, usage: measured.get(i.rowId) } : i,
         );
         const readBack = messages.map((m) => ({ role: m.role, text: m.text ?? "", rowId: m.row_id }));
-        this.noteRows(chatId, readBack.map((m) => m.rowId));
+        this.noteRows(profile, chatId, readBack.map((m) => m.rowId));
         const stale = this.staleItems.get(chatId) ?? 0;
         this.staleItems.delete(chatId);
         const early = this.earlyRequests.get(res.session_id) ?? [];
@@ -4101,7 +4122,7 @@ export class Hermes {
         // Hermes let go of the session meanwhile and the card stays, closed.
         const lost = (items: Item[]) => endWaitingApprovals(items.filter((i) => isWaiting(i) && !asking.some((r) => r.id === i.id)), "lost");
         for (const i of this.snapshot.chats.find((c) => c.id === chatId)?.items ?? [])
-          if (i.kind === "approval" && (i.answer || i.ended)) this.closedApprovals.set(i.id, i);
+          if (i.kind === "approval" && (i.answer || i.ended)) this.closedApprovals.set(profile, i.id, i);
         // The Saved copy, if shown, is among the stale items. Messages sent from here that Hermes hasn't confirmed go
         // last, and the history settles any that may have reached it (`reconcile`): read back, it wins.
         this.patchChat(chatId, (c) => ({
@@ -4134,7 +4155,7 @@ export class Hermes {
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
     if (!chat || chat.running || !!chat.archived === archived) return Promise.resolve(false);
     const profile = this.profile;
-    this.archiveWanted.set(chatId, archived);
+    this.archiveWanted.set(profile, chatId, archived);
     this.archiveUnsure.delete(chatId);
     // A restored chat older than the list's month stays in it.
     if (!archived) this.revealed.add(chatId);
@@ -4154,7 +4175,7 @@ export class Hermes {
    * as the owner wanted it.
    */
   private async writeArchived(chatId: string, title: string, profile: string): Promise<boolean> {
-    const archived = this.archiveWanted.get(chatId);
+    const archived = this.archiveWanted.get(profile, chatId);
     if (archived === undefined) return false;
     let failure: Error | undefined;
     try {
@@ -4167,12 +4188,12 @@ export class Hermes {
       now = await this.readArchived(chatId, profile);
     } catch (e) {
       // The owner has changed their mind meanwhile; the next write reads back the chat.
-      if (this.archiveWanted.get(chatId) !== archived) return false;
+      if (this.archiveWanted.get(profile, chatId) !== archived) return false;
       this.archiveUnsure.set(chatId, { profile, title });
       if (this.profile === profile) this.update({ syncError: unsureMessage(title, archived, e as Error) });
       return false;
     }
-    if (this.archiveWanted.get(chatId) === archived) this.showArchived(chatId, title, profile, archived, now, failure);
+    if (this.archiveWanted.get(profile, chatId) === archived) this.showArchived(chatId, title, profile, archived, now, failure);
     return now === archived;
   }
 
@@ -4181,11 +4202,11 @@ export class Hermes {
    * when it's gone), and says why when that isn't what the owner asked for.
    */
   private showArchived(chatId: string, title: string, profile: string, wanted: boolean, now: boolean | undefined, failure?: Error) {
-    this.archiveWanted.delete(chatId);
+    this.archiveWanted.delete(profile, chatId);
     this.archiveUnsure.delete(chatId);
     if (this.profile !== profile) return;
     if (now === undefined) {
-      this.deleted.add(chatId);
+      this.deleted.set(profile, chatId, true);
       this.update({
         chats: this.snapshot.chats.filter((c) => c.id !== chatId),
         syncError: `"${title}" is no longer in Hermes: another Hermes client deleted it.`,
@@ -4212,7 +4233,7 @@ export class Hermes {
   /** Reads back the archives and restores of the profile whose outcome wasn't known. */
   private async checkUnsureArchives(profile: string) {
     for (const [chatId, unsure] of this.archiveUnsure) {
-      const wanted = this.archiveWanted.get(chatId);
+      const wanted = this.archiveWanted.get(profile, chatId);
       if (unsure.profile !== profile || wanted === undefined) continue;
       try {
         const now = await this.readArchived(chatId, profile);
@@ -4224,15 +4245,15 @@ export class Hermes {
   }
 
   /** Whether a listed or found chat is archived: as the owner wants it while that isn't confirmed, else as Hermes has it. */
-  private isArchived(r: Pick<SessionRow, "id" | "archived">): boolean {
-    return this.archiveWanted.get(r.id) ?? !!r.archived;
+  private isArchived(profile: string, r: Pick<SessionRow, "id" | "archived">): boolean {
+    return this.archiveWanted.get(profile, r.id) ?? !!r.archived;
   }
 
   /** Resolves to false only when the write to Hermes failed. */
   private setSettled(chatId: string, settled: boolean): Promise<boolean> {
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
     if (!chat || chat.settled === settled) return Promise.resolve(true);
-    this.pinWanted.set(chatId, !settled);
+    this.pinWanted.set(this.profile, chatId, !settled);
     this.patchChat(chatId, (c) => ({ ...c, settled }));
     return this.writePin(chatId);
   }
@@ -4247,13 +4268,14 @@ export class Hermes {
    */
   private writePin(chatId: string, profile = this.profile): Promise<boolean> {
     const write = (this.pinWrites.get(chatId) ?? Promise.resolve(true)).then(async () => {
-      const pinned = this.pinWanted.get(chatId);
+      const pinned = this.pinWanted.get(profile, chatId);
       if (pinned === undefined) return true;
-      const running = this.snapshot.chats.find((c) => c.id === chatId)?.running;
+      const running = this.profile === profile && this.snapshot.chats.find((c) => c.id === chatId)?.running;
       try {
         await this.patchSession(chatId, profile, { pinned });
+        if (this.pinWanted.get(profile, chatId) === pinned) this.pinWanted.delete(profile, chatId);
+        if (this.profile !== profile) return true;
         this.pinnedSinceListRead.add(chatId);
-        if (this.pinWanted.get(chatId) === pinned) this.pinWanted.delete(chatId);
         this.patchChat(chatId, (c) => (c.settledHere ? { ...c, settledHere: undefined } : c));
         return true;
       } catch (e) {
@@ -4261,7 +4283,7 @@ export class Hermes {
           this.keepSettledHere(chatId, profile, pinned);
           return true;
         }
-        if (!running) this.update({ syncError: `Couldn't keep a chat ${pinned ? "Active" : "Settled"} on the server: ${(e as Error).message}` });
+        if (!running && this.profile === profile) this.update({ syncError: `Couldn't keep a chat ${pinned ? "Active" : "Settled"} on the server: ${(e as Error).message}` });
         return false;
       }
     });
@@ -4277,7 +4299,7 @@ export class Hermes {
    */
   private keepSettledHere(chatId: string, profile: string, pinned: boolean) {
     if (this.profile !== profile) return;
-    if (this.pinWanted.get(chatId) === pinned) this.pinWanted.delete(chatId);
+    if (this.pinWanted.get(profile, chatId) === pinned) this.pinWanted.delete(profile, chatId);
     this.patchChat(chatId, (c) => ({ ...c, settledHere: true }));
     this.saveList(profile, this.snapshot.chats);
   }
@@ -4347,17 +4369,17 @@ export class Hermes {
     const outbox = loadOutbox(this.cache, profile);
     const readOnScreen = new Set<string>();
     const listed = [...rows.values()]
-      .filter((r) => (this.isArchived(r) ? archivedListed : lastActive(r) >= cutoff) && !this.deleted.has(r.id))
+      .filter((r) => (this.isArchived(profile, r) ? archivedListed : lastActive(r) >= cutoff) && !this.deleted.has(profile, r.id))
       .map((r): Chat => {
         const c = known.get(r.id);
         // A row read before this app's latest write is stale; the chat stays where the owner put it until the next sync.
         // So is the flag of a chat whose state is kept here.
-        const wanted = this.pinWanted.get(r.id) ?? (c && (c.settledHere || this.pinnedSinceListRead.has(r.id)) ? !c.settled : undefined);
+        const wanted = this.pinWanted.get(profile, r.id) ?? (c && (c.settledHere || this.pinnedSinceListRead.has(r.id)) ? !c.settled : undefined);
         // A write under way may still change the flag, so only an idle chat's flag can confirm it or need a retry. A
         // message still on the way may fail, and the chat then goes back to Settled, so it isn't pinned before then.
-        if (this.pinWanted.has(r.id) && !this.pinWrites.has(r.id) && !this.pinnedSinceListRead.has(r.id)) {
-          if (wanted === !!r.pinned) this.pinWanted.delete(r.id);
-          else if (!this.submitting.has(r.id)) this.track(this.writePin(r.id));
+        if (this.pinWanted.has(profile, r.id) && !this.pinWrites.has(r.id) && !this.pinnedSinceListRead.has(r.id)) {
+          if (wanted === !!r.pinned) this.pinWanted.delete(profile, r.id);
+          else if (!this.submitting.has(profile, r.id)) this.track(this.writePin(r.id, profile));
         }
         // A row read before this app marked the chat read is stale too.
         const readHere = this.readWrites.has(r.id) || this.readSinceListRead.has(r.id);
@@ -4373,7 +4395,7 @@ export class Hermes {
           // A branch made here is this app's, though Hermes stores it with the source the parent was resumed as.
           source: this.snapshot.branches.links[r.id] ? "app" : toSource(r.source, r.created_source),
           settled: !(wanted ?? r.pinned),
-          archived: this.isArchived(r) || undefined,
+          archived: this.isArchived(profile, r) || undefined,
           updatedAt: Math.max(c?.updatedAt ?? 0, lastActive(r)),
           unread: !!r.unread && !readHere && !onScreen,
           // List rows carry the stored token and cost totals too.
@@ -4388,7 +4410,7 @@ export class Hermes {
     // One Hermes now lists as a Bot Chat, such as an ordinary chat renamed to the title in another client, stays out
     // of the list from now on, and is marked so every Bot Chat rule applies to it (ADR 0066).
     const onThisConnection = this.snapshot.chats
-      .filter((c) => (c.runtimeId || this.revealed.has(c.id) || this.archiveWanted.has(c.id)) && !listedIds.has(c.id))
+      .filter((c) => (c.runtimeId || this.revealed.has(c.id) || this.archiveWanted.has(profile, c.id)) && !listedIds.has(c.id))
       .map((c) => (botChats.has(c.id) && !c.bot ? { ...c, bot: true, title: BOT_CHAT_TITLE } : c));
     const chats = [...onThisConnection, ...listed];
     const wasUnlisted = !this.hasListed();
@@ -4452,7 +4474,7 @@ export class Hermes {
     const query = new URLSearchParams({ profile, order: "recent", limit: String(OTHER_PAGE_SIZE), offset: "0", exclude_sources: "cron" });
     const res = (await this.rest("GET", `api/sessions?${query}`)) as SessionPage;
     const chats = res.sessions
-      .filter((r) => !r.archived && !this.deleted.has(r.id) && !this.isBotChatRow(profile, r))
+      .filter((r) => !r.archived && !this.deleted.has(profile, r.id) && !this.isBotChatRow(profile, r))
       .map((r): ListedChat => ({ id: r.id, title: listTitle(r), at: lastActive(r), unread: !!r.unread && lastActive(r) >= cutoff, source: toSource(r.source) }));
     // As in syncOnce: the page also carries every pinned row, and the unpinned ones follow recency.
     const passedCutoff = res.sessions.some((r) => !r.pinned && lastActive(r) < cutoff);
@@ -4798,9 +4820,9 @@ export class Hermes {
   }
 
   /** Notes stored row ids seen in a chat, for `knownRow`. */
-  private noteRows(chatId: string, ids: unknown[]) {
-    const newest = Math.max(this.knownRow.get(chatId) ?? -Infinity, ...ids.filter((n): n is number => typeof n === "number"));
-    if (Number.isFinite(newest)) this.knownRow.set(chatId, newest);
+  private noteRows(profile: string, chatId: string, ids: unknown[]) {
+    const newest = Math.max(this.knownRow.get(profile, chatId) ?? -Infinity, ...ids.filter((n): n is number => typeof n === "number"));
+    if (Number.isFinite(newest)) this.knownRow.set(profile, chatId, newest);
   }
 
   /**
@@ -5329,6 +5351,16 @@ function turnFrom(items: Item[], from?: string | null): number {
   return at < 0 ? -1 : at + 1;
 }
 
+/** Where the call a `tool.complete` names is: the latest still running with that call id, which a provider may reuse. */
+function runningCall(items: Item[], toolId: unknown): number {
+  const callId = textOf(toolId);
+  for (let at = items.length - 1; callId !== undefined && at >= 0; at--) {
+    const i = items[at];
+    if (i.kind === "tool" && i.callId === callId && i.status === "running") return at;
+  }
+  return -1;
+}
+
 // Fold one session event into a chat. Text deltas extend the trailing assistant item, or start a new one
 // after a tool call; reasoning deltas do the same with thinking items. `from` is the last item before the running
 // turn's `message.start`: a turn Hermes starts by itself has no message from the owner before it, so the item it would
@@ -5363,12 +5395,12 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: st
       return { ...c, items, updatedAt: Date.now() };
     }
     case "tool.start": {
-      const id = textOf(p.tool_id);
-      if (id === undefined) return c;
+      const callId = textOf(p.tool_id);
+      if (callId === undefined) return c;
       items.push({
         kind: "tool",
-        id,
-        callId: id,
+        id: freeId(items, callId),
+        callId,
         name: str(p.name) ?? "tool",
         args: obj(p.args),
         preview: str(p.preview),
@@ -5376,22 +5408,14 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: st
       });
       return { ...c, items };
     }
-    case "tool.complete":
-      return {
-        ...c,
-        items: items.map((i) =>
-          i.kind === "tool" && i.id === textOf(p.tool_id)
-            ? {
-                ...i,
-                status: "done",
-                durationS: num(p.duration_s),
-                // A screenshot inside it stays on the server (ADR 0061).
-                result: toolResultText(p.result),
-                summary: str(p.summary),
-              }
-            : i,
-        ),
-      };
+    case "tool.complete": {
+      const at = runningCall(items, p.tool_id);
+      const call = items[at];
+      if (call?.kind !== "tool") return c;
+      // A screenshot inside the result stays on the server (ADR 0061).
+      items[at] = { ...call, status: "done", durationS: num(p.duration_s), result: toolResultText(p.result), summary: str(p.summary) };
+      return { ...c, items };
+    }
     // Every second or so while a turn runs.
     case "session.usage":
       return { ...c, live: withLive(c.live, undefined, p.usage) };
