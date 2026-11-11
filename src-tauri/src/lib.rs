@@ -1,3 +1,4 @@
+mod backlog;
 pub mod backup;
 #[cfg(target_os = "linux")]
 pub mod browser;
@@ -1612,7 +1613,8 @@ async fn terminal_open(
     })
 }
 
-/// Async, so a terminal that isn't reading can't hold up the window.
+/// Hands what the owner typed to terminal `id`'s writing thread (terminal.rs), so a program that isn't reading holds
+/// up neither the window nor the runtime.
 #[tauri::command]
 async fn terminal_write(terminals: State<'_, terminal::Terminals>, id: u64, data: String) -> Result<(), terminal::TerminalError> {
     terminals.write(id, data.as_bytes())

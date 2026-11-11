@@ -6,18 +6,26 @@
 //! Each terminal is a session of its own, closed by `close`, by ssh exiting, or by the app exiting (the PTY closes, and
 //! ssh gets a hangup).
 //!
+//! What the owner types is written to the PTY by a thread of the session's own, so a program that isn't reading holds
+//! up only that thread. Up to `INPUT_BUDGET` waits for it, in order; past that a write is refused, and says why.
+//!
 //! The PTY is the platform's own (`pty`): openpty on Linux, ConPTY on Windows. On Windows, closing the pseudo console
 //! sends everything still attached to it a close event, which is that platform's hangup.
 
+use crate::backlog::Backlog;
 use base64::Engine;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokio::process::Command;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
+
+/// How much typed or pasted input may wait for a program that isn't reading it. A program that is reads what it is
+/// sent at once, and a megabyte is far more than anyone types; one paste larger than this still goes when nothing waits.
+const INPUT_BUDGET: usize = 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TerminalError {
@@ -29,8 +37,6 @@ pub enum TerminalError {
     Spawn(String),
     #[error("That terminal has closed.")]
     Gone,
-    #[error("Couldn't send to the terminal: {0}")]
-    Write(String),
     #[error("The program in this terminal isn't taking input, so that wasn't sent. Wait for it, or close the terminal.")]
     NotTakingInput,
 }
@@ -52,8 +58,11 @@ pub enum TerminalEvent {
 }
 
 struct Session {
-    /// The PTY's master side: writes go to ssh as typed; also sized from here.
+    /// The PTY's master side, sized from here.
     master: pty::Master,
+    /// What the owner typed, on its way to the writing thread. Dropped, the thread ends once it has written what waits.
+    input: mpsc::UnboundedSender<Vec<u8>>,
+    waiting: Arc<Backlog>,
     /// Ends ssh. Dropped with the session, which ends it too.
     kill: Option<oneshot::Sender<()>>,
 }
@@ -156,20 +165,40 @@ impl Terminals {
             on_event(TerminalEvent::Exit { code });
         });
 
+        let (input, mut typed) = mpsc::unbounded_channel::<Vec<u8>>();
+        let waiting = Arc::new(Backlog::new(INPUT_BUDGET));
+        let (pty, written) = (master.clone(), waiting.clone());
+        std::thread::spawn(move || {
+            while let Some(data) = typed.blocking_recv() {
+                let wrote = pty.write(&data);
+                written.written(data.len());
+                // The PTY has closed, so nothing more can go.
+                if wrote.is_err() {
+                    break;
+                }
+            }
+        });
+
         let mut next = self.next.lock().unwrap();
         *next += 1;
-        self.open.lock().unwrap().insert(*next, Session { master, kill: Some(kill) });
+        self.open.lock().unwrap().insert(*next, Session { master, input, waiting, kill: Some(kill) });
         Ok(*next)
     }
 
-    /// Sends what the owner typed or pasted to terminal `id`.
+    /// Sends what the owner typed or pasted to terminal `id`, without waiting for the program to read it.
     pub fn write(&self, id: u64, data: &[u8]) -> Result<(), TerminalError> {
-        self.with_master(id, |m| m.write(data).map_err(|e| TerminalError::Write(e.to_string())))
+        let open = self.open.lock().unwrap();
+        let session = open.get(&id).filter(|s| !s.input.is_closed()).ok_or(TerminalError::Gone)?;
+        if !session.waiting.take(data.len()) {
+            return Err(TerminalError::NotTakingInput);
+        }
+        session.input.send(data.to_vec()).map_err(|_| TerminalError::Gone)
     }
 
     /// Tells terminal `id`, and so the shell on the server, its new size.
     pub fn resize(&self, id: u64, cols: u16, rows: u16) -> Result<(), TerminalError> {
-        self.with_master(id, |m| m.resize(cols, rows).map_err(|e| TerminalError::Pty(e.to_string())))
+        let master = self.open.lock().unwrap().get(&id).map(|s| s.master.clone()).ok_or(TerminalError::Gone)?;
+        master.resize(cols, rows).map_err(|e| TerminalError::Pty(e.to_string()))
     }
 
     /// Ends terminal `id`'s ssh. Its Exit event still comes. Closing one that has gone does nothing.
@@ -179,11 +208,6 @@ impl Terminals {
                 let _ = kill.send(());
             }
         }
-    }
-
-    fn with_master<T>(&self, id: u64, f: impl FnOnce(&pty::Master) -> Result<T, TerminalError>) -> Result<T, TerminalError> {
-        let master = self.open.lock().unwrap().get(&id).map(|s| s.master.clone()).ok_or(TerminalError::Gone)?;
-        f(&master)
     }
 }
 
