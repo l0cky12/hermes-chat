@@ -1,3 +1,4 @@
+pub mod annotate;
 pub mod backup;
 #[cfg(target_os = "linux")]
 pub mod browser;
