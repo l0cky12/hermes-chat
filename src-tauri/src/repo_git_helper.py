@@ -8,6 +8,7 @@
 #
 # Kept to the Python 3.8 standard library.
 
+import contextlib
 import hashlib
 import json
 import os
@@ -18,6 +19,8 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 VERSION = 1
 # The most diff text one answer carries. A bigger diff is cut, and says so.
@@ -29,6 +32,10 @@ BINARY_SNIFF_FILES = 500
 BINARY_SNIFF_BYTES = 8000
 # The most lines of context a diff can ask for. "Whole file" asks for this many.
 MAX_CONTEXT = 1000000
+# The most of what Git and hooks print that one answer carries. The end is kept: that's where a failure says why.
+MAX_OUTPUT = 256 * 1024
+# How long a child gets to end on SIGTERM (Git lets go of its lock files then) before it gets SIGKILL.
+STOP_GRACE = 5
 
 
 class Refusal(Exception):
@@ -60,22 +67,66 @@ def run(argv, cwd, read_only=True, stdin=None, timeout=60, merge_output=False, e
     """(exit status, stdout bytes, stderr bytes) of `argv`, which is always git or gh, never a shell."""
     if argv[0] not in ("git", "gh"):
         raise Refusal("internal", "Only git and gh are run.")
+    # A stop signal waits until the child is in CHILDREN: if it ended the helper inside Popen, the child would be
+    # running with nobody holding its handle to stop it. From then on, main() stops it however the helper ends.
+    with no_stop():
+        proc = spawn(argv, cwd, stdin, merge_output, read_only, extra_env)
+        if TEST_STOP_AT and TEST_STOP_AT in argv:
+            os.kill(os.getpid(), signal.SIGTERM)
+        CHILDREN.append(proc)
     try:
-        proc = subprocess.run(
+        out, err = proc.communicate(stdin, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        end_child(proc)
+        raise Refusal("timeout", "%s %s took longer than %d s, so it was stopped." % (argv[0], argv[1] if len(argv) > 1 else "", timeout))
+    except BaseException:
+        # A stop signal (the connection dropped) or a bug: the child doesn't outlive the helper.
+        end_child(proc)
+        raise
+    finally:
+        # Only once it has ended: a child still running stays for main() to stop.
+        if proc.returncode is not None and proc in CHILDREN:
+            CHILDREN.remove(proc)
+    return proc.returncode, out, err or b""
+
+
+def spawn(argv, cwd, stdin, merge_output, read_only, extra_env):
+    try:
+        return subprocess.Popen(
             argv,
             cwd=cwd,
-            input=stdin,
-            stdin=None if stdin is not None else subprocess.DEVNULL,
+            # Its own process group, hooks and all, so stopping it stops everything it started (end_child).
+            start_new_session=True,
+            stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT if merge_output else subprocess.PIPE,
             env=dict(environment(read_only), **(extra_env or {})),
-            timeout=timeout,
         )
     except FileNotFoundError:
         raise Refusal("unsupported", "%s isn't installed on the server, or isn't on the PATH ssh gives it." % argv[0])
-    except subprocess.TimeoutExpired:
-        raise Refusal("timeout", "%s %s took longer than %d s, so it was stopped." % (argv[0], argv[1] if len(argv) > 1 else "", timeout))
-    return proc.returncode, proc.stdout, proc.stderr or b""
+
+
+def end_child(proc):
+    """Stops a child that's still running, and everything it started (its process group: Git's hooks too). SIGTERM
+    first, so Git removes its lock files on the way out; then, once Git has ended or after STOP_GRACE, SIGKILL for
+    whatever is left, such as a hook that ignores SIGTERM. (subprocess.run would SIGKILL Git alone, at once, which
+    leaves a lock such as index.lock or a ref's behind, and the hook running.) A stop signal that arrives meanwhile,
+    as when the connection drops during the grace, waits until the child has ended: cut short, it would leave a child
+    that ignores SIGTERM running."""
+    def signal_group(sig):
+        try:
+            os.killpg(proc.pid, sig)
+        except OSError:
+            pass
+
+    with no_stop():
+        signal_group(signal.SIGTERM)
+        try:
+            proc.wait(timeout=STOP_GRACE)
+        except subprocess.TimeoutExpired:
+            pass
+        signal_group(signal.SIGKILL)
+        proc.wait()
 
 
 # Settings the owner's config could change that would make a diff read, or a patch apply, differently from what the
@@ -101,6 +152,23 @@ def git(args, cwd, **kw):
 
 def text(raw):
     return raw.decode("utf-8", "replace")
+
+
+def utf8(raw):
+    """Whether `raw` is UTF-8 as it is. A path that isn't is shown with U+FFFD in its place, and that text names no
+    file on the server, so nothing can be asked of it by name."""
+    try:
+        raw.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        return False
+
+
+def tail(output):
+    """At most MAX_OUTPUT of what Git and hooks printed, keeping the end."""
+    if len(output) <= MAX_OUTPUT:
+        return output
+    return "[The first %d characters were cut.]\n%s" % (len(output) - MAX_OUTPUT, output[-MAX_OUTPUT:])
 
 
 def git_ok(args, cwd, **kw):
@@ -221,6 +289,11 @@ def op_status(req):
     else:
         raise Refusal("busy", "The repository kept changing while it was read (another tool is working in it). Refresh in a moment.")
     reply["head"], reply["index"] = after
+    # The files are stamped once, after the list settled: a retry above doesn't read them again.
+    budget = [STATUS_HASH_BUDGET]
+    for e in reply["entries"]:
+        if (e["kind"] == "untracked" or (e["y"] not in (".", "?"))) and not e.get("nameLossy"):
+            e["worktree"] = list_stamp(top, e["path"], budget)
     return reply
 
 
@@ -232,10 +305,12 @@ def status_once(top, git_dir):
     branch = {"oid": None, "head": None, "detached": False, "upstream": None, "ahead": None, "behind": None}
     entries = []
     truncated = False
-    records = text(out).split("\0")
+    raws = out.split(b"\0")
+    records = [text(r) for r in raws]
     i = 0
     while i < len(records):
         rec = records[i]
+        whole = utf8(raws[i])
         i += 1
         if not rec:
             continue
@@ -264,6 +339,7 @@ def status_once(top, git_dir):
             elif tag == "2":
                 f = rec.split(" ", 9)
                 orig = records[i] if i < len(records) else ""
+                whole = whole and (i >= len(raws) or utf8(raws[i]))
                 i += 1
                 entry = {"kind": "renamed" if f[8].startswith("R") else "copied", "x": f[1][0], "y": f[1][1],
                          "sub": f[2] != "N...", "modes": [f[3], f[4], f[5]], "score": f[8], "path": f[9],
@@ -276,6 +352,9 @@ def status_once(top, git_dir):
                 entry = {"kind": "untracked", "x": "?", "y": "?", "sub": False, "path": rec[2:]}
             if entry is None:
                 continue
+            if not whole:
+                # Its name isn't UTF-8: a request naming it would name another path. Listed, never acted on.
+                entry["nameLossy"] = True
             if len(entries) >= MAX_ENTRIES:
                 truncated = True
                 continue
@@ -298,9 +377,6 @@ def status_once(top, git_dir):
             c = unstaged.get(e["path"], False)
             if c is not False:
                 e["unstaged"] = c
-    for e in entries:
-        if e["kind"] == "untracked" or (e["y"] not in (".", "?")):
-            e["worktree"] = worktree_stamp(top, e["path"])
     return {
         "top": top,
         "gitDir": git_dir,
@@ -361,6 +437,7 @@ def op_diff(req):
     # The file's bytes as this diff shows them, when the diff is of the working tree: the screen compares it with
     # the list's, and won't stage from a list older than the diff on screen.
     worktree = worktree_stamp(top, path) if side in ("unstaged", "untracked") else None
+    worktree_meta = meta_of(top, path) if side in ("unstaged", "untracked") else None
     stages = []
     if side == "conflict":
         lines = text(git_ok(["ls-files", "-u", "-z", "--", path], top)).split("\0")
@@ -373,6 +450,8 @@ def op_diff(req):
         "sha": hashlib.sha256(out).hexdigest(),
         "stages": stages,
         "worktree": worktree,
+        # The same file by its metadata: what a list that ran out of its hashing budget stamped it with.
+        "worktreeMeta": worktree_meta,
         "head": head_oid(top),
         "index": index_stamp(top),
     }
@@ -398,14 +477,28 @@ def index_stamp(top):
     return hashlib.sha256(git_ok(["ls-files", "--stage", "-z"], top)).hexdigest()
 
 
-# Files bigger than this are stamped by size, time, inode and mode instead of hashed, so a status stays quick.
+# Files bigger than this are stamped by their metadata, never hashed.
 STAMP_HASH_MAX = 32 * 1024 * 1024
+# The most bytes one Status reads to hash files. Past it, the rest are stamped by their metadata, so a checkout with
+# many big changed files still answers well within its time limit. A test makes it small.
+STATUS_HASH_BUDGET = int(os.environ.get("HERMES_REPO_TEST_HASH_BUDGET") or 256 * 1024 * 1024)
 
 
-def snapshot(top, rel):
-    """What a working-tree path is now, read once: (stamp, kind, payload, executable). The stamp is SHA-256 of the executable bit
-    and the bytes (a link's target for a symbolic link), so a chmod counts as a change. kind is "file", "link", "big"
-    (over STAMP_HASH_MAX: stamped by its metadata, payload None), "dir" (a folder or a submodule) or "missing"."""
+def meta_stamp(st):
+    """A file stamped without reading it: executable bit, size, modification and change times, inode and device. A
+    write sets the change time, which nothing can set back, but not every write: one through a shared memory mapping
+    whose page is already dirty changes no time until the page is written back. So only files too big, or too many,
+    to hash are stamped this way."""
+    x = "x" if st.st_mode & 0o111 else "-"
+    return "meta:%s:%d:%d:%d:%d:%d" % (x, st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino, st.st_dev)
+
+
+def snapshot(top, rel, by_meta=False):
+    """What a working-tree path is now, read once: (stamp, kind, payload, executable). A file's stamp is SHA-256 of
+    its executable bit and bytes, so a chmod counts as a change; with `by_meta`, or over STAMP_HASH_MAX, it is its
+    metadata (meta_stamp), which must be the same before and after the bytes are read, so the bytes returned are the
+    ones it stamps ("changing" if not). A link's stamp is SHA-256 of its target. kind is "file", "link", "big" (over
+    STAMP_HASH_MAX, payload None), "dir" (a folder or a submodule), "special" or "missing"."""
     full = os.path.join(top, rel)
     try:
         st = os.lstat(full)
@@ -418,20 +511,49 @@ def snapshot(top, rel):
         return "dir", "dir", None, False
     if not stat.S_ISREG(st.st_mode):
         return "special", "special", None, False
-    executable = bool(st.st_mode & 0o111)
-    x = b"x" if executable else b"-"
-    if st.st_size > STAMP_HASH_MAX:
-        return "meta:%s:%d:%d:%d" % (x.decode(), st.st_size, st.st_mtime_ns, st.st_ino), "big", None, executable
+    big = st.st_size > STAMP_HASH_MAX
     try:
-        with open(full, "rb") as f:
-            data = f.read()
+        with open(os.open(full, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)), "rb") as f:
+            before = os.fstat(f.fileno())
+            data = None if big else f.read()
+            after = os.fstat(f.fileno())
     except OSError:
         return None, "missing", None, False
-    return hashlib.sha256(x + b":" + data).hexdigest(), "file", data, executable
+    executable = bool(before.st_mode & 0o111)
+    if by_meta or big:
+        same = meta_stamp(st) == meta_stamp(before) == meta_stamp(after)
+        stamp = meta_stamp(before) if same else "changing"
+    else:
+        stamp = hashlib.sha256((b"x:" if executable else b"-:") + data).hexdigest()
+    return stamp, "big" if big else "file", data, executable
 
 
 def worktree_stamp(top, rel):
+    """A path's stamp as staging checks it: SHA-256 of a file's bytes, or its metadata over STAMP_HASH_MAX."""
     return snapshot(top, rel)[0]
+
+
+def list_stamp(top, rel, budget):
+    """`worktree_stamp` for Status, which hashes at most `budget[0]` bytes in all: a file past that is stamped by its
+    metadata. Staging checks a file against whichever kind of stamp the list gave it."""
+    try:
+        st = os.lstat(os.path.join(top, rel))
+    except OSError:
+        return None
+    if stat.S_ISREG(st.st_mode) and st.st_size <= STAMP_HASH_MAX:
+        if st.st_size > budget[0]:
+            return meta_stamp(st)
+        budget[0] -= st.st_size
+    return worktree_stamp(top, rel)
+
+
+def meta_of(top, rel):
+    """A regular file's metadata stamp, for comparing a diff with a list that stamped the file that way."""
+    try:
+        st = os.lstat(os.path.join(top, rel))
+    except OSError:
+        return None
+    return meta_stamp(st) if stat.S_ISREG(st.st_mode) else None
 
 
 def check_stamps(top, expect):
@@ -456,6 +578,11 @@ def stamps(top):
     return {"head": head_oid(top), "index": index_stamp(top)}
 
 
+# The index locks this helper holds. main() lets go of any still here however the helper ends, even when a stop signal
+# landed where __exit__ never runs (Python doesn't call it when __enter__ raises).
+HELD = []
+
+
 class LockedIndex:
     """The index, held from the check to the write. It takes the index's own lock (index.lock), as Git does for
     any change to the index, so no other Git process can change it in between. The write goes to a copy
@@ -469,14 +596,23 @@ class LockedIndex:
         self.held = False
 
     def __enter__(self):
+        # A stop signal waits while the lock is taken, so it can't land between taking it and recording it in HELD.
+        with no_stop():
+            try:
+                fd = os.open(self.lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+            except FileExistsError:
+                raise Refusal("locked", "Another Git process is changing the index (index.lock exists). Nothing was changed. Wait for it, then try again.")
+            os.close(fd)
+            self.held = True
+            HELD.append(self)
+        # Python doesn't call __exit__ when __enter__ raises: a failed copy (a full disk) lets the lock go here, or
+        # every later `git add` in this checkout would fail until it was deleted by hand.
         try:
-            fd = os.open(self.lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
-        except FileExistsError:
-            raise Refusal("locked", "Another Git process is changing the index (index.lock exists). Nothing was changed. Wait for it, then try again.")
-        os.close(fd)
-        self.held = True
-        if os.path.exists(self.index):
-            shutil.copyfile(self.index, self.copy)
+            if os.path.exists(self.index):
+                shutil.copyfile(self.index, self.copy)
+        except BaseException:
+            self.__exit__()
+            raise
         return self
 
     @property
@@ -497,6 +633,8 @@ class LockedIndex:
             except OSError:
                 pass
         self.held = False
+        if self in HELD:
+            HELD.remove(self)
         return False
 
 
@@ -527,19 +665,25 @@ def op_stage(req):
         check_stamps(top, req.get("expect"))
         for f in files:
             rel = safe_rel(f.get("path") if isinstance(f, dict) else None, top)
-            stamp, kind, data, executable = snapshot(top, rel)
+            want = f.get("worktree")
+            by_meta = isinstance(want, str) and want.startswith("meta:")
+            stamp, kind, data, executable = snapshot(top, rel, by_meta)
             if kind in ("dir", "special"):
                 raise Refusal("bad-path", "%s is a folder, a submodule or a special file. Only files are staged here; use the Terminal for it." % rel)
-            if stamp != f.get("worktree"):
+            if stamp != want:
                 raise Refusal("stale", "%s changed on the server since this screen read it. Nothing was staged. Refresh and look at it again." % rel)
             if kind == "missing":
+                # Staged as deleted only if the index has it: a path that's in neither (a name read wrongly) is
+                # refused rather than answered as staged.
+                if not git_ok(["ls-files", "-z", "--", rel], top, extra_env=idx.env):
+                    raise Refusal("stale", "There's no file %s on the server or in the index. Nothing was staged. Refresh and look again." % rel)
                 git_ok(["update-index", "--remove", "--", rel], top, read_only=False, extra_env=idx.env)
                 continue
             full = os.path.join(top, rel)
             if kind == "big":
                 with open(full, "rb") as fh:
                     blob = text(run(["git", "hash-object", "-w", "--path", rel, "--stdin"], top, read_only=False, stdin=fh.read())[1]).strip()
-                if worktree_stamp(top, rel) != stamp:
+                if snapshot(top, rel, True)[0] != stamp:
                     raise Refusal("stale", "%s changed while it was being staged. Nothing was staged." % rel)
             else:
                 # A link is stored as its target's name; a file through its clean filters, as git add would.
@@ -696,12 +840,11 @@ def op_preview(req):
             i += 2
     unmerged = bool(text(git_ok(["ls-files", "-u", "-z"], top)))
     folder, found = hooks(top)
-    code, branch, _ = git(["symbolic-ref", "-q", "--short", "HEAD"], top)
     recent = text(git(["log", "-n", "10", "--format=%s"], top)[1]).splitlines() if head else []
     return {
         "head": head,
         "index": index_stamp(top),
-        "branch": text(branch).strip() if code == 0 else None,
+        "branch": current_branch(top),
         "headRef": head_ref(top),
         "files": name_status(raw),
         "renames": renames,
@@ -802,7 +945,7 @@ def op_commit(req):
         if operation in ("merge", "rebase", "cherry-pick", "revert"):
             raise Refusal("operation", "A %s is in progress, and committing now would finish part of it. Finish or abort it in the Terminal." % operation)
         try:
-            code, out, failed = traced(["commit", "--cleanup=verbatim", "-F", "-"], top, stdin=message.encode("utf-8"), timeout=600, env=idx.env)
+            code, out, failed = traced(["commit", "--cleanup=verbatim", "-F", "-"], top, stdin=message.encode("utf-8"), timeout=COMMIT_TIMEOUT, env=idx.env)
         finally:
             # However it ended, a timeout or a dropped ssh's hangup included: once the commit has landed, the index copy
             # it was made from (with anything a hook staged) becomes the index, so the index never disagrees with it.
@@ -810,23 +953,25 @@ def op_commit(req):
                 idx.install()
         output = text(out)
         after = head_oid(top)
-        if code != 0 or after == head:
+        if after == head:
             kind, why = classify_commit_failure(output, failed)
             # A refused commit leaves HEAD and the index as they were: the copy a hook may have changed is dropped.
-            raise Refusal(kind, why, output)
-        # What a hook staged during the commit is part of it; the index it left was installed above.
+            raise Refusal(kind, why, tail(output))
+        # HEAD moved, so the commit landed, even if Git then exited with an error: it's reported as made, with Git's
+        # words beside it. What a hook staged during the commit is part of it; the index it left was installed above.
     parents = text(git_ok(["rev-list", "--parents", "-n", "1", after], top)).split()[1:]
     if parents != ([head] if head else []):
-        raise Refusal("lost", "A commit was made, but not on top of the HEAD that was checked. Refresh and look at the history in the Terminal.", output)
+        raise Refusal("lost", "A commit was made, but not on top of the HEAD that was checked. Refresh and look at the history in the Terminal.", tail(output))
     tree_args = ["diff-tree", "-r", "--ignore-submodules=none", "--raw", "--no-abbrev", "--no-renames", "--no-commit-id", "-z"] + (["--root"] if head is None else [])
     committed = git_ok(tree_args + [after], top)
     return {
         "head": after,
         "subject": message.splitlines()[0],
-        "output": output,
+        "output": tail(output),
+        "exitCode": code,
         "matches": committed == raw,
         "files": name_status(committed),
-        "branch": (lambda r: text(r[1]).strip() if r[0] == 0 else None)(git(["symbolic-ref", "-q", "--short", "HEAD"], top)),
+        "branch": current_branch(top),
     }
 
 
@@ -870,6 +1015,13 @@ def redact(url):
 def git_line(args, top):
     code, out, _ = git(args, top)
     return text(out).strip() if code == 0 else ""
+
+
+def current_branch(top):
+    """The branch checked out, or None when HEAD is detached. Read as the full ref and cut, never with `--short`,
+    which prints `heads/<name>` when a tag has the branch's name."""
+    ref = git_line(["symbolic-ref", "-q", "HEAD"], top)
+    return ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else None
 
 
 def check_branch_name(name, top):
@@ -922,7 +1074,7 @@ def op_publish_info(req):
     request for the branch. Nothing here talks to the remote except gh's read-only queries."""
     top, _ = checkout(req.get("repo"))
     head = head_oid(top)
-    branch = git_line(["symbolic-ref", "-q", "--short", "HEAD"], top) or None
+    branch = current_branch(top)
     remotes = []
     for name in git_line(["remote"], top).splitlines():
         if name.startswith("-"):
@@ -1011,9 +1163,11 @@ def op_publish_info(req):
         pr_commits = [dict(zip(("sha", "subject"), l.split("\x1f", 1))) for l in log.splitlines() if "\x1f" in l]
     bases = []
     if remote:
-        for ref in git_line(["for-each-ref", "--format=%(refname:short)", "refs/remotes/%s/" % remote], top).splitlines():
-            short = ref[len(remote) + 1:]
-            if short and short != "HEAD" and ref != remote:
+        # Full names, cut here: `%(refname:short)` turns ambiguous ones into `remotes/<remote>/<branch>`.
+        prefix = "refs/remotes/%s/" % remote
+        for ref in git_line(["for-each-ref", "--format=%(refname)", prefix], top).splitlines():
+            short = ref[len(prefix):] if ref.startswith(prefix) else ""
+            if short and short != "HEAD":
                 bases.append(short)
     return {
         "head": head,
@@ -1066,8 +1220,14 @@ def remote_sha(top, remote, branch, timeout=60):
     if code != 0:
         kind, why = classify_push_failure(text(err), [])
         raise Refusal(kind if kind in ("auth", "network") else "git", why.replace(" Nothing was pushed.", ""), redact_text(text(err)))
-    line = text(out).strip().split("\t")
-    return line[0] if line and line[0] else None
+    # ls-remote matches a pattern against the end of each ref (refs/heads/x/refs/heads/<branch> too): only the
+    # branch itself counts.
+    want = "refs/heads/%s" % branch
+    for line in text(out).splitlines():
+        sha, _, ref = line.partition("\t")
+        if ref.strip() == want and sha:
+            return sha
+    return None
 
 
 def op_push(req):
@@ -1079,7 +1239,7 @@ def op_push(req):
     check_remote(remote, top)
     remote_branch = check_branch_name(req.get("remoteBranch"), top)
     head = head_oid(top)
-    if git_line(["symbolic-ref", "-q", "--short", "HEAD"], top) != branch or head != (req.get("expect") or {}).get("head"):
+    if current_branch(top) != branch or head != (req.get("expect") or {}).get("head"):
         raise Refusal("stale", "The branch or its commit changed since this screen read it. Nothing was pushed. Look again.")
     # The confirmation showed where the push goes. If the remote's push URL changed since (`git remote set-url`),
     # refuse rather than send the commit somewhere the owner didn't see. URLs are compared without credentials.
@@ -1092,7 +1252,8 @@ def op_push(req):
     output = redact_text(text(out))
     if code != 0:
         kind, why = classify_push_failure(output, failed)
-        raise Refusal(kind, why, output)
+        raise Refusal(kind, why, tail(output))
+    output = tail(output)
     # The push happened. Anything failing from here on is reported beside it, never as a refused push.
     upstream_set, verify_error, after = False, None, None
     try:
@@ -1139,7 +1300,7 @@ def op_pr_create(req):
     # The form was written for this branch at this commit. If another process committed or switched branches here
     # since, the screen is out of date: refuse, as Push does, rather than open a pull request from a stale form.
     branch = check_branch_name(req.get("branch"), top)
-    if git_line(["symbolic-ref", "-q", "--short", "HEAD"], top) != branch or head_oid(top) != expect:
+    if current_branch(top) != branch or head_oid(top) != expect:
         raise Refusal("stale", "The branch or its commit changed here since this screen read it. No pull request was made. Look again.")
     gh_repo = github_repo(configured_push_url(remote, top))
     if not gh_repo:
@@ -1208,27 +1369,93 @@ OPS = {
 }
 
 
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+# Set once the app's end of stdin closed: nobody is waiting for an answer any more.
+GONE = threading.Event()
+# How long a commit, its hooks included, may take. A test makes it short.
+COMMIT_TIMEOUT = int(os.environ.get("HERMES_REPO_TEST_COMMIT_TIMEOUT") or 600)
+
+
+# The children running now: main() stops any still here however the helper ends.
+CHILDREN = []
+# Where a stop signal waits: inside no_stop(), it's held until the end of it.
+STOPPING = {"depth": 0, "signal": None}
+# A test sends the helper a stop signal while it starts the git command with this argument.
+TEST_STOP_AT = os.environ.get("HERMES_REPO_TEST_STOP_AT")
+
+
 def stop(signum, frame):
-    # ssh going away sends a hangup; ending through SystemExit lets the index lock be let go on the way out.
+    # Ending through SystemExit lets the index lock, and the worktree record's state, be put back on the way out.
+    if STOPPING["depth"]:
+        STOPPING["signal"] = signum
+        return
     raise SystemExit(128 + signum)
 
 
+@contextlib.contextmanager
+def no_stop():
+    """Holds a stop signal until two steps that must go together are both done, such as starting a child and
+    recording it. (Blocking the signal instead would pass the block on to the child, which then couldn't be stopped
+    by SIGTERM.) The held signal is raised once, at the end; cleanup after it runs normally."""
+    STOPPING["depth"] += 1
+    try:
+        yield
+    finally:
+        STOPPING["depth"] -= 1
+        held = STOPPING["signal"]
+        if held and not STOPPING["depth"]:
+            STOPPING["signal"] = None
+            raise SystemExit(128 + held)
+
+
+def watch_connection():
+    """Ends the helper and everything it started once the app's end of stdin closes (ADR 0043). ssh runs the helper
+    without a terminal (`-T`), so a dropped connection sends no hangup: sshd only closes its pipes. The app keeps
+    stdin open until it has the answer, so its end means the connection dropped or the app stopped waiting (a time
+    limit). The helper gets SIGTERM and ends as for any stop signal: the command it's running and everything that
+    command started end (end_child), and the index and the worktree record are put back. If it hasn't ended a while
+    later, SIGKILL."""
+    # The file descriptor, not sys.stdin: a daemon thread blocked inside Python's buffered reader holds its lock, and
+    # the interpreter then aborts on the way out ("could not acquire lock ... at interpreter shutdown"). Nothing
+    # follows the request line, so nothing is left in that reader's buffer.
+    try:
+        while os.read(0, 65536):
+            pass
+    except OSError:
+        pass
+    GONE.set()
+    os.kill(os.getpid(), signal.SIGTERM)
+    time.sleep(4 * STOP_GRACE)
+    os.kill(os.getpid(), signal.SIGKILL)
+
+
 def main():
-    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+    for sig in STOP_SIGNALS:
         signal.signal(sig, stop)
     try:
-        req = json.loads(sys.stdin.buffer.read().decode("utf-8"))
-        op = OPS.get(req.get("op")) if isinstance(req, dict) else None
-        if op is None:
-            raise Refusal("internal", "Unknown request.")
-        reply = {"ok": True, "v": VERSION, "result": op(req)}
-    except Refusal as r:
-        reply = {"ok": False, "v": VERSION, "error": {"kind": r.kind, "message": r.message, "output": r.output}}
-    except Exception as e:  # noqa: BLE001 - anything else is a bug here, reported as one
-        reply = {"ok": False, "v": VERSION, "error": {"kind": "internal", "message": "The helper failed: %r" % (e,), "output": ""}}
-    # The mark sets the answer apart from anything a login script printed first (repo_git.rs, MARK).
-    sys.stdout.write("\x1ehermes-repo\x1e" + json.dumps(reply))
-    sys.stdout.flush()
+        try:
+            # The request is one line. The rest of stdin stays open until the app has the answer.
+            req = json.loads(sys.stdin.buffer.readline().decode("utf-8"))
+            threading.Thread(target=watch_connection, daemon=True).start()
+            op = OPS.get(req.get("op")) if isinstance(req, dict) else None
+            if op is None:
+                raise Refusal("internal", "Unknown request.")
+            reply = {"ok": True, "v": VERSION, "result": op(req)}
+        except Refusal as r:
+            reply = {"ok": False, "v": VERSION, "error": {"kind": r.kind, "message": r.message, "output": r.output}}
+        except Exception as e:  # noqa: BLE001 - anything else is a bug here, reported as one
+            reply = {"ok": False, "v": VERSION, "error": {"kind": "internal", "message": "The helper failed: %r" % (e,), "output": ""}}
+        # The mark sets the answer apart from anything a login script printed first (repo_git.rs, MARK).
+        sys.stdout.write("\x1ehermes-repo\x1e" + json.dumps(reply))
+        sys.stdout.flush()
+    finally:
+        # Children first: Git lets go of its own locks as it ends, then the helper's are let go. A stop signal that
+        # arrives meanwhile waits until all of it is done.
+        with no_stop():
+            for proc in list(CHILDREN):
+                end_child(proc)
+            for idx in list(HELD):
+                idx.__exit__()
 
 
 # main() runs at the end of repo_worktree_helper.py, which Rust sends after this file as one program.
