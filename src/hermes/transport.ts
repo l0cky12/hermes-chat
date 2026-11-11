@@ -3238,7 +3238,7 @@ export class Hermes {
    * Answers a waiting Clarify, Sudo password or Secret card for the owner: locks one Clarify answer (`clarify.lock`, the
    * last lock answers the whole Clarify), sends a password or secret, or skips. A card already answered, or that Hermes
    * stopped waiting for, is left alone, and so is a question locked already and an empty value, which Hermes would read
-   * as skipped. The value goes to Hermes and nowhere else: the card keeps only that it was answered (ADR 0136).
+   * as skipped. The value goes to Hermes and nowhere else: the card keeps only that it was answered (ADR 0138).
    */
   async answerQuestion(chatId: string, itemId: string, a: QuestionAnswer): Promise<void> {
     const card = this.snapshot.chats.find((c) => c.id === chatId)?.items.find((i) => i.id === itemId);

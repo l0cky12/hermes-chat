@@ -1,5 +1,5 @@
 // A Clarify, Sudo password or Secret card (#390): what Hermes asks, and the owner's answer. A password or secret lives
-// only in the card's masked field until it goes to Hermes; the card then keeps only that it was answered (ADR 0136).
+// only in the card's masked field until it goes to Hermes; the card then keeps only that it was answered (ADR 0138).
 import { useCallback, useId, useRef, useState, type KeyboardEvent } from "react";
 import { KeyRound, MessageCircleQuestion } from "lucide-react";
 import type { ClarifyQuestion, QuestionAnswer, QuestionItem } from "../hermes/model";

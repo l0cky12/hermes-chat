@@ -13,6 +13,7 @@ pub mod links;
 pub mod local_stt;
 mod loopback_peer;
 pub mod main_window;
+pub mod markdown_image;
 pub mod mcp;
 pub mod media;
 pub mod notify;
@@ -1327,6 +1328,12 @@ async fn preview_check_web(url: String, user_agent: String) -> Result<web_page::
     web_page::check(&url, &user_agent).await
 }
 
+/// A Markdown image the owner clicked to load, as a `data:` URL (`markdown_image::load`, ADR 0136).
+#[tauri::command]
+async fn markdown_image_load(url: String) -> Result<String, String> {
+    markdown_image::load(&url).await
+}
+
 /// Opens an http(s) page in the owner's default browser, and gives the browser's name where it is known.
 #[tauri::command]
 async fn preview_open_in_browser(app: tauri::AppHandle, url: String) -> Result<Option<String>, String> {
@@ -1656,6 +1663,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             preview_read_local,
             preview_read_local_image,
             preview_check_web,
+            markdown_image_load,
             preview_open_in_browser,
             preview_page_open,
             preview_page_go,

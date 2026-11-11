@@ -12,6 +12,8 @@
 //   a prompt that starts with "fail" ends its reply with an error, as a provider failure does.
 //   a prompt that starts with "math" gets a reply with inline and display math and a Mermaid diagram (#350), and one
 //   that starts with "badmath" the same with a diagram Mermaid can't parse.
+//   with HV_REPLY_FILE=<path>, a prompt that starts with `canned` gets that file's text as its reply, read at each send,
+//   so a test can serve a hostile reply (a diagram, a link, an image) exactly as written.
 //   with HV_LONG_REPLY=<n>, a prompt that starts with `long` gets n paragraphs of markdown (code, a list, a table),
 //   three words every 40 ms, so a reply keeps streaming for minutes.
 //   `subagent.interrupt` (Stop in the Subagents panel) ends that subagent as `interrupted`, as Hermes reports it.
@@ -43,7 +45,7 @@
 // the app's answers to what the stand-in asked it.
 // The same JSON is rewritten to <state-file> after every change, so it survives the bridge being stopped.
 import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { FakeHermes, row } from "../../../../src/hermes/fakeHermes";
@@ -162,8 +164,10 @@ const mathReply = (broken: boolean) =>
 function replyTo(sessionId: string, prompt: string, said?: string, persisted_turn?: Record<string, unknown>) {
   const long = longParagraphs > 0 && prompt.startsWith("long");
   const math = prompt.startsWith("math") || prompt.startsWith("badmath");
+  const canned = process.env.HV_REPLY_FILE && prompt.startsWith("canned") ? readFileSync(process.env.HV_REPLY_FILE, "utf8") : undefined;
   const text =
     said ??
+    canned ??
     (long
       ? Array.from({ length: longParagraphs }, (_, i) => paragraph(i)).join("\n")
       : math
