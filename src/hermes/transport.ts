@@ -3676,7 +3676,7 @@ export class Hermes {
       this.kanbanWatch.turnStarted([chat.id, ...(chat.lineage ?? [])]);
     }
     if (type === "tool.complete") {
-      const call = chat.items.find((i) => i.kind === "tool" && i.id === textOf(payload.tool_id));
+      const call = chat.items[runningCall(chat.items, payload.tool_id)];
       const task = call?.kind === "tool" && call.name === "kanban_create" ? parseKanbanCreate(call.args, payload.result, Date.now(), this.kanbanWatch.currentBoard()) : undefined;
       if (task) this.kanbanWatch.add(task, chat.id);
     }
@@ -5331,6 +5331,16 @@ function turnFrom(items: Item[], from?: string | null): number {
   return at < 0 ? -1 : at + 1;
 }
 
+/** Where the call a `tool.complete` names is: the latest still running with that call id, which a provider may reuse. */
+function runningCall(items: Item[], toolId: unknown): number {
+  const callId = textOf(toolId);
+  for (let at = items.length - 1; callId !== undefined && at >= 0; at--) {
+    const i = items[at];
+    if (i.kind === "tool" && i.callId === callId && i.status === "running") return at;
+  }
+  return -1;
+}
+
 // Fold one session event into a chat. Text deltas extend the trailing assistant item, or start a new one
 // after a tool call; reasoning deltas do the same with thinking items. `from` is the last item before the running
 // turn's `message.start`: a turn Hermes starts by itself has no message from the owner before it, so the item it would
@@ -5365,12 +5375,12 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: st
       return { ...c, items, updatedAt: Date.now() };
     }
     case "tool.start": {
-      const id = textOf(p.tool_id);
-      if (id === undefined) return c;
+      const callId = textOf(p.tool_id);
+      if (callId === undefined) return c;
       items.push({
         kind: "tool",
-        id,
-        callId: id,
+        id: freeId(items, callId),
+        callId,
         name: str(p.name) ?? "tool",
         args: obj(p.args),
         preview: str(p.preview),
@@ -5378,22 +5388,14 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: st
       });
       return { ...c, items };
     }
-    case "tool.complete":
-      return {
-        ...c,
-        items: items.map((i) =>
-          i.kind === "tool" && i.id === textOf(p.tool_id)
-            ? {
-                ...i,
-                status: "done",
-                durationS: num(p.duration_s),
-                // A screenshot inside it stays on the server (ADR 0061).
-                result: toolResultText(p.result),
-                summary: str(p.summary),
-              }
-            : i,
-        ),
-      };
+    case "tool.complete": {
+      const at = runningCall(items, p.tool_id);
+      const call = items[at];
+      if (call?.kind !== "tool") return c;
+      // A screenshot inside the result stays on the server (ADR 0061).
+      items[at] = { ...call, status: "done", durationS: num(p.duration_s), result: toolResultText(p.result), summary: str(p.summary) };
+      return { ...c, items };
+    }
     // Every second or so while a turn runs.
     case "session.usage":
       return { ...c, live: withLive(c.live, undefined, p.usage) };
