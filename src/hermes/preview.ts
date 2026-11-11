@@ -179,15 +179,18 @@ export function addressOf(t: PreviewTarget): string {
   }
 }
 
+/** The host Rust serves a server page's tunnel at: `127.0.0.1`, or on Windows the page's own name (ADR 0144). */
+const TUNNEL_HOST = /^(127\.0\.0\.1|p[0-9a-f]{16}\.localhost)$/;
+
 /**
- * The address Rust gave for a server page's tunnel, if it is what Rust makes: http(s) on `127.0.0.1` at a port, and
+ * The address Rust gave for a server page's tunnel, if it is what Rust makes: http(s) on a tunnel host at a port, and
  * never the app's own origin. Anything else isn't loaded.
  */
 export function tunnelUrl(raw: string, appOrigin: string): string | undefined {
   const web = checkWebUrl(raw, appOrigin);
   if (!("url" in web)) return undefined;
   const u = new URL(web.url);
-  return u.hostname === "127.0.0.1" && u.port ? web.url : undefined;
+  return TUNNEL_HOST.test(u.hostname) && u.port ? web.url : undefined;
 }
 
 /** A path the server can read: absolute, or under its home (`~/`). Relative paths would resolve in Hermes's own folder. */

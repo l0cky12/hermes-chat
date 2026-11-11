@@ -153,10 +153,10 @@ impl ServerPage {
         format!("{host}:{}", self.port)
     }
 
-    /// The same page through the tunnel's local end: only the host and port change.
-    pub fn local_url(&self, local_port: u16) -> Url {
+    /// The same page through the tunnel's local end at `host`: only the host and port change.
+    pub fn local_url(&self, host: &str, local_port: u16) -> Url {
         let mut u = self.url.clone();
-        u.set_host(Some("127.0.0.1")).expect("an http(s) URL takes an IP host");
+        u.set_host(Some(host)).expect("an http(s) URL takes a loopback host");
         u.set_port(Some(local_port)).expect("an http(s) URL takes a port");
         u
     }
@@ -738,12 +738,25 @@ struct Served {
     jar: Jar,
 }
 
-/// Every server page is served at `127.0.0.1`, and cookies don't tell ports apart, so in one jar each page would get
-/// every other server page's cookies.
+/// Every server page's tunnel listens on `127.0.0.1`, and cookies don't tell ports apart, so in one jar each page would
+/// get every other server page's cookies. On Linux each jar is a WebKit context of its own (`page_view`). On Windows the
+/// page is a frame in the app's one WebView2, so each jar is a host name instead (`host`, ADR 0144).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Jar {
     target: String,
     origin: url::Origin,
+}
+
+/// Keyed afresh each run, so the names, and the cookies WebView2 keeps on disk under them, last only the run, as Linux's
+/// jars do (ADR 0081).
+static RUN: std::sync::LazyLock<std::hash::RandomState> = std::sync::LazyLock::new(std::hash::RandomState::new);
+
+impl Jar {
+    /// The jar's own name under `localhost`, which WebView2 resolves to loopback (RFC 6761): `p` and 16 hex digits.
+    pub fn host(&self) -> String {
+        use std::hash::BuildHasher;
+        format!("p{:016x}.localhost", RUN.hash_one(self))
+    }
 }
 
 #[cfg(test)]
@@ -784,6 +797,7 @@ struct Started {
     address: Address,
     stderr: Stderr,
     listener: TcpListener,
+    ipv6: Option<TcpListener>,
 }
 
 impl ServerPages {
@@ -828,7 +842,7 @@ impl ServerPages {
             started = start(program, &target, &page) => started,
             why = &mut stopped => Err(ServerPageError::Closed(why.unwrap_or(None))),
         };
-        let Started { mut child, end, address, stderr, listener } = match started {
+        let Started { mut child, end, address, stderr, listener, ipv6 } = match started {
             Ok(s) => s,
             Err(e) => {
                 self.open.lock().unwrap().remove(&key);
@@ -836,8 +850,10 @@ impl ServerPages {
             }
         };
         let local_port = listener.local_addr().map_err(|e| ServerPageError::Io(e.to_string()))?.port();
+        let jar = Jar { target: target.clone(), origin: page.url.origin() };
+        let host = if cfg!(windows) { jar.host() } else { "127.0.0.1".to_owned() };
         if let Some(open) = self.open.lock().unwrap().get_mut(&key) {
-            open.served = Some(Served { local_port, jar: Jar { target: target.clone(), origin: page.url.origin() } });
+            open.served = Some(Served { local_port, jar });
         }
 
         let pages = Arc::clone(self);
@@ -846,7 +862,22 @@ impl ServerPages {
             // Everything the tunnel holds lives in this task: ending it drops the listener, the copies, ssh (killed on
             // drop) and the socket's folder.
             let _end = end;
-            let serving = serve(listener, address, Peers::Account(loopback_peer::this_account()));
+            let peers = Peers::Account(loopback_peer::this_account());
+            let on_ipv6 = {
+                let address = address.clone();
+                async move {
+                    match ipv6 {
+                        Some(ipv6) => serve(ipv6, address, peers).await,
+                        None => std::future::pending().await,
+                    }
+                }
+            };
+            let serving = async move {
+                tokio::select! {
+                    () = serve(listener, address, peers) => {}
+                    () = on_ipv6 => {}
+                }
+            };
             tokio::pin!(serving);
             let why = tokio::select! {
                 status = child.wait() => {
@@ -870,7 +901,7 @@ impl ServerPages {
             }
         });
 
-        Ok(Opened { id: key, url: page.local_url(local_port).to_string(), target, at: page.at() })
+        Ok(Opened { id: key, url: page.local_url(&host, local_port).to_string(), target, at: page.at() })
     }
 
     /// Closes the tunnel `key`, starting or open. The webview asked, so it isn't told. A key not seen yet is kept, so
@@ -1013,8 +1044,37 @@ async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started
     if end.named_in(&said) {
         return Err(ServerPageError::Ssh(said));
     }
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| ServerPageError::Io(e.to_string()))?;
-    Ok(Started { child, end, address, stderr, listener })
+    let (listener, ipv6) = listen(cfg!(windows)).await.map_err(|e| ServerPageError::Io(e.to_string()))?;
+    Ok(Started { child, end, address, stderr, listener, ipv6 })
+}
+
+/// The tunnel's listeners: on `127.0.0.1`, and with `ipv6` on `[::1]` at the same port. On Windows a page's name under
+/// `localhost` (`Jar::host`) resolves to both, so a program that listened on `[::1]` at the port would otherwise get the
+/// frame's requests and cookies (ADR 0144). The second is `None` without `ipv6`, and when this computer has no `::1`,
+/// where nothing can listen. Any other failure there tries another port, since something may hold that one.
+async fn listen(ipv6: bool) -> std::io::Result<(TcpListener, Option<TcpListener>)> {
+    for _ in 0..16 {
+        let ipv4 = TcpListener::bind(("127.0.0.1", 0)).await?;
+        if !ipv6 {
+            return Ok((ipv4, None));
+        }
+        let port = ipv4.local_addr()?.port();
+        match TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)).await {
+            Ok(ipv6) => return Ok((ipv4, Some(ipv6))),
+            Err(e) if no_ipv6(&e) => return Ok((ipv4, None)),
+            Err(_) => continue,
+        }
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "no port was free on both 127.0.0.1 and [::1]"))
+}
+
+/// Whether binding `[::1]` failed because this computer has no IPv6 or no `::1`.
+fn no_ipv6(e: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    const NO_FAMILY: i32 = libc::EAFNOSUPPORT;
+    #[cfg(windows)]
+    const NO_FAMILY: i32 = windows_sys::Win32::Networking::WinSock::WSAEAFNOSUPPORT;
+    e.kind() == std::io::ErrorKind::AddrNotAvailable || e.raw_os_error() == Some(NO_FAMILY)
 }
 
 /// Whether anything answers through a new tunnel. ssh closing the connection with nothing said means the server
@@ -1130,9 +1190,63 @@ mod tests {
 
     #[test]
     fn the_frame_loads_the_same_page_on_the_local_end() {
-        assert_eq!(page("http://localhost:3000/a/b?q=1#f").local_url(41234).as_str(), "http://127.0.0.1:41234/a/b?q=1#f");
-        assert_eq!(page("https://[::1]/x").local_url(40000).as_str(), "https://127.0.0.1:40000/x");
+        assert_eq!(page("http://localhost:3000/a/b?q=1#f").local_url("127.0.0.1", 41234).as_str(), "http://127.0.0.1:41234/a/b?q=1#f");
+        assert_eq!(page("https://[::1]/x").local_url("127.0.0.1", 40000).as_str(), "https://127.0.0.1:40000/x");
+        let host = Jar::of("hermes", "http://localhost:3000").host();
+        assert_eq!(page("http://localhost:3000/a").local_url(&host, 41234).as_str(), format!("http://{host}:41234/a"));
         assert_eq!(page("http://0.0.0.0:8000").at(), "0.0.0.0:8000");
+    }
+
+    #[cfg(any(target_os = "linux", windows))]
+    #[tokio::test]
+    async fn the_tunnel_listens_on_both_loopbacks_at_one_port_and_relays_both() {
+        let (ipv4, ipv6) = listen(true).await.unwrap();
+        let ipv6 = ipv6.expect("this computer has ::1");
+        let port = ipv4.local_addr().unwrap().port();
+        assert_eq!(ipv6.local_addr().unwrap(), (std::net::Ipv6Addr::LOCALHOST, port).into());
+        assert!(TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)).await.is_err(), "no other program can listen at [::1] on the port");
+
+        let (address, _end) = ssh_answering("the page").await;
+        let peers = Peers::Account(loopback_peer::this_account());
+        let (ipv4, ipv6) = (tokio::spawn(serve(ipv4, address.clone(), peers)), tokio::spawn(serve(ipv6, address, peers)));
+        for host in ["127.0.0.1", "[::1]"] {
+            let mut s = tokio::net::TcpStream::connect(format!("{host}:{port}")).await.unwrap();
+            s.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await.unwrap();
+            let mut got = String::new();
+            s.read_to_string(&mut got).await.unwrap();
+            assert!(got.ends_with("the page"), "this account's program is relayed on {host}: {got:?}");
+        }
+        ipv4.abort();
+        ipv6.abort();
+    }
+
+    #[tokio::test]
+    async fn a_computer_without_ipv6_gets_the_ipv4_listener_alone() {
+        #[cfg(unix)]
+        let no_family = libc::EAFNOSUPPORT;
+        #[cfg(windows)]
+        let no_family = windows_sys::Win32::Networking::WinSock::WSAEAFNOSUPPORT;
+        assert!(no_ipv6(&std::io::Error::from_raw_os_error(no_family)), "IPv6 is off");
+        assert!(no_ipv6(&std::io::ErrorKind::AddrNotAvailable.into()), "no ::1");
+        assert!(!no_ipv6(&std::io::ErrorKind::AddrInUse.into()), "something holds [::1] at the port: try another");
+        assert!(!no_ipv6(&std::io::ErrorKind::PermissionDenied.into()));
+        let (_, ipv6) = listen(false).await.unwrap();
+        assert!(ipv6.is_none(), "Linux serves its pages at 127.0.0.1 alone");
+    }
+
+    #[test]
+    fn each_jar_has_a_host_name_of_its_own_and_keeps_it() {
+        let a = Jar::of("hermes", "http://localhost:3000");
+        assert_eq!(a.host(), Jar::of("hermes", "http://localhost:3000").host(), "opened again, the same name");
+        let names: std::collections::HashSet<String> =
+            [&a, &Jar::of("hermes", "http://localhost:8080"), &Jar::of("other", "http://localhost:3000"), &Jar::of("hermes", "https://localhost:3000")]
+                .map(Jar::host)
+                .into();
+        assert_eq!(names.len(), 4, "another port, server or scheme gets another name: {names:?}");
+        for name in &names {
+            let label = name.strip_suffix(".localhost").unwrap();
+            assert!(label.len() == 17 && label.starts_with('p') && label[1..].bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()), "{name}");
+        }
     }
 
     #[test]
@@ -1831,6 +1945,15 @@ while True:
     /// The relay's port, in front of a stand-in for ssh's end that answers every request with `body`, serving programs
     /// run by `account`. The second value keeps the stand-in's end open.
     async fn relay_for(body: &'static str, account: loopback_peer::Account) -> (u16, impl Sized) {
+        let (address, end) = ssh_answering(body).await;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(serve(listener, address, Peers::Account(account)));
+        (port, end)
+    }
+
+    /// A stand-in for ssh's end of a tunnel, answering every request with `body`.
+    async fn ssh_answering(body: &'static str) -> (Address, impl Sized) {
         #[cfg(unix)]
         let (ssh, address, end) = {
             let dir = SocketDir::new().unwrap();
@@ -1854,10 +1977,7 @@ while True:
                 });
             }
         });
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(serve(listener, address, Peers::Account(account)));
-        (port, end)
+        (address, end)
     }
 
     /// An account this test never runs as.

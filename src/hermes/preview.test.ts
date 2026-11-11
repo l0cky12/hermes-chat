@@ -83,9 +83,21 @@ describe("Pages on a loopback address (issue #171)", () => {
     expect(pageOn({ kind: "web", url: "https://example.com/", on: "local" })).toBeUndefined();
   });
 
-  it("loads only a tunnel address on this computer's 127.0.0.1", () => {
+  it("loads only a tunnel address on this computer's loopback", () => {
     expect(tunnelUrl("http://127.0.0.1:41234/a?b#c", APP)).toBe("http://127.0.0.1:41234/a?b#c");
-    for (const raw of ["http://localhost:41234/", "https://evil.example/", "http://127.0.0.1/", "javascript:alert(1)", "http://u:p@127.0.0.1:4/"])
+    expect(tunnelUrl("http://p0123456789abcdef.localhost:41234/a", APP)).toBe("http://p0123456789abcdef.localhost:41234/a");
+    for (const raw of [
+      "http://localhost:41234/",
+      "https://evil.example/",
+      "http://127.0.0.1/",
+      "javascript:alert(1)",
+      "http://u:p@127.0.0.1:4/",
+      "http://p0123456789abcdef.localhost/",
+      "http://tauri.localhost:41234/",
+      "http://p0123456789abcde.localhost:41234/",
+      "http://x.p0123456789abcdef.localhost:41234/",
+      "http://p0123456789abcdef.localhost.evil.example:41234/",
+    ])
       expect(tunnelUrl(raw, APP), raw).toBeUndefined();
     expect(tunnelUrl("http://127.0.0.1:1420/", "http://127.0.0.1:1420")).toBeUndefined();
   });

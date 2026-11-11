@@ -20,7 +20,7 @@ The preview pane beside the chat shows web pages, Server files, Local files and 
 
 ## Consequences
 
-- Framed pages get no cookies (WebKitGTK blocks third-party cookies), so a site that needs a sign-in won't stay signed in.
+- Framed pages get no cookies (WebKitGTK blocks third-party cookies), so a site that needs a sign-in won't stay signed in. WebView2 does keep a framed page's `SameSite=None` cookies, so ADR 0144 frames each server page at a name of its own.
 - Sites that send `X-Frame-Options` or `frame-ancestors` show blank in the frame. The frame can't tell this apart from a page that loaded, so the pane asks the site separately and offers the owner's browser (ADR 0011). A page slow to load still says, after 15 seconds, that it may not show.
 - Pages on the Hermes server's own loopback (an agent's dev server, say) aren't reachable from this computer, so they don't load. Since ADR 0114 they open through an SSH tunnel to the server.
 - Links in replies now open in the pane. Before, a click replaced the app's own window with the page.
