@@ -10,6 +10,7 @@ import { FakeGateways } from "./fakeGateways";
 import { FakeVoiceProviders } from "./fakeVoiceProviders";
 import { FakeSkills } from "./fakeSkills";
 import { FakeServerFiles } from "./fakeServerFiles";
+import { FakeProjectContext } from "./fakeProjectContext";
 import { ScheduleError, isoIn, parseSchedule, upcomingRuns } from "./schedule";
 import { skillInvocationText } from "./skillCommands";
 
@@ -456,6 +457,16 @@ export class FakeHermes {
   afterFsWrite?: (path: string) => void;
   /** The server's own disk, for the Server files screen (managed files: `GET /api/files`, `GET /api/files/read`). */
   readonly managedFiles = new FakeServerFiles();
+  /** The Rust commands for a project's context files, over this server's disks (fakeProjectContext.ts, ADR 0135). */
+  readonly context = new FakeProjectContext({
+    managed: this.managedFiles,
+    local: () => this.files,
+    agentFiles: () => this.serverFiles,
+    agentDirs: () => this.serverDirs,
+    repos: () => this.repos,
+  });
+  /** Where each profile's tools run (`terminal.backend` in its config): `local` unless set, `ssh` for an SSH machine. */
+  terminalBackend: Record<string, string> = {};
   /** The profiles' skills, as Settings → Skills reads and writes them (fakeSkills.ts). */
   readonly skills = new FakeSkills(this.managedFiles);
   /** The profiles' external memory providers, as Settings → Memory → External memory reads and writes them. */
@@ -1438,6 +1449,7 @@ export class FakeHermes {
       skills: this.skills.config(query.get("profile") || "default"),
       agent: { ...this.modelConfig.agent },
       delegation: { ...this.modelConfig.delegation },
+      terminal: { backend: this.terminalBackend[query.get("profile") || "default"] ?? "local" },
       ...(this.cron.zoneSetting(query.get("profile") || "default") && { timezone: this.cron.zoneSetting(query.get("profile") || "default") }),
       // The raw map, as `include_defaults=false` reads it: what Rust's MCP edit starts from (fakeMcp.ts).
       ...(this.mcp.servers[query.get("profile") || "default"] && { mcp_servers: this.mcp.servers[query.get("profile") || "default"] }),
@@ -1681,6 +1693,7 @@ export class FakeHermes {
       saveText: (id, path, text, overwrite) => this.managedFiles.saveText(path, text, overwrite),
       fsSaveText: (_id, profile, path, text, session) => this.fsWriteText(profile, path, text, session),
       cancelTransfer: async (id) => this.managedFiles.cancel(id),
+      context: this.context.pipe(),
       // Mirrors `Dashboard::toolset_guards`: only these two facts of the config.
       toolsetGuards: async (profile): Promise<ToolsetGuards> => {
         if (this.toolsetGuardsFailure) throw new Error(this.toolsetGuardsFailure);

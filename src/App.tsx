@@ -18,6 +18,7 @@ import { sending, unsaved, type Sending } from "./hermes/unsaved";
 import { connOf, restoreBlocked, savedBackupEnv } from "./hermes/backup";
 import { chatToReopen, forgetOpenChat, rememberOpenChat } from "./hermes/uiPrefs";
 import { PROJECTS_KEY, projectLinks, projectScope } from "./hermes/projectLinks";
+import { chatContext, contextLedger, knownWindow, type ChatContexts } from "./hermes/projectContextFiles";
 import { ProjectsStore, type Project } from "./hermes/projects";
 import { instructionsMessage, modelProblem, resolveNewChat, savedDefaults, type ProjectDefaults } from "./hermes/projectDefaults";
 import { systemSecrets } from "./hermes/tauriKeyring";
@@ -36,7 +37,7 @@ import { readMethods } from "./hermes/signInMethods";
 import { PreferredRoutes, type RouteHealth, routesOf, sshAddressOf } from "./hermes/routes";
 import { isSetUp, testSignIn, type TestOutcome } from "./hermes/setup";
 import { isOutgoing, isWaiting, type Attachment, type Chat, type ConnectionStatus, type Found } from "./hermes/model";
-import type { ModelCatalog, ModelPick } from "./hermes/models";
+import { shortName, type ModelCatalog, type ModelPick } from "./hermes/models";
 import { ChatList, Rail, leavingNote } from "./ui/Sidebar";
 import { type ChatLink, type ConnectionRefs, checkConnection, connectionKey, connectionLabel, connectionRefs, formatChatLink, locateChat, parseChatLink } from "./hermes/chatLinks";
 import { desktopLinks, type LinkInbox } from "./hermes/tauriLinks";
@@ -85,6 +86,7 @@ import { OutputsIndex, outputsIn, sessionOf, splitPath, type Output } from "./he
 import { STATUS_LABEL, composing, routeLabel } from "./ui/bits";
 import { editStep, isTextField } from "./ui/editKeys";
 import { ProjectScreen, ProjectSwitcher, type ProjectUnread } from "./ui/Projects";
+import { ContextCard } from "./ui/ProjectContext";
 import { ScheduledJobs } from "./ui/ScheduledJobs";
 import { TroubleshootStore, startTroubleshoot } from "./hermes/troubleshoot";
 import { CapabilityGate } from "./ui/Diagnostics";
@@ -221,6 +223,7 @@ const forgetLocal = (c: SavedConnection) => forgetConnectionData(c, { defaults: 
 const savedDrafts = drafts(localStorage);
 const savedConnectionRefs = connectionRefs(localStorage);
 const savedProjects = projectLinks(localStorage);
+const savedContextLedger = contextLedger(localStorage);
 const savedPersona = new PersonaStore(localStorage);
 // Applied as the app loads, so the chosen fonts show from the first screen.
 const appearance = appearanceStore(localStorage, document.documentElement);
@@ -1200,6 +1203,17 @@ export function Main({
     return store;
   }, [hermes, scope, projectStores]);
   const proj = useSyncExternalStore(projects.subscribe, projects.getSnapshot);
+  const newChatDraftKey = draftKey(connection, profile, null);
+  const newChatDraft = useSyncExternalStore(savedDrafts.subscribe, () => savedDrafts.get(newChatDraftKey));
+  const [startWith, setStartWith] = useState<{ pane: string; n: number }>();
+  const contexts = useMemo(
+    () => chatContext(hermes.contextFiles, savedContextLedger, projects, (id) => knownWindow(hermes.getSnapshot().chats, projects.getSnapshot().defaults[id]?.model)),
+    [hermes, projects],
+  );
+  useEffect(() => {
+    hermes.sendContext = (inProfile, chatId) => (inProfile === projects.profile ? contexts.next(chatId) : undefined);
+    return () => void (hermes.sendContext = undefined);
+  }, [hermes, projects, contexts]);
   // Another Hermes Chat window changed the projects, or another window or instance their defaults: show them here too.
   // Defaults are in a file every instance shares, so they are read again whenever the window comes back to the front.
   useEffect(() => {
@@ -1964,6 +1978,7 @@ export function Main({
     return hermes.delete(id).then((deleted) => {
       if (deleted) {
         projects.forgetChat(id);
+        savedContextLedger.forgetChat(scope, id);
         tagChange(() => tagsStore.forgetChat(id));
         snoozeStore.wake(id);
         pinStore.unpin(id);
@@ -2456,6 +2471,9 @@ export function Main({
           sticky={sticky}
           favorites={modelFavorites}
           projects={projects}
+          contexts={contexts}
+          autoSend={startWith?.pane === p.key ? startWith.n : undefined}
+          onAutoSent={() => setStartWith(undefined)}
           projectNames={listed ? projectNames(chat.id) : shownProject ? [shownProject.name] : undefined}
           snoozedUntil={snoozedNow(chat.id)}
           shownProject={shownProject && { name: shownProject.name, defaults: proj.defaults[shownProject.id], has: !!listed && !!proj.chats[shownProject.id]?.includes(chat.id) }}
@@ -2877,8 +2895,32 @@ export function Main({
                 profile={profile}
                 connection={where}
                 connected={status === "connected"}
-                chats={listed.length}
+                chats={listed.map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, unread: !!c.unread && !c.archived }))}
                 unlisted={(proj.chats[shownProject.id]?.length ?? 0) - listed.length}
+                draft={newChatDraft}
+                onDraft={(text) => savedDrafts.set(newChatDraftKey, text)}
+                onStartChat={() =>
+                  guard(() => {
+                    openChat(null, { fresh: true, keepSettings: true });
+                    setStartWith({ pane: active.key, n: Date.now() });
+                  })
+                }
+                onOpenChat={(id) => openChat(id)}
+                context={
+                  <ContextCard
+                    files={hermes.contextFiles}
+                    remote={hermes.files}
+                    profile={profile}
+                    project={shownProject}
+                    connection={where}
+                    connected={status === "connected"}
+                    model={{
+                      name: proj.defaults[shownProject.id]?.model && shortName(proj.defaults[shownProject.id].model!.model),
+                      window: knownWindow(chats, proj.defaults[shownProject.id]?.model),
+                    }}
+                    onAddFolder={(path) => projects.addFolder(shownProject.id, path)}
+                  />
+                }
                 onRename={(name) => projects.rename(shownProject.id, name)}
                 onDelete={async () => {
                   const { name } = shownProject;
@@ -3365,6 +3407,9 @@ function ChatView({
   sticky,
   favorites,
   projects,
+  contexts,
+  autoSend,
+  onAutoSent,
   projectNames,
   snoozedUntil,
   shownProject,
@@ -3417,6 +3462,9 @@ function ChatView({
   sticky?: ModelPick;
   favorites: string[];
   projects: ProjectsStore;
+  contexts: ChatContexts;
+  autoSend?: number;
+  onAutoSent: () => void;
   projectNames?: string[];
   /** When the chat wakes, if it is snoozed. */
   snoozedUntil?: number;
@@ -3512,6 +3560,8 @@ function ChatView({
       if (problem) throw new Error(problem);
       // Hermes would run a chat in a folder it can't list, or quietly in its own; check it is there and allowed first.
       if (s.folder.value) await hermes.projects.checkFolder(profile, s.folder.value);
+      const context = shown && (await contexts.start(shown.id));
+      const seed = { folder: s.folder.value, context: context?.blocks[0] };
       // The owner may have switched profile, or another window the project shown, meanwhile: these were that one's.
       if (!stillIn()) throw new Error(`The profile changed to ${hermes.profile} before the chat started. Nothing was sent.`);
       projects.reread();
@@ -3525,7 +3575,7 @@ function ChatView({
         const w = worktree;
         const begin = () => {
           if (!stillIn()) return Promise.reject(new Error(`The profile changed to ${hermes.profile} before the chat started. Nothing was sent.`));
-          return hermes.newChat(s.model.value, { folder: s.folder.value, instructions });
+          return hermes.newChat(s.model.value, { ...seed, instructions });
         };
         const started = await startInWorktree(repoApi, w, { profile, connection: connectionName }, begin);
         id = started.chatId;
@@ -3535,7 +3585,8 @@ function ChatView({
         if (!noted)
           onToast(`The chat started, but this computer couldn't note that it works in ${w.path}: its storage is full or unavailable. The chat's header won't name the worktree; the Repository screen's Worktrees view still does.`);
         if (started.warning) onToast(started.warning);
-      } else id = await hermes.newChat(s.model.value, { folder: s.folder.value, instructions });
+      } else id = await hermes.newChat(s.model.value, { ...seed, instructions });
+      context?.accepted(id);
       if (into && projects.getSnapshot().projects.some((p) => p.id === into)) projects.setChat(into, id, true);
       if (stillIn()) onStarted(id);
       return { id };
@@ -3594,6 +3645,12 @@ function ChatView({
       // Retain ownership until Rust protects the outbox, as in the single-pane send path.
     }
   };
+  useEffect(() => {
+    if (autoSend === undefined || chatId !== null) return;
+    onAutoSent();
+    const text = savedDrafts.get(shownDraft).trim();
+    if (text) void send(text, []);
+  }, [autoSend]);
   // The chat's queue, shared by every pane showing it (ADR 0018). A chat not started yet has none.
   const queue = useSyncExternalStore(hermes.subscribe, () => hermes.getSnapshot().queues[chat.id]);
   const queueApi: QueueApi | undefined = started

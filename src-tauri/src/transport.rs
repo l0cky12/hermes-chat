@@ -1541,8 +1541,27 @@ impl Dashboard {
     /// since it was listed can't fill memory. Returns the response body on 2xx.
     pub async fn get_limited(&self, path_and_query: &str, max_bytes: u64) -> Result<String, TransportError> {
         let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
+        let body = self.send_limited(Method::GET, path, query, None, max_bytes).await?;
+        String::from_utf8(body).map_err(|_| TransportError::Unexpected { status: 200, body: "the answer isn't UTF-8 text".into() })
+    }
+
+    /// One request with an optional JSON body, whose answer is read only up to `max_bytes`, as `get_limited` reads.
+    /// Unlike `request`, it sends writes to the file routes: it is only for commands that check their own paths first,
+    /// such as a project's context files (`project_context.rs`, ADR 0135). Returns the answer's bytes on 2xx.
+    pub(crate) async fn send_limited(
+        &self,
+        method: Method,
+        path: &str,
+        query: &str,
+        json: Option<&serde_json::Value>,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, TransportError> {
         let (url, _) = relay_url(&self.base, path, query)?;
-        let mut resp = self.signed(Method::GET, url).send().await.map_err(unreachable)?;
+        let mut req = self.signed(method, url);
+        if let Some(json) = json {
+            req = req.json(json);
+        }
+        let mut resp = req.send().await.map_err(unreachable)?;
         self.keep_cookies(&resp);
         match resp.status() {
             s if s.is_success() => {}
@@ -1560,7 +1579,7 @@ impl Dashboard {
                 return Err(too_large(body.len() as u64));
             }
         }
-        String::from_utf8(body).map_err(|_| TransportError::Unexpected { status: 200, body: "the answer isn't UTF-8 text".into() })
+        Ok(body)
     }
 
     /// Downloads the Server file at `server_path` through the managed-files route `GET api/files/download` (ADR 0023)

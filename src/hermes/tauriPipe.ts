@@ -4,6 +4,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { CustomEndpoint, EndpointSave, ProviderSignIn } from "./accounts";
 import type { LocalFile, OpenPipe, Pipe, PipeEvent, Route, ToolsetGuards, Transcript, VoiceSetup } from "./pipe";
+import type { GitExclude } from "./projectContextFiles";
 import type { Downloaded, PickedUpload, TransferProgress } from "./remoteFiles";
 import type { Probe, Probed, ProbeFailure, SavedKey } from "./setup";
 import { routedPipe, type ReachRoute, type RouteDetails, type RoutedHooks } from "./routes";
@@ -149,6 +150,23 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
       saveText: (id, path, text, overwrite) => invoke<string>("files_save_text", { id, path, text, overwrite }).catch(asError),
       fsSaveText: (id, profile, path, text, session) => invoke<string>("fs_save_text", { id, profile, path, text, session: session ?? null }).catch(asError),
       cancelTransfer: (id) => invoke("files_cancel", { id }),
+      context: {
+        pick: () => invoke<LocalFile[]>("context_pick").catch(asError),
+        localFiles: (paths) => invoke<LocalFile[]>("context_local_files", { paths }).catch(asError),
+        upload: (id, local, serverPath, overwrite, sshProfile, onProgress) => {
+          const channel = new Channel<TransferProgress>();
+          channel.onmessage = onProgress;
+          return invoke<void>("context_upload", { id, local, serverPath, overwrite, sshProfile: sshProfile ?? null, onProgress: channel }).catch(asError);
+        },
+        writeText: (serverPath, text, overwrite, sshProfile) => invoke<void>("context_write_text", { serverPath, text, overwrite, sshProfile: sshProfile ?? null }).catch(asError),
+        mkdir: (path) => invoke<string>("context_mkdir", { path }).catch(asError),
+        remove: (serverPath) => invoke<void>("context_remove", { serverPath }).catch(asError),
+        readText: (serverPath, size, sshProfile) =>
+          invoke<string | null>("context_read_text", { serverPath, size, sshProfile: sshProfile ?? null }).then((text) => text ?? undefined, asError),
+        sshFile: (serverPath, sshProfile) =>
+          invoke<{ size: number; text: string | null }>("context_ssh_file", { serverPath, sshProfile }).then(({ size, text }) => (text === null ? { size } : { size, text }), asError),
+        gitExclude: (mainFolder, sshProfile) => invoke<GitExclude>("context_git_exclude", { mainFolder, sshProfile: sshProfile ?? null }).catch(asError),
+      },
       openDisplay: async (ticket, onData, onClose) => {
         // RFB bytes arrive raw, as an ArrayBuffer; the close, once, as JSON.
         const channel = new Channel<ArrayBuffer | { code: number; reason: string }>();

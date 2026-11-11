@@ -49,9 +49,12 @@ import { readBack, sendImport, type PlannedChat } from "./importTranscripts";
 import { memoryApi, type MemoryApi } from "./memory";
 import { MemoryProvidersApi } from "./memoryProviders";
 import { SkillsApi } from "./skills";
-import { CapabilityStore, CapabilityUnsupportedError, failureOf, isNoRoute, sharesChats, type ServerFacts } from "./capabilities";
+import { CapabilityStore, CapabilityUnsupportedError, failureOf, isNoRoute, sharesChats, specOf, type CapabilityId, type ServerFacts } from "./capabilities";
 import { BOT_CHAT_TITLE, BotChats, BotModeUnsupportedError, isBotChat, isBotChatTitle, rosterOf, type Bot } from "./bots";
 import type { OpenPipe, Pipe, PipeEvent, RestMethod, Route, Speech, Transcript, VoiceSetup } from "./pipe";
+import { projectContextFiles, type ChatContext, type ProjectContextFiles } from "./projectContextFiles";
+import { withContext } from "./projectContext";
+import { typedText } from "./branch";
 import { RemoteFilesError, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, SESSION_GONE, previewSupport, remoteFiles, type EditIo, type RemoteFiles } from "./remoteFiles";
 import { isUnsecure } from "./unsecure";
 import { TOKEN_REFUSED } from "./routes";
@@ -360,7 +363,7 @@ type QuestionSpec<Q extends QuestionItem> = {
 const isQuestionMethod = (method: string): method is QuestionKind => Object.hasOwn(QUESTIONS, method);
 /** The card for a request the app shows, or none. */
 const questionCard = (r: ServerRequest): QuestionItem | undefined => (isQuestionMethod(r.method) ? QUESTIONS[r.method].card(r) : undefined);
-const specOf = <Q extends QuestionItem>(i: Q) => QUESTIONS[i.kind] as unknown as QuestionSpec<Q>;
+const questionSpec = <Q extends QuestionItem>(i: Q) => QUESTIONS[i.kind] as unknown as QuestionSpec<Q>;
 
 /** JSON-RPC "method not found": what Hermes expects from a client that can't handle a request. */
 const NO_SUCH_METHOD = -32601;
@@ -893,6 +896,24 @@ export class Hermes {
     },
     cancel: (id) => this.pipe?.cancelTransfer(id) ?? Promise.resolve(),
   });
+
+  /** A project's context files on the server (projectContextFiles.ts, ADR 0135). */
+  readonly contextFiles: ProjectContextFiles = projectContextFiles({
+    get: (pathAndQuery, maxBytes) => this.restGet(pathAndQuery, maxBytes),
+    pipe: () => (this.closing || this.snapshot.status !== "connected" ? undefined : this.pipe?.context),
+    lacks: (ssh) => {
+      const lacking = (id: CapabilityId) => (this.capabilities.get(id).state === "unsupported" ? [`${specOf(id).label}: ${specOf(id).needs}`] : []);
+      return ssh ? lacking("outputs") : lacking("serverFiles");
+    },
+    scope: () => String(this.generation),
+    preview: (entry, asText) => this.files.preview(entry, asText),
+  });
+  /**
+   * What a message to `chatId` carries below the owner's words: what its projects' context files are now, for a chat
+   * that hasn't been told (projectContextFiles.ts `chatContext`). Asked just before each message goes; `accepted` is
+   * called once Hermes took it.
+   */
+  sendContext?: (profile: string, chatId: string) => Promise<ChatContext | undefined> | undefined;
 
   /**
    * How an artifact on the machine where `profile`'s tools run is read and saved (artifacts.ts `agentFsEditIo`, ADR
@@ -2027,17 +2048,19 @@ export class Hermes {
    * what it runs on, for this chat only; left out, it runs on the profile's model. `folder`: the server folder it
    * works in (its session `cwd`), checked by the caller first; Hermes quietly runs a chat in its own folder when it
    * can't use the one asked for, so the chat is refused unless Hermes says it took it. `instructions`: one hidden
-   * message seeded before the owner's first, which the model reads and no Hermes client shows (ADR 0017).
+   * message seeded before the owner's first, which the model reads and no Hermes client shows (ADR 0017). `context`:
+   * a second one after it, with the project's context files (ADR 0135).
    */
-  async newChat(model?: ModelPick, start: { folder?: string; instructions?: string } = {}): Promise<string> {
-    const { folder, instructions } = start;
+  async newChat(model?: ModelPick, start: { folder?: string; instructions?: string; context?: string } = {}): Promise<string> {
+    const { folder, instructions, context } = start;
+    const seeded = [instructions, context].filter((text): text is string => !!text);
     const profile = this.profile;
     const res = (await this.request("session.create", {
       profile,
       source: APP_SOURCE,
       // `cwd_explicit`: a deliberate pick, which beats a profile's configured `terminal.cwd` (`_completion_cwd`).
       ...(folder && { cwd: folder, cwd_explicit: true }),
-      ...(instructions && { messages: [{ role: "user", content: instructions, display_kind: "hidden" }] }),
+      ...(seeded.length && { messages: seeded.map((content) => ({ role: "user", content, display_kind: "hidden" })) }),
       // `SessionCreateParams`: each is this session's own override. `fast` left out keeps the profile's.
       ...(model && {
         model: model.model,
@@ -2052,9 +2075,9 @@ export class Hermes {
     };
     const cwd = (res.info as { cwd?: unknown } | undefined)?.cwd;
     if (folder && cwd !== folder) {
-      // Not this chat: drop the session, and the hidden message Hermes stored with it, so nothing is left behind.
+      // Not this chat: drop the session, and the hidden messages Hermes stored with it, so nothing is left behind.
       void this.request("session.close", { session_id: res.session_id }).catch(() => {});
-      if (instructions)
+      if (seeded.length)
         void this.fencedDelete(res.stored_session_id, profile).catch(() => {});
       throw new Error(`Hermes didn't start it in ${folder}${typeof cwd === "string" && cwd ? `: it would have worked in ${cwd}` : ""}. Nothing was sent.`);
     }
@@ -2973,15 +2996,18 @@ export class Hermes {
         this.setOutgoing(profile, chatId, user.id, (r) =>
           withOutgoing(r, { sent: { prompt: shown ?? prompt, ...(this.knownRow.has(chatId) && { after: this.knownRow.get(chatId) }) } }),
         );
+      let told: ChatContext | undefined;
       // A compaction Hermes hasn't answered yet goes first: the message mustn't land while it rewrites the context.
       const submitting = this.resume(chatId).then((runtimeId) => {
         const go = async () => {
-          if (!skill) return this.submit(runtimeId, text, attachments, goingOut, !!queued);
+          const asking = this.sendContext?.(profile, chatId);
+          if (asking) told = await asking.catch(() => undefined);
+          if (!skill) return this.submit(runtimeId, text, attachments, goingOut, !!queued, told?.blocks);
           // Hermes builds the skill's text for this session; nothing reaches the chat until it is sent below.
           const ran = await runSkill((method, params) => this.request(method, params), runtimeId, skill);
           shown = ran.display;
           this.setOutgoing(profile, chatId, user.id, (r) => ({ ...r, text: ran.display }));
-          return this.submit(runtimeId, ran.message, attachments, goingOut, !!queued);
+          return this.submit(runtimeId, ran.message, attachments, goingOut, !!queued, told?.blocks);
         };
         const compacting = this.compacting.get(chatId);
         return compacting ? compacting.then(go) : go();
@@ -3000,6 +3026,7 @@ export class Hermes {
         if (this.submitting.get(chatId) === submitting) this.submitting.delete(chatId);
       }
       this.setOutgoing(profile, chatId, user.id, confirmed);
+      told?.accepted(chatId);
       this.noteRows(chatId, [res.user_row_id]);
       // Pin now if Hermes has stored the session; a new chat may not have its row yet, so the end of the turn
       // tries again.
@@ -3259,7 +3286,7 @@ export class Hermes {
   async answerQuestion(chatId: string, itemId: string, a: QuestionAnswer): Promise<void> {
     const card = this.snapshot.chats.find((c) => c.id === chatId)?.items.find((i) => i.id === itemId);
     if (!card || !isWaiting(card) || card.kind === "approval") return;
-    const spec = specOf(card);
+    const spec = questionSpec(card);
     const reopen = () => ({ answer: undefined });
     if (a.kind === "skip" && spec.skip) {
       const result = spec.skip;
@@ -3945,7 +3972,7 @@ export class Hermes {
     const cards = reqs.flatMap((r) => questionCard(r) ?? []);
     const fresh = cards.filter((q) => !this.notified.has(`${runtimeId} ${q.id}`));
     for (const q of fresh) this.notified.add(`${runtimeId} ${q.id}`);
-    if (fresh.length) this.alert(specOf(fresh[0]).notice);
+    if (fresh.length) this.alert(questionSpec(fresh[0]).notice);
     this.patchChat(chatId, (c) => {
       const shown = new Set(c.items.map((i) => i.id));
       const items = [...c.items];
@@ -3954,7 +3981,7 @@ export class Hermes {
         if (!closed) items.push(q);
         else if (closed.answer)
           items.push(
-            errorItem({ ...c, items }, `Your answer to ${specOf(closed).named(closed)} didn't reach Hermes before the connection dropped. Hermes stops waiting on its own.`),
+            errorItem({ ...c, items }, `Your answer to ${questionSpec(closed).named(closed)} didn't reach Hermes before the connection dropped. Hermes stops waiting on its own.`),
           );
       }
       return items.length > c.items.length ? { ...c, items } : c;
@@ -4118,7 +4145,7 @@ export class Hermes {
    * don't ride along with the next one. `goingOut` hears the prompt just before it goes. `hold`: should a turn still be
    * running there, Hermes holds the message until it ends, instead of redirecting or interrupting it (research doc).
    */
-  private async submit(runtimeId: string, text: string, attachments: Attachment[], goingOut: (prompt: string) => void, hold = false) {
+  private async submit(runtimeId: string, text: string, attachments: Attachment[], goingOut: (prompt: string) => void, hold = false, context: readonly string[] = []) {
     const queued: string[] = [];
     const refs: string[] = [];
     try {
@@ -4138,7 +4165,7 @@ export class Hermes {
       }
       const prompt = [refs.join("\n"), text].filter(Boolean).join("\n\n") || (queued.length ? IMAGE_ONLY_PROMPT : "");
       goingOut(prompt);
-      return (await this.request("prompt.submit", { session_id: runtimeId, profile: this.profile, text: prompt, ...(hold && { queued: true }) }).catch((e) => {
+      return (await this.request("prompt.submit", { session_id: runtimeId, profile: this.profile, text: withContext(prompt, context), ...(hold && { queued: true }) }).catch((e) => {
         throw e instanceof ConnectionLostError ? new PromptUnconfirmedError(e.message) : e;
       })) as Submitted;
     } catch (e) {
@@ -5263,7 +5290,7 @@ function arrived(row: OutgoingItem, readBack: ReadBack[]): boolean {
     (m) =>
       m.role === "user" &&
       (sent.after === undefined || m.rowId === undefined || m.rowId > sent.after) &&
-      (m.text.trim() === sent.prompt.trim() || (!!attachments?.length && !!words && m.text.includes(words))),
+      (typedText(m.text).trim() === sent.prompt.trim() || (!!attachments?.length && !!words && m.text.includes(words))),
   );
 }
 
@@ -5311,7 +5338,7 @@ function historyItems(messages: TranscriptMessage[]): Item[] {
     const at = storedAt(m.timestamp);
     const rowId = Number.isSafeInteger(m.row_id) ? (m.row_id as number) : undefined;
     if (m.role === "user")
-      return [{ kind: "user", id, text: m.text, ...(at && { at }), ...(rowId !== undefined && { rowId }), ...(m.display_kind === "steer" && { steer: true }) }];
+      return [{ kind: "user", id, text: typedText(m.text), ...(at && { at }), ...(rowId !== undefined && { rowId }), ...(m.display_kind === "steer" && { steer: true }) }];
     if (m.role === "assistant") return [...thought, { kind: "assistant", id, text: m.text, ...(at && { at }), ...(rowId !== undefined && { rowId }) }];
     return [];
   });
