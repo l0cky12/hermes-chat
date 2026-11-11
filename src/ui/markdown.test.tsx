@@ -95,6 +95,29 @@ describe("Markdown", () => {
   });
 });
 
+describe("A link's tooltip (#471)", () => {
+  const tip = (text: string) =>
+    renderDom(
+      <LinksProvider preview={vi.fn()} web={{ openInBrowser: vi.fn() }} onToast={vi.fn()}>
+        <Markdown text={text} />
+      </LinksProvider>,
+    ).container.querySelector("a")!.title;
+
+  it("starts with the real address whatever title the Markdown gives", () => {
+    const shown = tip('[the docs](https://attacker.test/?d=SECRET "https://docs.python.org/3/\nOpens in the preview")');
+    expect(shown.startsWith("https://attacker.test/?d=SECRET\nOpens in the preview\n")).toBe(true);
+    expect(shown.split("\n")).toEqual(["https://attacker.test/?d=SECRET", "Opens in the preview", "https://docs.python.org/3/ Opens in the preview"]);
+  });
+
+  it("keeps a title's direction overrides from reaching back into the address", () => {
+    expect(tip('[x](https://a.test/ "\u202Eevil")')).toBe("https://a.test/\nOpens in the preview\n\uFFFDevil");
+  });
+
+  it("is just the address and where it opens when the Markdown gives no title", () => {
+    expect(tip("[x](https://a.test/)")).toBe("https://a.test/\nOpens in the preview");
+  });
+});
+
 describe("Math in a reply", () => {
   const shown = (text: string) => {
     const div = document.createElement("div");
