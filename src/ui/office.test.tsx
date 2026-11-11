@@ -358,6 +358,16 @@ describe("The building", () => {
     expect(onOpen.mock.calls[0][0]).toMatchObject({ profile: "work", chatId: "deploy" });
   });
 
+  it("gives the scene the tower again when a floor's count changes, though nothing on the open floor moved, so its labels are laid out at their new size", async () => {
+    const { rerender } = office("building", { rooms: sample("work"), profiles: ["work"] });
+    await waitFor(() => expect(drawn.scene?.tower).toEqual([{ profile: "work", agents: 1, lit: true }]));
+    const drawnFloors = drawn.scene!.floors.length;
+    const second: Room = { key: "work notes", profile: "work", chatId: "notes", title: "Notes", desks: [{ key: "work notes reply", agent: { kind: "reply" }, name: "The chat's reply", state: "running" }] };
+    rerender({ rooms: [...sample("work"), second] });
+    await waitFor(() => expect(drawn.scene!.tower).toEqual([{ profile: "work", agents: 2, lit: true }]));
+    expect(drawn.scene!.floors).toHaveLength(drawnFloors);
+  });
+
   it("opens again on the floor last looked at, from the picture it last drew, so an agent dismissed meanwhile walks out", async () => {
     const floorMemory = fresh();
     const { user, unmount } = office("building", { rooms: sample("work"), profiles: ["work"], floorMemory });

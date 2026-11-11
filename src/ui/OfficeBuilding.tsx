@@ -145,7 +145,8 @@ export function OfficeBuilding({
     });
   const towerNow = useRef(tower);
   towerNow.current = tower;
-  const lights = tower.map((t) => (t.lit ? 1 : 0)).join("");
+  // All a floor's label says, so a frame lays the labels out again whenever one may change size.
+  const towerLabelsSay = tower.map((t) => `${t.profile}|${t.agents}|${t.lit ? 1 : 0}`).join(";");
 
   const picture = `${opened}:${pictureOf(floor)}`;
   const latest = useRef({ floor, opened });
@@ -231,7 +232,7 @@ export function OfficeBuilding({
     scene.setFloor(floor, opened);
     memory.current = { ...memory.current, last: { floor, profile: opened } };
   }, [scene, picture, memory]);
-  useEffect(() => scene?.setTower(towerNow.current), [scene, lights]);
+  useEffect(() => scene?.setTower(towerNow.current), [scene, towerLabelsSay]);
   useEffect(() => scene?.setMode(mode), [scene, mode]);
   useEffect(() => scene?.setMotion(moves), [scene, moves]);
   useEffect(() => scene?.setQuality(quality), [scene, quality]);
