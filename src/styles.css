@@ -548,10 +548,14 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 .approval:focus-visible { outline: 2px solid var(--line-2); outline-offset: 2px; }
 .approval-head { display: flex; align-items: center; gap: 8px; font-size: calc(13rem / 14); font-weight: 500; color: var(--warn); }
 .approval.answered .approval-head { color: var(--muted); font-weight: 400; }
+/* A long command scrolls inside its box, which starts at its first line, so the card stays short enough that the
+   transcript sticking to its bottom can't push that line out of sight above the buttons (#489). */
 .approval-cmd {
   margin: 10px 0 8px; background: var(--code-bg); padding: 9px 12px; border-radius: 8px; font-size: calc(var(--mono-size) - 0.5px); white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-all; max-height: min(22em, 40vh); overflow-y: auto;
 }
+.approval-gap { color: var(--muted); font-style: italic; }
+.approval-lines { color: var(--muted); font-size: calc(12rem / 14); margin: -4px 0 8px; }
 .approval.answered .approval-cmd { margin: 6px 0 2px; color: var(--muted); }
 .approval-desc { color: var(--muted); font-size: calc(13rem / 14); }
 .approval-actions { display: flex; gap: 8px; margin-top: 12px; }
