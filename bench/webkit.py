@@ -2,7 +2,9 @@
 # Runs `window.bench` expressions in WebKitGTK 4.1, the engine the Linux app runs in, as bench/run.mjs does in
 # Chromium. Build the page first (`npx vite build --config bench/vite.config.ts`), then run under a display, such as
 # `xvfb-run -a -s "-screen 0 1280x900x24" python3 bench/webkit.py 'bench.streamCode(10,false)' ...`.
-# Each expression runs in turn in one page; each result prints as a line of JSON.
+# Each expression runs in turn in one page; each result prints as a line of JSON, with `rssMB`, the resident memory
+# of the page's web process once the expression is done. The expression `settle` waits 10 s, for
+# WebKit to collect garbage on its own timers (WebKitGTK 4.1 has no call to force it), then prints the memory.
 import functools
 import http.server
 import json
@@ -18,7 +20,8 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("WebKit2", "4.1")
 from gi.repository import GLib, Gtk, WebKit2  # noqa: E402
 
-dist = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist")
+# BENCH_DIST serves another build of the page, to time two builds in turn.
+dist = os.environ.get("BENCH_DIST") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist")
 class Quiet(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -37,16 +40,45 @@ window.show_all()
 failed = False
 
 
+def web_rss_mb():
+    """The resident memory of the web processes this script started, in MB."""
+    total = 0
+    pids = [str(os.getpid())]
+    while pids:
+        pid = pids.pop()
+        try:
+            for task in os.listdir(f"/proc/{pid}/task"):
+                with open(f"/proc/{pid}/task/{task}/children") as f:
+                    pids += f.read().split()
+            with open(f"/proc/{pid}/comm") as c:
+                if not c.read().startswith("WebKitWebProces"):  # /proc keeps 15 characters of the name
+                    continue
+            with open(f"/proc/{pid}/status") as st:
+                total += next(int(line.split()[1]) for line in st if line.startswith("VmRSS:"))
+        except (FileNotFoundError, ProcessLookupError):
+            pass
+    return round(total / 1024)
+
+
+def settled(i):
+    print(json.dumps({"expr": "settle", "rssMB": web_rss_mb()}), flush=True)
+    run(i + 1)
+    return False
+
+
 def run(i):
     if i == len(expressions):
         Gtk.main_quit()
+        return
+    if expressions[i] == "settle":
+        GLib.timeout_add_seconds(10, settled, i)
         return
 
     def done(_view, result):
         global failed
         try:
             value = view.call_async_javascript_function_finish(result)
-            print(json.dumps({"expr": expressions[i], "value": json.loads(value.to_json(0))}), flush=True)
+            print(json.dumps({"expr": expressions[i], "value": json.loads(value.to_json(0)), "rssMB": web_rss_mb()}), flush=True)
         except Exception as e:
             print(json.dumps({"expr": expressions[i], "error": str(e)}), flush=True)
             failed = True
