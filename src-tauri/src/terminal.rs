@@ -31,6 +31,8 @@ pub enum TerminalError {
     Gone,
     #[error("Couldn't send to the terminal: {0}")]
     Write(String),
+    #[error("The program in this terminal isn't taking input, so that wasn't sent. Wait for it, or close the terminal.")]
+    NotTakingInput,
 }
 
 impl Serialize for TerminalError {
@@ -465,6 +467,37 @@ mod tests {
         };
         assert_eq!(end, None, "a signal ended it");
         assert!(matches!(t.write(id, b"x"), Err(TerminalError::Gone)));
+        t.close(id);
+    }
+
+    /// A program that never reads: what the owner types waits for it without holding up the caller, until a megabyte
+    /// waits; then the terminal refuses more and says why.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn input_a_program_isnt_reading_waits_without_holding_up_the_caller_and_is_refused_past_a_megabyte() {
+        let t = std::sync::Arc::new(Terminals::default());
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30"]);
+        let id = t.open(command, 80, 24, |_| {}).unwrap();
+        let (done, writes) = std::sync::mpsc::channel();
+        let writer = t.clone();
+        std::thread::spawn(move || {
+            let chunk = vec![b'x'; 64 * 1024];
+            let mut taken = 0;
+            let refused = loop {
+                match writer.write(id, &chunk) {
+                    Ok(()) => taken += chunk.len(),
+                    Err(e) => break e,
+                }
+                if taken > 16 * 1024 * 1024 {
+                    panic!("16 MiB taken and nothing refused");
+                }
+            };
+            let _ = done.send((taken, refused));
+        });
+        let (taken, refused) = writes.recv_timeout(Duration::from_secs(5)).expect("a write held up the caller");
+        assert!(matches!(refused, TerminalError::NotTakingInput), "{refused:?}");
+        assert!((1024 * 1024..=2 * 1024 * 1024).contains(&taken), "refused after {taken} bytes");
         t.close(id);
     }
 

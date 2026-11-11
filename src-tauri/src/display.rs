@@ -16,10 +16,12 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::WebSocketStream;
 
 /// Hermes's tickets are short; anything far longer isn't one.
 const MAX_TICKET: usize = 512;
@@ -76,6 +78,14 @@ pub async fn open(dashboard: Arc<Dashboard>, ticket: &str, on_event: impl Fn(Dis
         .await
         .map_err(|_| TransportError::WebSocket(format!("it didn't open within {}s.", OPEN_LIMIT.as_secs())))?
         .map_err(|e| TransportError::WebSocket(e.to_string()))?;
+    Ok(relay(ws, move |reason| dashboard.hides_reason(reason), on_event))
+}
+
+/// Moves bytes both ways on the open socket `ws` until it closes. A close reason `hides` matches isn't passed on.
+fn relay<S>(ws: WebSocketStream<S>, hides: impl Fn(&str) -> bool + Send + 'static, on_event: impl Fn(DisplayEvent) + Send + 'static) -> DisplaySocket
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let (outgoing, mut to_server) = mpsc::unbounded_channel::<Out>();
     tokio::spawn(async move {
         let (mut sink, mut stream) = ws.split();
@@ -104,10 +114,10 @@ pub async fn open(dashboard: Arc<Dashboard>, ticket: &str, on_event: impl Fn(Dis
                 },
             }
         };
-        let reason = if dashboard.hides_reason(&reason) { String::new() } else { reason };
+        let reason = if hides(&reason) { String::new() } else { reason };
         on_event(DisplayEvent::Closed { code, reason });
     });
-    Ok(DisplaySocket { outgoing })
+    DisplaySocket { outgoing }
 }
 
 /// The screen sockets open now, by id.
@@ -167,6 +177,38 @@ mod tests {
             assert!(checked_ticket(bad).is_err(), "{bad:?}");
         }
         assert!(checked_ticket("Abc-123_x.y~z").is_ok());
+    }
+
+    /// Hermes not reading what the Screen sends: past a megabyte waiting, a send is refused, and the socket ends as a
+    /// dropped link does (1006, no close frame), so the Screen's own way back from a lost stream applies.
+    #[tokio::test]
+    async fn input_hermes_isnt_reading_is_refused_past_a_megabyte_and_ends_the_socket() {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.set_recv_buffer_size(64 * 1024).unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let listener = socket.listen(1).unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            // Opened and never read.
+            let _ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let (ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/")).await.unwrap();
+        let (events, mut heard) = mpsc::unbounded_channel();
+        let socket = relay(ws, |_| false, move |e| drop(events.send(e)));
+
+        let chunk = vec![0u8; 64 * 1024];
+        let mut taken = 0;
+        while socket.send(chunk.clone()).is_ok() {
+            taken += chunk.len();
+            assert!(taken <= 64 * 1024 * 1024, "64 MiB taken and nothing refused");
+            // Lets the relay write what the socket takes, as it does between the webview's sends.
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert!(taken >= 1024 * 1024, "refused after only {taken} bytes");
+        let closed = tokio::time::timeout(Duration::from_secs(5), heard.recv()).await.expect("the socket didn't end");
+        assert!(matches!(closed, Some(DisplayEvent::Closed { code: 1006, .. })), "{closed:?}");
     }
 
     #[test]

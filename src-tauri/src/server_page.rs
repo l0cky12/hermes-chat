@@ -1061,10 +1061,20 @@ fn client_hello() -> Vec<u8> {
 /// Accepts connections on `listener` and copies each one to and from ssh's `socket`. Runs until dropped; returns only
 /// if accepting fails. A connection from anyone but `peers` is closed unanswered (ADR 0105, ADR 0138).
 pub(crate) async fn serve(listener: TcpListener, socket: Address, peers: Peers) {
+    let listener = &listener;
+    serve_with(move || listener.accept(), socket, peers).await
+}
+
+/// `serve`, taking each connection from `accept`.
+async fn serve_with<A, F>(mut accept: A, socket: Address, peers: Peers)
+where
+    A: FnMut() -> F,
+    F: std::future::Future<Output = std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)>>,
+{
     let mut conns = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
-            accepted = listener.accept() => {
+            accepted = accept() => {
                 let Ok((mut tcp, _)) = accepted else { return };
                 let socket = socket.clone();
                 conns.spawn(async move {
@@ -1830,6 +1840,15 @@ while True:
     /// The relay's port, in front of a stand-in for ssh's end that answers every request with `body`, serving programs
     /// run by `account`. The second value keeps the stand-in's end open.
     async fn relay_for(body: &'static str, account: loopback_peer::Account) -> (u16, impl Sized) {
+        let (address, end) = ssh_stand_in(body).await;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(serve(listener, address, Peers::Account(account)));
+        (port, end)
+    }
+
+    /// A stand-in for ssh's end that answers every request with `body`. The second value keeps it open.
+    async fn ssh_stand_in(body: &'static str) -> (Address, impl Sized) {
         #[cfg(unix)]
         let (ssh, address, end) = {
             let dir = SocketDir::new().unwrap();
@@ -1853,10 +1872,33 @@ while True:
                 });
             }
         });
+        (address, end)
+    }
+
+    /// A failed accept (a connection reset before it was taken, or no file descriptors left) doesn't end the relay: the
+    /// next connection is still relayed.
+    #[cfg(any(target_os = "linux", windows))]
+    #[tokio::test]
+    async fn the_relay_outlives_a_failed_accept() {
+        let (address, _end) = ssh_stand_in("the dashboard").await;
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        tokio::spawn(serve(listener, address, Peers::Account(account)));
-        (port, end)
+        tokio::spawn(async move {
+            let mut failed = false;
+            let accept = || {
+                let fail = !std::mem::replace(&mut failed, true);
+                let listener = &listener;
+                async move {
+                    if fail {
+                        return Err(std::io::Error::from(std::io::ErrorKind::ConnectionAborted));
+                    }
+                    listener.accept().await
+                }
+            };
+            serve_with(accept, address, Peers::Account(loopback_peer::this_account())).await
+        });
+        let got = tokio::time::timeout(Duration::from_secs(5), get(&format!("http://127.0.0.1:{port}/"))).await.expect("the relay didn't answer");
+        assert!(got.as_deref().is_ok_and(|g| g.ends_with("the dashboard")), "{got:?}");
     }
 
     /// An account this test never runs as.
