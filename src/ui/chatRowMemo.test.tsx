@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import type { ComponentProps } from "react";
+import { type ComponentProps, Suspense, startTransition, use } from "react";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import type { Chat } from "../hermes/model";
 import { CheckTimesStore } from "../hermes/otherProfiles";
@@ -107,4 +107,39 @@ it("moves a chat's age on as minutes pass, without drawing its row again", () =>
   rerender(list({ chats: shown }));
   expect(rowOf("c0").querySelector(".row-meta")!.textContent).toBe("7m");
   expect(rowsDrawn).toBe(drawn);
+});
+
+it("calls the committed callbacks from a row after React throws away a newer render of the list (#436)", async () => {
+  const committed = vi.fn();
+  const discarded = vi.fn();
+  const shown = chats(2);
+  const never = new Promise<never>(() => {});
+  const Hold = () => use(never);
+  const tree = (onOpen: () => void, held: boolean) => (
+    <Suspense fallback="Loading">
+      {list({ chats: shown, onOpen })}
+      {held && <Hold />}
+    </Suspense>
+  );
+  const { rerender } = render(tree(committed, false));
+  // A transition whose render suspends is never committed: the list rendered with `discarded`, but React keeps the
+  // committed tree on screen.
+  await act(async () => startTransition(() => rerender(tree(discarded, true))));
+  expect(screen.queryByText("Loading")).toBeNull();
+  fireEvent.click(rowOf("c1"));
+  expect(discarded).not.toHaveBeenCalled();
+  expect(committed).toHaveBeenCalledWith("c1");
+});
+
+it("moves a snoozed chat's wake label past midnight without another render of the list (#438)", () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  vi.setSystemTime(new Date(2026, 10, 11, 23, 59));
+  const until = new Date(2026, 10, 12, 9, 0).getTime();
+  const weekday = new Date(until).toLocaleDateString(undefined, { weekday: "short" });
+  render(list({ chats: chats(1), snoozes: { c0: until } }));
+  fireEvent.click(screen.getByRole("button", { name: /Snoozed/ }));
+  const wake = () => rowOf("c0").querySelector(".row-wake")!.textContent;
+  expect(wake()).toMatch(new RegExp(`^${weekday} `));
+  act(() => vi.advanceTimersByTime(2 * AGE_TICK_MS));
+  expect(wake()).toBe(new Date(until).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }));
 });
