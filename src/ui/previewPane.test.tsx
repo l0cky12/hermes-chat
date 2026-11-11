@@ -228,7 +228,7 @@ describe("Opening the preview pane", () => {
     const frame = await within(pane()).findByTitle("Web page: https://docs.example.com/crash");
     expect(frame.getAttribute("src")).toBe("https://docs.example.com/crash");
     const sandbox = frame.getAttribute("sandbox")!.split(" ");
-    expect(sandbox.sort()).toEqual(["allow-forms", "allow-same-origin", "allow-scripts"]);
+    expect(sandbox.sort()).toEqual(["allow-forms", "allow-scripts"]);
     expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(within(pane()).getByText("Web")).toBeTruthy();
     expect(within(pane()).getByRole("status").textContent).toContain("Loading page");
@@ -431,7 +431,7 @@ describe("Web pages a site won't let the pane show (issue #55)", () => {
     // The owner may still try, in the same sandboxed frame.
     await user.click(within(note).getByRole("button", { name: "Try showing it here anyway" }));
     const again = within(pane()).getByTitle(`Web page: ${GOOGLE}`);
-    expect(again.getAttribute("sandbox")!.split(" ").sort()).toEqual(["allow-forms", "allow-same-origin", "allow-scripts"]);
+    expect(again.getAttribute("sandbox")!.split(" ").sort()).toEqual(["allow-forms", "allow-scripts"]);
     expect(within(pane()).getAllByRole("status").some((e) => e.textContent?.includes("Loading page"))).toBe(true);
   });
 
@@ -813,7 +813,7 @@ describe("Pages on the Hermes server's own loopback (issue #171)", () => {
     );
     // The same sandbox as any web page.
     const frame = within(pane()).getByTitle(`Web page: ${APP_URL}`);
-    expect(frame.getAttribute("sandbox")!.split(" ").sort()).toEqual(["allow-forms", "allow-same-origin", "allow-scripts"]);
+    expect(frame.getAttribute("sandbox")!.split(" ").sort()).toEqual(["allow-forms", "allow-scripts"]);
     // The framing check asks the page through the tunnel too.
     expect(web.checked).toEqual([TUNNEL]);
 
@@ -1058,6 +1058,9 @@ describe("The empty Preview (issue #376)", () => {
     const menu = within(pane()).getByRole("menu", { name: "More" });
     expect(menu.textContent).toContain("Pages here run on their own, with no access to Hermes Chat or your sign-in, and only you can use them.");
     expect(menu.textContent, "a frame can't report a link followed inside it").toContain("Links you follow inside a page don't change the address here.");
+    expect(menu.textContent, "a frame's origin is opaque, so its storage throws (ADR 0138)").toContain(
+      "Pages here can't use their own storage, so some sites work only in your browser.",
+    );
     await user.click(within(menu).getByRole("menuitem", { name: "Copy address" }));
     expect(writes).toEqual(["https://docs.example.com/crash"]);
     expect(await within(pane()).findByText("Address copied.")).toBeTruthy();

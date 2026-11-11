@@ -428,11 +428,10 @@ export function localChatCache(connection: ScopeSource): ChatCache {
           writeOutbox(profile, id, [...readJson(outboxKey(profile, id)).flatMap((r) => toOutgoing(r) ?? []), ...held]);
           localStorage.removeItem(k);
         }
-        return Object.fromEntries(
-          chatsUnder(OUTBOX_PREFIX, profile)
-            .map(({ k, id }) => [id, readJson(k).flatMap((r) => toOutgoing(r) ?? [])] as const)
-            .filter(([, rows]) => rows.length),
-        );
+        const outboxes = Object.fromEntries(chatsUnder(OUTBOX_PREFIX, profile).map(({ k, id }) => [id, readJson(k).flatMap((r) => toOutgoing(r) ?? [])]));
+        // One storage refused is kept in memory instead, and is the latest.
+        for (const { k, id } of chatsUnder(OUTBOX_PREFIX, profile, [...liveOutboxes.keys()])) outboxes[id] = liveOutboxes.get(k)!;
+        return Object.fromEntries(Object.entries(outboxes).filter(([, rows]) => rows.length));
       } catch {
         return {};
       }

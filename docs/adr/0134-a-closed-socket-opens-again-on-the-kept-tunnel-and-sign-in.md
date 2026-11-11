@@ -26,3 +26,4 @@ A socket can close while the rest of the connection is fine, for example when a 
 - Server pages opened over SSH stay open across a socket-only drop. Before, every drop closed them.
 - A server that keeps closing new sockets gets a ticket and a socket about once a second for as long as it does, with no further backoff, because each reopen succeeds. Before, the same server got a sign-in each time, until its login limit put the app Offline.
 - A route the connection was on when its socket closed is tried again before the others. ADR 0120's "drops move to the next route" now applies when the reopen fails.
+- An attachment is one frame, and on a slow uplink it can take minutes to write. The pipe keeps reading what Hermes sends while it writes, `hermes_send_file` answers once the frame has been written, and the heartbeat neither pings nor counts silence until then: its pings would only wait behind the file (#469).

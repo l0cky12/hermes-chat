@@ -3,9 +3,12 @@
 //!
 //! The local end is made as a server page's is (ADR 0114, ADR 0098): ssh forwards a Unix socket in a private folder,
 //! and Rust binds `127.0.0.1:0`, keeps the listener and relays each connection to the socket. The port the sign-in
-//! sends the password to is never free for another program to take while ssh signs in. On Windows ssh listens on a
-//! loopback port instead, and each connection to it is checked to reach ssh before anything is sent (ADR 0140).
+//! sends the password to is never free for another program to take while ssh signs in. Only Rust uses that port, so
+//! the relay serves this process alone: a page in the Preview, loaded by WebKit's own process, can't (ADR 0138). On
+//! Windows ssh listens on a loopback port instead, and each connection to it is checked to reach ssh before anything
+//! is sent (ADR 0140).
 
+use crate::loopback_peer::Peers;
 use crate::server_page::{self, LocalEnd, Ssh, Stderr};
 use std::process::Stdio;
 use std::time::Duration;
@@ -125,7 +128,7 @@ async fn open_through(program: &str, target: &str, remote_port: u16, quick: Opti
     }
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| TunnelError::Spawn(e.to_string()))?;
     let local_port = listener.local_addr().map_err(|e| TunnelError::Spawn(e.to_string()))?.port();
-    let relay = tokio::spawn(server_page::serve(listener, address)).abort_handle();
+    let relay = tokio::spawn(server_page::serve(listener, address, Peers::ThisProcess)).abort_handle();
     Ok(Tunnel { _ssh: child, _end: end, relay, local_port })
 }
 
@@ -380,6 +383,47 @@ fn main() {
             }
         });
         seen
+    }
+
+    /// Sends a request to `127.0.0.1:<port>` from another program of this account, as a page in the Preview does from
+    /// WebKit's network process, and prints whatever comes back.
+    #[cfg(target_os = "linux")]
+    const OTHER_PROGRAM: &str = r#"
+import socket, sys
+try:
+    s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5)
+    s.sendall(b"GET /api/status HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+    got = b""
+    while True:
+        data = s.recv(65536)
+        if not data:
+            break
+        got += data
+    sys.stdout.write(got.decode("latin-1"))
+except OSError:
+    pass
+"#;
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn only_this_app_reaches_the_dashboard_through_the_tunnel_not_another_program_of_the_owners() {
+        let dashboard = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let dashboard_port = dashboard.local_addr().unwrap().port();
+        let seen = serve_http(dashboard);
+        let ssh = FakeSsh::new("only-this-app");
+        let tunnel = open_through(&ssh.program, "me@hermes", dashboard_port, None).await.expect("the tunnel opens");
+
+        let other = tokio::process::Command::new("python3").args(["-c", OTHER_PROGRAM, &tunnel.local_port.to_string()]).output().await.expect("python3");
+        assert_eq!(String::from_utf8_lossy(&other.stdout), "", "another program of the owner's got an answer");
+        let requests = || seen.lock().unwrap().iter().filter(|r| r.starts_with("GET /api/status")).count();
+        assert_eq!(requests(), 0, "another program's request reached the dashboard");
+
+        let mut s = TcpStream::connect(("127.0.0.1", tunnel.local_port)).await.unwrap();
+        s.write_all(b"GET /api/status HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").await.unwrap();
+        let mut answer = String::new();
+        tokio::time::timeout(Duration::from_secs(5), s.read_to_string(&mut answer)).await.expect("an answer").unwrap();
+        assert!(answer.starts_with("HTTP/1.1 200 OK"), "this app's own request is relayed: {answer:?}");
+        assert_eq!(requests(), 1);
     }
 
     const PASSWORD: &str = "correct-horse-battery-staple";

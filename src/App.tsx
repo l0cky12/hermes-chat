@@ -221,6 +221,11 @@ const serverMethods = (d: SignInDetails) => readMethods((one, expect) => tauriRe
 const forgetLocal = (c: SavedConnection) => forgetConnectionData(c, { defaults: savedDefaults, tags: savedTagsFile, persona: savedPersona, afterwards: syncScreenshotOutbox });
 
 const savedDrafts = drafts(localStorage);
+/** Adds `text` to the Draft at `key`, after anything already there. */
+const keepDraft = (key: string, text: string) => {
+  const now = savedDrafts.get(key);
+  if (text) savedDrafts.set(key, now ? `${now}\n\n${text}` : text);
+};
 const savedConnectionRefs = connectionRefs(localStorage);
 const savedProjects = projectLinks(localStorage);
 const savedContextLedger = contextLedger(localStorage);
@@ -753,6 +758,9 @@ let viewsMade = 0;
 /** A pane's `view`: new each time what the pane shows changes, but not when only its tabs do, so a chat starting in the
  * pane can tell the owner went elsewhere from a tab closing beside it. */
 const newView = () => ++viewsMade;
+
+/** Why a pane went to the New chat pane on its own: its chat left the list. */
+const CHAT_LEFT_LIST = "The chat open here is no longer on Hermes: it was deleted elsewhere. Anything you typed in it is kept below, and sending it starts a new chat.";
 
 /** The chat a pane on the New chat pane shows: nothing yet, or why the chat couldn't start. */
 const draftChat = (draftError?: string): Chat => ({
@@ -2001,6 +2009,43 @@ export function Main({
     void (archived ? hermes.archive(id) : hermes.restore(id)).then(done);
   };
 
+  // A chat open in a pane that a list read leaves out is asked for. The list reaches back a month, so one older than
+  // that, or one archived elsewhere, is put back in the list and stays open. One Hermes no longer has, deleted in
+  // another client, leaves its panes as one deleted here does, and its Draft goes with them to the New chat pane: a
+  // send there starts a chat instead of reaching none, and nothing typed is lost (#467). A check that can't reach Hermes
+  // changes nothing, and the next list read asks again.
+  const askedGone = useMemo(() => new Set<string>(), [scope]);
+  // The chats Hermes said it no longer has, whose panes gave way: known at once, before the panes render again.
+  const goneChats = useMemo(() => new Set<string>(), [scope]);
+  const clearChatRef = useRef(clearChat);
+  clearChatRef.current = clearChat;
+  /** `typed`: the words of a send that found the chat out of the list, back to the Draft the owner will see. */
+  const chatGone = (id: string, typed = "") => {
+    const shown = !goneChats.has(id) && panesRef.current.some((p) => p.tabs.includes(id));
+    keepDraft(draftKey(connection, profile, shown ? id : null), typed);
+    if (askedGone.has(id) || !shown) return;
+    askedGone.add(id);
+    const at = profile;
+    hermes
+      .findChat(id, at)
+      .then((found) => {
+        if (hermes.profile !== at) return;
+        if (found) return void hermes.reveal(found);
+        goneChats.add(id);
+        keepDraft(draftKey(connection, at, null), savedDrafts.take(draftKey(connection, at, id)));
+        const shown = panesRef.current.filter((p) => p.chatId === id).map((p) => p.key);
+        clearChatRef.current(id);
+        if (shown.length)
+          setPanes((ps) => ps.map((p) => (shown.includes(p.key) && p.chatId === null ? { ...p, draftError: CHAT_LEFT_LIST } : p)));
+      })
+      .catch(() => {})
+      .finally(() => askedGone.delete(id));
+  };
+  useEffect(() => {
+    if (switching || reopening || status !== "connected" || !hermes.hasListed()) return;
+    for (const id of new Set(panes.flatMap((p) => p.tabs))) if (id !== null && !chats.some((c) => c.id === id)) chatGone(id);
+  }, [chats, panes, switching, reopening, status]);
+
   // The chat to reopen opens as soon as the list has it, the saved one at first, and stays open once the list read from
   // Hermes has it too. If that list doesn't, the chat was deleted, archived, or is older than the list reaches: the New
   // chat pane shows instead, and the chat isn't looked for at the next launch. Only the first pane reopens anything;
@@ -2460,6 +2505,7 @@ export function Main({
           started={!!listed}
           picked={p.picked}
           jump={p.jump}
+          focusItem={focusItem?.pane === p.key && focusItem.chatId === p.chatId ? focusItem : undefined}
           showSubagent={p.subagent?.chatId === p.chatId ? p.subagent : undefined}
           active={!covered && !covering && !previewCovers && (!split || isActive)}
           split={split}
@@ -2494,6 +2540,7 @@ export function Main({
             setReopening(undefined);
             if (stillActive) rememberChat(id);
           }}
+          onChatGone={chatGone}
           onDraftError={(reason) => {
             if (panesRef.current.find((now) => now.key === p.key)?.view === p.view) patchPane(p.key, { draftError: reason });
           }}
@@ -3400,6 +3447,7 @@ function ChatView({
   started,
   picked,
   jump,
+  focusItem,
   showSubagent,
   active,
   split,
@@ -3422,6 +3470,7 @@ function ChatView({
   onOpenWorktree,
   onStarted,
   onDraftError,
+  onChatGone,
   onToast,
   delivers,
   compare,
@@ -3454,6 +3503,8 @@ function ChatView({
   picked?: { found: Found; at: number };
   /** A tool call to go to, from Outputs. */
   jump?: JumpTarget;
+  /** The card or message an Inbox entry is about, which Main scrolls to and focuses once the chat shows it. */
+  focusItem?: { itemId?: string; approval: boolean };
   /** A subagent to open in the chat's Subagents panel, from the agent office. */
   showSubagent?: { id: SubagentId; at: number };
   active: boolean;
@@ -3484,6 +3535,9 @@ function ChatView({
   onOpenWorktree: (w: WorktreeChat) => void;
   onStarted: (id: string) => void;
   onDraftError: (reason: string) => void;
+  /** A send found its chat out of the list: puts `typed` back where the owner will see it, and asks Hermes whether
+   * the chat is still there (#467). */
+  onChatGone: (id: string, typed: string) => void;
   /** Where this pane keeps its `deliver`, by `paneKey`, for a compared pane to send through. */
   delivers: Map<string, RefObject<Deliver>>;
   /** One of two compared panes (ADR 0101): a send here goes to `partner` too. `startModel`: what this New chat pane starts on. */
@@ -3617,7 +3671,18 @@ function ChatView({
       if (!mirrored) savedDrafts.putBack(draftOf(null), typed);
       return false;
     }
-    await hermes.send(to.id, text, attachments, skill);
+    const { delivery, itemId } = await hermes.sendTracked(to.id, text, attachments, skill);
+    // No item: the chat left the list before the message went in, so it is in no outbox. Its words go back to its Draft
+    // while a pane still shows it, and the chat is asked for: back in the list if Hermes still has it, else the Draft
+    // moves to New chat. Once its panes have given way, they go straight to New chat (#467).
+    if (itemId === undefined && delivery.delivery !== "accepted") {
+      // After a profile switch, the words stay with their own profile's chat.
+      if (!stillIn()) keepDraft(draftOf(to.id), mirrored ? "" : typed);
+      else onChatGone(to.id, mirrored ? "" : typed);
+      if (stillIn())
+        onDraftError(`Your message wasn't sent: ${delivery.reason} Its words are back in the composer${attachments.length ? "; attach again any of its files that aren't" : ""}.`);
+      return false;
+    }
     return true;
   };
   const deliverRef = useRef(deliver);
@@ -3865,6 +3930,7 @@ function ChatView({
       notLoaded={started && status !== "connected" && !chat.runtimeId && chat.items.every(isOutgoing)}
       findTarget={findTarget}
       jumpTo={jump}
+      reveal={focusItem}
       showSubagent={showSubagent}
       onJumpMissed={() =>
         onToast(jump?.rowId !== undefined ? "Couldn't find the message this branch was made from in the chat's history." : "Couldn't find the tool call that made this file in the chat's history.")
