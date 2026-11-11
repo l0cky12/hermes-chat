@@ -990,7 +990,7 @@ async fn files_download(
 ) -> Result<Option<Downloaded>, RelayError> {
     let epoch = transfers.epoch();
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let mut dialog = app.dialog().file().set_title("Download from the Hermes server").set_file_name(name);
+    let mut dialog = app.dialog().file().set_title("Download from the Hermes server").set_file_name(suggested_name(&name, "download"));
     if let Some(window) = app.get_webview_window("main") {
         dialog = dialog.set_parent(&window);
     }
@@ -1331,6 +1331,29 @@ async fn token_delete(connection: Option<String>) -> Result<(), String> {
     saved_password::delete(saved_password::account(saved_password::TOKEN, connection.as_deref())?).await
 }
 
+/// A file name the webview or the server suggests, made fit to show in a Save dialog (#481): only its last part on
+/// either separator, so it names no folder; without control, invisible or direction-changing characters, which can make
+/// `invoice\u{202E}fdp.exe` read `invoiceexe.pdf`; and without `:` or the other characters Windows refuses, where `:`
+/// would name a drive or a stream. Leading and trailing spaces and dots go too. `fallback` when nothing is left.
+fn suggested_name(name: &str, fallback: &str) -> String {
+    let hidden = |c: char| {
+        c.is_control()
+            || matches!(c, '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}')
+    };
+    let last = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let kept: String = last.chars().filter(|&c| !hidden(c) && !matches!(c, ':' | '<' | '>' | '"' | '|' | '?' | '*')).collect();
+    let mut kept = kept.trim_matches(|c: char| c.is_whitespace() || c == '.').to_owned();
+    if kept.len() > 200 {
+        let end = (0..=200).rev().find(|&i| kept.is_char_boundary(i)).unwrap_or(0);
+        kept.truncate(end);
+    }
+    if kept.is_empty() {
+        fallback.to_owned()
+    } else {
+        kept
+    }
+}
+
 /// Writes `contents` where the owner picks in the native Save dialog, which asks before replacing a file. The webview
 /// never names the path. `None`: the owner cancelled, and nothing was written.
 async fn save_with_dialog(
@@ -1341,6 +1364,7 @@ async fn save_with_dialog(
     contents: impl AsRef<[u8]>,
 ) -> Result<Option<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
+    let file_name = suggested_name(&file_name, filter.1.first().map_or("export".to_owned(), |ext| format!("export.{ext}")).as_str());
     let mut dialog = app.dialog().file().set_title(title).set_file_name(file_name).add_filter(filter.0, filter.1);
     if let Some(window) = app.get_webview_window("main") {
         dialog = dialog.set_parent(&window);
@@ -1936,6 +1960,24 @@ mod test_common;
 mod tests {
     use super::Transfers;
     use std::time::Duration;
+
+    #[test]
+    fn a_suggested_save_name_is_one_plain_file_name() {
+        let name = |s: &str| super::suggested_name(s, "download");
+        assert_eq!(name("invoice\u{202E}fdp.exe"), "invoicefdp.exe");
+        assert_eq!(name("a\u{2066}b\u{2069}c\u{200F}d\u{FEFF}e\u{0007}f\nġ.txt"), "abcdefġ.txt");
+        assert_eq!(name(r"..\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\x.bat"), "x.bat");
+        assert_eq!(name("../../etc/passwd"), "passwd");
+        assert_eq!(name("C:x.txt"), "Cx.txt");
+        assert_eq!(name("report.txt:stream"), "report.txtstream");
+        assert_eq!(name(r#"a<b>c"d|e?f*g.md"#), "abcdefg.md");
+        assert_eq!(name("  .hidden. "), "hidden");
+        for nothing in ["", "..", "/", r"dir\", "\u{202E}", " . "] {
+            assert_eq!(name(nothing), "download", "{nothing:?}");
+        }
+        assert_eq!(name("Chat — notes 2026.md"), "Chat — notes 2026.md");
+        assert_eq!(name(&"é".repeat(150)).len(), 200);
+    }
 
     #[test]
     fn a_chat_exports_only_as_markdown_or_json_each_with_its_own_extension() {
