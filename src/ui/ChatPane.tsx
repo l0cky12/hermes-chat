@@ -24,6 +24,7 @@ import { chunkBlocks } from "./transcriptChunks";
 import { useTranscriptWindow } from "./transcriptWindow";
 import { SourceIcon, Spinner, StoredTime, composing, escapeRe, highlight } from "./bits";
 import { caretAfter, editStep, inputKind, type EditStep } from "./editKeys";
+import { ariaKeys, chordLabel, chordOf, chordParts, pick as pickCommand, pickApp, useBindings, type Chord } from "./keybindings";
 import type { EditKind } from "../hermes/editHistory";
 import { wakeFull } from "../hermes/snooze";
 import { stagedFiles } from "../hermes/unsaved";
@@ -48,6 +49,9 @@ import { CopyButton, replyMarkdown } from "./CopyMessage";
 import { turnsOf, type ReplayKind, type Variant } from "../hermes/replay";
 import type { FollowUp } from "../hermes/uiPrefs";
 import { sttRoute } from "../hermes/sttRoute";
+
+const NATIVE_NEW_LINE: readonly string[] = ["Enter", "Shift+Enter"];
+const insertAsTyping = (text: string) => document.execCommand("insertText", false, text);
 
 /**
  * What a message sent while the chat's reply runs does (ADR 0057). `mode`: what Enter does, the Follow-up behavior
@@ -452,6 +456,8 @@ export function ChatPane({
   variants?: { byTurn: Map<number, Variant[]>; onPick: (chatId: string, turn: number) => void };
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const keys = useBindings();
+  const labels = (chords: readonly Chord[]) => chords.map(chordLabel).join(" or ");
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -573,10 +579,9 @@ export function ChatPane({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && !composing(e) && activeRef.current) {
-        e.preventDefault();
-        openFind();
-      }
+      if (pickApp(e) !== "find" || e.defaultPrevented || !activeRef.current) return;
+      e.preventDefault();
+      openFind();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -756,9 +761,9 @@ export function ChatPane({
             {headActions}
             <button
               className="icon-btn"
-              title="Find in chat (Ctrl+F)"
+              title={`Find in chat (${labels(keys.find)})`}
               aria-label="Find in chat"
-              aria-keyshortcuts="Control+F"
+              aria-keyshortcuts={ariaKeys(keys.find)}
               onClick={openFind}
             >
               <Search size={16} />
@@ -783,23 +788,23 @@ export function ChatPane({
                 stickToBottom.current = false;
               }}
               onKeyDown={(e) => {
-                if (composing(e)) return;
-                if (e.key === "Enter" || e.key === "ArrowDown" || e.key === "ArrowUp") {
-                  e.preventDefault();
-                  step(e.key === "ArrowUp" || (e.key === "Enter" && e.shiftKey) ? -1 : 1);
-                } else if (e.key === "Escape") closeFind();
+                const command = pickCommand(e, "find");
+                if (!command) return;
+                e.preventDefault();
+                if (command === "findClose") closeFind();
+                else step(command === "findPrev" ? -1 : 1);
               }}
             />
             <span className="find-count" aria-live="polite">
               {query ? `${count ? Math.min(matchIndex, count - 1) + 1 : 0} of ${count}` : ""}
             </span>
-            <button className="icon-btn" title="Previous (↑ or Shift+Enter)" disabled={!count} onClick={() => step(-1)}>
+            <button className="icon-btn" title={`Previous (${labels(keys.findPrev)})`} disabled={!count} onClick={() => step(-1)}>
               <ChevronUp size={16} />
             </button>
-            <button className="icon-btn" title="Next (↓ or Enter)" disabled={!count} onClick={() => step(1)}>
+            <button className="icon-btn" title={`Next (${labels(keys.findNext)})`} disabled={!count} onClick={() => step(1)}>
               <ChevronDown size={16} />
             </button>
-            <button className="icon-btn" title="Close (Esc)" onClick={closeFind}>
+            <button className="icon-btn" title={`Close (${labels(keys.findClose)})`} onClick={closeFind}>
               <X size={16} />
             </button>
           </div>
@@ -856,10 +861,10 @@ export function ChatPane({
             <div className="empty-state">
               <div className="empty-chat">What should Hermes work on?</div>
               <ul className="empty-keys" aria-label="Keyboard shortcuts">
-                <li><kbd>Ctrl N</kbd> New chat</li>
-                <li><kbd>Ctrl K</kbd> Search chats</li>
-                <li><kbd>Alt ↑↓</kbd> Switch chats</li>
-                <li><kbd>Ctrl ,</kbd> Settings</li>
+                <li><kbd>{chordParts(keys.newChat[0]).join(" ")}</kbd> New chat</li>
+                <li><kbd>{chordParts(keys.search[0]).join(" ")}</kbd> Search chats</li>
+                <li><kbd>{chordParts(keys.chatAbove[0]).join(" ")}</kbd> <kbd>{chordParts(keys.chatBelow[0]).join(" ")}</kbd> Switch chats</li>
+                <li><kbd>{chordParts(keys.settings[0]).join(" ")}</kbd> Settings</li>
               </ul>
             </div>
           )}
@@ -1454,6 +1459,7 @@ function Composer({
   compare?: Comparing;
 }) {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const keys = useBindings();
   // What an update's restart would drop, for Settings to name (unsaved.ts).
   const me = useRef({}).current;
   useEffect(() => stagedFiles.set(me, attachments), [attachments]);
@@ -1751,7 +1757,9 @@ function Composer({
   // What Enter, and the button beside the text, do now; Ctrl+Enter does the other while a reply runs.
   const enterDoes = enterSteers ? "steer" : queueing ? "queue" : "send";
   // With the Ctrl+Enter hint there is no room for Shift+Enter's, which never changes.
-  const keysHint = `Enter to ${enterDoes} · ${enterSteers ? "Ctrl+Enter to queue" : ctrlSteers ? "Ctrl+Enter to steer" : "Shift+Enter for a new line"}`;
+  const sendKey = chordLabel(keys.send[0]);
+  const otherKey = chordLabel(keys.sendOther[0]);
+  const keysHint = `${sendKey} to ${enterDoes} · ${enterSteers ? `${otherKey} to queue` : ctrlSteers ? `${otherKey} to steer` : `${chordLabel(keys.newLine[0])} for a new line`}`;
 
   return (
     <div
@@ -1854,10 +1862,14 @@ function Composer({
               step(edit);
               return;
             }
-            if (e.key === "Enter" && !e.shiftKey && !composing(e)) {
+            const command = pickCommand(e, "composer");
+            if (command === "send" || command === "sendOther") {
               e.preventDefault();
               // Enter queues or steers only while the hint below says so; Dictation hides it.
-              if (!(queueing && dictation.active)) send(e.ctrlKey || e.metaKey);
+              if (!(queueing && dictation.active)) send(command === "sendOther");
+            } else if (command === "newLine" && !NATIVE_NEW_LINE.includes(chordOf(e)!)) {
+              e.preventDefault();
+              insertAsTyping("\n");
             }
           }}
         />

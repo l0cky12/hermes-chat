@@ -30,6 +30,7 @@ import { desktopSummon, type SummonApi } from "./hermes/summon";
 import { onDesktopScreenshot, screenshotSupport, showWindow, syncScreenshotOutbox, tauriScreenshots, type ScreenshotSupport } from "./hermes/tauriScreenshot";
 import { ConnectionManager, RailConnections, RemoveConnection, SwitchConnection } from "./ui/Connections";
 import { checkShortcut, shortcutLabel, shortcutOf } from "./ui/shortcut";
+import { chordLabel, pickApp, useBindings } from "./ui/keybindings";
 
 import { reachRoute, tauriPipe, tauriProbe, tauriReach, type SignInDetails } from "./hermes/tauriPipe";
 import { AttemptLog, tauriAttemptStore } from "./hermes/attempts";
@@ -1135,6 +1136,7 @@ export function Main({
   // computer only and never becomes the profile's default. Picked in another profile, it gives way to this profile's
   // own model. A chat on screen shows the model it runs on, and a pick there switches that chat alone.
   const { modelPicker, modelPicks, modelFavorites, previewWidth, screenshotShortcut, agentOffice, inboxAutoDismissDays } = useSyncExternalStore(subscribeUIPrefs, getUIPrefs);
+  const keys = useBindings();
   const officeShown = officeOpen && agentOffice !== "off";
   // Who sits where in the building. It outlives the building's view, so hidden to the tray, minimized, behind Settings
   // or switched to List and back, each agent comes back to the desk it had.
@@ -1711,8 +1713,8 @@ export function Main({
       return kept.map((k) => k.action);
     };
     const along = items([
-      { drop: { pane: p.key, zone: "tab", index: at - 1 }, label: "Move tab left", icon: <ArrowLeft size={15} />, keys: shown ? "Ctrl+Shift+PgUp" : undefined },
-      { drop: { pane: p.key, zone: "tab", index: at + 2 }, label: "Move tab right", icon: <ArrowRight size={15} />, keys: shown ? "Ctrl+Shift+PgDn" : undefined },
+      { drop: { pane: p.key, zone: "tab", index: at - 1 }, label: "Move tab left", icon: <ArrowLeft size={15} />, keys: shown ? chordLabel(keys.moveTabLeft[0]) : undefined },
+      { drop: { pane: p.key, zone: "tab", index: at + 2 }, label: "Move tab right", icon: <ArrowRight size={15} />, keys: shown ? chordLabel(keys.moveTabRight[0]) : undefined },
     ]);
     // Into the other pane's tabs first, as that is the plainest; then the edges of the tab's own pane.
     const elsewhere = items([
@@ -2359,8 +2361,6 @@ export function Main({
   };
 
   useEffect(() => {
-    // Only Ctrl/Cmd chords and Alt+Up/Down, never mid-composition. No bare key does anything app-wide, so nothing
-    // typed with focus outside an input can answer an Approval or stop a reply.
     const onKey = (e: KeyboardEvent) => {
       if (covered || composing(e)) return;
       // Ctrl+Z outside a text field runs the notice's Undo, as its button does; in one it is always text undo.
@@ -2378,49 +2378,63 @@ export function Main({
         if (!e.repeat) takeScreenshot();
         return;
       }
-      // Alt+Up/Down: the chat above or below the one showing, in Pinned, the Inbox or Working, as the list orders
-      // them. Only while the chat is on screen; a list that uses the same keys (the queue) takes them first, and a
-      // select keeps Alt+Down to open.
+      if (e.defaultPrevented) return;
       const onChat = !covering && !previewCovers && !projectScreenOpen && !searchOpen;
-      if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
-        if (!onChat || e.defaultPrevented || (e.target as Element | null)?.tagName === "SELECT") return;
-        const { pinned, inbox, working } = chatSections(listed, snoozes, Date.now(), attention.since, pins, handoffMap);
-        const order = [...pinned, ...inbox, ...working];
-        const at = order.findIndex((c) => c.id === active.chatId);
-        const next = order[at < 0 ? 0 : at + (e.key === "ArrowDown" ? 1 : -1)];
-        if (next) {
-          e.preventDefault();
-          openChat(next.id);
+      const command = pickApp(e);
+      switch (command) {
+        case "chatBelow":
+        case "chatAbove": {
+          // A select keeps Alt+Down to open.
+          if (!onChat || (e.target as Element | null)?.tagName === "SELECT") return;
+          const { pinned, inbox, working } = chatSections(listed, snoozes, Date.now(), attention.since, pins, handoffMap);
+          const order = [...pinned, ...inbox, ...working];
+          const at = order.findIndex((c) => c.id === active.chatId);
+          const next = order[at < 0 ? 0 : at + (command === "chatBelow" ? 1 : -1)];
+          if (next) {
+            e.preventDefault();
+            openChat(next.id);
+          }
+          return;
         }
-        return;
-      }
-      if (!(e.ctrlKey || e.metaKey)) return;
-      const k = e.key.toLowerCase();
-      if (k === "k") {
-        e.preventDefault();
-        setSearchStart(undefined);
-        setSearchOpen((o) => !o);
-      } else if (k === "n") {
-        e.preventDefault();
-        newChat();
-      } else if (e.key === "Tab" && onChat) {
-        e.preventDefault();
-        cycleTab(e.shiftKey ? -1 : 1);
-      } else if ((e.key === "PageUp" || e.key === "PageDown") && e.shiftKey && !e.altKey && onChat) {
-        e.preventDefault();
-        shiftTab(e.key === "PageUp" ? -1 : 1);
-      } else if (k === "b") {
-        e.preventDefault();
-        setListOpen((o) => !o);
-      } else if (k === ",") {
-        e.preventDefault();
-        openSettings();
-      } else if (e.code === "Backslash" || k === "\\") {
-        e.preventDefault();
-        toggleSplit();
-      } else if ((k === "1" || k === "2") && !e.shiftKey && !e.altKey && split && !settingsOpen && !jobsOpen && !automationsOpen && !outputsOpen && !repoOpen) {
-        e.preventDefault();
-        focusPane(panes[Number(k) - 1].key);
+        case "search":
+          e.preventDefault();
+          setSearchStart(undefined);
+          setSearchOpen((o) => !o);
+          return;
+        case "newChat":
+          e.preventDefault();
+          newChat();
+          return;
+        case "nextTab":
+        case "prevTab":
+          if (!onChat) return;
+          e.preventDefault();
+          cycleTab(command === "nextTab" ? 1 : -1);
+          return;
+        case "moveTabLeft":
+        case "moveTabRight":
+          if (!onChat) return;
+          e.preventDefault();
+          shiftTab(command === "moveTabLeft" ? -1 : 1);
+          return;
+        case "toggleList":
+          e.preventDefault();
+          setListOpen((o) => !o);
+          return;
+        case "settings":
+          e.preventDefault();
+          openSettings();
+          return;
+        case "toggleSplit":
+          e.preventDefault();
+          toggleSplit();
+          return;
+        case "focusLeft":
+        case "focusRight":
+          if (!split || settingsOpen || jobsOpen || automationsOpen || outputsOpen || repoOpen) return;
+          e.preventDefault();
+          focusPane(panes[command === "focusLeft" ? 0 : 1].key);
+          return;
       }
     };
     window.addEventListener("keydown", onKey);
@@ -2604,9 +2618,9 @@ export function Main({
             </button>
           }
         />,
-        // Splitting is Ctrl+\, a tab's menu, or dragging a tab to an edge (ADR 0116); a split pane keeps its Close.
+        // Splitting is its shortcut (Settings → Keyboard Shortcuts), a tab's menu, or dragging a tab to an edge (ADR 0116); a split pane keeps its Close.
         split && (
-          <button className="icon-btn" title={`Close the ${paneNames(splitDir)[i].toLowerCase()} pane${isActive ? "" : " (Ctrl+\\)"}`} aria-label={`Close the ${paneNames(splitDir)[i].toLowerCase()} pane`} onClick={() => closePane(p.key)}>
+          <button className="icon-btn" title={`Close the ${paneNames(splitDir)[i].toLowerCase()} pane${isActive ? "" : ` (${chordLabel(keys.toggleSplit[0])})`}`} aria-label={`Close the ${paneNames(splitDir)[i].toLowerCase()} pane`} onClick={() => closePane(p.key)}>
             <X size={16} />
           </button>
         )
@@ -3293,10 +3307,7 @@ export function Main({
           onSave={(name, f) => tagsStore.saveFilter(name, f)}
           onBulk={(p) => tagsStore.applyBulk(p)}
           onManageTags={() => openTags()}
-          // Ctrl+K closes the palette, and the screenshot shortcut closes it to take one.
-          passKey={(e) =>
-            ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") || (!!screenshotShortcut && shortcutOf(e.nativeEvent) === screenshotShortcut)
-          }
+          passKey={(e) => pickApp(e) === "search" || (!!screenshotShortcut && shortcutOf(e.nativeEvent) === screenshotShortcut)}
         />
       )}
       {tagsOpen && <TagManager key={scope} store={tagsStore} profile={profile} returnTo={tagsReturn} onClose={() => setTagsOpen(false)} />}
