@@ -567,6 +567,265 @@ mod imp {
             assert!(!found.is_empty(), "the page has a web process of its own");
             assert!(found.iter().all(|between| between.iter().any(|name| name == "bwrap")), "a web process runs outside bubblewrap: {found:?}");
         }
+
+        /// Serves `body_for(path)` as HTML on a port of its own.
+        fn serve(body_for: impl Fn(&str) -> String + Send + 'static) -> u16 {
+            use std::io::{Read, Write};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            std::thread::spawn(move || {
+                for mut stream in listener.incoming().flatten() {
+                    let mut request = [0u8; 4096];
+                    let n = stream.read(&mut request).unwrap_or(0);
+                    let path = String::from_utf8_lossy(&request[..n]).split_whitespace().nth(1).unwrap_or("/").to_owned();
+                    let body = body_for(&path);
+                    let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                    let _ = stream.write_all(response.as_bytes());
+                }
+            });
+            port
+        }
+
+        fn run_until(mut done: impl FnMut() -> bool, secs: u64, what: &str) {
+            let end = Instant::now() + Duration::from_secs(secs);
+            while !done() {
+                assert!(Instant::now() < end, "timed out: {what}");
+                gtk::main_iteration_do(false);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+
+        fn run_for(ms: u64) {
+            let end = Instant::now() + Duration::from_millis(ms);
+            while Instant::now() < end {
+                gtk::main_iteration_do(false);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+
+        /// A page that tries to fool or read from a picker: secrets in a password field, a hidden input, a data
+        /// attribute, a session-like class and a signed background address, 10,000 characters of text, a same-origin and
+        /// a cross-origin frame, and its own versions of everything a picker calls.
+        fn hostile_page(cross_port: u16) -> String {
+            format!(
+                r#"<!doctype html><html><head><style>
+body {{ margin: 0; font: 14px sans-serif; }}
+#save {{ position: absolute; left: 40px; top: 40px; width: 120px; height: 36px; background: rgb(37,99,235); color: white; border: 0; }}
+#secret {{ position: absolute; left: 200px; top: 40px; }}
+#bg {{ position: absolute; left: 40px; top: 100px; width: 100px; height: 40px; background-image: url("https://cdn.example/a.png?sig=SECRETSIG"); }}
+#same {{ position: absolute; left: 40px; top: 160px; width: 200px; height: 100px; border: 0; }}
+#cross {{ position: absolute; left: 260px; top: 160px; width: 200px; height: 100px; border: 0; }}
+#long {{ position: absolute; left: 40px; top: 300px; width: 400px; height: 60px; overflow: hidden; }}
+</style></head><body>
+<button id="save" class="primary session-8f3a9b2c" data-token="TOK123">Save changes</button>
+<input id="secret" type="password" value="hunter2">
+<input type="hidden" name="csrf" value="CSRF999">
+<div id="bg"></div>
+<iframe id="same" src="/frame"></iframe>
+<iframe id="cross" src="http://localhost:{cross_port}/frame"></iframe>
+<div id="long">{long}</div>
+<script>
+document.elementFromPoint = () => document.body;
+Element.prototype.getBoundingClientRect = () => ({{left: 0, top: 0, width: 1, height: 1, x: 0, y: 0}});
+window.getComputedStyle = () => ({{ color: 'evil', backgroundImage: 'evil', display: 'evil' }});
+JSON.stringify = () => '"evil"';
+Object.defineProperty(document.getElementById('save'), 'innerText', {{ get() {{ return 'EVIL TEXT'; }} }});
+</script></body></html>"#,
+                long = "x".repeat(10_000)
+            )
+        }
+
+        /// The hostile page, shown in an overlay at 640×480 as the app shows it.
+        fn hostile_view() -> (gtk::Window, gtk::Overlay, webkit2gtk::WebView) {
+            let cross = serve(|_| "<button style='width:100%;height:100%'>Cross</button>".into());
+            let port = serve(move |path| match path {
+                "/frame" => "<body style='margin:0'><button id=inner style='width:150px;height:50px'>Inner button</button></body>".into(),
+                _ => hostile_page(cross),
+            });
+            gtk::init().expect("a display");
+            let view = page_webview(&page_context());
+            view.set_no_show_all(true);
+            let window = gtk::Window::new(gtk::WindowType::Toplevel);
+            window.set_default_size(1000, 700);
+            let overlay = gtk::Overlay::new();
+            overlay.add(&gtk::Label::new(Some("app")));
+            overlay.connect_get_child_position(|_, _| Some(gtk::gdk::Rectangle::new(100, 50, 640, 480)));
+            overlay.add_overlay(&view);
+            window.add(&overlay);
+            window.show_all();
+            view.show();
+            let loaded = Rc::new(Cell::new(false));
+            let l = loaded.clone();
+            view.connect_load_changed(move |_, event| l.set(l.get() || event == LoadEvent::Finished));
+            view.load_uri(&format!("http://127.0.0.1:{port}/"));
+            run_until(|| loaded.get(), 120, "the page loads");
+            run_for(1000);
+            (window, overlay, view)
+        }
+
+        struct Shot {
+            width: i32,
+            height: i32,
+            stride: i32,
+            data: Vec<u8>,
+        }
+
+        fn snapshot(view: &webkit2gtk::WebView) -> Shot {
+            use webkit2gtk::{SnapshotOptions, SnapshotRegion};
+            let out: Rc<RefCell<Option<Result<Shot, String>>>> = Rc::default();
+            let o = out.clone();
+            view.snapshot(SnapshotRegion::Visible, SnapshotOptions::NONE, None::<&gio::Cancellable>, move |r| {
+                let shot = r.map_err(|e| e.to_string()).and_then(|surface| {
+                    let mut image = gtk::cairo::ImageSurface::try_from(surface).map_err(|_| "not an image surface".to_owned())?;
+                    image.flush();
+                    let (width, height, stride) = (image.width(), image.height(), image.stride());
+                    let data = image.data().map_err(|e| e.to_string())?.to_vec();
+                    Ok(Shot { width, height, stride, data })
+                });
+                o.replace(Some(shot));
+            });
+            run_until(|| out.borrow().is_some(), 20, "a snapshot");
+            out.take().unwrap().expect("a snapshot")
+        }
+
+        /// Differing pixels inside a box in CSS pixels, scaled into device pixels, and the box's pixel count.
+        fn differing(a: &Shot, b: &Shot, (x, y, w, h): (f64, f64, f64, f64), scale: f64) -> (usize, usize) {
+            let (x0, y0, x1, y1) = ((x * scale) as i32, (y * scale) as i32, ((x + w) * scale) as i32, ((y + h) * scale) as i32);
+            let (mut differ, mut all) = (0, 0);
+            for row in y0.max(0)..y1.min(a.height).min(b.height) {
+                for col in x0.max(0)..x1.min(a.width).min(b.width) {
+                    let (ia, ib) = ((row * a.stride + col * 4) as usize, (row * b.stride + col * 4) as usize);
+                    all += 1;
+                    differ += usize::from(a.data[ia..ia + 4] != b.data[ib..ib + 4]);
+                }
+            }
+            (differ, all)
+        }
+
+        const PROBE_QUERY: &str = r#"
+let doc = document, px = x, py = y, el = null, depth = 0, crossHost = null, offX = 0, offY = 0;
+for (;;) {
+  el = doc.elementFromPoint(px, py);
+  if (!el) break;
+  if ((el.tagName === 'IFRAME' || el.tagName === 'FRAME') && depth < 4) {
+    let inner = null;
+    try { inner = el.contentDocument; } catch (e) {}
+    const r = el.getBoundingClientRect();
+    if (!inner) { try { crossHost = new URL(el.src).host; } catch (e) {} break; }
+    const dx = r.left + el.clientLeft, dy = r.top + el.clientTop;
+    px -= dx; py -= dy; offX += dx; offY += dy;
+    doc = inner; depth++;
+    continue;
+  }
+  break;
+}
+for (let i = 0; i < up && el && el.parentElement; i++) el = el.parentElement;
+if (!el) return JSON.stringify(null);
+const r = el.getBoundingClientRect();
+globalThis.__isoMark = 1;
+return JSON.stringify({
+  tag: el.tagName.toLowerCase(), text: (el.innerText || '').replace(/\s+/g, ' ').slice(0, 120),
+  rect: [r.left + offX, r.top + offY, r.width, r.height], depth, crossHost,
+  color: el.ownerDocument.defaultView.getComputedStyle(el).color,
+  jsonIsNative: JSON.stringify.toString().includes('[native code]'),
+});
+"#;
+
+        fn ask(view: &webkit2gtk::WebView, body: &str, x: f64, y: f64, up: u32) -> serde_json::Value {
+            use javascriptcore::ValueExt;
+            let args = gtk::glib::VariantDict::new(None);
+            args.insert("x", x);
+            args.insert("y", y);
+            args.insert("up", f64::from(up));
+            let out: Rc<RefCell<Option<Result<String, String>>>> = Rc::default();
+            let o = out.clone();
+            view.call_async_javascript_function(body, Some(&args.end()), Some("hermes-chat-annotate"), None, None::<&gio::Cancellable>, move |r| {
+                o.replace(Some(r.map(|v| v.to_str().to_string()).map_err(|e| e.to_string())));
+            });
+            run_until(|| out.borrow().is_some(), 20, "an answer");
+            let answer = out.take().unwrap().expect("an answer");
+            serde_json::from_str(&answer).unwrap_or_else(|e| panic!("{e}: {answer}"))
+        }
+
+        fn in_page(view: &webkit2gtk::WebView, js: &str) -> String {
+            use javascriptcore::ValueExt;
+            let out: Rc<RefCell<Option<String>>> = Rc::default();
+            let o = out.clone();
+            view.evaluate_javascript(js, None, None, None::<&gio::Cancellable>, move |r| {
+                o.replace(Some(r.map(|v| v.to_str().to_string()).unwrap_or_else(|e| format!("error: {e}"))));
+            });
+            run_until(|| out.borrow().is_some(), 20, "the page's answer");
+            out.take().unwrap()
+        }
+
+        /// The facts ADR 0094 builds on, with WebKit's own calls: a hidden view snapshots in device pixels and matches
+        /// the still while nothing changes; it answers a function in an isolated world, which the page's replacements
+        /// don't reach and which the page can't see; same-origin frames are entered, and another site's gives its host.
+        #[test]
+        #[ignore = "needs a display, a session bus and GTK on one thread, so one test a process: xvfb-run -a dbus-run-session -- cargo test --lib page_view::imp::tests::a_hidden_page -- --ignored"]
+        fn a_hidden_page_answers_from_an_isolated_world_and_snapshots() {
+            let (_window, overlay, view) = hostile_view();
+            let scale = f64::from(view.scale_factor());
+            let (width, height) = (view.allocated_width(), view.allocated_height());
+            assert_eq!((width, height), (640, 480), "the view's box");
+
+            let started = Instant::now();
+            let still = snapshot(&view);
+            eprintln!("scale {scale}: visible snapshot {}×{} in {:?}", still.width, still.height, started.elapsed());
+            assert_eq!((still.width, still.height), (width * scale as i32, height * scale as i32), "the still is in device pixels");
+
+            hide(&overlay, &view);
+            run_for(300);
+            assert!(!view.is_visible());
+            let mut times = Vec::new();
+            let mut hidden = None;
+            for _ in 0..5 {
+                let started = Instant::now();
+                hidden = Some(snapshot(&view));
+                times.push(started.elapsed());
+            }
+            let hidden = hidden.unwrap();
+            eprintln!("scale {scale}: hidden snapshots {}×{} in {times:?}", hidden.width, hidden.height);
+            assert_eq!((hidden.width, hidden.height), (still.width, still.height));
+            let (differ, all) = differing(&still, &hidden, (0.0, 0.0, 640.0, 480.0), scale);
+            eprintln!("scale {scale}: hidden against visible, {differ} of {all} pixels differ");
+            assert_eq!(differ, 0, "an unchanged hidden page matches the still");
+
+            let save = ask(&view, PROBE_QUERY, 60.0, 50.0, 0);
+            assert_eq!(save["tag"], "button");
+            assert_eq!(save["text"], "Save changes", "the real text, not the page's getter");
+            assert_eq!(save["rect"], serde_json::json!([40, 40, 120, 36]), "the real box, not the page's");
+            assert_eq!(save["color"], "rgb(255, 255, 255)", "the real computed style");
+            assert_eq!(save["jsonIsNative"], true);
+            assert_eq!(ask(&view, PROBE_QUERY, 60.0, 50.0, 1)["tag"], "body", "up climbs to the parent");
+            let same = ask(&view, PROBE_QUERY, 60.0, 180.0, 0);
+            assert_eq!((&same["tag"], &same["text"], &same["depth"]), (&"button".into(), &"Inner button".into(), &1.into()), "a same-origin frame is entered");
+            assert_eq!(same["rect"], serde_json::json!([40, 160, 150, 50]), "in the top page's pixels");
+            let cross = ask(&view, PROBE_QUERY, 300.0, 180.0, 0);
+            assert_eq!(cross["tag"], "iframe");
+            assert!(cross["crossHost"].as_str().is_some_and(|h| h.starts_with("localhost:")), "another site's frame gives its host: {cross}");
+            let mut latency: Vec<Duration> = (0..20)
+                .map(|_| {
+                    let started = Instant::now();
+                    ask(&view, PROBE_QUERY, 60.0, 50.0, 0);
+                    started.elapsed()
+                })
+                .collect();
+            latency.sort();
+            eprintln!("scale {scale}: hidden query min {:?}, median {:?}, max {:?}", latency[0], latency[10], latency[19]);
+            assert_eq!(in_page(&view, "typeof __isoMark"), "undefined", "the page can't see the isolated world");
+            assert_eq!(in_page(&view, "document.visibilityState"), "hidden");
+
+            in_page(&view, "document.getElementById('save').style.left = '300px'");
+            run_for(300);
+            let (differ, all) = differing(&still, &snapshot(&view), (40.0, 40.0, 120.0, 36.0), scale);
+            eprintln!("scale {scale}: after the page moved the button, {differ} of {all} pixels in its box differ");
+            assert!(differ * 2 > all, "a page that changed doesn't match the still");
+
+            view.show();
+            run_for(300);
+            assert_eq!(snapshot(&view).width, still.width, "the view shows again");
+        }
     }
 }
 
