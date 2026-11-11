@@ -1,5 +1,7 @@
 //! The Rust transport against a local stub of the dashboard's sign-in routes, `/api/ws` and REST.
 
+mod common;
+
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, RawQuery};
 use axum::extract::{Request, State};
@@ -676,8 +678,8 @@ async fn rate_limited_sign_in_is_reported() {
 
 #[tokio::test]
 async fn nothing_listening_is_unreachable() {
-    let port = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
-    let base = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+    let closed = common::refusing();
+    let base = Url::parse(&format!("http://{}/", closed.addr)).unwrap();
     let err = sign_in_at(&base, &sign_in("hunter2")).await.err().unwrap();
     assert!(matches!(err, TransportError::Unreachable(_)), "{err:?}");
 }
@@ -1354,7 +1356,7 @@ async fn stats_files_to_attach() {
                 path: path_of(&dir.join("gone.txt")),
                 name: "gone.txt".into(),
                 size: None,
-                error: Some("No such file or directory (os error 2)".into()),
+                error: Some(std::io::Error::from_raw_os_error(2).to_string()),
             },
             LocalFile { path: path_of(&elsewhere), name: "id_ed25519".into(), size: None, error: Some("it wasn't attached in this app".into()) },
         ]
@@ -1408,7 +1410,7 @@ async fn reports_a_file_that_is_gone() {
     let (pipe, mut rx) = open_stub().await;
     next(&mut rx).await;
     let err = pipe.send_file("", &path_of(&dir.join("gone.txt")), "", 1024).await.err().unwrap();
-    assert_eq!(err.to_string(), "No such file or directory (os error 2)");
+    assert_eq!(err.to_string(), std::io::Error::from_raw_os_error(2).to_string());
 }
 
 #[tokio::test]
@@ -1503,7 +1505,7 @@ async fn previews_only_images() {
 async fn refuses_to_preview_a_missing_or_oversized_image() {
     let dir = scratch("preview-refused");
     let err = preview(&path_of(&dir.join("gone.png"))).await.err().unwrap();
-    assert_eq!(err.to_string(), "No such file or directory (os error 2)");
+    assert_eq!(err.to_string(), std::io::Error::from_raw_os_error(2).to_string());
 
     let big = dir.join("big.png");
     let f = std::fs::File::create(&big).unwrap();
@@ -1528,8 +1530,8 @@ async fn a_connection_test_says_the_password_was_wrong_and_keeps_the_status() {
 
 #[tokio::test]
 async fn a_connection_test_says_when_nothing_answers() {
-    let free = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();
-    let failed = transport::probe(&Url::parse(&format!("http://{free}/")).unwrap(), &sign_in("hunter2"), "default").await.unwrap_err();
+    let closed = common::refusing();
+    let failed = transport::probe(&Url::parse(&format!("http://{}/", closed.addr)).unwrap(), &sign_in("hunter2"), "default").await.unwrap_err();
     assert_eq!(failed.stage, Stage::Reach);
     assert!(failed.message.contains("Can't reach the Hermes dashboard") && failed.message.to_lowercase().contains("refused"), "{}", failed.message);
 }
@@ -2158,7 +2160,8 @@ fn a_pasted_file_name_stays_a_plain_basename() {
         ("rack\n\u{7}photo.JPG", "rackphoto.JPG"),
         (".bashrc", "bashrc"),
         ("notes.tar.gz", "notes.tar.gz"),
-        ("report.<script>", "report.<script>"),
+        ("report.<script>", "report.script"),
+        ("what? \"really\": a|b*.txt", "what really ab.txt"),
         ("Résumé 2026.pdf", "Résumé 2026.pdf"),
     ] {
         let p = transport::stage_clipboard_file(&root.1, hostile, b"x").unwrap();

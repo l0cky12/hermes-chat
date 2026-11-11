@@ -24,10 +24,10 @@ import {
   changed,
   draftProblem,
 } from "../hermes/gateways";
+import { errorText } from "../hermes/values";
 
 type Note = { tone: "ok" | "warn" | "bad"; text: string; problem?: Problem };
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const clock = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 const fresh = (g: Gateway): Draft => ({ enabled: g.enabled, edits: {} });
 
@@ -119,7 +119,7 @@ export function GatewaySettings({ api, profile, connected, picker, openUrl }: { 
       setList(l);
       setProblem(undefined);
     } catch (e) {
-      if (mine(p)) setProblem({ unsupported: e instanceof GatewaysUnsupportedError, permission: e instanceof GatewaysReadError && e.kind === "permission", text: messageOf(e) });
+      if (mine(p)) setProblem({ unsupported: e instanceof GatewaysUnsupportedError, permission: e instanceof GatewaysReadError && e.kind === "permission", text: errorText(e) });
     } finally {
       if (mine(p)) setLoading(false);
     }

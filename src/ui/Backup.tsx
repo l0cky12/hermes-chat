@@ -38,6 +38,7 @@ import {
 import { fmtSize } from "./bits";
 import { useModal } from "./modal";
 import { SettingRow, SettingsSection } from "./SettingRows";
+import { errorText, plural } from "../hermes/values";
 
 /** What Backup needs from the app. */
 export type BackupWiring = {
@@ -59,9 +60,7 @@ export type BackupWiring = {
   };
 };
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const placeLabel = (p: Conn) => `${p.mode === "ssh" ? `ssh ${p.target}` : p.target} as ${p.username}`;
-const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function BackupSection({ wiring }: { wiring: BackupWiring }) {
   const [open, setOpen] = useState<"export" | "restore">();
@@ -160,6 +159,7 @@ export function ExportDialog({ wiring, returnTo, onClose }: { wiring: BackupWiri
       (summary) => live.current && setStep({ at: "choose", summary }),
       (e) => live.current && setStep({ at: "unreadable", error: `Couldn't read what this computer keeps: ${errorText(e)}` }),
     );
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, []);
 
   const save = async (summary: ExportSummary) => {
@@ -287,6 +287,7 @@ export function RestoreDialog({ wiring, returnTo, onClose }: { wiring: BackupWir
   const [mapping, setMapping] = useState<Mapping>({});
   const [policies, setPolicies] = useState<Partial<Record<CategoryId, Policy>>>({});
   const live = useLive();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => void listed.current!.then((list) => live.current && setProfiles(list)), []);
 
   const choose = async () => {

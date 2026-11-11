@@ -20,6 +20,7 @@ import type { RestMethod } from "./pipe";
 import { answered, deadline, sameSoul, type PersonaApi, type Soul } from "./persona";
 import { nameProblem, readProfileRows, type ProfileRow } from "./profiles";
 import type { SkillRow, SkillsApi } from "./skills";
+import { errorText, isObj } from "./values";
 
 /** What the default (fresh) clone can carry over, each picked or not. */
 export type Part = "persona" | "model" | "description" | "skills";
@@ -85,8 +86,6 @@ export type Outcome =
 export const CLONE_TIMEOUTS = { readMs: 30_000, createMs: 120_000, deleteMs: 60_000 };
 
 const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 const modelOf = (p: ProfileRow) => (p.model && p.provider ? { provider: p.provider, model: p.model } : undefined);
 
@@ -140,7 +139,7 @@ export function preview(plan: Pick<Plan, "kind"> & { parts?: ReadonlySet<Part> }
 
 /** Sorts an error from a profile call into words for the owner, and whether it certainly changed nothing. */
 function profileProblem(e: unknown, doing: string): { problem: string; unwritten: boolean } {
-  const message = said(e);
+  const message = errorText(e);
   if (/^Not connected to Hermes|^The chat connection is closed|^Hermes Chat doesn't relay/.test(message)) return { problem: message, unwritten: true };
   const a = answered(e);
   if (!a) return { problem: `Couldn't ${doing}: ${message}`, unwritten: false };
@@ -176,7 +175,7 @@ export class ProfileCloneApi {
       this.persona.read(name),
       this.skills.rows(name).then(
         (rows) => ({ rows, problem: undefined }),
-        (e: unknown) => ({ rows: [] as SkillRow[], problem: said(e) }),
+        (e: unknown) => ({ rows: [] as SkillRow[], problem: errorText(e) }),
       ),
     ]);
     const profile = list.find((p) => p.name === name);
@@ -261,7 +260,7 @@ export class ProfileCloneApi {
       try {
         await this.skills.copy(plan.source, plan.name, row, source.listed);
       } catch (e) {
-        failed.push({ row, problem: said(e) });
+        failed.push({ row, problem: errorText(e) });
       }
       onStage("skills", "running", `${i + 1} of ${rows.length}`);
     }
@@ -319,7 +318,7 @@ export class ProfileCloneApi {
         if (sameSoul(soul, source.soul)) put("persona", "copied", "SOUL.md reads back as the source's");
         else put("persona", "failed", "SOUL.md reads back differently from the source's");
       } catch (e) {
-        put("persona", "unchecked", `Couldn't read SOUL.md back: ${said(e)}`);
+        put("persona", "unchecked", `Couldn't read SOUL.md back: ${errorText(e)}`);
       }
 
     const model = modelOf(source.profile);
@@ -358,7 +357,7 @@ export class ProfileCloneApi {
         if (missing.length) put("skills", "failed", `Not in the clone: ${missing.join(", ")}`);
         else put("skills", "copied", source.skills.length ? `All ${source.skills.length} of its own are listed, with Hermes's built-in ones` : "Every skill folder");
       } catch (e) {
-        put("skills", "unchecked", `Couldn't list the clone's skills: ${said(e)}`);
+        put("skills", "unchecked", `Couldn't list the clone's skills: ${errorText(e)}`);
       }
 
     if (full) {

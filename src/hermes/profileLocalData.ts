@@ -27,6 +27,7 @@ import { moveTagScopes, type TagsFile } from "./tags";
 import { getUIPrefs, setUIPrefs } from "./uiPrefs";
 import { sending, unsaved } from "./unsaved";
 import { WORKTREE_CHATS_KEY } from "./worktrees";
+import { isObj } from "./values";
 
 /** Keys of one profile, or one of its chats: the prefix, then the scope as JSON, then `suffix` if it has one. */
 export const PROFILE_KEYS: readonly { prefix: string; suffix?: RegExp }[] = [
@@ -125,7 +126,6 @@ function movedKey(key: string, walk: Walk): string | null | undefined {
 }
 
 type Store = Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length">;
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 function readJson(storage: Store, key: string): unknown {
   try {

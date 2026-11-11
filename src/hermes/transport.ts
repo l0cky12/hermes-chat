@@ -90,6 +90,7 @@ import {
   type StoredBranchRow,
 } from "./branch";
 import { cannotResend, laterOf, replayBlocked, resendText, replayTarget, splitRefs, turnAt, variantRoot, withRefs, withoutMarkers, type ReplayKind, type ReplayPreview } from "./replay";
+import { errorText } from "./values";
 
 /**
  * The `source` this app stamps on chats it starts. Legacy `session.create` stores any string as-is, but the gateway
@@ -145,7 +146,6 @@ const LOOKUPS_PER_CHECK = 3;
 const LOOKUP_AT_ONCE = 4;
 /** The most chats one search lists; dashboard REST caps it at 100. */
 const SEARCH_LIMIT = 50;
-export const SEARCH_MAX = 100;
 /** How long the skills the composer offers are used before they are read again (`skillCommands`). */
 export const SKILL_COMMANDS_FRESH_MS = 60_000;
 /** The most side questions a chat shows; a newer one takes the oldest one's place (ADR 0070). */
@@ -457,9 +457,6 @@ export class BranchUnconfirmed extends Error {
   }
 }
 
-/** Why a branch wasn't asked for after all; nothing went to Hermes. */
-class BranchNotSent extends Error {}
-
 /** Legacy `session.branch` result (`SessionBranchResult` at `bf0203a`): the branch's live and stored ids, its title,
  * its parent, the rows it copied, and its history as `session.resume` shows it. */
 type BranchAnswer = { session_id: string; stored_session_id: string; title: string; parent?: string; message_count: number; messages?: unknown; info?: unknown };
@@ -529,6 +526,13 @@ export type Snapshot = {
   queues: Record<string, ChatQueue>;
   /** The models the shown profile can switch to (`loadModels`); none until read. */
   models?: ModelCatalog;
+  /**
+   * The server's bots as last read, and when (`bots`). A roster spans the profiles, so it is kept across profile
+   * switches and reconnects, for the Bots view to show at once while it reads them again.
+   */
+  bots?: { roster: Bot[]; at: number };
+  /** Each bot's picture as a data URL, by profile, read once per connection for a bot that has one. */
+  botPictures: Record<string, string>;
   /** The switch to `profile` from `from`, until the new profile's list has been read. `error`: why it hasn't yet. */
   switching?: { from: string; error?: string };
   /** The display name Hermes keeps for its built-in `default` profile, as last listed; none when it has none. */
@@ -688,6 +692,10 @@ export class Hermes {
   private botChatIds = new Map<string, Set<string>>();
   /** The roster read for the Bot Chats' ids on a connection (`knownBotChats`). */
   private botChatsRead?: { gen: number; done: Promise<void> };
+  /** This connection's picture asks, by profile: each a token the next ask replaces, so only the latest one lands. */
+  private pictureAsks?: { gen: number; asks: Map<string, object> };
+  /** Roster reads by number: started, and the newest whose answer landed, so an older answer arriving late is dropped. */
+  private rosterReads = { started: 0, landed: 0 };
   /** Chats archived or restored here whose flag Hermes hasn't confirmed yet: the `archived` flag each should have.
    * While a chat is here, this flag beats the one the server lists. */
   private archiveWanted = new PerProfile<boolean>();
@@ -968,6 +976,7 @@ export class Hermes {
       others: noOthers,
       queues: loadQueues(cache, profile),
       branches: cache.loadBranches(profile),
+      botPictures: {},
     };
   }
 
@@ -1507,7 +1516,7 @@ export class Hermes {
       this.patchSide(chatId, (qs) => qs.map((q) => (q.id !== id ? q : early === undefined || q.state !== "asking" ? { ...q, taskId } : answered({ ...q, taskId }, early))));
       return true;
     } catch (e) {
-      const error = e instanceof Error ? e.message : String(e);
+      const error = errorText(e);
       this.patchSide(chatId, (qs) => qs.map((q) => (q.id === id && q.state === "asking" ? { id, question, after, state: "failed", error } : q)));
       return false;
     } finally {
@@ -1950,9 +1959,16 @@ export class Hermes {
    */
   async bots(): Promise<Bot[]> {
     const gen = this.generation;
+    const n = ++this.rosterReads.started;
     try {
       const bots = rosterOf(await this.request("profiles.list", {}));
-      if (gen === this.generation) this.botChatIds = new Map(bots.map((b) => [b.profile, new Set(b.botChat ? [b.botChat.id, b.botChat.resolvedId] : [])]));
+      if (gen === this.generation && n > this.rosterReads.landed) {
+        this.rosterReads.landed = n;
+        this.botChatIds = new Map(bots.map((b) => [b.profile, new Set(b.botChat ? [b.botChat.id, b.botChat.resolvedId] : [])]));
+        const pictures = Object.fromEntries(Object.entries(this.snapshot.botPictures).filter(([p]) => bots.some((b) => b.profile === p && b.hasAvatar)));
+        this.update({ bots: { roster: bots, at: Date.now() }, botPictures: pictures });
+        this.readBotPictures(gen, bots);
+      }
       return bots;
     } catch (e) {
       const unsupported =
@@ -1971,6 +1987,29 @@ export class Hermes {
     if (profile) return !!this.botChatIds.get(profile)?.has(chatId);
     for (const ids of this.botChatIds.values()) if (ids.has(chatId)) return true;
     return false;
+  }
+
+  /**
+   * Asks for each bot's picture once per connection, so a picture changed in another client shows after a reconnect.
+   * One held already stays shown meanwhile; a bot without one, or whose picture fails, shows its initial.
+   */
+  private readBotPictures(gen: number, bots: readonly Bot[]) {
+    if (this.pictureAsks?.gen !== gen) this.pictureAsks = { gen, asks: new Map() };
+    const asks = this.pictureAsks.asks;
+    const withPicture = new Set(bots.filter((b) => b.hasAvatar).map((b) => b.profile));
+    // A bot gone, or listed without a picture, is forgotten: a picture put back is asked for, and a late answer to the
+    // old ask is dropped.
+    for (const profile of asks.keys()) if (!withPicture.has(profile)) asks.delete(profile);
+    for (const profile of withPicture) {
+      if (asks.has(profile)) continue;
+      const ask = {};
+      asks.set(profile, ask);
+      this.track(
+        this.botAvatar(profile).then((url) => {
+          if (url && gen === this.generation && asks.get(profile) === ask) this.update({ botPictures: { ...this.snapshot.botPictures, [profile]: url } });
+        }),
+      );
+    }
   }
 
   /** A bot's picture, as a data URL, or none when it has none or Hermes sent something that isn't an image. */
@@ -2016,7 +2055,8 @@ export class Hermes {
 
   /**
    * Reads the roster once per connection, for the Bot Chats' ids, so search can leave them out before the Bots view
-   * has ever opened. A Hermes without Bot Mode, or a read that fails, leaves only the title to go by.
+   * has ever opened, and so the view shows the bots and their pictures as soon as it opens. A Hermes without Bot Mode,
+   * or a read that fails, leaves only the title to go by.
    */
   private knownBotChats(): Promise<void> {
     const gen = this.generation;
@@ -4488,6 +4528,7 @@ export class Hermes {
       this.update({ chats, syncError: undefined, switching: undefined });
     this.kanbanWatch.chatsListed();
     this.placeRoster();
+    this.track(this.knownBotChats());
     for (const chatId of readOnScreen) this.seen(chatId);
     this.saveList(profile, chats);
     if (switched) this.cache.rememberProfile(profile);
@@ -4735,7 +4776,7 @@ export class Hermes {
             (l) => ({ entries: l.entries.map((e) => ({ name: e.name, isDirectory: e.kind === "dir" })) }),
             (e: unknown) => {
               const status = e instanceof RemoteFilesError ? e.status : undefined;
-              const message = e instanceof Error ? e.message : String(e);
+              const message = errorText(e);
               if (status === 404 && /isn't on the server/.test(message)) return { entries: [], error: "ENOENT" };
               if (status === 400 && /not a folder/.test(message)) return { entries: [], error: "ENOTDIR" };
               if (status === 403) return { entries: [], error: "EACCES" };
@@ -5107,7 +5148,7 @@ const LIST_MAX_BYTES = 8 * 1024 * 1024;
  */
 export function outputFound(e: unknown): { state: "missing" | "folder" | "forbidden" | "available" | "unknown"; why?: string } | undefined {
   if (sessionNotFound(e)) return undefined;
-  if (!(e instanceof RestError)) return { state: "unknown", why: e instanceof Error ? e.message : String(e) };
+  if (!(e instanceof RestError)) return { state: "unknown", why: errorText(e) };
   const { status, detail } = e;
   if (status === 404 && detail.startsWith(SANDBOX_NOT_FOUND_PREFIX)) return { state: "missing", why: SANDBOX_MISSING };
   if (status === 404 && detail === "File not found") return { state: "missing", why: "It isn't at this path where its chat's tools ran: it was deleted, moved or renamed." };

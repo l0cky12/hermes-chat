@@ -178,6 +178,7 @@ export function ProfileSettings({ wiring }: { wiring: ProfilesWiring }) {
   };
   useEffect(() => {
     if (connected) void read();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- read once per connect; `read` is a new function every render
   }, [connected]);
 
   const focusRow = (name: string) => requestAnimationFrame(() => listRef.current?.querySelector<HTMLElement>(`[data-profile="${CSS.escape(name)}"]`)?.focus());
@@ -771,6 +772,7 @@ function ProfileForm({
       (e: unknown) => live.current && setCatalogError(f.catalogFailed(e instanceof Error ? e.message : String(e))),
     );
     return () => void (live.current = false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the catalogue is read once, when the dialog opens
   }, []);
 
   const trimmed = name.trim();
@@ -1144,6 +1146,7 @@ function DeleteProfile({
       () => {},
     );
     return () => void (live.current = false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- counted once, when the dialog opens on its row
   }, []);
 
   const go = async () => {

@@ -10,8 +10,8 @@ import { DefaultsConflict, NewerDefaultsError, cleanDraft, draftProblem, sameDra
 import type { Project, ProjectFolder, Worktree } from "../hermes/projects";
 import { Age, Spinner, composing, menuArrows, useDismiss, useReturnFocus } from "./bits";
 import { ModelControls } from "./ModelPicker";
+import { errorText } from "../hermes/values";
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const baseName = (path: string) => path.split("/").filter(Boolean).pop() ?? path;
 const chatsText = (n: number) => `${n} ${n === 1 ? "chat" : "chats"}`;
 
@@ -67,6 +67,7 @@ export function ProjectSwitcher({
     const onDown = (e: MouseEvent) => box.current?.contains(e.target as Node) || setOpen(false);
     window.addEventListener("mousedown", onDown);
     return () => window.removeEventListener("mousedown", onDown);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [open]);
 
   const name = selected?.name ?? "All chats";
@@ -173,7 +174,7 @@ function ProjectMenu({
     setSaving(true);
     setCreateError(undefined);
     onCreate(name).catch((e) => {
-      setCreateError(`Couldn't make the project: ${messageOf(e)}`);
+      setCreateError(`Couldn't make the project: ${errorText(e)}`);
       setSaving(false);
     });
   };
@@ -374,6 +375,7 @@ export function ProjectScreen({
     return () => {
       current = false;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [folderKey, connected]);
 
   const run = async (what: string, fn: () => Promise<unknown>, onError = setError) => {
@@ -383,7 +385,7 @@ export function ProjectScreen({
       await fn();
       return true;
     } catch (e) {
-      onError(messageOf(e));
+      onError(errorText(e));
       return false;
     } finally {
       setBusy(undefined);
@@ -771,6 +773,7 @@ function DefaultsSection({ saved, folders, profile, connection, catalog, profile
   // A save made elsewhere shows at once, unless the owner is editing; then their Save meets it as a conflict.
   useEffect(() => {
     if (!unsaved && (saved?.rev ?? 0) !== shown.rev) load(saved);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [saved?.rev]);
 
   const edit = (patch: Partial<DefaultsDraft>) => {
@@ -786,7 +789,7 @@ function DefaultsSection({ saved, folders, profile, connection, catalog, profile
       setDone(true);
     } catch (e) {
       if (e instanceof DefaultsConflict) setConflict(e.saved ?? null);
-      else setError(messageOf(e));
+      else setError(errorText(e));
     } finally {
       setSaving(false);
     }

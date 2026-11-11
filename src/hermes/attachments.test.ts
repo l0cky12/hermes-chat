@@ -101,8 +101,9 @@ describe("Sending attachments", () => {
     const { attachments } = await hermes.checkAttachments(["/tmp/a.txt"]);
     await hermes.send("s1", "Look", attachments);
 
-    // A resume also reads the chat's subagents (ADR 0072), which doesn't touch the message.
-    const sent = server.requests.map((r) => r.method).filter((m) => m !== "client.capabilities" && m !== "subagent.list");
+    // A resume also reads the chat's subagents (ADR 0072), and connecting reads the bots (ADR 0066); neither touches the
+    // message.
+    const sent = server.requests.map((r) => r.method).filter((m) => m !== "client.capabilities" && m !== "subagent.list" && m !== "profiles.list");
     expect(sent).toEqual(["session.resume", "file.attach", "prompt.submit"]);
     expect(server.last("file.attach")!.params.session_id).toBe(server.runtimeIdOf("s1"));
   });

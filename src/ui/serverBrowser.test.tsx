@@ -13,7 +13,6 @@ import { DiagnosticsSettings } from "./Diagnostics";
 import { ScreenTab } from "./Screen";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -199,7 +198,7 @@ describe("in the app", () => {
       <Main
         hermes={hermes}
         connection={{ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }}
-        webPages={{ check: async () => ({ kind: "allowed" }) as never, openInBrowser: async () => null, devServers: async () => ({ server: { kind: "listed", ports: [] }, local: [] }) }}
+        webPages={{ check: async () => ({ kind: "allowed" }) as never, httpsAnswers: async () => true, openInBrowser: async () => null, devServers: async () => ({ server: { kind: "listed", ports: [] }, local: [] }) }}
         onSignOut={async () => {}}
       />,
     );

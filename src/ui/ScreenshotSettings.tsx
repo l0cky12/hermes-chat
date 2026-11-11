@@ -5,6 +5,7 @@ import { getUIPrefs, setUIPrefs, subscribe } from "../hermes/uiPrefs";
 import type { ScreenshotSupport } from "../hermes/tauriScreenshot";
 import { SettingRow, SettingsSection } from "./SettingRows";
 import { DEFAULT_SCREENSHOT_SHORTCUT, checkShortcut, onlyModifiers, shortcutLabel, shortcutOf } from "./shortcut";
+import { errorText } from "../hermes/values";
 
 const COMMAND = "hermes-chat --screenshot";
 
@@ -19,7 +20,7 @@ export function ScreenshotSettings({ checkSupport }: { checkSupport?: () => Prom
     let live = true;
     checkSupport?.().then(
       (s) => live && setSupport(s),
-      (e) => live && setSupport({ ok: false, summary: `Couldn't check: ${e instanceof Error ? e.message : String(e)}` }),
+      (e) => live && setSupport({ ok: false, summary: `Couldn't check: ${errorText(e)}` }),
     );
     return () => void (live = false);
   }, [checkSupport]);

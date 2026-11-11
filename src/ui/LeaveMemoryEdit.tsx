@@ -78,5 +78,6 @@ export function useCloseGuard(unsaved: boolean, ask: (close: () => void) => void
       window.removeEventListener("beforeunload", onUnload);
       unlisten?.();
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [unsaved]);
 }

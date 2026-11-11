@@ -21,6 +21,7 @@
 import { CapabilityUnsupportedError, RouteMissingError } from "./capabilities";
 import { deadline } from "./persona";
 import { RestError, type RestMethod } from "./pipe";
+import { isObj } from "./values";
 
 /** A profile as `GET /api/profiles` lists it. */
 export type ProfileRow = {
@@ -78,7 +79,6 @@ export function nameProblem(name: string, profiles: readonly Pick<ProfileRow, "n
 /** What the screen calls a profile: its display name, if Hermes keeps one, with the id after it. */
 export const shownName = (p: Pick<ProfileRow, "name" | "displayName">) => (p.displayName && p.displayName !== p.name ? `${p.displayName} (${p.name})` : p.name);
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
 
 /** One `GET /api/profiles` row, or nothing for a row without a name Hermes's profile routes would take. */

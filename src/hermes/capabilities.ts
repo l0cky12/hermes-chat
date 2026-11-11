@@ -20,6 +20,7 @@
 // screen back or refuses a write.
 import { redact as redactSecrets } from "./logs";
 import { RestError, type RestMethod } from "./pipe";
+import { isObj } from "./values";
 
 /** The features whose server support is tracked. */
 export type CapabilityId =
@@ -106,7 +107,6 @@ export type CapabilitySpec = {
   notChecked?: string;
 };
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isList = (v: unknown) => Array.isArray(v);
 /** A `profiles.list` answer whose rows report their Bot Chat (`canonical_session`, null for none yet). */
 const botRoster = (r: unknown) => isObj(r) && isList(r.profiles) && (r.profiles as unknown[]).every((p) => isObj(p) && "canonical_session" in p);

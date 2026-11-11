@@ -8,7 +8,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes } from "../hermes/fakeHermes";
 import type { Attachment } from "../hermes/model";
 import { connect } from "../hermes/transport";
-import { ChatPane, pastedName, refuseStrayFileDrops } from "./ChatPane";
+import { ChatPane, pasteAttaches, pastedName, refuseStrayFileDrops } from "./ChatPane";
 import { stagedFiles } from "../hermes/unsaved";
 import { ScreenshotDesk } from "../hermes/screenshots";
 
@@ -16,7 +16,6 @@ type Invoke = (cmd: string, args?: unknown, opts?: { headers?: Record<string, st
 const tauri = vi.hoisted(() => ({ invoke: (async () => undefined) as Invoke }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: Parameters<Invoke>) => tauri.invoke(...a) }));
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -72,8 +71,14 @@ async function setUp(draft = "", screenshots?: ScreenshotDesk) {
 }
 
 const composer = () => screen.getByPlaceholderText<HTMLTextAreaElement>("Message Hermes");
-/** Pastes `files` into the composer the way the webview does; false when the paste was taken over. */
-const paste = (files: File[]) => fireEvent.paste(composer(), { clipboardData: { files, getData: () => "" } });
+/** A paste event's clipboard, as the webview shows it to the page. */
+const clip = ({ types = [] as string[], files = [] as File[], data = {} as Record<string, string> }) => ({
+  types,
+  files,
+  getData: (type: string) => data[type] ?? "",
+});
+/** Pastes `files` into the composer the way Chromium does; false when the paste was taken over. */
+const paste = (files: File[]) => fireEvent.paste(composer(), { clipboardData: clip({ types: files.length ? ["Files"] : [], files }) });
 const chips = () => Array.from(document.querySelectorAll(".chip"));
 const pane = () => document.querySelector<HTMLElement>(".chat")!;
 const overlay = () => screen.queryByText("Drop files to attach");
@@ -210,13 +215,77 @@ describe("Pasting into the composer", () => {
     const read = vi.fn(async () => [{ types: ["image/png"], getType: async () => new Blob([PNG], { type: "image/png" }) }]);
     Object.defineProperty(navigator, "clipboard", { value: { read }, configurable: true });
     try {
-      expect(fireEvent.paste(composer(), { clipboardData: { files: [], getData: () => "sda 92%" } })).toBe(true);
+      expect(fireEvent.paste(composer(), { clipboardData: clip({ types: ["text/plain"], data: { "text/plain": "sda 92%" } }) })).toBe(true);
       expect(read).not.toHaveBeenCalled();
 
-      expect(fireEvent.paste(composer(), { clipboardData: { files: [], getData: () => "" } })).toBe(true);
+      expect(fireEvent.paste(composer(), { clipboardData: clip({}) })).toBe(true);
       await waitFor(() => expect(chips()).toHaveLength(1));
       expect(read).toHaveBeenCalledTimes(1);
       expect(staged.map((s) => s.name)).toEqual([expect.stringMatching(/^clipboard-.*\.png$/)]);
+    } finally {
+      Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("attaches files copied in a file manager by path, as a drop does, and pastes no text", async () => {
+    const { server, onSend, onDraft } = await setUp("Here are the logs");
+    server.files["/home/owner/disk report.txt"] = "sda 92%";
+    server.files["/home/owner/rack.png"] = "png";
+    const save = tauri.invoke;
+    tauri.invoke = (cmd, args, opts) =>
+      cmd === "attach_copied_files" ? Promise.resolve(["/home/owner/disk report.txt", "/home/owner/rack.png"]) : save(cmd, args, opts);
+    // WebKitGTK names the uri-list but hides it, and hides the paths' text beside it.
+    expect(fireEvent.paste(composer(), { clipboardData: clip({ types: ["text/uri-list"] }) })).toBe(false);
+    await waitFor(() => expect(chips()).toHaveLength(2));
+    expect(chips().map((c) => c.querySelector(".chip-name")?.textContent)).toEqual(["disk report.txt", "rack.png"]);
+    expect(onDraft).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(onSend).toHaveBeenCalledWith("Here are the logs", [
+      { path: "/home/owner/disk report.txt", name: "disk report.txt", size: 7, kind: "file" },
+      { path: "/home/owner/rack.png", name: "rack.png", size: 3, kind: "image" },
+    ]);
+  });
+
+  it("says why when the copied files aren't on this computer", async () => {
+    await setUp();
+    const save = tauri.invoke;
+    tauri.invoke = (cmd, args, opts) => (cmd === "attach_copied_files" ? Promise.resolve([]) : save(cmd, args, opts));
+    expect(fireEvent.paste(composer(), { clipboardData: clip({ types: ["text/uri-list"] }) })).toBe(false);
+    expect((await screen.findByRole("alert")).textContent).toBe("Only files on this computer can be attached.");
+    expect(chips()).toHaveLength(0);
+  });
+
+  it("says why, and lets the owner send, when the clipboard doesn't give the copied files", async () => {
+    const { onSend } = await setUp("Here is the summary instead");
+    const save = tauri.invoke;
+    tauri.invoke = (cmd, args, opts) =>
+      cmd === "attach_copied_files" ? Promise.reject("The clipboard didn't give the copied files within 5 seconds.") : save(cmd, args, opts);
+    expect(fireEvent.paste(composer(), { clipboardData: clip({ types: ["text/uri-list"] }) })).toBe(false);
+    expect((await screen.findByRole("alert")).textContent).toBe("Couldn't attach the files: The clipboard didn't give the copied files within 5 seconds.");
+    expect(chips()).toHaveLength(0);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toHaveProperty("disabled", false));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(onSend).toHaveBeenCalledWith("Here is the summary instead", []);
+  });
+
+  it("attaches an image copied with text and lets the text paste", async () => {
+    const { staged } = await setUp();
+    const image = new File([PNG], "image.png", { type: "image/png" });
+    const mixed = clip({ types: ["Files", "text/plain"], files: [image], data: { "text/plain": "The rack after rewiring" } });
+    expect(fireEvent.paste(composer(), { clipboardData: mixed })).toBe(true);
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    expect(staged.map((s) => s.name)).toEqual([expect.stringMatching(/^clipboard-.*\.png$/)]);
+  });
+
+  it("pastes nothing from an empty clipboard", async () => {
+    const { staged, onDraft } = await setUp();
+    const read = vi.fn(async () => []);
+    Object.defineProperty(navigator, "clipboard", { value: { read }, configurable: true });
+    try {
+      expect(fireEvent.paste(composer(), { clipboardData: clip({}) })).toBe(true);
+      await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toHaveProperty("disabled", true));
+      expect([staged, chips(), screen.queryByRole("alert"), onDraft.mock.calls]).toEqual([[], [], null, []]);
     } finally {
       Reflect.deleteProperty(navigator, "clipboard");
     }
@@ -312,6 +381,40 @@ describe("A file dropped where no pane takes it", () => {
       expect(drag(type, ["Files"], true).dataTransfer.dropEffect).toBe("copy");
       expect(drag(type, ["application/x-hermes-chat"]).defaultPrevented).toBe(false);
     }
+  });
+});
+
+// Each clipboard as the probe on the real webviews showed it to the page (#442).
+describe("What a paste attaches", () => {
+  const image = new File([PNG], "image.png", { type: "image/png" });
+  const report = new File(["sda 92%"], "disk report.txt", { type: "text/plain" });
+
+  it("takes files copied in a file manager, and none of their text", () => {
+    // WebKitGTK: the uri-list is named but hidden, and so is the text of the paths.
+    expect(pasteAttaches(clip({ types: ["text/uri-list"] }))).toEqual({ kind: "copied files" });
+    // A webview that shows the uri-list and the paths' text.
+    const shown = { "text/uri-list": "file:///home/owner/a.txt\r\nfile:///home/owner/b.txt\r\n", "text/plain": "/home/owner/a.txt\n/home/owner/b.txt" };
+    expect(pasteAttaches(clip({ types: ["text/uri-list", "text/plain"], data: shown }))).toEqual({ kind: "copied files" });
+  });
+
+  it("takes files the paste carries, and keeps their text out only when there is none", () => {
+    // Chromium: files copied in Explorer come with no text.
+    expect(pasteAttaches(clip({ types: ["Files"], files: [report] }))).toEqual({ kind: "files", files: [report], keepText: false });
+    // Chromium: an image copied with text.
+    const mixed = clip({ types: ["Files", "text/plain", "text/html"], files: [image], data: { "text/plain": "Rack", "text/html": "<p>Rack</p>" } });
+    expect(pasteAttaches(mixed)).toEqual({ kind: "files", files: [image], keepText: true });
+  });
+
+  it("looks on the clipboard for images when the page sees no text", () => {
+    // WebKitGTK hides an image with text and HTML beside it, showing only the HTML, or nothing at all.
+    expect(pasteAttaches(clip({ types: ["text/html"], data: { "text/html": "<p>Rack</p>" } }))).toEqual({ kind: "clipboard images" });
+    expect(pasteAttaches(clip({}))).toEqual({ kind: "clipboard images" });
+  });
+
+  it("leaves text, and a copied link, to paste as text", () => {
+    expect(pasteAttaches(clip({ types: ["text/plain"], data: { "text/plain": "sda 92%" } }))).toEqual({ kind: "nothing" });
+    const link = { "text/uri-list": "https://example.com/docs\r\n", "text/plain": "https://example.com/docs" };
+    expect(pasteAttaches(clip({ types: ["text/uri-list", "text/plain"], data: link }))).toEqual({ kind: "nothing" });
   });
 });
 

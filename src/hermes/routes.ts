@@ -11,6 +11,7 @@ import type { AttemptRecorder, AttemptTrace, Step } from "./attempts";
 import type { Address } from "./connections";
 import type { OpenPipe, Pipe, Route } from "./pipe";
 import type { ExtraHeader, SignInDetails } from "./tauriPipe";
+import { errorText } from "./values";
 
 export type RouteKind = "lan" | "tailscale" | "web" | "ssh";
 export const ROUTE_KINDS: readonly RouteKind[] = ["lan", "tailscale", "web", "ssh"];
@@ -312,7 +313,7 @@ export function routedPipe(d: SignInDetails, open: OpenRoute, hooks: RoutedHooks
           signal,
         );
       } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
+        const message = errorText(e);
         trying?.failed(e);
         if (!quick || FINAL.test(message) || signal?.aborted) throw e;
         hooks.health?.failed(r.id);

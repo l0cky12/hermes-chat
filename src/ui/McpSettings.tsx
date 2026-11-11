@@ -24,6 +24,7 @@ import {
   envKeyFor,
   formProblem,
 } from "../hermes/mcp";
+import { errorText } from "../hermes/values";
 
 /** How often a sign-in under way is asked about, and for how long before giving up on it. */
 export const SIGN_IN_POLL_MS = 2000;
@@ -34,7 +35,6 @@ type Busy = "toggle" | "remove" | "test" | "signin";
 type SignIn = { flow: OAuthFlow; startedAt: number };
 type Dialog = { kind: "add" } | { kind: "edit"; server: McpServer } | { kind: "catalog" };
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const clock = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 const toolsText = (n: number) => `${n} ${n === 1 ? "tool" : "tools"}`;
 
@@ -102,7 +102,7 @@ export function McpSettings({
       setList(l);
       setProblem(undefined);
     } catch (e) {
-      if (mine(p)) setProblem({ unsupported: e instanceof McpUnsupportedError, text: messageOf(e) });
+      if (mine(p)) setProblem({ unsupported: e instanceof McpUnsupportedError, text: errorText(e) });
     } finally {
       if (mine(p)) setLoading(false);
     }
@@ -208,12 +208,13 @@ export function McpSettings({
             // Dropped here, so stopped on Hermes too: a flow left waiting there refuses the next sign-in until it times out.
             void api.cancelSignIn(s.flow.flowId);
             setOne(setSignIns, name, undefined);
-            setOne(setNotes, name, { tone: "bad", text: `Lost track of the sign-in, so it was stopped: ${messageOf(e)}. Sign in again to try once more.` });
+            setOne(setNotes, name, { tone: "bad", text: `Lost track of the sign-in, so it was stopped: ${errorText(e)}. Sign in again to try once more.` });
           },
         );
       }
     }, pollMs);
     return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [signIns]);
 
   const signIn = async (s: McpServer) => {
@@ -231,9 +232,9 @@ export function McpSettings({
         return;
       }
       setOne(setSignIns, s.name, { flow, startedAt: Date.now() });
-      if (flow.authorizationUrl) await Promise.resolve(openUrl(flow.authorizationUrl)).catch((e) => setOne(setNotes, s.name, { tone: "warn", text: `Couldn't open your browser: ${messageOf(e)}` }));
+      if (flow.authorizationUrl) await Promise.resolve(openUrl(flow.authorizationUrl)).catch((e) => setOne(setNotes, s.name, { tone: "warn", text: `Couldn't open your browser: ${errorText(e)}` }));
     } catch (e) {
-      if (mine(p)) setOne(setNotes, s.name, { tone: "bad", text: `Hermes couldn't start the sign-in: ${messageOf(e)}` });
+      if (mine(p)) setOne(setNotes, s.name, { tone: "bad", text: `Hermes couldn't start the sign-in: ${errorText(e)}` });
     } finally {
       if (mine(p)) setOne(setBusy, s.name, undefined);
     }
@@ -813,9 +814,10 @@ function CatalogDialog({
     open.current = true;
     api.catalog(profile).then(
       (c) => open.current && setCatalog(c),
-      (e) => open.current && setError(messageOf(e)),
+      (e) => open.current && setError(errorText(e)),
     );
     return () => void (open.current = false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, []);
 
   const missing = picked?.requiredEnv.filter((v) => v.required && !env.get(v.name)?.trim()) ?? [];

@@ -13,7 +13,9 @@ import { Main } from "../App";
 import { OutputsScreen } from "./Outputs";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
+// Paging works the same at any page size, and 200 rows rendered twice cost seconds of CPU, which a busy machine
+// stretches past the test timeout (#394).
+vi.mock("./outputPage", () => ({ OUTPUT_PAGE: 20 }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -247,21 +249,19 @@ describe("Outputs", () => {
     expect(localStorage.getItem("hermes-chat.outputs") ?? "").not.toContain("late.md");
   });
 
-  // 250 rows in jsdom: this ran 4–12 s on a loaded machine and timed out at the default 5 s in CI.
   it("shows many outputs a page at a time", async () => {
     const s = server();
-    s.transcripts.report = Array.from({ length: 250 }, (_, i) => call(`w${i}`, "write_file", { path: `/srv/many/f${i}.txt` }, written(`/srv/many/f${i}.txt`, i), i * 2 + 1)).flat();
+    s.transcripts.report = Array.from({ length: 25 }, (_, i) => call(`w${i}`, "write_file", { path: `/srv/many/f${i}.txt` }, written(`/srv/many/f${i}.txt`, i), i * 2 + 1)).flat();
     const { user } = await launch(s);
     await openChat(user, "Quarterly report");
     await openOutputs(user);
-    expect(shown()).toHaveLength(200);
-    expect(screen.getByText(/Showing 200 of 250/)).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Show 50 more" }));
-    expect(shown()).toHaveLength(250);
-    await user.type(screen.getByRole("textbox", { name: /Search outputs/ }), "f249.");
-    expect(shown()).toEqual(["f249.txt"]);
-    // 250 rows render twice: once listed, again once opening has checked where they are (ADR 0064).
-  }, 20_000);
+    expect(shown()).toHaveLength(20);
+    expect(screen.getByText(/Showing 20 of 25/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Show 5 more" }));
+    expect(shown()).toHaveLength(25);
+    await user.type(screen.getByRole("textbox", { name: /Search outputs/ }), "f24.");
+    expect(shown()).toEqual(["f24.txt"]);
+  });
 
   it("says discovery is partial in a chat whose file tools didn't say what they wrote, though none was found", async () => {
     const s = server();

@@ -24,7 +24,6 @@ import {
 import { Main } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -64,9 +63,26 @@ function localDisk(files: Record<string, FileView | Error>) {
 }
 
 function theWeb(answers: Record<string, Framing | Error | Promise<Framing>> = {}, openFails?: string) {
-  const web: WebPages & { checked: string[]; opened: string[]; devs: DevServers | Error; looked: number } = {
+  const web: WebPages & {
+    checked: string[];
+    opened: string[];
+    devs: DevServers | Error;
+    looked: number;
+    /** The https:// addresses tried first, and the hosts whose https:// doesn't answer. */
+    httpsAsked: string[];
+    httpOnly: Set<string>;
+    /** Holds every https:// answer until it resolves. */
+    httpsGate?: Promise<void>;
+  } = {
     checked: [],
     opened: [],
+    httpsAsked: [],
+    httpOnly: new Set(),
+    httpsAnswers: async (url) => {
+      web.httpsAsked.push(url);
+      await web.httpsGate;
+      return !web.httpOnly.has(new URL(url).host);
+    },
     devs: { server: { kind: "listed", ports: [] }, local: [] },
     looked: 0,
     devServers: async () => {
@@ -291,7 +307,7 @@ describe("Opening the preview pane", () => {
     expect([button("Back").disabled, button("Forward").disabled, button("Reload").disabled]).toEqual([true, true, true]);
     const box = address();
 
-    await user.type(box, "notes.md{Enter}");
+    await user.type(box, "docs/notes.md{Enter}");
     expect(within(pane()).getByRole("alert").textContent).toContain("starting with / or ~/");
     await user.clear(box);
     await user.type(box, "file:///home/liam/notes.md{Enter}");
@@ -557,10 +573,12 @@ describe("Web pages in the Preview's own view, on Linux (issue #254)", () => {
   });
 
   it("offers to try a typed address again when it fails at the address it redirected to", async () => {
-    const { view, user } = await openWeb(GOOGLE);
+    const { view, web, user } = await openWeb(GOOGLE);
     await act(async () => view.land(1));
+    web.httpOnly.add("down.example");
     await user.clear(address());
     await user.type(address(), "http://down.example/{Enter}");
+    await waitFor(() => expect(view.asked.at(-1)).toEqual([1, "go http://down.example/"]));
     await act(async () => view.say(1, { kind: "failed", message: "Could not connect: Connection refused", url: "https://down.example/" as ViewUrl }));
     expect(within(pane()).getByRole("alert").textContent).toContain("Check the address, or Reload to try again.");
 
@@ -609,6 +627,114 @@ describe("Web pages in the Preview's own view, on Linux (issue #254)", () => {
     await user.click(button("Close the side panel"));
     expect(view.closed).toEqual([1]);
     expect(pages.closed).toEqual(["1"]);
+  });
+});
+
+describe("A typed address opens over https first, as Chrome does (issue #441)", () => {
+  async function typeIn(text: string, web = theWeb()) {
+    const s = await withView({ web });
+    await s.user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await s.user.type(address(), `${text}{Enter}`);
+    return s;
+  }
+  const badge = () => within(pane()).getByText(/^(Web|Not secure)$/);
+
+  it("opens a bare domain and a domain with a path over https, and shows the https address", async () => {
+    const { view, web, user } = await typeIn("example.com");
+    await waitFor(() => expect(view.asked).toEqual([[1, "go https://example.com/"]]));
+    expect(web.httpsAsked).toEqual(["https://example.com/"]);
+    await act(async () => view.land(1));
+    expect(address().value).toBe("https://example.com/");
+    expect(badge().textContent?.trim()).toBe("Web");
+
+    await user.clear(address());
+    await user.type(address(), "docs.github.com/en{Enter}");
+    await waitFor(() => expect(view.asked.at(-1)).toEqual([1, "go https://docs.github.com/en"]));
+  });
+
+  it("falls back to http when https doesn't answer, and says the page isn't secure", async () => {
+    const web = theWeb();
+    web.httpOnly.add("plain.example:8080");
+    const { view } = await typeIn("plain.example:8080/a?b", web);
+    await waitFor(() => expect(view.asked).toEqual([[1, "go http://plain.example:8080/a?b"]]));
+    expect(web.httpsAsked).toEqual(["https://plain.example:8080/a?b"]);
+    await act(async () => view.land(1));
+    expect(address().value).toBe("http://plain.example:8080/a?b");
+    expect(badge().textContent?.trim()).toBe("Not secure");
+    expect(badge().title).toContain("aren't encrypted");
+  });
+
+  it("tries a typed http:// domain over https too, but not a loopback or IP address", async () => {
+    const { view, web, user } = await typeIn("http://docs.example.com/guide");
+    await waitFor(() => expect(view.asked).toEqual([[1, "go https://docs.example.com/guide"]]));
+    for (const typed of ["http://192.168.1.5:8080/", "http://intranet/"]) {
+      await user.clear(address());
+      await user.type(address(), `${typed}{Enter}`);
+      await waitFor(() => expect(view.asked.at(-1)).toEqual([1, `go ${typed}`]));
+    }
+    expect(web.httpsAsked).toEqual(["https://docs.example.com/guide"]);
+  });
+
+  it("loads nothing while https is tried, and opens what the owner opened next when it answers late", async () => {
+    const web = theWeb();
+    web.httpOnly.add("slow.example");
+    let answer = () => {};
+    web.httpsGate = new Promise<void>((resolve) => (answer = resolve));
+    const { view, user } = await typeIn("slow.example", web);
+    expect(within(pane()).getByRole("status").textContent).toContain("Trying slow.example over https");
+    expect(within(pane()).getByRole("button", { name: "Reload" }).className).toContain("preview-busy");
+    expect(view.asked).toEqual([]);
+    await user.clear(address());
+    await user.type(address(), "https://fast.example/{Enter}");
+    await waitFor(() => expect(view.asked).toEqual([[1, "go https://fast.example/"]]));
+    await act(async () => answer());
+    expect(view.asked).toEqual([[1, "go https://fast.example/"]]);
+    expect(address().value).toBe("https://fast.example/");
+  });
+
+  it("keeps the typed address when the page before it lands during the try", async () => {
+    const web = theWeb();
+    web.httpOnly.add("slow.example");
+    let answer = () => {};
+    web.httpsGate = new Promise<void>((resolve) => (answer = resolve));
+    const { view, user } = await typeIn("https://a.example/", web);
+    await waitFor(() => expect(view.asked).toEqual([[1, "go https://a.example/"]]));
+    await user.clear(address());
+    await user.type(address(), "slow.example{Enter}");
+    await waitFor(() => expect(within(pane()).getByRole("status").textContent).toContain("Trying slow.example"));
+    await act(async () => view.say(1, at("https://a.example/", false)));
+    expect(address().value).toBe("https://slow.example/");
+    await act(async () => answer());
+    await waitFor(() => expect(view.asked.at(-1)).toEqual([1, "go http://slow.example/"]));
+    await act(async () => view.say(1, at("http://slow.example/", false)));
+    expect(address().value).toBe("http://slow.example/");
+    await user.click(button("Back"));
+    expect(address().value).toBe("https://a.example/");
+  });
+
+  it("drops a late answer once Back, or a link from a reply, shows another entry", async () => {
+    const web = theWeb();
+    web.httpOnly.add("slow.example");
+    let answer = () => {};
+    web.httpsGate = new Promise<void>((resolve) => (answer = resolve));
+    const { view, user } = await typeIn("https://fast.example/", web);
+    await waitFor(() => expect(view.asked).toEqual([[1, "go https://fast.example/"]]));
+    await act(async () => view.land(1));
+    await user.clear(address());
+    await user.type(address(), "slow.example{Enter}");
+    await waitFor(() => expect(within(pane()).getByRole("status").textContent).toContain("Trying slow.example"));
+    await user.click(button("Back"));
+    await waitFor(() => expect(view.asked.at(-1)).toEqual([1, "go https://fast.example/"]));
+    await act(async () => answer());
+    expect(view.asked.at(-1)).toEqual([1, "go https://fast.example/"]);
+    expect(address().value).toBe("https://fast.example/");
+    expect(button("Forward").disabled).toBe(false);
+
+    // Forward shows the entry again, so it is tried again, and falls back this time.
+    await user.click(button("Forward"));
+    await waitFor(() => expect(view.asked.at(-1)).toEqual([1, "go http://slow.example/"]));
+    await user.click(screen.getByRole("link", { name: "the docs" }));
+    expect(address().value).toBe("https://docs.example.com/crash");
   });
 });
 

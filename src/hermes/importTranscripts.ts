@@ -8,6 +8,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { asError } from "./tauriPipe";
 import { RestError, conflictOf } from "./pipe";
+import { errorText, isObj, plural } from "./values";
 
 export type ImportFormat = "markdown" | "jsonl";
 
@@ -66,8 +67,6 @@ export type ImportPlan = {
 /** The file isn't one this format can import; nothing was sent. */
 export class ImportFileError extends Error {}
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
 
 export async function sha256(text: string): Promise<string> {
@@ -552,7 +551,7 @@ export async function sendImport(rest: ImportRest, profile: string, chats: Plann
       answer = await post();
       break;
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      const message = errorText(e);
       // Another write to the first chat landed between reading its revision and importing: read it again, once.
       if (conflictOf(e, "revision_conflict") && attempt === 0) continue;
       if (e instanceof RestError && e.status >= 400 && e.status < 500) throw new ImportRefusedError(refusal(e));
@@ -571,7 +570,7 @@ export async function sendImport(rest: ImportRest, profile: string, chats: Plann
     back = await readBack(rest, profile, ids);
   } catch (e) {
     // Hermes may have written them; it's the reading back that failed, so this isn't a refusal.
-    const why = e instanceof Error ? e.message : String(e);
+    const why = errorText(e);
     const said = Array.isArray(answer?.imported_ids) ? answer.imported_ids.filter((x): x is string => typeof x === "string") : [];
     return {
       imported: [],

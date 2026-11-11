@@ -29,6 +29,7 @@ import {
   type RemoveOutcome,
 } from "../hermes/memory";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { errorText } from "../hermes/values";
 
 /**
  * The entry open in the editor: as last read from Hermes, and the owner's text for it. `fromKept`: the kept edit the
@@ -39,7 +40,6 @@ type Notice = { kind: "ok" | "error" | "conflict" | "unsure"; text: string };
 /** Why memory couldn't be read: the server or the profile is unsupported here, a permission refusal, or another failure. */
 type LoadProblem = { kind: "server" | "profile" | "permission" | "error"; text: string };
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const entriesText = (n: number) => `${n} ${n === 1 ? "entry" : "entries"}`;
 /** An entry's first line, for the list; the editor shows all of it. */
 const firstLine = (text: string) => text.split("\n").find((l) => l.trim()) ?? text;
@@ -107,6 +107,7 @@ export function MemorySettings({
       setConfirmBulk(false);
       setBulkDone(undefined);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [sourceProp, busy]);
   const [notice, setNotice] = useState<Notice>();
   // The owner's texts that Hermes didn't take (a conflict, or a save that read back differently), each kept to copy or
@@ -127,6 +128,7 @@ export function MemorySettings({
   const openKey = useRef<{ id: string; key: string }>(undefined);
 
   const dirty = memoryDirty(editing, kept);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => onDirtyChange(dirty), [dirty]);
   const discards = useRef(discardSignal);
   useEffect(() => {
@@ -145,6 +147,7 @@ export function MemorySettings({
       alive.current = false;
       onDirtyChange(false);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, []);
 
   /** Puts a fresh read on screen, keeping the open edit if its entry is still there as it was. */
@@ -168,7 +171,7 @@ export function MemorySettings({
   const failLoad = (e: unknown) => {
     if (e instanceof MemoryUnsupportedError) setProblem({ kind: e.reason, text: e.message });
     else if (e instanceof MemoryPermissionError) setProblem({ kind: "permission", text: e.message });
-    else setProblem({ kind: "error", text: `Couldn't read memory from Hermes: ${messageOf(e)}` });
+    else setProblem({ kind: "error", text: `Couldn't read memory from Hermes: ${errorText(e)}` });
   };
 
   const load = async (why: "first" | "reload") => {
@@ -249,6 +252,7 @@ export function MemorySettings({
   // Read once connected; after a drop, the screen keeps what it read, and the owner's edit, until Reload.
   useEffect(() => {
     if (connected && !view && !problem && !loading) void load("first");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [connected]);
 
   /** Runs `go` now, or once the owner agrees to drop the open entry's unsaved edit. A kept edit stays either way. */
@@ -307,7 +311,7 @@ export function MemorySettings({
         keep(at.draft);
         setEditing(undefined);
         failLoad(e);
-      } else setNotice({ kind: "error", text: `${messageOf(e)} Your edit is still here.` });
+      } else setNotice({ kind: "error", text: `${errorText(e)} Your edit is still here.` });
     } finally {
       if (alive.current) setBusy(undefined);
     }
@@ -336,7 +340,7 @@ export function MemorySettings({
         setNotice({ kind: "conflict", text: e instanceof MemoryConflictError ? "This entry changed on the server, or was removed, since you opened it. Nothing was removed." : e.message });
       } else if (e instanceof MemoryUnsureError) setNotice({ kind: "unsure", text: e.message });
       else if (e instanceof MemoryUnsupportedError) failLoad(e);
-      else setNotice({ kind: "error", text: messageOf(e) });
+      else setNotice({ kind: "error", text: errorText(e) });
     } finally {
       if (alive.current) setBusy(undefined);
     }
@@ -362,7 +366,7 @@ export function MemorySettings({
     } catch (e) {
       if (!alive.current) return;
       if (e instanceof MemoryUnsupportedError) failLoad(e);
-      else setNotice({ kind: "error", text: `Nothing was removed: ${messageOf(e)}` });
+      else setNotice({ kind: "error", text: `Nothing was removed: ${errorText(e)}` });
     } finally {
       if (alive.current) setBusy(undefined);
     }

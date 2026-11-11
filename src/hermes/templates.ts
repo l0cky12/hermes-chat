@@ -1,3 +1,4 @@
+import { isObj } from "./values";
 // Templates (GLOSSARY.md "Template", ADR 0028): messages the owner reuses, with blanks filled in each time. They are
 // data, kept in this computer's UI prefs (uiPrefs.ts `templates`), and reach Hermes only as text the owner sends from
 // the composer. Nothing here is evaluated: a placeholder is replaced by the value typed for it, verbatim, once.
@@ -92,7 +93,6 @@ export function render(body: string, values: Record<string, string>): { text: st
 export const insertInto = (draft: string, text: string, how: "replace" | "append") =>
   how === "replace" || !draft.trim() ? text : `${draft.trimEnd()}\n\n${text}`;
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const sameName = (a: string, b: string) => a.trim().toLocaleLowerCase() === b.trim().toLocaleLowerCase();
 
 /** What is wrong with a template the owner is saving, if anything. `others`: every other template kept. */
@@ -159,9 +159,6 @@ export function exportFile(list: readonly Template[]): string {
   const templates = list.map(({ name, description, body }) => ({ name, description, body }));
   return JSON.stringify({ format: EXPORT_FORMAT, version: EXPORT_VERSION, templates }, null, 2) + "\n";
 }
-
-/** The largest file Import reads. */
-export const IMPORT_MAX_BYTES = 2 * 1024 * 1024;
 
 export type Imported = { added: Template[]; skipped: number; renamed: { from: string; to: string }[]; overLimit: number };
 
