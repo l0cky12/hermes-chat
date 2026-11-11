@@ -583,7 +583,9 @@ async fn hermes_save_endpoint(
 
 #[tauri::command]
 async fn hermes_send(state: State<'_, AppState>, attempt: String, frame: String) -> Result<(), String> {
-    held(&*state.0.lock().await, &attempt)?.pipe.send(frame).map_err(|e| e.to_string())
+    // The send waits while the pipe's queue is full; don't hold the lock meanwhile.
+    let pipe = held(&*state.0.lock().await, &attempt)?.pipe.clone();
+    pipe.send(frame).await.map_err(|e| e.to_string())
 }
 
 /// Sends a frame with a file the owner attached (`Attachable`) in it.

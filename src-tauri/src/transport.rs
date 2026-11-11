@@ -1129,21 +1129,31 @@ pub enum PipeEvent {
 /// (src/hermes/transport.ts `LIMITS.file.bytes`).
 const ATTACHMENT_MAX_BYTES: u64 = 256 * MIB;
 
-/// A frame for the pipe task to write, and who hears once it has been written.
+/// How many frames wait behind the one being written. Only a slow write fills it (a big file frame on a slow uplink,
+/// #469), and no frame can go before that write ends anyway, so a bigger queue would only hold more memory. A JSON-RPC
+/// frame can't be dropped: past it, `Pipe::send` waits.
+const PIPE_QUEUE: usize = 16;
+
+/// A frame for the pipe task to write, and who hears once it has been written. `file`: a file frame's turn
+/// (`Pipe::send_file`), given back once it has been written.
 struct Outgoing {
     text: String,
     written: Option<oneshot::Sender<Result<(), String>>>,
+    file: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 /// An open `/api/ws` connection. Dropping it closes the socket.
 pub struct Pipe {
-    outgoing: mpsc::UnboundedSender<Outgoing>,
+    outgoing: mpsc::Sender<Outgoing>,
+    /// One permit: a file frame is the whole file as base64, up to about 341 MiB, so one is read and held at a time.
+    files: std::sync::Arc<tokio::sync::Semaphore>,
     task: JoinHandle<()>,
 }
 
 impl Pipe {
-    pub fn send(&self, text: String) -> Result<(), TransportError> {
-        self.outgoing.send(Outgoing { text, written: None }).map_err(|_| TransportError::Closed)
+    /// Queue one frame, waiting while `PIPE_QUEUE` frames already wait.
+    pub async fn send(&self, text: String) -> Result<(), TransportError> {
+        self.outgoing.send(Outgoing { text, written: None, file: None }).await.map_err(|_| TransportError::Closed)
     }
 
     /// Queue one frame: `head`, the file at `path` as base64, then `tail`. Refuses a file over `max_bytes` (at most
@@ -1152,6 +1162,10 @@ impl Pipe {
     /// on a slow uplink, so `Written` says when it has gone, and the webview can tell a long upload from a silent
     /// Hermes (#469). Wait on it without holding the `Pipe`: dropping the pipe must still stop the write.
     pub async fn send_file(&self, head: &str, path: &str, tail: &str, max_bytes: u64) -> Result<Written, TransportError> {
+        let file = self.files.clone().acquire_owned().await.map_err(|_| TransportError::Closed)?;
+        if self.outgoing.is_closed() {
+            return Err(TransportError::Closed);
+        }
         let bytes = read_capped(path, max_bytes.min(ATTACHMENT_MAX_BYTES)).await?;
         let mut text = String::with_capacity(head.len() + bytes.len().div_ceil(3) * 4 + tail.len());
         text.push_str(head);
@@ -1159,7 +1173,7 @@ impl Pipe {
         drop(bytes);
         text.push_str(tail);
         let (written, sent) = oneshot::channel();
-        self.outgoing.send(Outgoing { text, written: Some(written) }).map_err(|_| TransportError::Closed)?;
+        self.outgoing.send(Outgoing { text, written: Some(written), file: Some(file) }).await.map_err(|_| TransportError::Closed)?;
         Ok(Written(sent))
     }
 }
@@ -1206,13 +1220,13 @@ fn run_pipe<S>(ws: tokio_tungstenite::WebSocketStream<S>, on_event: impl Fn(Pipe
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let (outgoing, mut to_server) = mpsc::unbounded_channel::<Outgoing>();
+    let (outgoing, mut to_server) = mpsc::channel::<Outgoing>(PIPE_QUEUE);
     let task = tokio::spawn(async move {
         let (mut sink, mut stream) = ws.split();
         let reason = 'socket: loop {
             tokio::select! {
                 out = to_server.recv() => match out {
-                    Some(Outgoing { text, written }) => {
+                    Some(Outgoing { text, written, file }) => {
                         let mut write = std::pin::pin!(sink.send(Message::text(text)));
                         let wrote = loop {
                             tokio::select! {
@@ -1225,6 +1239,7 @@ where
                                 },
                             }
                         };
+                        drop(file);
                         let failed = wrote.as_ref().err().cloned();
                         if let Some(written) = written {
                             let _ = written.send(wrote);
@@ -1245,7 +1260,7 @@ where
         };
         on_event(PipeEvent::Closed { reason });
     });
-    Pipe { outgoing, task }
+    Pipe { outgoing, files: std::sync::Arc::new(tokio::sync::Semaphore::new(1)), task }
 }
 
 impl Drop for Pipe {
@@ -3683,6 +3698,76 @@ mod tests {
             Ok(other) => panic!("{other:?}"),
             Err(_) => panic!("still reading a ticket that never ends"),
         }
+    }
+
+    /// A pipe to a WebSocket server that reads nothing until `read` is sent, then hands each frame's text on.
+    async fn held_pipe() -> (std::sync::Arc<super::Pipe>, tokio::sync::oneshot::Sender<()>, tokio::sync::mpsc::UnboundedReceiver<String>) {
+        use futures_util::StreamExt;
+        let listener = small_buffered_listener();
+        let addr = listener.local_addr().unwrap();
+        let (read, reading) = tokio::sync::oneshot::channel::<()>();
+        let (frames, heard) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default().max_frame_size(None).max_message_size(None);
+            let mut ws = tokio_tungstenite::accept_async_with_config(sock, Some(config)).await.unwrap();
+            reading.await.unwrap();
+            while let Some(Ok(msg)) = ws.next().await {
+                if let super::Message::Text(text) = msg {
+                    let _ = frames.send(text.to_string());
+                }
+            }
+        });
+        let ws = super::open_pipe_socket(super::IntoClientRequest::into_client_request(format!("ws://{addr}/api/ws")).unwrap()).await.unwrap();
+        (std::sync::Arc::new(super::run_pipe(ws, |_| {}, super::HeaderMap::new())), read, heard)
+    }
+
+    /// A JSON-RPC frame can't be dropped, so behind a write Hermes isn't reading, frames wait rather than pile up:
+    /// 16 queue, and the next `send` waits until Hermes reads again. Nothing is lost.
+    #[tokio::test]
+    async fn sending_waits_once_16_frames_are_queued_behind_a_slow_write() {
+        let (pipe, read, mut frames) = held_pipe().await;
+        let big = "x".repeat(24 * 1024 * 1024);
+        pipe.send(big.clone()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        for i in 0..16 {
+            tokio::time::timeout(Duration::from_secs(1), pipe.send(format!("{i}"))).await.expect("queued").unwrap();
+        }
+        let mut waiting = std::pin::pin!(pipe.send("16".into()));
+        assert!(tokio::time::timeout(Duration::from_millis(300), &mut waiting).await.is_err(), "a 17th frame queued behind the write");
+        read.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(20), waiting).await.expect("still waiting once Hermes read").unwrap();
+        assert_eq!(frames.recv().await.unwrap().len(), big.len());
+        for i in 0..=16 {
+            assert_eq!(frames.recv().await.unwrap(), i.to_string());
+        }
+    }
+
+    /// A file frame is the file whole as base64, up to about 341 MiB, so only one is held at a time: a second
+    /// attachment's file isn't read until the first frame has been written.
+    #[tokio::test]
+    async fn a_second_attachment_isnt_read_until_the_first_has_been_written() {
+        let (pipe, read, mut frames) = held_pipe().await;
+        let first = temp_file("attach-first", &vec![7u8; 24 * 1024 * 1024]);
+        let second = std::env::temp_dir().join(format!("hermes-transport-attach-second-{}", std::process::id()));
+        let _ = std::fs::remove_file(&second);
+        let send = |path: &std::path::Path| {
+            let (pipe, path) = (pipe.clone(), path.to_string_lossy().into_owned());
+            tokio::spawn(async move { pipe.send_file("[", &path, "]", u64::MAX).await?.wait().await })
+        };
+        let sending_first = send(&first);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let sending_second = send(&second);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!sending_second.is_finished(), "the second file was read while the first frame was being written: {:?}", sending_second.await);
+        std::fs::write(&second, b"later").unwrap();
+        read.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(20), sending_first).await.unwrap().unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(20), sending_second).await.unwrap().unwrap().unwrap();
+        assert_eq!(frames.recv().await.unwrap().len(), 2 + (24 * 1024 * 1024usize).div_ceil(3) * 4);
+        assert_eq!(frames.recv().await.unwrap(), "[bGF0ZXI=]");
+        let _ = std::fs::remove_file(&first);
+        let _ = std::fs::remove_file(&second);
     }
 
     /// A relayed answer is read up to the relay's 64 MiB: one announced past it is refused before any of it is read.

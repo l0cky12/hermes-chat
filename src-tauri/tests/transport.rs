@@ -607,7 +607,7 @@ async fn signs_in_and_receives_gateway_ready_first() {
 async fn relays_frames_both_ways() {
     let (pipe, mut rx) = open_stub().await;
     next(&mut rx).await;
-    pipe.send(json!({"jsonrpc": "2.0", "id": 7, "method": "echo", "params": {"hi": "there"}}).to_string()).unwrap();
+    pipe.send(json!({"jsonrpc": "2.0", "id": 7, "method": "echo", "params": {"hi": "there"}}).to_string()).await.unwrap();
     assert_eq!(frame(next(&mut rx).await), json!({"jsonrpc": "2.0", "id": 7, "result": {"hi": "there"}}));
 }
 
@@ -615,7 +615,7 @@ async fn relays_frames_both_ways() {
 async fn splits_newline_delimited_messages_into_frames() {
     let (pipe, mut rx) = open_stub().await;
     next(&mut rx).await;
-    pipe.send(json!({"jsonrpc": "2.0", "id": 1, "method": "pair"}).to_string()).unwrap();
+    pipe.send(json!({"jsonrpc": "2.0", "id": 1, "method": "pair"}).to_string()).await.unwrap();
     assert_eq!(frame(next(&mut rx).await)["result"], json!({"n": 1}));
     assert_eq!(frame(next(&mut rx).await)["params"]["type"], "message.start");
 }
@@ -624,7 +624,7 @@ async fn splits_newline_delimited_messages_into_frames() {
 async fn opens_the_socket_for_the_profile() {
     let (pipe, mut rx) = open_stub_for("work email").await;
     next(&mut rx).await;
-    pipe.send(json!({"jsonrpc": "2.0", "id": 1, "method": "profile"}).to_string()).unwrap();
+    pipe.send(json!({"jsonrpc": "2.0", "id": 1, "method": "profile"}).to_string()).await.unwrap();
     assert_eq!(frame(next(&mut rx).await)["result"], json!({"profile": "work email"}));
 }
 
@@ -632,7 +632,7 @@ async fn opens_the_socket_for_the_profile() {
 async fn reports_when_the_server_closes_the_socket() {
     let (pipe, mut rx) = open_stub().await;
     next(&mut rx).await;
-    pipe.send(json!({"jsonrpc": "2.0", "id": 1, "method": "bye"}).to_string()).unwrap();
+    pipe.send(json!({"jsonrpc": "2.0", "id": 1, "method": "bye"}).to_string()).await.unwrap();
     assert!(matches!(next(&mut rx).await, PipeEvent::Closed { .. }));
 }
 
@@ -642,13 +642,13 @@ async fn the_signed_in_dashboard_opens_the_socket_again_once_hermes_closed_it() 
     let (tx, mut rx) = mpsc::unbounded_channel();
     let pipe = dashboard.open_pipe("default", move |e| drop(tx.send(e))).await.expect("pipe open");
     next(&mut rx).await;
-    pipe.send(json!({"jsonrpc": "2.0", "id": 1, "method": "bye"}).to_string()).unwrap();
+    pipe.send(json!({"jsonrpc": "2.0", "id": 1, "method": "bye"}).to_string()).await.unwrap();
     assert!(matches!(next(&mut rx).await, PipeEvent::Closed { .. }));
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     let pipe = dashboard.open_pipe("work", move |e| drop(tx.send(e))).await.expect("opened again without signing in");
     assert_eq!(frame(next(&mut rx).await)["params"]["type"], "gateway.ready");
-    pipe.send(json!({"jsonrpc": "2.0", "id": 2, "method": "profile"}).to_string()).unwrap();
+    pipe.send(json!({"jsonrpc": "2.0", "id": 2, "method": "profile"}).to_string()).await.unwrap();
     assert_eq!(frame(next(&mut rx).await)["result"], json!({"profile": "work"}));
 }
 
@@ -1398,7 +1398,7 @@ async fn refuses_to_send_a_file_over_the_limit() {
     assert_eq!(err.to_string(), "it's 1.5 MB now, over the 1 MB limit");
 
     // Nothing went out: the next frame back answers the next request.
-    pipe.send(json!({"jsonrpc": "2.0", "id": 2, "method": "echo", "params": {}}).to_string()).unwrap();
+    pipe.send(json!({"jsonrpc": "2.0", "id": 2, "method": "echo", "params": {}}).to_string()).await.unwrap();
     assert_eq!(frame(next(&mut rx).await)["id"], 2);
 }
 
