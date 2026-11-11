@@ -3254,6 +3254,22 @@ mod tests {
         assert!(started.elapsed() >= limit + Duration::from_millis(50), "{:?}", started.elapsed());
     }
 
+    /// A loopback pair whose kernel buffers are pinned small, so a big frame backs up whatever the OS. Windows otherwise
+    /// grows its send buffer and receive window until a 32 MiB frame fits and the write ends at once; setting the sizes
+    /// turns that off.
+    fn small_buffered_listener() -> tokio::net::TcpListener {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.set_recv_buffer_size(64 * 1024).unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        socket.listen(1).unwrap()
+    }
+
+    async fn small_buffered_connect(addr: std::net::SocketAddr) -> tokio::net::TcpStream {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.set_send_buffer_size(64 * 1024).unwrap();
+        socket.connect(addr).await.unwrap()
+    }
+
     /// #469: a file frame big enough to fill the socket's buffers is still being written when Hermes speaks. The pipe
     /// hands that frame to the webview at once, and `send_file` resolves only once the whole file has gone.
     #[tokio::test]
@@ -3261,7 +3277,7 @@ mod tests {
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::tungstenite::Message;
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = small_buffered_listener();
         let addr = listener.local_addr().unwrap();
         let (speak, spoken) = tokio::sync::oneshot::channel::<()>();
         let (read, reading) = tokio::sync::oneshot::channel::<()>();
@@ -3287,7 +3303,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("hermes-pipe-469-{}.bin", std::process::id()));
         let size = 24 * 1024 * 1024;
         std::fs::write(&path, vec![7u8; size]).unwrap();
-        let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let tcp = small_buffered_connect(addr).await;
         let (ws, _) = tokio_tungstenite::client_async(format!("ws://{addr}/api/ws"), tcp).await.unwrap();
         let (events, mut heard) = tokio::sync::mpsc::unbounded_channel();
         let pipe = std::sync::Arc::new(super::run_pipe(ws, move |e| drop(events.send(e)), super::HeaderMap::new()));
@@ -3313,7 +3329,7 @@ mod tests {
     /// `Closed` instead of the old socket writing on (#469).
     #[tokio::test]
     async fn dropping_the_pipe_stops_a_file_frame_still_being_written() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = small_buffered_listener();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             let (sock, _) = listener.accept().await.unwrap();
@@ -3323,7 +3339,7 @@ mod tests {
         });
         let path = std::env::temp_dir().join(format!("hermes-pipe-469-drop-{}.bin", std::process::id()));
         std::fs::write(&path, vec![7u8; 24 * 1024 * 1024]).unwrap();
-        let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let tcp = small_buffered_connect(addr).await;
         let (ws, _) = tokio_tungstenite::client_async(format!("ws://{addr}/api/ws"), tcp).await.unwrap();
         let pipe = super::run_pipe(ws, |_| {}, super::HeaderMap::new());
 
