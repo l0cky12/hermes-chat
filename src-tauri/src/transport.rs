@@ -1227,6 +1227,54 @@ impl Drop for Pipe {
     }
 }
 
+/// The most one write hands the socket. Windows takes a write of any size whole while its send buffer isn't full, and
+/// tungstenite writes a frame in one call, so a big file frame counted as written at once while it still waited to go
+/// out, and the silence check started over during the upload (#469). Capped, a write backs up there as it does on Linux.
+/// Not smaller: tungstenite moves the rest of the frame down after each write, so a 256 MiB file over loopback takes
+/// 6.5 s at 1 MiB (1.9 s uncapped, 24 s at 256 KiB). What is left when the frame counts as written, about this much,
+/// goes in the 45 s silence limit down to about 256 kbit/s.
+const WRITE_CAP: usize = 1024 * 1024;
+
+/// A socket whose writes take at most `WRITE_CAP` bytes each.
+struct CappedWrites<S>(S);
+
+impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for CappedWrites<S> {
+    fn poll_read(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &mut tokio::io::ReadBuf<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
+    }
+}
+
+impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for CappedWrites<S> {
+    fn poll_write(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_write(cx, &buf[..buf.len().min(WRITE_CAP)])
+    }
+    fn poll_flush(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_flush(cx)
+    }
+    fn poll_shutdown(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_shutdown(cx)
+    }
+}
+
+type PipeSocket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<CappedWrites<tokio::net::TcpStream>>>;
+
+/// Opens `/api/ws` as `connect_async` does, over a socket with capped writes.
+async fn open_pipe_socket(handshake: tokio_tungstenite::tungstenite::handshake::client::Request) -> Result<PipeSocket, tokio_tungstenite::tungstenite::Error> {
+    use tokio_tungstenite::tungstenite::error::{Error, UrlError};
+    let uri = handshake.uri();
+    let host = uri.host().ok_or(Error::Url(UrlError::NoHostName))?.trim_start_matches('[').trim_end_matches(']').to_owned();
+    let port = uri
+        .port_u16()
+        .or(match uri.scheme_str() {
+            Some("wss") => Some(443),
+            Some("ws") => Some(80),
+            _ => None,
+        })
+        .ok_or(Error::Url(UrlError::UnsupportedUrlScheme))?;
+    let tcp = tokio::net::TcpStream::connect((host.as_str(), port)).await.map_err(Error::Io)?;
+    Ok(tokio_tungstenite::client_async_tls(handshake, CappedWrites(tcp)).await?.0)
+}
+
 /// A signed-in dashboard session. It keeps the session cookies up to date: the dashboard rotates an
 /// expired access token through the refresh cookie on any request and sends the new ones back. A token sign-in has
 /// no cookies: its `Authorization` header goes with every request instead (ADR 0058).
@@ -1345,8 +1393,8 @@ impl Dashboard {
             )
             .await?;
         let handshake = self.ws_handshake("api/ws", &[("ticket", &ticket), ("profile", profile)])?;
-        let connecting = async { tokio_tungstenite::connect_async(handshake).await.map_err(|e| TransportError::WebSocket(e.to_string())) };
-        let (ws, _) = steps
+        let connecting = async { open_pipe_socket(handshake).await.map_err(|e| TransportError::WebSocket(e.to_string())) };
+        let ws = steps
             .run(Step::WebSocket, within(limits.map(|l| l.socket), connecting, |s| TransportError::WebSocket(format!("it didn't open within {s}s."))))
             .await?;
 
@@ -3321,9 +3369,7 @@ mod tests {
         assert!(started.elapsed() >= limit + Duration::from_millis(50), "{:?}", started.elapsed());
     }
 
-    /// A loopback pair whose kernel buffers are pinned small, so a big frame backs up whatever the OS. Windows otherwise
-    /// grows its send buffer and receive window until a 32 MiB frame fits and the write ends at once; setting the sizes
-    /// turns that off.
+    /// A listener whose accepted sockets take little before the test reads them, so the client's write backs up soon.
     fn small_buffered_listener() -> tokio::net::TcpListener {
         let socket = tokio::net::TcpSocket::new_v4().unwrap();
         socket.set_recv_buffer_size(64 * 1024).unwrap();
@@ -3331,10 +3377,16 @@ mod tests {
         socket.listen(1).unwrap()
     }
 
-    async fn small_buffered_connect(addr: std::net::SocketAddr) -> tokio::net::TcpStream {
-        let socket = tokio::net::TcpSocket::new_v4().unwrap();
-        socket.set_send_buffer_size(64 * 1024).unwrap();
-        socket.connect(addr).await.unwrap()
+    /// Windows takes one write of any size whole while its send buffer isn't full, so a frame written in one call
+    /// counted as gone at once (#469). The pipe's socket hands it at most `WRITE_CAP` a write, and loses nothing.
+    #[tokio::test]
+    async fn the_pipe_socket_takes_a_big_frame_a_capped_piece_at_a_time() {
+        use tokio::io::AsyncWriteExt;
+        let frame: Vec<u8> = (0..3 * super::WRITE_CAP + 5).map(|i| i as u8).collect();
+        let mut socket = super::CappedWrites(Vec::new());
+        assert_eq!(socket.write(&frame).await.unwrap(), super::WRITE_CAP);
+        socket.write_all(&frame[super::WRITE_CAP..]).await.unwrap();
+        assert_eq!(socket.0, frame);
     }
 
     /// #469: a file frame big enough to fill the socket's buffers is still being written when Hermes speaks. The pipe
@@ -3370,8 +3422,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("hermes-pipe-469-{}.bin", std::process::id()));
         let size = 24 * 1024 * 1024;
         std::fs::write(&path, vec![7u8; size]).unwrap();
-        let tcp = small_buffered_connect(addr).await;
-        let (ws, _) = tokio_tungstenite::client_async(format!("ws://{addr}/api/ws"), tcp).await.unwrap();
+        let ws = super::open_pipe_socket(super::IntoClientRequest::into_client_request(format!("ws://{addr}/api/ws")).unwrap()).await.unwrap();
         let (events, mut heard) = tokio::sync::mpsc::unbounded_channel();
         let pipe = std::sync::Arc::new(super::run_pipe(ws, move |e| drop(events.send(e)), super::HeaderMap::new()));
 
@@ -3406,8 +3457,7 @@ mod tests {
         });
         let path = std::env::temp_dir().join(format!("hermes-pipe-469-drop-{}.bin", std::process::id()));
         std::fs::write(&path, vec![7u8; 24 * 1024 * 1024]).unwrap();
-        let tcp = small_buffered_connect(addr).await;
-        let (ws, _) = tokio_tungstenite::client_async(format!("ws://{addr}/api/ws"), tcp).await.unwrap();
+        let ws = super::open_pipe_socket(super::IntoClientRequest::into_client_request(format!("ws://{addr}/api/ws")).unwrap()).await.unwrap();
         let pipe = super::run_pipe(ws, |_| {}, super::HeaderMap::new());
 
         let written = pipe.send_file("{\"f\":\"", &path.to_string_lossy(), "\"}", 64 * 1024 * 1024).await.unwrap();
