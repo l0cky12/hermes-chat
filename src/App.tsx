@@ -202,7 +202,7 @@ const connectionAttempts = new AttemptLog(tauriAttemptStore);
  * Each opening is kept in the record of connection attempts.
  */
 const pipeFor = (c: SavedConnection, d: SignInDetails) =>
-  tauriPipe(d, { onServer: (server) => savedConnections().setServer(c.id, server), health: healthOf(c.id), attempts: connectionAttempts });
+  tauriPipe(d, c.id, { onServer: (server) => savedConnections().setServer(c.id, server), health: healthOf(c.id), attempts: connectionAttempts });
 
 const account: Account = {
   get connections() {
@@ -1041,6 +1041,12 @@ export function Main({
   // Usage analytics covers the chat panes too (ADR 0026). It reads Hermes afresh each time it opens.
   const [usageOpen, setUsageOpen] = useState(false);
   const usageIo = useMemo(() => hermes.usageIo(), [hermes]);
+  // The Preview's server side is the open connection's, which Rust finds by the name it was opened under (ADR 0125).
+  const previewWeb = useMemo<WebPages>(() => ({ ...webPages, devServers: () => webPages.devServers(hermes.connectionId) }), [webPages, hermes]);
+  const previewServerPages = useMemo<ServerPages>(
+    () => ({ open: (url, onClosed) => serverPages.open(url, onClosed, hermes.connectionId) }),
+    [serverPages, hermes],
+  );
   // Settings → Diagnostics → Logs reads the profile's Hermes logs (ADR 0033, 0087). What it read goes when it closes;
   // this app's own diagnostics stay.
   const logs = useMemo(
@@ -3380,8 +3386,8 @@ export function Main({
                     serverLabel={serverLabel(route)}
                     readServer={(path, host, session) => (host ? hermes.readHostFile(path) : hermes.readServerFile(path, session))}
                     local={localFiles}
-                    web={webPages}
-                    serverPages={serverPages}
+                    web={previewWeb}
+                    serverPages={previewServerPages}
                     artifacts={artifacts}
                     connected={status === "connected"}
                   />

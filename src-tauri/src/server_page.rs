@@ -23,6 +23,7 @@
 //! app exits: ssh is started with `PR_SET_PDEATHSIG` from a thread that lives as long as the app (on Windows, in a job
 //! object that is closed with the app), so even an app that crashes takes it along.
 
+use crate::live::ConnectionId;
 use crate::lock::Locked;
 use crate::loopback_peer::{self, Peers};
 use serde::Serialize;
@@ -722,6 +723,8 @@ pub enum PageEvent {
 }
 
 struct Open {
+    /// The connection it was opened for, which it closes with.
+    connection: ConnectionId,
     target: String,
     /// Ends the tunnel, starting or open, with what to tell the webview (`None`: the webview asked).
     stop: oneshot::Sender<Option<String>>,
@@ -764,8 +767,8 @@ impl Jar {
 /// The most keys of pages closed before Rust heard of them kept, so a late `open` with one is refused.
 const STOPPED_KEPT: usize = 256;
 
-/// A tunnel `begin` registered: it counts towards the limit, and `close`, `close_all` and `close_other_targets` end
-/// it, from before ssh starts until it closes.
+/// A tunnel `begin` registered: it counts towards the limit, and `close`, `close_all` and `close_for` end it, from
+/// before ssh starts until it closes.
 pub struct Starting {
     key: String,
     target: String,
@@ -796,9 +799,10 @@ struct Started {
 }
 
 impl ServerPages {
-    /// Registers a tunnel for `key` through `target`, before anything starts. Called while the connection that names
-    /// `target` is locked, so a sign-out or another sign-in after it closes this one too.
-    pub fn begin(&self, key: &str, target: &str) -> Result<Starting, ServerPageError> {
+    /// Registers a tunnel for `key` through `target`, for `connection`, before anything starts, so `close_for` after
+    /// it closes this one too. A `close_for` that ran just before can't have: the caller checks its connection is
+    /// still held once this returns, and lets the tunnel go (`give_up`) if it isn't.
+    pub fn begin(&self, key: &str, connection: &ConnectionId, target: &str) -> Result<Starting, ServerPageError> {
         if !key_ok(key) {
             return Err(ServerPageError::Io("That page key isn't one Hermes Chat makes.".into()));
         }
@@ -818,8 +822,13 @@ impl ServerPages {
             return Err(ServerPageError::TooMany);
         }
         let (stop, stopped) = oneshot::channel();
-        open.insert(key.to_owned(), Open { target: target.clone(), stop, served: None });
+        open.insert(key.to_owned(), Open { connection: connection.clone(), target: target.clone(), stop, served: None });
         Ok(Starting { key: key.to_owned(), target, stopped })
+    }
+
+    /// Lets go of a tunnel `begin` registered that won't be opened: its connection went meanwhile.
+    pub fn give_up(&self, starting: Starting) {
+        self.open.locked().remove(&starting.key);
     }
 
     /// Opens the tunnel `begin` registered, to `page`: waits until ssh listens and the page's port answers, then
@@ -921,19 +930,21 @@ impl ServerPages {
         }
     }
 
-    /// Closes every tunnel, starting or open, telling each page `why`: on sign-out, and at exit.
+    /// Closes every tunnel, starting or open, telling each page `why`: at exit.
     pub fn close_all(&self, why: &str) {
         for (_, o) in self.open.locked().drain() {
             let _ = o.stop.send(Some(why.to_owned()));
         }
     }
 
-    /// Closes the tunnels, starting or open, that don't go through `target`, once the app is signed in somewhere else.
-    pub fn close_other_targets(&self, target: Option<&str>, why: &str) {
-        let target = target.and_then(checked_target);
+    /// Closes `connection`'s tunnels, starting or open, telling each page `why`: all of them once it is closed, or,
+    /// once it is opened again, those that don't go through `keep_target`, the SSH target it has now. Another
+    /// connection's tunnels stay.
+    pub fn close_for(&self, connection: &ConnectionId, keep_target: Option<&str>, why: &str) {
+        let keep = keep_target.and_then(checked_target);
         let mut open = self.open.locked();
-        let others: Vec<String> = open.iter().filter(|(_, o)| Some(o.target.as_str()) != target).map(|(k, _)| k.clone()).collect();
-        for key in others {
+        let going: Vec<String> = open.iter().filter(|(_, o)| o.connection == *connection && Some(o.target.as_str()) != keep).map(|(k, _)| k.clone()).collect();
+        for key in going {
             if let Some(o) = open.remove(&key) {
                 let _ = o.stop.send(Some(why.to_owned()));
             }
@@ -1163,6 +1174,11 @@ mod tests {
 
     fn page(raw: &str) -> ServerPage {
         server_page(raw).unwrap()
+    }
+
+    /// The connection the pages of most tests belong to.
+    fn one() -> ConnectionId {
+        ConnectionId::parse("server-one").unwrap()
     }
 
     #[test]
@@ -1533,7 +1549,7 @@ while True:
         on_event: impl Fn(PageEvent) + Send + 'static,
     ) -> Result<Opened, ServerPageError> {
         let key = format!("k{}", KEYS.fetch_add(1, Ordering::Relaxed));
-        let starting = pages.begin(&key, target)?;
+        let starting = pages.begin(&key, &one(), target)?;
         pages.open(program, starting, page(raw), on_event).await
     }
 
@@ -1653,14 +1669,17 @@ while True:
         open_page(&pages, &b.program, "b", &format!("http://localhost:{port}/"), on_b).await.unwrap();
         let (pid_a, pid_b) = (a.ran().0, b.ran().0);
 
+        // Another connection going takes neither.
+        pages.close_for(&ConnectionId::parse("server-two").unwrap(), None, "elsewhere");
+        assert_eq!(pages.len(), 2);
         // Signed in through `a` again: only `b`'s page goes.
-        pages.close_other_targets(Some("a"), "moved");
+        pages.close_for(&one(), Some("a"), "moved");
         until("b's ssh ends", || ended(pid_b)).await;
         assert_eq!(*got_b.locked(), [PageEvent::Closed { message: "moved".into() }]);
         assert!(!ended(pid_a));
         assert_eq!(pages.len(), 1);
 
-        pages.close_all("signed out");
+        pages.close_for(&one(), None, "signed out");
         until("a's ssh ends", || ended(pid_a)).await;
         assert_eq!(*got_a.locked(), [PageEvent::Closed { message: "signed out".into() }]);
         assert!(pages.is_empty());
@@ -1752,7 +1771,7 @@ while True:
     async fn closing_a_page_while_ssh_connects_ends_ssh_at_once() {
         let fake = Fake::new("close-starting", "slow");
         let pages = Arc::new(ServerPages::default());
-        let starting = pages.begin("starting-1", "hermes").unwrap();
+        let starting = pages.begin("starting-1", &one(), "hermes").unwrap();
         let p = Arc::clone(&pages);
         let program = fake.program.clone();
         let opening = tokio::spawn(async move { p.open(&program, starting, page("http://localhost:3000/"), |_| {}).await });
@@ -1773,16 +1792,16 @@ while True:
         for leave in ["all", "other"] {
             let fake = Fake::new(&format!("leave-starting-{leave}"), "slow");
             let pages = Arc::new(ServerPages::default());
-            let starting = pages.begin(&format!("leave-{leave}"), "old-server").unwrap();
+            let starting = pages.begin(&format!("leave-{leave}"), &one(), "old-server").unwrap();
             let p = Arc::clone(&pages);
             let program = fake.program.clone();
             let opening = tokio::spawn(async move { p.open(&program, starting, page("http://localhost:3000/"), |_| {}).await });
             until("ssh starts", || fake.started()).await;
             let pid = fake.ran().0;
             if leave == "all" {
-                pages.close_all("signed out");
+                pages.close_for(&one(), None, "signed out");
             } else {
-                pages.close_other_targets(Some("new-server"), "moved");
+                pages.close_for(&one(), Some("new-server"), "moved");
             }
             let why = if leave == "all" { "signed out" } else { "moved" };
             assert_eq!(opening.await.unwrap().unwrap_err(), ServerPageError::Closed(Some(why.into())));
@@ -1797,17 +1816,26 @@ while True:
         let fake = Fake::new("closed-early", "ok");
         let pages = Arc::new(ServerPages::default());
         pages.close("early-1");
-        assert_eq!(pages.begin("early-1", "hermes").err(), Some(ServerPageError::Closed(None)));
+        assert_eq!(pages.begin("early-1", &one(), "hermes").err(), Some(ServerPageError::Closed(None)));
         // Only once: the key may be used again after.
-        let starting = pages.begin("early-1", "hermes").unwrap();
+        let starting = pages.begin("early-1", &one(), "hermes").unwrap();
         pages.close("early-1");
         assert!(pages.open(&fake.program, starting, page("http://localhost:3000/"), |_| {}).await.is_err());
         assert!(!fake.dir.join("ran").exists());
         // Keys are short and plain.
         for bad in ["", "a b", "../x", &"k".repeat(65)] {
-            assert!(matches!(pages.begin(bad, "hermes"), Err(ServerPageError::Io(_))), "{bad:?}");
+            assert!(matches!(pages.begin(bad, &one(), "hermes"), Err(ServerPageError::Io(_))), "{bad:?}");
         }
         assert!(pages.is_empty());
+    }
+
+    #[test]
+    fn a_tunnel_given_up_before_it_opens_leaves_nothing_registered() {
+        let pages = ServerPages::default();
+        let starting = pages.begin("lost-1", &one(), "hermes").unwrap();
+        pages.give_up(starting);
+        assert!(pages.is_empty());
+        assert!(pages.begin("lost-1", &one(), "hermes").is_ok(), "its key is free again");
     }
 
     #[test]
@@ -1823,7 +1851,7 @@ while True:
                 p.close(&k);
             });
             barrier.wait();
-            let began = pages.begin(&key, "hermes");
+            let began = pages.begin(&key, &one(), "hermes");
             closer.join().unwrap();
             match began {
                 Err(e) => assert_eq!(e, ServerPageError::Closed(None)),

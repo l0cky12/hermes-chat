@@ -9,7 +9,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     onmessage = () => {};
   },
 }));
-import { tauriNativePages } from "./tauriPreview";
+import { tauriNativePages, tauriServerPages, tauriWebPages } from "./tauriPreview";
 import type { ViewUrl } from "../hermes/preview";
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -54,5 +54,17 @@ describe("The native page view's commands", () => {
     expect(keys[5]).not.toBe(keys[0]);
     expect(new Set(keys.slice(5)).size).toBe(1);
     expect(failed).toEqual([{ kind: "failed", message: "Error: no window" }]);
+  });
+});
+
+describe("The Preview's server side", () => {
+  it("names the connection whose server it means, so Rust looks on that one (ADR 0125)", async () => {
+    invoke.mockResolvedValue({ server: { kind: "notConnected" }, local: [] });
+    await tauriWebPages.devServers("attempt-1");
+    expect(invoke).toHaveBeenLastCalledWith("preview_dev_servers", { attempt: "attempt-1" });
+
+    invoke.mockResolvedValue({ id: "k", url: "http://127.0.0.1:4000/", target: "liam@hermes", at: "localhost:3000" });
+    await tauriServerPages.open("http://localhost:3000/", () => {}, "attempt-1").page;
+    expect(invoke).toHaveBeenLastCalledWith("preview_server_open", expect.objectContaining({ url: "http://localhost:3000/", attempt: "attempt-1" }));
   });
 });

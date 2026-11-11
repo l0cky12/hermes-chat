@@ -421,8 +421,9 @@ async fn the_connection_going_drops_each_screen_without_a_close_so_hermes_keeps_
     let (tx, mut rx) = mpsc::unbounded_channel();
     let socket = display::open(dashboard, "SCREEN-1", move |e| drop(tx.send(e))).await.expect("open");
     next_display(&mut rx).await;
-    displays.keep(displays.epoch(), socket).unwrap();
-    displays.close_all();
+    let connection = hermes_chat::live::ConnectionId::parse("server-one").unwrap();
+    displays.keep(&connection, displays.epoch(&connection), socket).unwrap();
+    displays.close_for(&connection);
     // Hermes gets no close frame: a dropped link, not a viewer leaving.
     let got = tokio::time::timeout(Duration::from_secs(5), closes.recv()).await.unwrap().unwrap();
     assert_eq!(got, None);
