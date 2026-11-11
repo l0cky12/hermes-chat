@@ -22,9 +22,9 @@ export type Entry = {
   unstaged?: [number, number] | null;
   /** An untracked file whose first 8000 bytes hold a NUL, as Git decides. */
   binary?: boolean;
-  /** The working-tree file's stamp as read (null: it's gone), for a file with unstaged changes or untracked: its
-   * metadata ("meta:…") once its last change has settled, else SHA-256 of its bytes. Staging sends it back, and the
-   * helper stages nothing if the file has changed since. */
+  /** The working-tree file's stamp as read (null: it's gone), for a file with unstaged changes or untracked: SHA-256
+   * of its bytes, or its metadata ("meta:…") for a file over 32 MiB or past what one status hashes. Staging sends it
+   * back, and the helper stages nothing if the file has changed since. */
   worktree?: string | null;
   /** Its name isn't UTF-8, so `path` shows it with � and names no file on the server: it can't be staged or unstaged here. */
   nameLossy?: boolean;
@@ -71,6 +71,8 @@ export type DiffReply = {
   stages: number[];
   /** The working-tree file's stamp as this diff shows it (unstaged and untracked sides only). */
   worktree?: string | null;
+  /** The same file's metadata stamp, to compare with a list that stamped it by its metadata. */
+  worktreeMeta?: string | null;
   /** HEAD and the index when the diff was read. */
   head?: string | null;
   index?: string;
@@ -553,7 +555,8 @@ export const expectOf = (s: { head: string | null; index: string }): Expect => (
  */
 export function diffStale(s: Status, entry: Entry | undefined, d: DiffReply): string | undefined {
   if (d.head !== undefined && (d.head !== s.head || d.index !== s.index)) return "The repository changed after the list was read.";
-  if (entry && (d.worktree !== undefined && d.worktree !== null) && entry.worktree !== d.worktree) return "This file changed after the list was read.";
+  const shown = entry?.worktree?.startsWith("meta:") ? (d.worktreeMeta ?? d.worktree) : d.worktree;
+  if (entry && shown !== undefined && shown !== null && entry.worktree !== shown) return "This file changed after the list was read.";
   return undefined;
 }
 

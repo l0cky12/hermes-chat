@@ -70,6 +70,8 @@ def run(argv, cwd, read_only=True, stdin=None, timeout=60, merge_output=False, e
         proc = subprocess.Popen(
             argv,
             cwd=cwd,
+            # Its own process group, hooks and all, so stopping it stops everything it started (end_child).
+            start_new_session=True,
             stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT if merge_output else subprocess.PIPE,
@@ -90,16 +92,23 @@ def run(argv, cwd, read_only=True, stdin=None, timeout=60, merge_output=False, e
 
 
 def end_child(proc):
-    """Stops a child that's still running: SIGTERM first, so Git removes its lock files on the way out, then SIGKILL.
-    (subprocess.run would SIGKILL at once, which leaves a lock such as index.lock or a ref's behind.)"""
+    """Stops a child that's still running, and everything it started (its process group: Git's hooks too). SIGTERM
+    first, so Git removes its lock files on the way out; then, once Git has ended or after STOP_GRACE, SIGKILL for
+    whatever is left, such as a hook that ignores SIGTERM. (subprocess.run would SIGKILL Git alone, at once, which
+    leaves a lock such as index.lock or a ref's behind, and the hook running.)"""
+    def signal_group(sig):
+        try:
+            os.killpg(proc.pid, sig)
+        except OSError:
+            pass
+
+    signal_group(signal.SIGTERM)
     try:
-        proc.terminate()
         proc.wait(timeout=STOP_GRACE)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
-    except OSError:
         pass
+    signal_group(signal.SIGKILL)
+    proc.wait()
 
 
 # Settings the owner's config could change that would make a diff read, or a patch apply, differently from what the
@@ -262,6 +271,11 @@ def op_status(req):
     else:
         raise Refusal("busy", "The repository kept changing while it was read (another tool is working in it). Refresh in a moment.")
     reply["head"], reply["index"] = after
+    # The files are stamped once, after the list settled: a retry above doesn't read them again.
+    budget = [STATUS_HASH_BUDGET]
+    for e in reply["entries"]:
+        if (e["kind"] == "untracked" or (e["y"] not in (".", "?"))) and not e.get("nameLossy"):
+            e["worktree"] = list_stamp(top, e["path"], budget)
     return reply
 
 
@@ -345,9 +359,6 @@ def status_once(top, git_dir):
             c = unstaged.get(e["path"], False)
             if c is not False:
                 e["unstaged"] = c
-    for e in entries:
-        if (e["kind"] == "untracked" or (e["y"] not in (".", "?"))) and not e.get("nameLossy"):
-            e["worktree"] = worktree_stamp(top, e["path"])
     return {
         "top": top,
         "gitDir": git_dir,
@@ -408,6 +419,7 @@ def op_diff(req):
     # The file's bytes as this diff shows them, when the diff is of the working tree: the screen compares it with
     # the list's, and won't stage from a list older than the diff on screen.
     worktree = worktree_stamp(top, path) if side in ("unstaged", "untracked") else None
+    worktree_meta = meta_of(top, path) if side in ("unstaged", "untracked") else None
     stages = []
     if side == "conflict":
         lines = text(git_ok(["ls-files", "-u", "-z", "--", path], top)).split("\0")
@@ -420,6 +432,8 @@ def op_diff(req):
         "sha": hashlib.sha256(out).hexdigest(),
         "stages": stages,
         "worktree": worktree,
+        # The same file by its metadata: what a list that ran out of its hashing budget stamped it with.
+        "worktreeMeta": worktree_meta,
         "head": head_oid(top),
         "index": index_stamp(top),
     }
@@ -445,16 +459,18 @@ def index_stamp(top):
     return hashlib.sha256(git_ok(["ls-files", "--stage", "-z"], top)).hexdigest()
 
 
-# Files bigger than this are always stamped by their metadata, never hashed.
+# Files bigger than this are stamped by their metadata, never hashed.
 STAMP_HASH_MAX = 32 * 1024 * 1024
-# A file whose last change is older than this is stamped by its metadata in a list or a diff. One changed more recently
-# is hashed: a write in the same clock tick as the read could leave its times as they were.
-SETTLED_NS = 2 * 10 ** 9
+# The most bytes one Status reads to hash files. Past it, the rest are stamped by their metadata, so a checkout with
+# many big changed files still answers well within its time limit. A test makes it small.
+STATUS_HASH_BUDGET = int(os.environ.get("HERMES_REPO_TEST_HASH_BUDGET") or 256 * 1024 * 1024)
 
 
 def meta_stamp(st):
-    """A file stamped without reading it: executable bit, size, modification and change times, inode and device. Any
-    write to the file sets its change time, which nothing can set back, so a later write always changes the stamp."""
+    """A file stamped without reading it: executable bit, size, modification and change times, inode and device. A
+    write sets the change time, which nothing can set back, but not every write: one through a shared memory mapping
+    whose page is already dirty changes no time until the page is written back. So only files too big, or too many,
+    to hash are stamped this way."""
     x = "x" if st.st_mode & 0o111 else "-"
     return "meta:%s:%d:%d:%d:%d:%d" % (x, st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino, st.st_dev)
 
@@ -495,15 +511,31 @@ def snapshot(top, rel, by_meta=False):
 
 
 def worktree_stamp(top, rel):
-    """A path's stamp for a list or a diff, without reading a file whose last change has settled: Status stays quick
-    however big the changed files are. Staging checks a file against whichever kind of stamp the list gave it."""
+    """A path's stamp as staging checks it: SHA-256 of a file's bytes, or its metadata over STAMP_HASH_MAX."""
+    return snapshot(top, rel)[0]
+
+
+def list_stamp(top, rel, budget):
+    """`worktree_stamp` for Status, which hashes at most `budget[0]` bytes in all: a file past that is stamped by its
+    metadata. Staging checks a file against whichever kind of stamp the list gave it."""
     try:
         st = os.lstat(os.path.join(top, rel))
     except OSError:
         return None
-    if stat.S_ISREG(st.st_mode) and time.time_ns() - max(st.st_mtime_ns, st.st_ctime_ns) > SETTLED_NS:
-        return meta_stamp(st)
-    return snapshot(top, rel)[0]
+    if stat.S_ISREG(st.st_mode) and st.st_size <= STAMP_HASH_MAX:
+        if st.st_size > budget[0]:
+            return meta_stamp(st)
+        budget[0] -= st.st_size
+    return worktree_stamp(top, rel)
+
+
+def meta_of(top, rel):
+    """A regular file's metadata stamp, for comparing a diff with a list that stamped the file that way."""
+    try:
+        st = os.lstat(os.path.join(top, rel))
+    except OSError:
+        return None
+    return meta_stamp(st) if stat.S_ISREG(st.st_mode) else None
 
 
 def check_stamps(top, expect):
@@ -898,7 +930,7 @@ def op_commit(req):
         if operation in ("merge", "rebase", "cherry-pick", "revert"):
             raise Refusal("operation", "A %s is in progress, and committing now would finish part of it. Finish or abort it in the Terminal." % operation)
         try:
-            code, out, failed = traced(["commit", "--cleanup=verbatim", "-F", "-"], top, stdin=message.encode("utf-8"), timeout=600, env=idx.env)
+            code, out, failed = traced(["commit", "--cleanup=verbatim", "-F", "-"], top, stdin=message.encode("utf-8"), timeout=COMMIT_TIMEOUT, env=idx.env)
         finally:
             # However it ended, a timeout or a dropped ssh's hangup included: once the commit has landed, the index copy
             # it was made from (with anything a hook staged) becomes the index, so the index never disagrees with it.
@@ -1325,6 +1357,8 @@ OPS = {
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 # Set once the app's end of stdin closed: nobody is waiting for an answer any more.
 GONE = threading.Event()
+# How long a commit, its hooks included, may take. A test makes it short.
+COMMIT_TIMEOUT = int(os.environ.get("HERMES_REPO_TEST_COMMIT_TIMEOUT") or 600)
 
 
 def stop(signum, frame):
@@ -1332,24 +1366,13 @@ def stop(signum, frame):
     raise SystemExit(128 + signum)
 
 
-def own_group():
-    """Whether this helper leads its own process group, so signalling the group reaches only it and what it started."""
-    return os.getpgrp() == os.getpid()
-
-
-def end_everything(sig):
-    if own_group():
-        os.killpg(os.getpgrp(), sig)
-    else:
-        os.kill(os.getpid(), sig)
-
-
 def watch_connection():
     """Ends the helper and everything it started once the app's end of stdin closes (ADR 0043). ssh runs the helper
     without a terminal (`-T`), so a dropped connection sends no hangup: sshd only closes its pipes. The app keeps
     stdin open until it has the answer, so its end means the connection dropped or the app stopped waiting (a time
-    limit). Everything gets SIGTERM, so Git lets go of its locks and the helper puts the index and the worktree
-    record back; what's left when the helper exits gets SIGKILL (main)."""
+    limit). The helper gets SIGTERM and ends as for any stop signal: the command it's running and everything that
+    command started end (end_child), and the index and the worktree record are put back. If it hasn't ended a while
+    later, SIGKILL."""
     # The stop signals go to the main thread, which handles them, and which can then hold them off (LockedIndex).
     signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
     # The file descriptor, not sys.stdin: a daemon thread blocked inside Python's buffered reader holds its lock, and
@@ -1361,18 +1384,14 @@ def watch_connection():
     except OSError:
         pass
     GONE.set()
-    end_everything(signal.SIGTERM)
+    os.kill(os.getpid(), signal.SIGTERM)
+    time.sleep(4 * STOP_GRACE)
+    os.kill(os.getpid(), signal.SIGKILL)
 
 
 def main():
     for sig in STOP_SIGNALS:
         signal.signal(sig, stop)
-    try:
-        # Its own process group, so a dropped connection can end Git and the hooks it runs along with the helper.
-        # Under sshd it already leads its own session, and so its own group.
-        os.setpgid(0, 0)
-    except OSError:
-        pass
     try:
         try:
             # The request is one line. The rest of stdin stays open until the app has the answer.
@@ -1392,9 +1411,6 @@ def main():
     finally:
         for idx in list(HELD):
             idx.__exit__()
-        if GONE.is_set():
-            # A hook that ignored SIGTERM doesn't outlive the connection either.
-            end_everything(signal.SIGKILL)
 
 
 # main() runs at the end of repo_worktree_helper.py, which Rust sends after this file as one program.

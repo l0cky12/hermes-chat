@@ -185,6 +185,15 @@ describe("staging and committing", () => {
     expect(diffStale(s, s.entries[0], reply(TWO, { head: "other", index: s.index }))).toMatch(/repository changed/);
   });
 
+  it("compares a list that stamped a file by its metadata with the diff's metadata stamp", () => {
+    const s = status([{ kind: "ordinary", x: ".", y: "M", sub: false, path: "f", worktree: "meta:-:4:1:2:3:4" }]);
+    expect(diffStale(s, s.entries[0], reply(TWO, { head: s.head, index: s.index, worktree: "sha", worktreeMeta: "meta:-:4:1:2:3:4" }))).toBeUndefined();
+    expect(diffStale(s, s.entries[0], reply(TWO, { head: s.head, index: s.index, worktree: "sha", worktreeMeta: "meta:-:4:1:9:3:4" }))).toMatch(/This file changed/);
+    // A hashed list entry is compared with the diff's hash, never its metadata.
+    const h = status([{ kind: "ordinary", x: ".", y: "M", sub: false, path: "f", worktree: "sha" }]);
+    expect(diffStale(h, h.entries[0], reply(TWO, { head: h.head, index: h.index, worktree: "sha", worktreeMeta: "meta:x" }))).toBeUndefined();
+  });
+
   it("commits the message verbatim with one final new line, and notes a long first line", () => {
     expect(commitMessage("Fix it\n\n# keep this\n\n\n")).toBe("Fix it\n\n# keep this\n");
     expect(commitMessage("  \n ")).toBe("");

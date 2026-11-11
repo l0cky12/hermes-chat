@@ -264,7 +264,8 @@ export function RepositoryScreen({
     });
 
   /** Stages these changes (from Changed or Untracked), each as the list read it. */
-  const stage = (changes: Change[]) => {
+  const stage = (picked: Change[]) => {
+    const changes = picked.filter(actionable);
     if (!shown || !changes.length) return;
     const files = changes.map((c) => ({ path: c.path, worktree: entryOf(c.path)?.worktree ?? null }));
     const n = files.length;
@@ -274,7 +275,8 @@ export function RepositoryScreen({
   };
 
   /** Takes these staged changes out of the index; a rename takes its old path back too. */
-  const unstage = (changes: Change[]) => {
+  const unstage = (picked: Change[]) => {
+    const changes = picked.filter(actionable);
     if (!shown || !changes.length) return;
     const paths = changes.flatMap((c) => (c.origPath ? [c.path, c.origPath] : [c.path]));
     const n = changes.length;
@@ -560,7 +562,8 @@ export function RepositoryScreen({
                 SECTIONS.map(({ key, title, empty }) => {
                   const items = groups[key];
                   if (!items.length && !empty) return null;
-                  const ticked = items.filter((c) => checked.has(c.key));
+                  // A tick kept across a refresh counts only while the change can still be acted on.
+                  const ticked = items.filter((c) => checked.has(c.key) && actionable(c));
                   const unstaging = key === "staged";
                   return (
                     <section key={key} className="repo-section" aria-label={title}>

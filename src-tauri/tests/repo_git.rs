@@ -1461,7 +1461,8 @@ async fn a_dropped_connection_ends_the_helper_and_the_hook_it_was_waiting_on() {
     let d = busy("dropped");
     let hook_pid = d.path().join(".git/hook-pid");
     let helper_pid = d.path().join(".git/helper-pid");
-    hook(&d, "pre-commit", &format!("echo $$ > '{}'; exec sleep 300", hook_pid.display()));
+    // A hook that ignores SIGTERM: it ends only with SIGKILL.
+    hook(&d, "pre-commit", &format!("trap '' TERM\necho $$ > '{}'\nexec sleep 300", hook_pid.display()));
     git(d.path(), &["add", "notes.txt"]);
     let p = preview(&d).await;
     let before = head(&d);
@@ -1530,31 +1531,74 @@ async fn a_name_that_isnt_utf8_is_listed_but_never_staged() {
 }
 
 #[tokio::test]
-async fn status_stamps_a_settled_file_without_reading_it_and_staging_still_catches_a_change() {
-    let d = busy("settled");
-    // Let the files' last change settle, so Status stamps them by their metadata.
+async fn a_write_through_a_memory_mapping_after_the_list_is_still_caught() {
+    // Linux changes no file time for a write to a shared mapping's page that is already dirty, so only the bytes
+    // themselves show this change.
+    let d = busy("mmap");
+    let path = d.path().join("notes.txt");
+    let file = std::fs::File::options().read(true).write(true).open(&path).unwrap();
+    let len = file.metadata().unwrap().len() as usize;
+    use std::os::fd::AsRawFd;
+    let map = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, file.as_raw_fd(), 0) } as *mut u8;
+    assert_ne!(map as *mut libc::c_void, libc::MAP_FAILED);
+    unsafe { *map = b'O' };
+    // Long after that write, as an editor or agent leaves a file.
     tokio::time::sleep(std::time::Duration::from_millis(2200)).await;
     let s = status(&d).await;
+    unsafe { *map = b'Q' };
+    let e = ask(Request::Stage { repo: d.s(), files: vec![stamp_of(&s, "notes.txt")], expect: expect_of(&s) }).await.unwrap_err();
+    unsafe { libc::munmap(map as *mut libc::c_void, len) };
+    assert_eq!(kind(e), "stale");
+    assert_eq!(staged_names(&d), "");
+}
+
+#[tokio::test]
+async fn past_what_one_status_hashes_files_are_stamped_by_metadata_and_still_checked() {
+    let d = busy("hash-budget");
+    // With a full budget, every file is hashed.
+    let s = status(&d).await;
+    assert!(!entry(&s, "notes.txt")["worktree"].as_str().unwrap().starts_with("meta:"));
+    // With none left, each is stamped by its metadata.
+    let no_budget = |req: Request| {
+        let mut c = helper();
+        c.env("HERMES_REPO_TEST_HASH_BUDGET", "0");
+        async move { repo_git::run(c, &req).await }
+    };
+    let s = no_budget(Request::Status { repo: d.s() }).await.unwrap();
     let notes = entry(&s, "notes.txt")["worktree"].as_str().unwrap().to_owned();
     assert!(notes.starts_with("meta:"), "{notes}");
-    assert!(entry(&s, "other.txt")["worktree"].as_str().unwrap().starts_with("meta:"));
-    // Rewritten after the read, with the same size and its modification time set back: its change time still tells.
+    // A diff read later carries the same metadata stamp, so the screen can compare them.
+    let dd = diff(&d, "notes.txt", None, DiffSide::Unstaged, 3).await;
+    assert_eq!(dd["worktreeMeta"].as_str(), Some(notes.as_str()), "{dd}");
+    // Rewritten with the same size and its modification time set back: the change time still tells.
     let path = d.path().join("notes.txt");
     let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
-    let old = std::fs::read(&path).unwrap();
-    let mut new = old.clone();
+    let mut new = std::fs::read(&path).unwrap();
     new[4] = b'X';
     std::fs::write(&path, &new).unwrap();
     std::fs::File::options().write(true).open(&path).unwrap().set_modified(mtime).unwrap();
     let err = ask(Request::Stage { repo: d.s(), files: vec![stamp_of(&s, "notes.txt")], expect: expect_of(&s) }).await.unwrap_err();
     assert_eq!(kind(err), "stale");
-    // A settled file that didn't change stages from its metadata stamp, with the bytes it holds.
+    // A file that didn't change stages from its metadata stamp, with the bytes it holds.
     ask(Request::Stage { repo: d.s(), files: vec![stamp_of(&s, "other.txt")], expect: expect_of(&s) }).await.unwrap();
     assert_eq!(git(d.path(), &["show", ":other.txt"]), "b");
-    // Read again, it stages, with the bytes it now holds.
-    let s = status(&d).await;
-    ask(Request::Stage { repo: d.s(), files: vec![stamp_of(&s, "notes.txt")], expect: expect_of(&s) }).await.unwrap();
-    assert_eq!(git(d.path(), &["show", ":notes.txt"]).as_bytes(), String::from_utf8(new).unwrap().trim_end().as_bytes());
+}
+
+#[tokio::test]
+async fn a_hook_that_ignores_sigterm_ends_when_the_commit_times_out() {
+    let d = busy("stubborn-hook");
+    let hook_pid = d.path().join(".git/hook-pid");
+    hook(&d, "pre-commit", &format!("trap '' TERM\necho $$ > '{}'\nexec sleep 300", hook_pid.display()));
+    git(d.path(), &["add", "notes.txt"]);
+    let p = preview(&d).await;
+    let mut c = helper();
+    c.env("HERMES_REPO_TEST_COMMIT_TIMEOUT", "2");
+    let expect = Expect { raw_sha: p["rawSha"].as_str().map(Into::into), head_ref: p["headRef"].as_str().map(Into::into), ..expect_of(&p) };
+    let e = repo_git::run(c, &Request::Commit { repo: d.s(), message: "Slow".into(), expect }).await.unwrap_err();
+    assert_eq!(kind(e), "timeout");
+    let hook = pid_in(&hook_pid).await;
+    assert!(ended(hook), "the hook doesn't outlive the helper's answer");
+    assert!(!d.path().join(".git/index.lock").exists());
 }
 
 #[tokio::test]

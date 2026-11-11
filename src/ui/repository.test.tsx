@@ -392,6 +392,38 @@ describe("Repository screen, a file name that isn't UTF-8", () => {
     expect(await screen.findByRole("button", { name: /Stage file/ })).toBeTruthy();
     expect(count(calls, "stage")).toBe(0);
   });
+
+  it("drops a tick kept across a refresh once the change can't be named", async () => {
+    const user = userEvent.setup();
+    let renamed = false;
+    const { api, calls } = fakeApi((_t, r) => {
+      if (r.op === "status")
+        return statusOf({
+          entries: [
+            renamed
+              ? { kind: "renamed", x: "R", y: ".", sub: false, path: "dest.txt", origPath: "caf\ufffd.txt", staged: [0, 0], nameLossy: true }
+              : { kind: "ordinary", x: "M", y: ".", sub: false, path: "dest.txt", staged: [1, 0] },
+          ],
+        });
+      if (r.op === "publishInfo") return NO_REMOTE;
+      if (r.op === "diff") return diffOf("");
+      if (r.op === "unstage") return { head: "h", index: "i2" };
+      throw new Error(`unexpected ${r.op}`);
+    });
+    show(api);
+    await screen.findByText(TOP);
+    await user.click(screen.getByRole("checkbox", { name: "Tick dest.txt to unstage it" }));
+    const staged = () => within(screen.getByRole("region", { name: "Staged" }));
+    expect((staged().getByRole("button", { name: /Unstage 1 ticked/ }) as HTMLButtonElement).disabled).toBe(false);
+    // Another tool makes it a rename from a file whose name isn't UTF-8.
+    renamed = true;
+    const reads = count(calls, "status");
+    await user.click(screen.getAllByRole("button", { name: /Refresh/ })[0]);
+    await waitFor(() => expect(count(calls, "status")).toBe(reads + 1));
+    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "Tick dest.txt to unstage it" })).toBeNull());
+    expect((staged().getByRole("button", { name: /Unstage ticked/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(count(calls, "unstage")).toBe(0);
+  });
 });
 
 describe("Repository screen, committing", () => {
