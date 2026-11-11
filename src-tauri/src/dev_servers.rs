@@ -204,18 +204,18 @@ LISTEN 0      511 [fe80::1%eth0]:4001          [::]:*
     fn finds_another_programs_server_here_but_not_its_own() {
         let own = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let own_port = own.local_addr().unwrap().port();
-        let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let mut server = std::process::Command::new("python3")
-            .args(["-c", &format!("import socket,time; s=socket.socket(); s.bind(('127.0.0.1',{free})); s.listen(); print(flush=True); time.sleep(30)")])
+            .args(["-c", "import socket,time; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); print(s.getsockname()[1], flush=True); time.sleep(30)"])
             .stdout(std::process::Stdio::piped())
             .spawn()
             .expect("python3");
         let mut ready = String::new();
         std::io::BufRead::read_line(&mut std::io::BufReader::new(server.stdout.as_mut().unwrap()), &mut ready).unwrap();
+        let theirs: u16 = ready.trim().parse().unwrap();
         let found = local();
         let _ = server.kill();
         let _ = server.wait();
         assert!(!found.iter().any(|l| l.port == own_port), "this process's own socket is left out: {found:?}");
-        assert!(found.contains(&at(free, Some("python3"))), "the other program's server is named: {found:?}");
+        assert!(found.contains(&at(theirs, Some("python3"))), "the other program's server is named: {found:?}");
     }
 }
