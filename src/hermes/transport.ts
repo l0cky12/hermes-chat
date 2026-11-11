@@ -49,9 +49,12 @@ import { readBack, sendImport, type PlannedChat } from "./importTranscripts";
 import { memoryApi, type MemoryApi } from "./memory";
 import { MemoryProvidersApi } from "./memoryProviders";
 import { SkillsApi } from "./skills";
-import { CapabilityStore, CapabilityUnsupportedError, failureOf, isNoRoute, sharesChats, type ServerFacts } from "./capabilities";
+import { CapabilityStore, CapabilityUnsupportedError, failureOf, isNoRoute, sharesChats, specOf, type CapabilityId, type ServerFacts } from "./capabilities";
 import { BOT_CHAT_TITLE, BotChats, BotModeUnsupportedError, isBotChat, isBotChatTitle, rosterOf, type Bot } from "./bots";
 import type { OpenPipe, Pipe, PipeEvent, RestMethod, Route, Speech, Transcript, VoiceSetup } from "./pipe";
+import { projectContextFiles, type ChatContext, type ProjectContextFiles } from "./projectContextFiles";
+import { withContext } from "./projectContext";
+import { typedText } from "./branch";
 import { RemoteFilesError, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, SESSION_GONE, previewSupport, remoteFiles, type EditIo, type RemoteFiles } from "./remoteFiles";
 import { isUnsecure } from "./unsecure";
 import { TOKEN_REFUSED } from "./routes";
@@ -67,6 +70,7 @@ import type { UsageIo } from "./usageAnalytics";
 import { compactResultOf, compactionsOf, readingOf, type CompactResult, type CompactionHistory, type CompactionRow, type ContextReading } from "./contextInspect";
 import { chatUsageOf, countersOf, newerChatUsage, newerListedUsage, replyUsage, ZERO_COUNTERS, type ReplyUsage, type UsageCounters } from "./usage";
 import { toolResultText } from "./toolResult";
+import { num, str } from "./chatCache";
 import { onLost, onRoster, onSubagentEvent, onUnchecked, parseOutput, type SubagentId, type SubagentOutput } from "./subagents";
 import {
   BRANCH_KEY_TTL_MS,
@@ -283,20 +287,30 @@ type ConfigSet = { value?: unknown; confirm_required?: boolean; confirm_message?
  * row was stored, Unix seconds, sent only when positive (`session_history._history_to_messages` at `bf0203a`). */
 type TranscriptMessage = {
   role: string;
-  text?: string | null;
-  reasoning?: string | null;
+  text?: string;
+  reasoning?: string;
   content?: unknown;
-  name?: string | null;
-  context?: string | null;
-  args?: Record<string, unknown> | null;
+  name?: string;
+  context?: string;
+  args?: Record<string, unknown>;
   /** A tool row's call (`tool_call_id`). */
-  tool_call_id?: string | null;
-  timestamp?: number | null;
+  tool_call_id?: string;
+  timestamp?: number;
   /** The stored row (`messages.id`); a live session's not-yet-stored tail has none. */
-  row_id?: number | null;
+  row_id?: number;
   /** How Hermes shows the row: `steer` for a message that went into a running reply (`session_history.py`). */
-  display_kind?: string | null;
+  display_kind?: string;
 };
+
+/** The history rows `raw` holds: a row with no role is left out, and a field of the wrong type is dropped. */
+const transcriptMessages = (raw: unknown): TranscriptMessage[] =>
+  (Array.isArray(raw) ? raw : []).flatMap((v): TranscriptMessage[] => {
+    const m = obj(v);
+    const role = str(m?.role);
+    if (!m || role === undefined) return [];
+    const [text, reasoning, name, context, tool_call_id, display_kind] = [m.text, m.reasoning, m.name, m.context, m.tool_call_id, m.display_kind].map(str);
+    return [{ role, text, reasoning, content: m.content, name, context, args: obj(m.args), tool_call_id, timestamp: num(m.timestamp), row_id: num(m.row_id), display_kind }];
+  });
 
 /** Legacy `prompt.submit` result. `user_row_id`: the stored row of the message, when its turn started at once
  * (`tui_gateway/methods_prompt.py` at `bf0203a`). */
@@ -350,14 +364,19 @@ const REPLAY_CHANGED = "This chat changed since this opened, here or in another 
 const COMPACTION_PAGE = 500;
 const COMPACTION_ROWS = 10_000;
 
-type RpcFrame = {
-  jsonrpc: "2.0";
-  id?: number | string | null;
-  method?: string;
-  params?: { type?: string; session_id?: string; payload?: Record<string, unknown> } & Record<string, unknown>;
-  result?: unknown;
-  error?: { code: number; message: string };
-};
+/** A frame from Hermes: a JSON object, its `params` an object (`{}` when it sent none, or something else). */
+type RpcFrame = { id?: unknown; method?: unknown; params: Record<string, unknown>; result?: unknown; error?: unknown };
+
+/** The frame `text` holds, or undefined if it isn't one. */
+function parseFrame(text: string): RpcFrame | undefined {
+  let frame: Record<string, unknown> | undefined;
+  try {
+    frame = obj(JSON.parse(text));
+  } catch {
+    return undefined;
+  }
+  return frame && { ...frame, params: obj(frame.params) ?? {} };
+}
 
 export class ProtocolMismatchError extends Error {
   constructor() {
@@ -434,7 +453,7 @@ class BranchNotSent extends Error {}
 
 /** Legacy `session.branch` result (`SessionBranchResult` at `bf0203a`): the branch's live and stored ids, its title,
  * its parent, the rows it copied, and its history as `session.resume` shows it. */
-type BranchAnswer = { session_id: string; stored_session_id: string; title: string; parent?: string; message_count: number; messages?: TranscriptMessage[]; info?: unknown };
+type BranchAnswer = { session_id: string; stored_session_id: string; title: string; parent?: string; message_count: number; messages?: unknown; info?: unknown };
 
 /** Stored rows are read for a branch this many at a time (dashboard REST's page cap), up to this many pages. */
 const BRANCH_PAGE_ROWS = 500;
@@ -849,6 +868,24 @@ export class Hermes {
     },
     cancel: (id) => this.pipe?.cancelTransfer(id) ?? Promise.resolve(),
   });
+
+  /** A project's context files on the server (projectContextFiles.ts, ADR 0135). */
+  readonly contextFiles: ProjectContextFiles = projectContextFiles({
+    get: (pathAndQuery, maxBytes) => this.restGet(pathAndQuery, maxBytes),
+    pipe: () => (this.closing || this.snapshot.status !== "connected" ? undefined : this.pipe?.context),
+    lacks: (ssh) => {
+      const lacking = (id: CapabilityId) => (this.capabilities.get(id).state === "unsupported" ? [`${specOf(id).label}: ${specOf(id).needs}`] : []);
+      return ssh ? lacking("outputs") : lacking("serverFiles");
+    },
+    scope: () => String(this.generation),
+    preview: (entry, asText) => this.files.preview(entry, asText),
+  });
+  /**
+   * What a message to `chatId` carries below the owner's words: what its projects' context files are now, for a chat
+   * that hasn't been told (projectContextFiles.ts `chatContext`). Asked just before each message goes; `accepted` is
+   * called once Hermes took it.
+   */
+  sendContext?: (profile: string, chatId: string) => Promise<ChatContext | undefined> | undefined;
 
   /**
    * How an artifact on the machine where `profile`'s tools run is read and saved (artifacts.ts `agentFsEditIo`, ADR
@@ -1983,17 +2020,19 @@ export class Hermes {
    * what it runs on, for this chat only; left out, it runs on the profile's model. `folder`: the server folder it
    * works in (its session `cwd`), checked by the caller first; Hermes quietly runs a chat in its own folder when it
    * can't use the one asked for, so the chat is refused unless Hermes says it took it. `instructions`: one hidden
-   * message seeded before the owner's first, which the model reads and no Hermes client shows (ADR 0017).
+   * message seeded before the owner's first, which the model reads and no Hermes client shows (ADR 0017). `context`:
+   * a second one after it, with the project's context files (ADR 0135).
    */
-  async newChat(model?: ModelPick, start: { folder?: string; instructions?: string } = {}): Promise<string> {
-    const { folder, instructions } = start;
+  async newChat(model?: ModelPick, start: { folder?: string; instructions?: string; context?: string } = {}): Promise<string> {
+    const { folder, instructions, context } = start;
+    const seeded = [instructions, context].filter((text): text is string => !!text);
     const profile = this.profile;
     const res = (await this.request("session.create", {
       profile,
       source: APP_SOURCE,
       // `cwd_explicit`: a deliberate pick, which beats a profile's configured `terminal.cwd` (`_completion_cwd`).
       ...(folder && { cwd: folder, cwd_explicit: true }),
-      ...(instructions && { messages: [{ role: "user", content: instructions, display_kind: "hidden" }] }),
+      ...(seeded.length && { messages: seeded.map((content) => ({ role: "user", content, display_kind: "hidden" })) }),
       // `SessionCreateParams`: each is this session's own override. `fast` left out keeps the profile's.
       ...(model && {
         model: model.model,
@@ -2008,9 +2047,9 @@ export class Hermes {
     };
     const cwd = (res.info as { cwd?: unknown } | undefined)?.cwd;
     if (folder && cwd !== folder) {
-      // Not this chat: drop the session, and the hidden message Hermes stored with it, so nothing is left behind.
+      // Not this chat: drop the session, and the hidden messages Hermes stored with it, so nothing is left behind.
       void this.request("session.close", { session_id: res.session_id }).catch(() => {});
-      if (instructions)
+      if (seeded.length)
         void this.fencedDelete(res.stored_session_id, profile).catch(() => {});
       throw new Error(`Hermes didn't start it in ${folder}${typeof cwd === "string" && cwd ? `: it would have worked in ${cwd}` : ""}. Nothing was sent.`);
     }
@@ -2572,7 +2611,7 @@ export class Hermes {
       source: "app",
       settled: false,
       updatedAt: Date.now(),
-      items: historyItems(Array.isArray(res.messages) ? res.messages : []),
+      items: historyItems(transcriptMessages(res.messages)),
       model: pickFromInfo(res.info),
       live: withLive(undefined, res.info),
     };
@@ -2929,15 +2968,18 @@ export class Hermes {
         this.setOutgoing(profile, chatId, user.id, (r) =>
           withOutgoing(r, { sent: { prompt: shown ?? prompt, ...(this.knownRow.has(chatId) && { after: this.knownRow.get(chatId) }) } }),
         );
+      let told: ChatContext | undefined;
       // A compaction Hermes hasn't answered yet goes first: the message mustn't land while it rewrites the context.
       const submitting = this.resume(chatId).then((runtimeId) => {
         const go = async () => {
-          if (!skill) return this.submit(runtimeId, text, attachments, goingOut, !!queued);
+          const asking = this.sendContext?.(profile, chatId);
+          if (asking) told = await asking.catch(() => undefined);
+          if (!skill) return this.submit(runtimeId, text, attachments, goingOut, !!queued, told?.blocks);
           // Hermes builds the skill's text for this session; nothing reaches the chat until it is sent below.
           const ran = await runSkill((method, params) => this.request(method, params), runtimeId, skill);
           shown = ran.display;
           this.setOutgoing(profile, chatId, user.id, (r) => ({ ...r, text: ran.display }));
-          return this.submit(runtimeId, ran.message, attachments, goingOut, !!queued);
+          return this.submit(runtimeId, ran.message, attachments, goingOut, !!queued, told?.blocks);
         };
         const compacting = this.compacting.get(chatId);
         return compacting ? compacting.then(go) : go();
@@ -2956,6 +2998,7 @@ export class Hermes {
         if (this.submitting.get(chatId) === submitting) this.submitting.delete(chatId);
       }
       this.setOutgoing(profile, chatId, user.id, confirmed);
+      told?.accepted(chatId);
       this.noteRows(chatId, [res.user_row_id]);
       // Pin now if Hermes has stored the session; a new chat may not have its row yet, so the end of the turn
       // tries again.
@@ -3566,23 +3609,23 @@ export class Hermes {
   private handle(e: PipeEvent) {
     if (e.kind === "closed") return this.dropped(e.reason, true);
     this.lastHeard = Date.now();
-    let frame: RpcFrame;
-    try {
-      frame = JSON.parse(e.text);
-    } catch {
-      return;
-    }
-    if (frame.method === undefined && typeof frame.id === "number") {
-      const p = this.pending.get(frame.id);
+    const frame = parseFrame(e.text);
+    if (!frame) return;
+    const { id, method, params } = frame;
+    if (method === undefined && typeof id === "number") {
+      const p = this.pending.get(id);
       if (!p) return;
-      this.pending.delete(frame.id);
-      if (frame.error) p.reject(new RpcError(frame.error.code, frame.error.message));
+      this.pending.delete(id);
+      const error = obj(frame.error);
+      if (frame.error) p.reject(new RpcError(num(error?.code) ?? 0, str(error?.message) ?? ""));
       else p.resolve(frame.result);
       return;
     }
-    if (typeof frame.id === "string" && frame.method) return this.onServerRequest({ id: frame.id, method: frame.method, params: frame.params ?? {} });
-    if (frame.method !== "event" || !frame.params?.type) return;
-    const { type, session_id, payload = {} } = frame.params;
+    if (typeof id === "string" && typeof method === "string" && method) return this.onServerRequest({ id, method, params });
+    const type = str(params.type);
+    if (method !== "event" || !type) return;
+    const session_id = str(params.session_id);
+    const payload = obj(params.payload) ?? {};
     if (type === "gateway.ready") {
       this.onReady?.(payload);
       return;
@@ -3604,7 +3647,7 @@ export class Hermes {
     const chat = session_id ? this.snapshot.chats.find((c) => c.runtimeId === session_id) : undefined;
     if (!chat) return;
     // A side question's answer is no part of the chat or of a turn running in it.
-    if (type === "btw.complete") return this.sideAnswered(chat, String(payload.task_id ?? ""), payload.text);
+    if (type === "btw.complete") return this.sideAnswered(chat, textOf(payload.task_id) ?? "", payload.text);
     // Sent when the chat's model, reasoning, fast mode or YOLO changes, here or in another Hermes client.
     if (type === "session.info") {
       const model = pickFromInfo(payload);
@@ -3631,7 +3674,7 @@ export class Hermes {
       this.kanbanWatch.turnStarted([chat.id, ...(chat.lineage ?? [])]);
     }
     if (type === "tool.complete") {
-      const call = chat.items.find((i) => i.kind === "tool" && i.id === String(payload.tool_id));
+      const call = chat.items.find((i) => i.kind === "tool" && i.id === textOf(payload.tool_id));
       const task = call?.kind === "tool" && call.name === "kanban_create" ? parseKanbanCreate(call.args, payload.result, Date.now(), this.kanbanWatch.currentBoard()) : undefined;
       if (task) this.kanbanWatch.add(task, chat.id);
     }
@@ -3794,7 +3837,7 @@ export class Hermes {
       if (error) void this.pipe?.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, error })).catch(() => {});
       return;
     }
-    const sid = String(req.params.session_id ?? "");
+    const sid = textOf(req.params.session_id) ?? "";
     const chat = this.snapshot.chats.find((c) => c.runtimeId === sid);
     if (chat) this.showApprovals(chat.id, [req]);
     else this.earlyRequests.set(sid, [...(this.earlyRequests.get(sid) ?? []), req]);
@@ -3984,7 +4027,7 @@ export class Hermes {
    * don't ride along with the next one. `goingOut` hears the prompt just before it goes. `hold`: should a turn still be
    * running there, Hermes holds the message until it ends, instead of redirecting or interrupting it (research doc).
    */
-  private async submit(runtimeId: string, text: string, attachments: Attachment[], goingOut: (prompt: string) => void, hold = false) {
+  private async submit(runtimeId: string, text: string, attachments: Attachment[], goingOut: (prompt: string) => void, hold = false, context: readonly string[] = []) {
     const queued: string[] = [];
     const refs: string[] = [];
     try {
@@ -4004,7 +4047,7 @@ export class Hermes {
       }
       const prompt = [refs.join("\n"), text].filter(Boolean).join("\n\n") || (queued.length ? IMAGE_ONLY_PROMPT : "");
       goingOut(prompt);
-      return (await this.request("prompt.submit", { session_id: runtimeId, profile: this.profile, text: prompt, ...(hold && { queued: true }) }).catch((e) => {
+      return (await this.request("prompt.submit", { session_id: runtimeId, profile: this.profile, text: withContext(prompt, context), ...(hold && { queued: true }) }).catch((e) => {
         throw e instanceof ConnectionLostError ? new PromptUnconfirmedError(e.message) : e;
       })) as Submitted;
     } catch (e) {
@@ -4026,7 +4069,7 @@ export class Hermes {
         const profile = this.profile;
         const res = (await this.request("session.resume", { session_id: chatId, profile, inline_images: false })) as {
           session_id: string;
-          messages?: TranscriptMessage[];
+          messages?: unknown;
           /** A live session's turn is still going. */
           running?: boolean;
           /** What a live session is still waiting on, oldest first. */
@@ -4043,10 +4086,11 @@ export class Hermes {
         const measured = new Map<number, ReplyUsage>();
         for (const i of this.snapshot.chats.find((c) => c.id === chatId)?.items ?? [])
           if (i.kind === "assistant" && i.rowId !== undefined && i.usage) measured.set(i.rowId, i.usage);
-        const history = historyItems(res.messages ?? []).map((i): Item =>
+        const messages = transcriptMessages(res.messages);
+        const history = historyItems(messages).map((i): Item =>
           i.kind === "assistant" && i.rowId !== undefined && measured.has(i.rowId) ? { ...i, usage: measured.get(i.rowId) } : i,
         );
-        const readBack = (res.messages ?? []).map((m) => ({ role: m.role, text: m.text ?? "", rowId: typeof m.row_id === "number" ? m.row_id : undefined }));
+        const readBack = messages.map((m) => ({ role: m.role, text: m.text ?? "", rowId: m.row_id }));
         this.noteRows(chatId, readBack.map((m) => m.rowId));
         const stale = this.staleItems.get(chatId) ?? 0;
         this.staleItems.delete(chatId);
@@ -5127,7 +5171,7 @@ function arrived(row: OutgoingItem, readBack: ReadBack[]): boolean {
     (m) =>
       m.role === "user" &&
       (sent.after === undefined || m.rowId === undefined || m.rowId > sent.after) &&
-      (m.text.trim() === sent.prompt.trim() || (!!attachments?.length && !!words && m.text.includes(words))),
+      (typedText(m.text).trim() === sent.prompt.trim() || (!!attachments?.length && !!words && m.text.includes(words))),
   );
 }
 
@@ -5175,7 +5219,7 @@ function historyItems(messages: TranscriptMessage[]): Item[] {
     const at = storedAt(m.timestamp);
     const rowId = Number.isSafeInteger(m.row_id) ? (m.row_id as number) : undefined;
     if (m.role === "user")
-      return [{ kind: "user", id, text: m.text, ...(at && { at }), ...(rowId !== undefined && { rowId }), ...(m.display_kind === "steer" && { steer: true }) }];
+      return [{ kind: "user", id, text: typedText(m.text), ...(at && { at }), ...(rowId !== undefined && { rowId }), ...(m.display_kind === "steer" && { steer: true }) }];
     if (m.role === "assistant") return [...thought, { kind: "assistant", id, text: m.text, ...(at && { at }), ...(rowId !== undefined && { rowId }) }];
     return [];
   });
@@ -5191,9 +5235,9 @@ function approvalItem(r: ServerRequest): ApprovalItem {
   return {
     kind: "approval",
     id: r.id,
-    requestId: String(p.request_id ?? ""),
-    command: String(p.command ?? ""),
-    description: String(p.description ?? ""),
+    requestId: textOf(p.request_id) ?? "",
+    command: textOf(p.command) ?? "",
+    description: textOf(p.description) ?? "",
     choices: APPROVAL_CHOICES.filter((c) => offered.includes(c)).sort((a, b) => offered.indexOf(a) - offered.indexOf(b)),
     // A grant Hermes doesn't say it allows is ruled out.
     allowSession: p.allow_session === true,
@@ -5204,6 +5248,9 @@ function approvalItem(r: ServerRequest): ApprovalItem {
 /** Closes the waiting cards, or those of them `which` picks, with Hermes's reason. */
 const endWaitingApprovals = (items: Item[], ended: string, which = (_: ApprovalItem) => true) =>
   items.map((i): Item => (isWaiting(i) && which(i) ? { ...i, ended } : i));
+
+/** A frame field as text: a string, or a number as Hermes may send an id. Anything else, which may not be made text, isn't. */
+const textOf = (v: unknown) => (typeof v === "string" ? v : typeof v === "number" ? String(v) : undefined);
 
 const obj = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined);
 
@@ -5315,29 +5362,32 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: st
       else items.push({ kind: "assistant", id: nextId(items, "a"), text });
       return { ...c, items, updatedAt: Date.now() };
     }
-    case "tool.start":
+    case "tool.start": {
+      const id = textOf(p.tool_id);
+      if (id === undefined) return c;
       items.push({
         kind: "tool",
-        id: String(p.tool_id),
-        callId: String(p.tool_id),
-        name: String(p.name ?? "tool"),
-        args: p.args as Record<string, unknown> | undefined,
-        preview: p.preview as string | undefined,
+        id,
+        callId: id,
+        name: str(p.name) ?? "tool",
+        args: obj(p.args),
+        preview: str(p.preview),
         status: "running",
       });
       return { ...c, items };
+    }
     case "tool.complete":
       return {
         ...c,
         items: items.map((i) =>
-          i.kind === "tool" && i.id === String(p.tool_id)
+          i.kind === "tool" && i.id === textOf(p.tool_id)
             ? {
                 ...i,
                 status: "done",
-                durationS: p.duration_s as number | undefined,
+                durationS: num(p.duration_s),
                 // A screenshot inside it stays on the server (ADR 0061).
                 result: toolResultText(p.result),
-                summary: p.summary as string | undefined,
+                summary: str(p.summary),
               }
             : i,
         ),
@@ -5347,11 +5397,11 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: st
       return { ...c, live: withLive(c.live, undefined, p.usage) };
     case "request.cancel":
       // Hermes stopped waiting: timed out, interrupted, or answered in another Hermes client.
-      return { ...c, items: endWaitingApprovals(items, String(p.reason || "withdrawn"), (i) => i.id === p.id) };
+      return { ...c, items: endWaitingApprovals(items, textOf(p.reason) || "withdrawn", (i) => i.id === p.id) };
     case "approval.cancelled": {
       // An interrupt or teardown dropped the session's waiting Approvals: the ones listed, by either id, or all.
       const ids = Array.isArray(p.request_ids) ? p.request_ids : undefined;
-      return { ...c, items: endWaitingApprovals(items, String(p.reason || "withdrawn"), (i) => !ids || ids.includes(i.requestId) || ids.includes(i.id)) };
+      return { ...c, items: endWaitingApprovals(items, textOf(p.reason) || "withdrawn", (i) => !ids || ids.includes(i.requestId) || ids.includes(i.id)) };
     }
     case "message.complete": {
       // Providers that don't stream send the whole reply here; a streamed turn repeats text it already sent.
@@ -5370,11 +5420,11 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: st
       // Stopped here or from another Hermes client.
       if (p.status === "interrupted") return { ...end, items: markInterrupted(endWaitingApprovals(items, "turn ended"), from) };
       const failure = p.error ?? (p.status === "error" ? p.failure_reason ?? "The turn failed." : undefined);
-      if (failure) items.push(errorItem({ ...c, items }, String(failure)));
+      if (failure) items.push(errorItem({ ...c, items }, textOf(failure) ?? "The turn failed."));
       return { ...end, items: endRunningTools(endWaitingApprovals(items, "turn ended"), "done") };
     }
     case "error":
-      items.push(errorItem(c, String(p.message ?? "Hermes reported an error.")));
+      items.push(errorItem(c, textOf(p.message) ?? "Hermes reported an error."));
       return { ...c, items: endWaitingApprovals(items, "turn ended"), running: false, stopping: false };
     default:
       return c;

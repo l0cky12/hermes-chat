@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // A reply streaming in through Markdown (#224): each delta must redo only what it changed, and the finished reply must
 // come out as it always has.
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Markdown } from "./Markdown";
@@ -71,8 +71,11 @@ const whole = (text: string, query = "") => {
   return html;
 };
 
-/** `text` streamed in `step` characters at a time, then finished; the HTML each time, and the last. */
-function streamed(text: string, step: number, query = "") {
+/**
+ * `text` streamed in `step` characters at a time, then finished; the HTML each time, and the last, once the languages
+ * guessed after a delta are in.
+ */
+async function streamed(text: string, step: number, query = "") {
   const { container, rerender, unmount } = render(<Markdown text="" query={query} streaming />);
   const seen: string[] = [];
   for (let i = step; i < text.length + step; i += step) {
@@ -80,6 +83,7 @@ function streamed(text: string, step: number, query = "") {
     seen.push(container.innerHTML);
   }
   rerender(<Markdown text={text} query={query} />);
+  await act(() => new Promise((r) => setTimeout(r)));
   const html = container.innerHTML;
   unmount();
   return { seen, html };
@@ -168,14 +172,14 @@ describe("Splitting a reply into blocks", () => {
 });
 
 describe("A streamed reply, once finished", () => {
-  it("comes out exactly as the same reply rendered in one piece", { timeout: 30_000 }, () => {
+  it("comes out exactly as the same reply rendered in one piece", { timeout: 30_000 }, async () => {
     for (const [name, text] of Object.entries(REPLIES))
-      for (const query of ["", "e"]) expect(streamed(text, 7, query).html, `${name}, query "${query}"`).toBe(whole(text, query));
+      for (const query of ["", "e"]) expect((await streamed(text, 7, query)).html, `${name}, query "${query}"`).toBe(whole(text, query));
   });
 
-  it("matches the one-piece render at every delta too, apart from code still coming in", { timeout: 30_000 }, () => {
+  it("matches the one-piece render at every delta too, apart from code still coming in", { timeout: 30_000 }, async () => {
     const text = REPLIES["lists, loose and tight"] + "\n\n" + REPLIES.table + "\n\n" + REPLIES.links + "\n\n" + REPLIES["inline math"];
-    const { seen } = streamed(text, 5);
+    const { seen } = await streamed(text, 5);
     seen.forEach((html, i) => expect(html, `after ${(i + 1) * 5} characters`).toBe(whole(text.slice(0, (i + 1) * 5))));
   });
 });
@@ -217,7 +221,7 @@ describe("Each delta", () => {
 describe("Code still coming in", () => {
   const code = "fn parse(line: &str) -> Option<u32> {\n    let n: u32 = line.trim().parse().ok()?;\n    Some(n)\n}";
 
-  it("stays plain until its fence closes, then is highlighted, with its language guessed, and left alone", () => {
+  it("stays plain until its fence closes, then is highlighted, with its language guessed after that commit, and left alone", async () => {
     const intro = "Like this:\n\n";
     const { container, rerender } = render(<Markdown text={intro + "```\n" + code.slice(0, 20)} streaming />);
     const codeEl = () => container.querySelector("pre code")!;
@@ -227,7 +231,9 @@ describe("Code still coming in", () => {
     expect(codeEl().querySelector("span")).toBeNull();
     expect(container.querySelector(".code-head span")!.textContent).toBe("");
     rerender(<Markdown text={intro + "```\n" + code + "\n```"} streaming />);
-    expect(codeEl().className).toBe("hljs language-rust");
+    expect(codeEl().className, "the guess waits for the commit that closed the fence to paint").toBe("hljs");
+    expect(codeEl().querySelector("span")).toBeNull();
+    await waitFor(() => expect(codeEl().className).toBe("hljs language-rust"));
     expect(codeEl().querySelector(".hljs-keyword")!.textContent).toBe("fn");
     expect(container.querySelector(".code-head span")!.textContent).toBe("rust");
     const done = codeEl();

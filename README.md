@@ -483,6 +483,7 @@ npm run app     # run the desktop app in development mode
 | `HERMES_LIVE_DASHBOARD=… npx vitest run src/hermes/importTranscripts.live.test.ts` | Imports real export files into a real dashboard, imports them again, and sends a corrupted file. It refuses one whose profiles don't all live under `/tmp`; see the file's header. Skipped by `npm test`. |
 | `node bench/run.mjs` | Benchmarks long chats (50, 200, and 800 turns) in headless Chromium. See below. |
 | `node bench/run.mjs code` | Benchmarks streaming a reply with 1, 3, 6, and 10 code blocks, tagged and untagged, in headless Chromium. |
+| `xvfb-run -a python3 bench/webkit.py 'bench.streamCode(10,false)'` | Runs `window.bench` calls in WebKitGTK 4.1, the engine of the Linux app, and prints each result as JSON. Build the page first with `npx vite build --config bench/vite.config.ts`. Needs the `python-gobject` and `webkit2gtk-4.1` packages. |
 
 The benchmark times opening, streaming, find-in-chat, scrolling, two simultaneous streams, and divider dragging. It needs `$CHROME` or Playwright's cached headless shell (`npx playwright install chromium-headless-shell`). Set `THROTTLE=4` to slow the CPU four times. `bench/parse.ts` times only the Markdown parse and highlight work for the same streamed reply, in Node (usage in the file).
 

@@ -12,6 +12,8 @@
 //   a prompt that starts with "fail" ends its reply with an error, as a provider failure does.
 //   a prompt that starts with "math" gets a reply with inline and display math and a Mermaid diagram (#350), and one
 //   that starts with "badmath" the same with a diagram Mermaid can't parse.
+//   with HV_REPLY_FILE=<path>, a prompt that starts with `canned` gets that file's text as its reply, read at each send,
+//   so a test can serve a hostile reply (a diagram, a link, an image) exactly as written.
 //   with HV_LONG_REPLY=<n>, a prompt that starts with `long` gets n paragraphs of markdown (code, a list, a table),
 //   three words every 40 ms, so a reply keeps streaming for minutes.
 //   `subagent.interrupt` (Stop in the Subagents panel) ends that subagent as `interrupted`, as Hermes reports it.
@@ -32,7 +34,13 @@
 //   the request's id; the app's answer shows in `/__state` under `answers`.
 //   `POST /__changed[?n=<count>&gap=<ms>]` broadcasts `sessions.changed` n times (default 1), gap ms apart, as Hermes's
 //   change watcher does when another process writes the session store (a test's control).
+//   `POST /__frame[?chat=<chat id>]` sends the request body to the app verbatim, as one WebSocket text frame, malformed
+//   or not (a test's control). With `chat`, each `$SESSION` in the body is first replaced by the runtime session id of
+//   that chat, which must be open in the app: `{"jsonrpc":"2.0","method":"event","params":{"type":"tool.start",
+//   "session_id":"$SESSION","payload":{"tool_id":"t1","name":"terminal","preview":5}}}`.
 // HV_INBOX=1 gives the `work` profile two Unread chats for the Rail inbox: one last active 3 days ago, one an hour ago.
+// HV_BAD_HISTORY=1 adds `badtool`, "Broken tool row", to `default`: its stored history has a tool row whose `context`
+// is a number and one whose `name` is an object, each between two messages, as a misbehaving server might send.
 // HV_LIST=<n> adds n Active, read chats to `default`, one an hour apart, so its Inbox is longer than the list panel.
 // HV_DELAY_MS=<ms> holds each /api/ answer that long, as a distant server's round trip would.
 // HV_FAIL_PATCH=<id>,<id> answers 503 to every edit (PATCH) of those sessions, as a server that fails a write does.
@@ -43,7 +51,7 @@
 // the app's answers to what the stand-in asked it.
 // The same JSON is rewritten to <state-file> after every change, so it survives the bridge being stopped.
 import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { FakeHermes, row } from "../../../../src/hermes/fakeHermes";
@@ -81,6 +89,15 @@ for (let i = 0; i < Number(process.env.HV_LIST ?? 0); i++) {
   server.sessions.push(row(`list${i + 1}`, at, { title, pinned: true }));
   server.storeMessage(`list${i + 1}`, { role: "user", text: `${title}?` });
   server.storeMessage(`list${i + 1}`, { role: "assistant", text: "Checked. Nothing to do for now." });
+}
+
+if (process.env.HV_BAD_HISTORY === "1") {
+  server.sessions.push(row("badtool", 0.01, { title: "Broken tool row", message_count: 5 }));
+  server.storeMessage("badtool", { role: "user", text: "List the backup folder." });
+  server.storeMessage("badtool", { role: "tool", name: "terminal", context: 5 as never, args: { command: "ls /srv/backup" } });
+  server.storeMessage("badtool", { role: "assistant", text: "It holds 14 snapshots. Checking their size." });
+  server.storeMessage("badtool", { role: "tool", name: { tool: "terminal" } as never, context: "du -sh /srv/backup" });
+  server.storeMessage("badtool", { role: "assistant", text: "The backup folder holds 14 snapshots, 212 GiB in all." });
 }
 
 const benchTurns = Number(process.env.HV_TURNS ?? 0);
@@ -162,8 +179,10 @@ const mathReply = (broken: boolean) =>
 function replyTo(sessionId: string, prompt: string, said?: string, persisted_turn?: Record<string, unknown>) {
   const long = longParagraphs > 0 && prompt.startsWith("long");
   const math = prompt.startsWith("math") || prompt.startsWith("badmath");
+  const canned = process.env.HV_REPLY_FILE && prompt.startsWith("canned") ? readFileSync(process.env.HV_REPLY_FILE, "utf8") : undefined;
   const text =
     said ??
+    canned ??
     (long
       ? Array.from({ length: longParagraphs }, (_, i) => paragraph(i)).join("\n")
       : math
@@ -341,6 +360,14 @@ const http = createServer(async (req, res) => {
       server.broadcast("sessions.changed");
     }
     return json(200, { ok: true, sent: n });
+  }
+  if (url.pathname === "/__frame" && req.method === "POST") {
+    const chat = url.searchParams.get("chat");
+    const runtime = chat === null ? "" : server.runtimeIdOf(chat);
+    if (runtime === undefined) return json(400, { detail: `Chat ${chat} isn't open in the app` });
+    if (!send) return json(409, { detail: "The app has no WebSocket open" });
+    send((body ?? "").replaceAll("$SESSION", runtime));
+    return json(200, { ok: true });
   }
   if (url.pathname === "/__ask" && req.method === "POST") {
     const runtime = server.runtimeIdOf(url.searchParams.get("chat") ?? "");

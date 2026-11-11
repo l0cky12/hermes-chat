@@ -112,6 +112,24 @@ describe("The transcript", () => {
     expect(screen.getByText("2 of 3")).toBeTruthy();
   });
 
+  it("marks a match a reply shows through a character reference or an escape", () => {
+    const items: Item[] = [
+      { kind: "assistant", id: "a-0", text: "Fish &amp; chips, and 2 \\* 3." },
+      { kind: "assistant", id: "a-1", text: "No match here." },
+    ];
+    const { show } = pane(chatOf(items), { query: "fish & chips", at: 1 });
+    expect(screen.getByText("1 of 1")).toBeTruthy();
+    expect(item("a-0")?.querySelector("mark.hit")?.textContent).toBe("Fish & chips");
+    show(chatOf(items), { query: "2 * 3", at: 2 });
+    expect(screen.getByText("1 of 1")).toBeTruthy();
+  });
+
+  it("marks a footnote's number, which the reply's text doesn't hold", () => {
+    pane(chatOf([{ kind: "assistant", id: "a-0", text: "See this[^note].\n\n[^note]: A note." }]), { query: "1", at: 1 });
+    expect(screen.getByText("1 of 1")).toBeTruthy();
+    expect(document.querySelector("mark.hit")?.closest("sup")).not.toBeNull();
+  });
+
   it("answers an Approval card through the handler App passed last", () => {
     const first = vi.fn<Answer>();
     const latest = vi.fn<Answer>();
@@ -228,5 +246,40 @@ describe("The transcript", () => {
       expect(copy.defaultPrevented).toBe(false);
       expect(writeText).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("A message that can't be drawn (#476)", () => {
+  it("shows an error in its place, while the other messages and the composer keep working", () => {
+    // React reports the caught error on the console, which Logs keeps.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const onSend = vi.fn();
+    const items: Item[] = [
+      { kind: "user", id: "u-0", text: "List the backup folder." },
+      { kind: "tool", id: "t-1", name: "terminal", status: "done", preview: 5 as never },
+      { kind: "assistant", id: "a-2", text: "14 snapshots." },
+    ];
+    render(
+      <ChatPane
+        chat={chatOf(items)}
+        status="connected"
+        draft="And their sizes?"
+        onDraft={() => {}}
+        onDraftStep={() => undefined}
+        onRetry={() => {}}
+        onEdit={() => {}}
+        onDismiss={() => {}}
+        onAttach={async () => ({ attachments: [], refused: [] })}
+        onSend={onSend}
+        onStop={() => {}}
+        onAnswer={() => {}}
+      />,
+    );
+    expect(item("u-0")?.textContent).toContain("List the backup folder.");
+    expect(item("a-2")?.textContent).toContain("14 snapshots.");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.queryByText("terminal")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(onSend).toHaveBeenCalledWith("And their sizes?", []);
   });
 });
