@@ -533,20 +533,10 @@ pub(crate) struct Ssh {
 }
 
 impl Ssh {
-    /// Starts `command`. On Windows it starts suspended, goes into the app's job, so it ends with the app, and into a
-    /// job of its own, so it ends with this `Ssh`, and only then runs: nothing it starts can be outside both.
+    /// Starts `command`, in a job of its own that ends with this `Ssh` (`job::start`).
     #[cfg(windows)]
     pub(crate) fn start(command: &mut Command) -> std::io::Result<Ssh> {
-        const CREATE_SUSPENDED: u32 = 0x0000_0004;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let child = command.kill_on_drop(true).creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED).spawn()?;
-        let (Some(handle), Some(pid)) = (child.raw_handle(), child.id()) else {
-            return Err(std::io::Error::other("ssh exited as it started"));
-        };
-        job::ends_with_app(handle)?;
-        let own = job::Own::new()?;
-        own.add(handle)?;
-        job::resume(pid)?;
+        let (child, own) = job::start(command)?;
         Ok(Ssh { child, _job: own })
     }
 
@@ -569,8 +559,10 @@ impl std::ops::DerefMut for Ssh {
     }
 }
 
+/// Windows jobs, which end a program together with everything it started: ssh here, and a speech-to-text engine
+/// (local_stt.rs).
 #[cfg(windows)]
-mod job {
+pub(crate) mod job {
     use std::sync::OnceLock;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32};
@@ -620,23 +612,25 @@ mod job {
         made.map(|h| h as HANDLE).map_err(std::io::Error::from_raw_os_error)
     }
 
-    /// Puts the process `handle` in the app's job, so it ends with this app.
-    pub fn ends_with_app(handle: std::os::windows::io::RawHandle) -> std::io::Result<()> {
-        add(the_job()?, handle)
+    /// Starts `command` with no console window. It starts suspended, goes into the app's job, so it ends with the app,
+    /// and into a job of its own, so it ends with the `Own` returned, and only then runs: nothing it starts can be
+    /// outside both.
+    pub(crate) fn start(command: &mut tokio::process::Command) -> std::io::Result<(tokio::process::Child, Own)> {
+        const CREATE_SUSPENDED: u32 = 0x0000_0004;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let child = command.kill_on_drop(true).creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED).spawn()?;
+        let (Some(handle), Some(pid)) = (child.raw_handle(), child.id()) else {
+            return Err(std::io::Error::other("it exited as it started"));
+        };
+        add(the_job()?, handle)?;
+        let own = Own(killing_job()? as usize);
+        add(own.0 as HANDLE, handle)?;
+        resume(pid)?;
+        Ok((child, own))
     }
 
     /// A job of one process's own, nested in the app's. Dropping it ends that process and everything it started.
-    pub struct Own(usize);
-
-    impl Own {
-        pub fn new() -> std::io::Result<Own> {
-            killing_job().map(|job| Own(job as usize))
-        }
-
-        pub fn add(&self, process: std::os::windows::io::RawHandle) -> std::io::Result<()> {
-            add(self.0 as HANDLE, process)
-        }
-    }
+    pub(crate) struct Own(usize);
 
     impl Drop for Own {
         fn drop(&mut self) {
@@ -646,7 +640,7 @@ mod job {
     }
 
     /// Lets process `pid`, started suspended, run.
-    pub fn resume(pid: u32) -> std::io::Result<()> {
+    fn resume(pid: u32) -> std::io::Result<()> {
         let mut resumed = false;
         // SAFETY: plain Win32 calls on handles opened and closed here; `entry` is sized as Thread32First asks.
         unsafe {
@@ -672,7 +666,7 @@ mod job {
         if resumed {
             Ok(())
         } else {
-            Err(std::io::Error::other("couldn't let ssh run after putting it in its job"))
+            Err(std::io::Error::other("couldn't let it run after putting it in its job"))
         }
     }
 }

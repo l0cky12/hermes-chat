@@ -1717,6 +1717,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
     if screenshot {
         screenshots.requests.ask();
     }
+    std::thread::spawn(local_stt::sweep_scratch);
     let context = tauri::generate_context!();
     let mut builder = tauri::Builder::default();
     // The updater needs a public key to start, so it is there only in a build given one (README, "Updates").
