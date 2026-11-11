@@ -12,6 +12,7 @@
 //! ends a socket the second way too, once `INPUT_BUDGET` waits: the owner is still there, so control stays theirs.
 
 use crate::backlog::Backlog;
+use crate::lock::Locked;
 use crate::transport::{Dashboard, TransportError};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
@@ -168,7 +169,7 @@ impl Displays {
     /// Keeps `socket` under a new id, unless every socket was closed since `epoch`: then it is abandoned, as
     /// `close_all` would have, and the answer is None.
     pub fn keep(&self, epoch: u64, socket: DisplaySocket) -> Option<u64> {
-        let mut open = self.open.lock().unwrap();
+        let mut open = self.open.locked();
         if self.epoch() != epoch {
             socket.abandon();
             return None;
@@ -179,18 +180,18 @@ impl Displays {
     }
 
     pub fn send(&self, id: u64, bytes: Vec<u8>) -> Result<(), TransportError> {
-        self.open.lock().unwrap().get(&id).ok_or(TransportError::Closed)?.send(bytes)
+        self.open.locked().get(&id).ok_or(TransportError::Closed)?.send(bytes)
     }
 
     /// Closes socket `id`; one already gone is left alone.
     pub fn close(&self, id: u64) {
-        self.open.lock().unwrap().remove(&id);
+        self.open.locked().remove(&id);
     }
 
     /// Abandons every socket: the connection they were opened on is going. Hermes sees dropped links, so control the
     /// owner holds stays theirs; leaving on purpose has already handed it back.
     pub fn close_all(&self) {
-        let mut open = self.open.lock().unwrap();
+        let mut open = self.open.locked();
         self.epoch.fetch_add(1, Ordering::SeqCst);
         for (_, socket) in open.drain() {
             socket.abandon();

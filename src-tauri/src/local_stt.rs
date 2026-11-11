@@ -10,6 +10,7 @@
 //! choosing among what Rust found or was given through a dialog. The recording goes to a private folder (0700; on
 //! Windows, the user's own temp folder's ACL) that is deleted once the text is read, and the engine is killed after a timeout. The choice lives in `local-stt.json` in the
 //! app's config folder, for this computer, not per connection or profile.
+use crate::lock::Locked;
 use std::ffi::{OsStr, OsString};
 use std::future::Future;
 #[cfg(unix)]
@@ -807,7 +808,7 @@ struct Ticket {
 
 impl Ticket {
     fn new(id: String) -> Ticket {
-        let mut runs = RUNS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut runs = RUNS.locked();
         prune(&mut runs);
         let cancel = match runs.iter_mut().find(|(i, ..)| *i == id) {
             Some((_, tx, _, running)) => {
@@ -826,14 +827,14 @@ impl Ticket {
 
 impl Drop for Ticket {
     fn drop(&mut self) {
-        RUNS.lock().unwrap_or_else(|e| e.into_inner()).retain(|(i, ..)| *i != self.id);
+        RUNS.locked().retain(|(i, ..)| *i != self.id);
     }
 }
 
 /// Stops the transcription the webview started with this `run` id: what runs is dropped, and the backup isn't tried.
 #[tauri::command]
 pub fn local_stt_cancel(run: String) {
-    let mut runs = RUNS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut runs = RUNS.locked();
     match runs.iter().find(|(i, ..)| *i == run) {
         Some((_, tx, ..)) => {
             tx.send_replace(true);
@@ -996,7 +997,7 @@ pub struct Downloads(Mutex<Option<(DownloadProgress, Arc<AtomicBool>)>>);
 
 impl Downloads {
     fn now(&self) -> Option<DownloadProgress> {
-        self.0.lock().ok()?.as_ref().map(|(p, _)| p.clone())
+        self.0.locked().as_ref().map(|(p, _)| p.clone())
     }
 }
 
@@ -1028,7 +1029,7 @@ pub async fn local_stt_download(
     let info = model_info(&name).ok_or_else(|| format!("There's no Whisper model called {name}."))?;
     let cancel = Arc::new(AtomicBool::new(false));
     {
-        let mut held = downloads.0.lock().map_err(|e| e.to_string())?;
+        let mut held = downloads.0.locked();
         if let Some((running, _)) = held.as_ref() {
             return Err(format!("The {} model is downloading already.", running.name));
         }
@@ -1040,10 +1041,8 @@ pub async fn local_stt_download(
         (Ok(client), Ok(dir)) => {
             let mut last = Instant::now();
             download_model(&client, MODEL_BASE_URL, dir, info, &cancel, |done| {
-                if let Ok(mut held) = downloads.0.lock() {
-                    if let Some((p, _)) = held.as_mut() {
-                        p.done = done;
-                    }
+                if let Some((p, _)) = downloads.0.locked().as_mut() {
+                    p.done = done;
                 }
                 if last.elapsed() >= Duration::from_millis(200) || done == info.bytes {
                     last = Instant::now();
@@ -1055,19 +1054,15 @@ pub async fn local_stt_download(
         (Err(e), _) => Err(e),
         (_, Err(e)) => Err(e.clone()),
     };
-    if let Ok(mut held) = downloads.0.lock() {
-        *held = None;
-    }
+    *downloads.0.locked() = None;
     result?;
     Ok(models_in(&dir?, None))
 }
 
 #[tauri::command]
 pub fn local_stt_cancel_download(downloads: Managed<'_, Downloads>) {
-    if let Ok(held) = downloads.0.lock() {
-        if let Some((_, cancel)) = held.as_ref() {
-            cancel.store(true, Ordering::Relaxed);
-        }
+    if let Some((_, cancel)) = downloads.0.locked().as_ref() {
+        cancel.store(true, Ordering::Relaxed);
     }
 }
 
@@ -1152,7 +1147,7 @@ async fn version(binary: &Path) -> Option<String> {
 
 fn update(app: &AppHandle, change: impl FnOnce(&mut Settings) -> Result<(), String>) -> Result<State, String> {
     let path = settings_path(app)?;
-    let _held = SETTINGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _held = SETTINGS_LOCK.locked();
     let mut settings = read_settings(&path)?;
     change(&mut settings)?;
     Ok(state_of(write_settings(&path, &settings)?))
@@ -1808,7 +1803,7 @@ mod tests {
         let ticket = Ticket::new("early".into());
         assert!(*ticket.cancel.borrow());
         drop(ticket);
-        assert!(RUNS.lock().unwrap().iter().all(|(i, ..)| i != "early"));
+        assert!(RUNS.locked().iter().all(|(i, ..)| i != "early"));
         // One cancelled while it runs.
         let ticket = Ticket::new("running".into());
         assert!(!*ticket.cancel.borrow());

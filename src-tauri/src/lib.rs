@@ -12,6 +12,7 @@ pub mod fonts;
 pub mod gtk_clipboard;
 pub mod links;
 pub mod local_stt;
+pub mod lock;
 mod loopback_owner;
 mod loopback_peer;
 pub mod main_window;
@@ -35,6 +36,7 @@ pub mod tunnel;
 pub mod update;
 pub mod web_page;
 
+use crate::lock::Locked;
 use connect_steps::{Step, Steps};
 use saved_password::{Address, TokenEntry};
 use serde::{Deserialize, Serialize};
@@ -229,7 +231,7 @@ struct Screenshots {
 
 impl Screenshots {
     fn captures(&self) -> Result<Arc<screenshot::Captures>, screenshot::CaptureError> {
-        let mut slot = self.captures.lock().unwrap();
+        let mut slot = self.captures.locked();
         if let Some(c) = &*slot {
             return Ok(c.clone());
         }
@@ -396,7 +398,7 @@ async fn as_attempt<T: Send + 'static>(
     opening: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
 ) -> Attempt<T> {
     let task = {
-        let mut connecting = state.2.lock().unwrap();
+        let mut connecting = state.2.locked();
         if let Some(i) = connecting.stopped.iter().position(|a| *a == attempt) {
             connecting.stopped.remove(i);
             return Attempt::StoppedFirst;
@@ -408,7 +410,7 @@ async fn as_attempt<T: Send + 'static>(
     };
     let opened = task.await;
     {
-        let mut connecting = state.2.lock().unwrap();
+        let mut connecting = state.2.locked();
         if connecting.now.as_ref().is_some_and(|(a, _)| *a == attempt) {
             connecting.now = None;
         }
@@ -457,7 +459,7 @@ async fn open_connection(
 /// Another attempt's is left alone.
 #[tauri::command]
 fn hermes_connect_cancel(state: State<'_, AppState>, attempt: String) {
-    let mut connecting = state.2.lock().unwrap();
+    let mut connecting = state.2.locked();
     match &connecting.now {
         Some((now, task)) if *now == attempt => task.abort(),
         _ => {
@@ -497,7 +499,7 @@ async fn hermes_probe(
             transport::probe_expecting(&base, &sign_in, &profile, transport::PROBE_STEP_TIMEOUT, reach_within(quick), expect_server.as_deref()).await?;
         Ok(ProbeResult { route: route.with_server(probed.server.clone()), probed })
     });
-    if let Some(before) = state.1.lock().unwrap().replace(task.abort_handle()) {
+    if let Some(before) = state.1.locked().replace(task.abort_handle()) {
         before.abort();
     }
     match task.await {
@@ -536,7 +538,7 @@ async fn hermes_reach(target: Target, expect_server: Option<String>, quick: Opti
 
 #[tauri::command]
 fn hermes_probe_cancel(state: State<'_, AppState>) {
-    if let Some(task) = state.1.lock().unwrap().take() {
+    if let Some(task) = state.1.locked().take() {
         task.abort();
     }
 }
@@ -658,7 +660,7 @@ async fn screenshot_capture(
 #[tauri::command]
 async fn screenshot_discard(app: tauri::AppHandle, path: String) {
     let _ = tokio::task::spawn_blocking(move || {
-        if let Some(c) = &*app.state::<Screenshots>().captures.lock().unwrap() {
+        if let Some(c) = &*app.state::<Screenshots>().captures.locked() {
             c.discard(std::path::Path::new(&path));
         }
     })
@@ -901,7 +903,7 @@ struct Transfers {
 impl Transfers {
     fn stop_all(&self) {
         use std::sync::atomic::Ordering;
-        let mut tasks = self.tasks.lock().unwrap();
+        let mut tasks = self.tasks.locked();
         self.epoch.fetch_add(1, Ordering::SeqCst);
         for (_, (_, task)) in tasks.drain() {
             task.abort();
@@ -932,7 +934,7 @@ impl Transfers {
     ) -> Result<T, E> {
         let run = self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let task = {
-            let mut tasks = self.tasks.lock().unwrap();
+            let mut tasks = self.tasks.locked();
             if self.epoch() != epoch {
                 return Err(TRANSFER_STOPPED.to_owned().into());
             }
@@ -943,7 +945,7 @@ impl Transfers {
             task
         };
         let ended = task.await;
-        let mut tasks = self.tasks.lock().unwrap();
+        let mut tasks = self.tasks.locked();
         if tasks.get(&id).is_some_and(|(r, _)| *r == run) {
             tasks.remove(&id);
         }
@@ -1061,7 +1063,7 @@ async fn files_pick_upload(app: tauri::AppHandle, picks: State<'_, UploadPicks>,
         return Err("That isn't a file.".into());
     }
     let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
-    let mut picks = picks.0.lock().unwrap();
+    let mut picks = picks.0.locked();
     picks.0 += 1;
     let token = picks.0;
     // Picks never sent are let go once the connection they were picked in is gone.
@@ -1074,7 +1076,7 @@ async fn files_pick_upload(app: tauri::AppHandle, picks: State<'_, UploadPicks>,
 /// Lets go of a pick that won't be sent: the owner cancelled the upload dialog. A token already taken or let go is fine.
 #[tauri::command]
 fn files_discard_pick(picks: State<'_, UploadPicks>, token: u64) {
-    picks.0.lock().unwrap().1.remove(&token);
+    picks.0.locked().1.remove(&token);
 }
 
 /// Uploads the file picked as `token` to the server path `path` (`Dashboard::upload`, ADR 0023). `overwrite` false:
@@ -1093,7 +1095,7 @@ async fn files_upload(
     on_progress: Channel<TransferProgress>,
 ) -> Result<String, RelayError> {
     // Taken, not looked up: a pick is good for one upload.
-    let (local, epoch) = picks.0.lock().unwrap().1.remove(&token).ok_or("That file wasn't picked in the Open dialog, or was already sent.")?;
+    let (local, epoch) = picks.0.locked().1.remove(&token).ok_or("That file wasn't picked in the Open dialog, or was already sent.")?;
     let dest = path.clone();
     // Registered before it waits for the connection, so a stop meanwhile reaches it; and only the connection that was
     // current when it was asked for is used.
@@ -1271,7 +1273,7 @@ async fn context_git_exclude(
 /// Stops transfer `id`, if it is still running. A download's part file is removed; `dest` is left as it was.
 #[tauri::command]
 fn files_cancel(transfers: State<'_, Transfers>, id: u64) {
-    if let Some((_, task)) = transfers.tasks.lock().unwrap().remove(&id) {
+    if let Some((_, task)) = transfers.tasks.locked().remove(&id) {
         task.abort();
     }
 }
@@ -1948,6 +1950,7 @@ mod test_common;
 #[cfg(test)]
 mod tests {
     use super::Transfers;
+    use crate::lock::Locked;
     use std::time::Duration;
 
     #[test]
@@ -2020,12 +2023,12 @@ mod tests {
         });
         assert_eq!(old.await.unwrap(), Err(super::TRANSFER_STOPPED.to_owned()));
         // The old run ended after the new one registered; the new one must still be reachable.
-        assert!(transfers.tasks.lock().unwrap().contains_key(&7));
+        assert!(transfers.tasks.locked().contains_key(&7));
         let epoch = transfers.epoch();
         transfers.stop_all();
         assert_eq!(new.await.unwrap(), Err(super::TRANSFER_STOPPED.to_owned()));
         assert_eq!(transfers.epoch(), epoch + 1);
-        assert!(transfers.tasks.lock().unwrap().is_empty());
+        assert!(transfers.tasks.locked().is_empty());
         // Asked for before that stop: it never starts.
         let started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let s = started.clone();
@@ -2076,7 +2079,7 @@ mod tests {
                         let _ = ws.send(Message::text(ready)).await;
                         while let Some(Ok(message)) = ws.recv().await {
                             if let Message::Text(text) = message {
-                                got.lock().unwrap().push(text.to_string());
+                                got.locked().push(text.to_string());
                             }
                         }
                     })
@@ -2085,7 +2088,7 @@ mod tests {
             )
             .layer(axum::middleware::from_fn(move |req: axum::extract::Request, next: axum::middleware::Next| {
                 let auth = req.headers().get(axum::http::header::AUTHORIZATION).and_then(|v| v.to_str().ok()).map(str::to_owned);
-                note.lock().unwrap().push((req.uri().path().to_owned(), auth));
+                note.locked().push((req.uri().path().to_owned(), auth));
                 next.run(req)
             }));
         let count = accepted.clone();
@@ -2117,7 +2120,7 @@ mod tests {
             let _connection = connect(&base, credential).await;
             let want = [("/api/status", None), (sign_in, auth.clone()), ("/api/auth/ws-ticket", auth), ("/api/ws", None)];
             // The shared client never carries the token: the status read and the socket go without it.
-            assert_eq!(*heard.lock().unwrap(), want.map(|(p, a)| (p.to_owned(), a)));
+            assert_eq!(*heard.locked(), want.map(|(p, a)| (p.to_owned(), a)));
             assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2, "one HTTP connection plus the WebSocket, for {sign_in}");
         }
     }
@@ -2222,7 +2225,7 @@ mod tests {
         for i in 0..10_000 {
             super::hermes_connect_cancel(app.state(), format!("finished-{i}"));
         }
-        let kept = app.state::<super::AppState>().2.lock().unwrap().stopped.len();
+        let kept = app.state::<super::AppState>().2.locked().stopped.len();
         assert!(kept < 1000, "{kept} stops kept");
     }
 
@@ -2277,7 +2280,7 @@ mod tests {
         let attached = dir.join("notes.txt");
         std::fs::write(&attached, "MEETING NOTES").unwrap();
         app.state::<super::Attachable>().add([attached.to_string_lossy().into_owned()]);
-        let heard = |bytes: &str| frames.lock().unwrap().iter().any(|f| f.contains(&base64::engine::general_purpose::STANDARD.encode(bytes)));
+        let heard = |bytes: &str| frames.locked().iter().any(|f| f.contains(&base64::engine::general_purpose::STANDARD.encode(bytes)));
 
         let sent = send_through_ipc(&webview, &secret);
         send_through_ipc(&webview, &attached).expect("an attached file is sent");
@@ -2329,12 +2332,12 @@ mod tests {
         assert!(refused.contains("closed"), "refused for another reason: {refused}");
         send("B", "MEANT FOR B").await.unwrap().expect("a frame for the connection held is sent");
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !to_b.lock().unwrap().iter().any(|f| f == "MEANT FOR B") && std::time::Instant::now() < deadline {
+        while !to_b.locked().iter().any(|f| f == "MEANT FOR B") && std::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let heard_by_b = to_b.lock().unwrap().clone();
+        let heard_by_b = to_b.locked().clone();
         assert_eq!(heard_by_b, ["MEANT FOR B"], "server B heard a frame meant for server A");
-        assert!(!to_a.lock().unwrap().iter().any(|f| f == "MEANT FOR A"), "the replaced connection still sent it");
+        assert!(!to_a.locked().iter().any(|f| f == "MEANT FOR A"), "the replaced connection still sent it");
     }
 
     /// Issue #474: a reopen, or a token keep, asked for server A after a switch to server B leaves B alone.
@@ -2353,7 +2356,7 @@ mod tests {
             .unwrap();
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
         *app.state::<super::AppState>().0.lock().await = Some(super::Connection { attempt: "B".into(), ..connect(&b, password).await });
-        let tickets = || heard_by_b.lock().unwrap().iter().filter(|(p, _)| p == "/api/auth/ws-ticket").count();
+        let tickets = || heard_by_b.locked().iter().filter(|(p, _)| p == "/api/auth/ws-ticket").count();
         let before = tickets();
 
         let call = |cmd: &'static str, body: serde_json::Value| {
@@ -2370,9 +2373,9 @@ mod tests {
         assert_eq!(tickets(), before, "server B was asked for a ticket for a reopen meant for server A");
         call("hermes_send", serde_json::json!({"attempt": "B", "frame": "STILL B"})).await.unwrap().expect("server B's connection is still held");
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !to_b.lock().unwrap().iter().any(|f| f == "STILL B") && std::time::Instant::now() < deadline {
+        while !to_b.locked().iter().any(|f| f == "STILL B") && std::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert!(to_b.lock().unwrap().iter().any(|f| f == "STILL B"), "server B's socket was replaced");
+        assert!(to_b.locked().iter().any(|f| f == "STILL B"), "server B's socket was replaced");
     }
 }

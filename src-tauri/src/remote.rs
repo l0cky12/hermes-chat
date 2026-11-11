@@ -22,6 +22,7 @@
 #[cfg(target_os = "linux")]
 mod bus;
 #[cfg(target_os = "linux")]
+use crate::lock::Locked;
 use bus as desktop;
 #[cfg(windows)]
 mod pipe;
@@ -54,7 +55,7 @@ pub struct Requests {
 
 impl Requests {
     pub fn ask(&self) {
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = self.pending.locked();
         *pending = Some((self.next.fetch_add(1, Ordering::Relaxed), Instant::now()));
     }
 
@@ -63,7 +64,7 @@ impl Requests {
     }
 
     fn pending_at(&self, now: Instant) -> Option<u64> {
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = self.pending.locked();
         if pending.is_some_and(|(_, at)| now.duration_since(at) >= Duration::from_secs(120)) {
             *pending = None;
         }
@@ -71,7 +72,7 @@ impl Requests {
     }
 
     pub fn acknowledge(&self, id: u64) {
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = self.pending.locked();
         if pending.is_some_and(|(current, _)| current == id) {
             *pending = None;
         }
@@ -185,16 +186,16 @@ pub struct Inbox {
 
 impl Inbox {
     fn dispatch(&self, r: Request) {
-        let handler = self.handler.lock().unwrap();
+        let handler = self.handler.locked();
         match &*handler {
             Some(f) => f(r),
-            None => self.early.lock().unwrap().push(r),
+            None => self.early.locked().push(r),
         }
     }
 
     pub fn set_handler(&self, f: impl Fn(Request) + Send + 'static) {
-        let mut handler = self.handler.lock().unwrap();
-        for r in self.early.lock().unwrap().drain(..) {
+        let mut handler = self.handler.locked();
+        for r in self.early.locked().drain(..) {
             f(r);
         }
         *handler = Some(Box::new(f));

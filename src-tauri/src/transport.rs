@@ -19,6 +19,7 @@
 //! a Hermes dashboard, and the same one the connection signed in to before (ADR 0120).
 
 use crate::connect_steps::{Step, Steps};
+use crate::lock::Locked;
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -916,12 +917,12 @@ impl PickedFiles {
         let path = std::fs::canonicalize(path).map_err(|e| TransportError::File(e.to_string()))?;
         let path = path.to_str().ok_or_else(|| TransportError::File("the path isn't UTF-8".into()))?.to_owned();
         let file = open_local_text(&path)?;
-        self.0.lock().unwrap().insert(path.clone(), std::sync::Arc::new(file));
+        self.0.locked().insert(path.clone(), std::sync::Arc::new(file));
         Ok(path)
     }
 
     fn file(&self, path: &str) -> Result<std::sync::Arc<std::fs::File>, TransportError> {
-        self.0.lock().unwrap().get(path).cloned().ok_or_else(|| TransportError::File("it wasn't picked in the Open dialog".into()))
+        self.0.locked().get(path).cloned().ok_or_else(|| TransportError::File("it wasn't picked in the Open dialog".into()))
     }
 
     pub async fn read(&self, path: &str) -> Result<LocalText, TransportError> {
@@ -967,19 +968,19 @@ impl Attachable {
             }),
             Err(_) => Vec::new(),
         };
-        *self.paths.lock().unwrap() = kept;
-        *self.file.lock().unwrap() = Some(file);
+        *self.paths.locked() = kept;
+        *self.file.locked() = Some(file);
     }
 
     pub fn add(&self, paths: impl IntoIterator<Item = String>) {
-        let mut kept = self.paths.lock().unwrap();
+        let mut kept = self.paths.locked();
         for path in paths {
             kept.retain(|p| *p != path);
             kept.push(path);
         }
         let over = kept.len().saturating_sub(ATTACHABLE_KEPT);
         kept.drain(..over);
-        if let Some(file) = &*self.file.lock().unwrap() {
+        if let Some(file) = &*self.file.locked() {
             if let Err(e) = write_json(file, &*kept) {
                 eprintln!("hermes-chat: couldn't keep the attached files' paths, so they can't be sent after a restart: {e}");
             }
@@ -987,7 +988,7 @@ impl Attachable {
     }
 
     pub fn check(&self, path: &str) -> Result<(), TransportError> {
-        if self.paths.lock().unwrap().iter().any(|p| p == path) {
+        if self.paths.locked().iter().any(|p| p == path) {
             Ok(())
         } else {
             Err(TransportError::File("it wasn't attached in this app".into()))
@@ -1889,7 +1890,7 @@ impl Dashboard {
     /// Take in every Set-Cookie: a new value replaces the old one, and an empty one or one set to expire (`expired`)
     /// deletes it. Only `name=value` is kept; the dashboard is the only site this jar talks to.
     fn keep_cookies(&self, resp: &reqwest::Response) {
-        let mut jar = self.cookies.lock().unwrap();
+        let mut jar = self.cookies.locked();
         for v in resp.headers().get_all(header::SET_COOKIE) {
             let Some((pair, attributes)) = v.to_str().ok().map(|v| v.split_once(';').unwrap_or((v, ""))) else {
                 continue;
@@ -1910,7 +1911,7 @@ impl Dashboard {
     /// no session cookie is that short, and one such as `1` would hide nearly every error.
     fn hidden(&self) -> HeaderMap {
         let mut hide = self.hide.clone();
-        for (_, value) in self.cookies.lock().unwrap().iter().filter(|(_, v)| v.len() >= HEADER_PIECE) {
+        for (_, value) in self.cookies.locked().iter().filter(|(_, v)| v.len() >= HEADER_PIECE) {
             if let Ok(mut value) = HeaderValue::from_str(value) {
                 value.set_sensitive(true);
                 hide.append(header::COOKIE, value);
@@ -1934,7 +1935,7 @@ impl Dashboard {
     }
 
     fn cookie_header(&self) -> String {
-        let jar = self.cookies.lock().unwrap();
+        let jar = self.cookies.locked();
         jar.iter().map(|(n, v)| format!("{n}={v}")).collect::<Vec<_>>().join("; ")
     }
 }
@@ -2908,7 +2909,7 @@ pub async fn probe_expecting(
     let pipe = match tokio::time::timeout(
         step,
         dashboard.open_pipe(profile, move |e| {
-            if let Some(tx) = tx.lock().unwrap().take() {
+            if let Some(tx) = tx.locked().take() {
                 let _ = tx.send(e);
             }
         }),

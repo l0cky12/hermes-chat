@@ -23,6 +23,7 @@
 //! app exits: ssh is started with `PR_SET_PDEATHSIG` from a thread that lives as long as the app (on Windows, in a job
 //! object that is closed with the app), so even an app that crashes takes it along.
 
+use crate::lock::Locked;
 use crate::loopback_peer::{self, Peers};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -480,8 +481,7 @@ fn spawner() -> std::sync::mpsc::Sender<Job> {
                 .expect("start the ssh spawner thread");
             Mutex::new(tx)
         })
-        .lock()
-        .unwrap()
+        .locked()
         .clone()
 }
 
@@ -685,7 +685,7 @@ impl Stderr {
                 if n == 0 {
                     break;
                 }
-                let mut k = kept.lock().unwrap();
+                let mut k = kept.locked();
                 k.extend_from_slice(&buf[..n]);
                 let over = k.len().saturating_sub(STDERR_KEPT);
                 k.drain(..over);
@@ -694,7 +694,7 @@ impl Stderr {
     }
 
     pub(crate) fn text(&self) -> String {
-        String::from_utf8_lossy(&self.0.lock().unwrap()).trim().to_owned()
+        String::from_utf8_lossy(&self.0.locked()).trim().to_owned()
     }
 
     /// The last line about a forward the server couldn't open (`channel 2: open failed: connect failed: …`).
@@ -789,9 +789,9 @@ impl ServerPages {
             return Err(ServerPageError::Io("That page key isn't one Hermes Chat makes.".into()));
         }
         let target = checked_target(target).ok_or(ServerPageError::NoSshTarget)?.to_owned();
-        let mut open = self.open.lock().unwrap();
+        let mut open = self.open.locked();
         {
-            let mut stopped = self.stopped.lock().unwrap();
+            let mut stopped = self.stopped.locked();
             if let Some(i) = stopped.iter().position(|k| k == key) {
                 stopped.remove(i);
                 return Err(ServerPageError::Closed(None));
@@ -826,12 +826,12 @@ impl ServerPages {
         let Started { mut child, end, address, stderr, listener } = match started {
             Ok(s) => s,
             Err(e) => {
-                self.open.lock().unwrap().remove(&key);
+                self.open.locked().remove(&key);
                 return Err(e);
             }
         };
         let local_port = listener.local_addr().map_err(|e| ServerPageError::Io(e.to_string()))?.port();
-        if let Some(open) = self.open.lock().unwrap().get_mut(&key) {
+        if let Some(open) = self.open.locked().get_mut(&key) {
             open.served = Some(Served { local_port, jar: Jar { target: target.clone(), origin: page.url.origin() } });
         }
 
@@ -859,7 +859,7 @@ impl ServerPages {
                 }
                 never = &mut serving => match never {},
             };
-            pages.open.lock().unwrap().remove(&task_key);
+            pages.open.locked().remove(&task_key);
             if let Some(message) = why {
                 on_event(PageEvent::Closed { message });
             }
@@ -873,14 +873,14 @@ impl ServerPages {
     pub fn close(&self, key: &str) {
         // `open` stays locked until the key is kept, in the order `begin` locks them, so a `begin` for the same key can't
         // slip in between finding nothing and keeping it.
-        let mut open = self.open.lock().unwrap();
+        let mut open = self.open.locked();
         match open.remove(key) {
             Some(o) => {
                 drop(open);
                 let _ = o.stop.send(None);
             }
             None if key_ok(key) => {
-                let mut stopped = self.stopped.lock().unwrap();
+                let mut stopped = self.stopped.locked();
                 if stopped.len() >= STOPPED_KEPT {
                     stopped.pop_front();
                 }
@@ -892,7 +892,7 @@ impl ServerPages {
 
     /// Closes every tunnel, starting or open, telling each page `why`: on sign-out, and at exit.
     pub fn close_all(&self, why: &str) {
-        for (_, o) in self.open.lock().unwrap().drain() {
+        for (_, o) in self.open.locked().drain() {
             let _ = o.stop.send(Some(why.to_owned()));
         }
     }
@@ -900,7 +900,7 @@ impl ServerPages {
     /// Closes the tunnels, starting or open, that don't go through `target`, once the app is signed in somewhere else.
     pub fn close_other_targets(&self, target: Option<&str>, why: &str) {
         let target = target.and_then(checked_target);
-        let mut open = self.open.lock().unwrap();
+        let mut open = self.open.locked();
         let others: Vec<String> = open.iter().filter(|(_, o)| Some(o.target.as_str()) != target).map(|(k, _)| k.clone()).collect();
         for key in others {
             if let Some(o) = open.remove(&key) {
@@ -914,11 +914,11 @@ impl ServerPages {
             return None;
         }
         let port = url.port_or_known_default()?;
-        self.open.lock().unwrap().values().find_map(|o| o.served.as_ref().filter(|s| s.local_port == port)).map(|s| s.jar.clone())
+        self.open.locked().values().find_map(|o| o.served.as_ref().filter(|s| s.local_port == port)).map(|s| s.jar.clone())
     }
 
     pub fn len(&self) -> usize {
-        self.open.lock().unwrap().len()
+        self.open.locked().len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1430,7 +1430,7 @@ while True:
     fn events() -> (Events, impl Fn(PageEvent) + Send + 'static) {
         let got: Events = Arc::default();
         let into = got.clone();
-        (got, move |e| into.lock().unwrap().push(e))
+        (got, move |e| into.locked().push(e))
     }
 
     #[cfg(unix)]
@@ -1463,7 +1463,7 @@ while True:
         assert!(pages.is_empty());
         // The webview closed it, so it isn't told.
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(got.lock().unwrap().is_empty());
+        assert!(got.locked().is_empty());
     }
 
     #[cfg(unix)]
@@ -1518,8 +1518,8 @@ while True:
         let opened = open_page(&pages, &fake.program, "hermes", &format!("http://localhost:{port}/"), on_event).await.unwrap();
         let (pid, socket, _) = fake.ran();
         unsafe { libc::kill(pid, libc::SIGKILL) };
-        until("the page hears", || !got.lock().unwrap().is_empty()).await;
-        assert!(matches!(&got.lock().unwrap()[0], PageEvent::Closed { message } if message.starts_with("ssh ended")));
+        until("the page hears", || !got.locked().is_empty()).await;
+        assert!(matches!(&got.locked()[0], PageEvent::Closed { message } if message.starts_with("ssh ended")));
         until("the socket's folder is gone", || !socket.parent().unwrap().exists()).await;
         assert!(pages.is_empty());
         pages.close(&opened.id);
@@ -1541,13 +1541,13 @@ while True:
         // Signed in through `a` again: only `b`'s page goes.
         pages.close_other_targets(Some("a"), "moved");
         until("b's ssh ends", || ended(pid_b)).await;
-        assert_eq!(*got_b.lock().unwrap(), [PageEvent::Closed { message: "moved".into() }]);
+        assert_eq!(*got_b.locked(), [PageEvent::Closed { message: "moved".into() }]);
         assert!(!ended(pid_a));
         assert_eq!(pages.len(), 1);
 
         pages.close_all("signed out");
         until("a's ssh ends", || ended(pid_a)).await;
-        assert_eq!(*got_a.lock().unwrap(), [PageEvent::Closed { message: "signed out".into() }]);
+        assert_eq!(*got_a.locked(), [PageEvent::Closed { message: "signed out".into() }]);
         assert!(pages.is_empty());
     }
 

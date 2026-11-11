@@ -1,5 +1,6 @@
 //! Its own test binary, because the proxy variables are read for the whole process.
 
+use hermes_chat::lock::Locked;
 use hermes_chat::transport;
 use reqwest::header::HeaderMap;
 use std::sync::{Arc, Mutex};
@@ -18,7 +19,7 @@ async fn recording() -> (u16, Arc<Mutex<Vec<String>>>) {
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 16384];
                 let n = s.read(&mut buf).await.unwrap_or(0);
-                kept.lock().unwrap().push(String::from_utf8_lossy(&buf[..n]).into_owned());
+                kept.locked().push(String::from_utf8_lossy(&buf[..n]).into_owned());
                 let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await;
             });
         }
@@ -48,12 +49,12 @@ async fn a_proxy_in_the_environment_never_sees_a_dashboard_request() {
         .send()
         .await;
     assert!(sign_in.is_ok(), "the sign-in reached the tunnel: {sign_in:?}");
-    let to_proxy = proxy.lock().unwrap().clone();
+    let to_proxy = proxy.locked().clone();
     assert!(to_proxy.is_empty(), "the proxy saw the sign-in: {to_proxy:?}");
-    assert!(dashboard.lock().unwrap().iter().any(|r| r.contains("correct-horse-battery-staple")), "the tunnel got the sign-in");
+    assert!(dashboard.locked().iter().any(|r| r.contains("correct-horse-battery-staple")), "the tunnel got the sign-in");
 
     let _ = http.get("http://hermes.invalid/api/status").timeout(Duration::from_secs(5)).send().await;
 
-    let seen = proxy.lock().unwrap().clone();
+    let seen = proxy.locked().clone();
     assert!(seen.is_empty(), "the proxy saw dashboard requests: {seen:?}");
 }

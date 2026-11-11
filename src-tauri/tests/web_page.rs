@@ -7,6 +7,7 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::Router;
+use hermes_chat::lock::Locked;
 use hermes_chat::web_page::{self, Framing};
 use std::sync::{Arc, Mutex};
 
@@ -23,7 +24,7 @@ async fn site() -> (String, Arc<Mutex<Vec<HeaderMap>>>) {
         .layer(axum::middleware::from_fn(move |req: axum::extract::Request, next: axum::middleware::Next| {
             let log = log.clone();
             async move {
-                log.lock().unwrap().push(req.headers().clone());
+                log.locked().push(req.headers().clone());
                 Ok::<Response, std::convert::Infallible>(next.run(req).await.into_response())
             }
         }));
@@ -51,7 +52,7 @@ async fn says_a_site_refuses_when_its_answer_does() {
     assert_eq!(check("/gone").await.unwrap(), Framing::NotRefused);
 
     // It asks the way a cross-site frame does, with the webview's user agent and no cookies.
-    let first = seen.lock().unwrap()[0].clone();
+    let first = seen.locked()[0].clone();
     assert_eq!(first["sec-fetch-dest"], "iframe");
     assert_eq!(first["sec-fetch-site"], "cross-site");
     assert_eq!(first[header::USER_AGENT], UA);

@@ -236,7 +236,8 @@ mod desktop {
 #[cfg(windows)]
 mod desktop {
     use super::Clickable;
-    use std::sync::{Mutex, PoisonError};
+    use crate::lock::Locked;
+    use std::sync::Mutex;
     use std::time::Instant;
     use tauri::AppHandle;
     use windows::core::HSTRING;
@@ -266,7 +267,7 @@ mod desktop {
         }))?;
         let id = if tauri::is_dev() { DEV_APP_ID.to_owned() } else { app.config().identifier.clone() };
         ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(id))?.Show(&toast)?;
-        SHOWN.lock().unwrap_or_else(PoisonError::into_inner).add(Instant::now(), toast);
+        SHOWN.locked().add(Instant::now(), toast);
         Ok(())
     }
 }

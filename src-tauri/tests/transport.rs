@@ -11,6 +11,7 @@ use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use hermes_chat::connect_steps::{Step, Steps};
 use hermes_chat::display;
+use hermes_chat::lock::Locked;
 use hermes_chat::transport::{self, Credential, Dashboard, ExtraHeader, LocalFile, PipeEvent, SignIn, StepLimits, TransportError};
 use hermes_chat::transport::{ProbeFailure, SavedKey, Stage};
 use serde_json::{json, Value};
@@ -101,7 +102,7 @@ static SAVED_KEYS: Mutex<Vec<(String, Value)>> = Mutex::new(Vec::new());
 static REMOVED_KEYS: Mutex<Vec<(String, Value)>> = Mutex::new(Vec::new());
 
 fn removed_for(profile: &str) -> Vec<Value> {
-    REMOVED_KEYS.lock().unwrap().iter().filter(|(q, _)| q == &format!("profile={profile}")).map(|(_, b)| b.clone()).collect()
+    REMOVED_KEYS.locked().iter().filter(|(q, _)| q == &format!("profile={profile}")).map(|(_, b)| b.clone()).collect()
 }
 
 /// `GET /api/env`, trimmed: a provider key that is not set, one that is set until a `DELETE` removes it (and is never
@@ -111,7 +112,7 @@ async fn env_rows(headers: HeaderMap, RawQuery(query): RawQuery) -> Response {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let query = query.unwrap_or_default();
-    let anthropic_set = query != "profile=keys-gone" && !REMOVED_KEYS.lock().unwrap().iter().any(|(q, _)| q == &query);
+    let anthropic_set = query != "profile=keys-gone" && !REMOVED_KEYS.locked().iter().any(|(q, _)| q == &query);
     Json(json!({
         "OPENROUTER_API_KEY": {"is_set": false, "provider": "openrouter", "is_password": true, "channel_managed": false},
         "ANTHROPIC_API_KEY": {"is_set": anthropic_set, "provider": "anthropic", "is_password": true, "channel_managed": false},
@@ -126,7 +127,7 @@ async fn save_env(RawQuery(query): RawQuery, Json(body): Json<Value>) -> Respons
     if body["value"].as_str().is_some_and(|v| v.starts_with("sk-echo")) {
         return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"detail": [{"msg": "bad", "input": body}]}))).into_response();
     }
-    SAVED_KEYS.lock().unwrap().push((query.unwrap_or_default(), body));
+    SAVED_KEYS.locked().push((query.unwrap_or_default(), body));
     Json(json!({"ok": true})).into_response()
 }
 
@@ -139,7 +140,7 @@ async fn delete_env(RawQuery(query): RawQuery, Json(body): Json<Value>) -> Respo
         }
         "profile=keys-stuck" => Json(json!({"ok": true})).into_response(),
         _ => {
-            REMOVED_KEYS.lock().unwrap().push((query, body));
+            REMOVED_KEYS.locked().push((query, body));
             Json(json!({"ok": true})).into_response()
         }
     }
@@ -211,7 +212,7 @@ async fn upload_stream(State(uploads): State<Arc<Mutex<Vec<String>>>>, headers: 
             _ => {}
         }
     }
-    uploads.lock().unwrap().push(path.clone());
+    uploads.locked().push(path.clone());
     if path == "/srv/taken.txt" && overwrite == "false" {
         return (StatusCode::CONFLICT, Json(json!({"detail": "File already exists"}))).into_response();
     }
@@ -521,7 +522,7 @@ type Seen = Arc<Mutex<Vec<(String, Option<String>)>>>;
 /// Notes every request in `seen`, then refuses any without the Cloudflare Access service token, as Access would.
 async fn access_gate(State(seen): State<Seen>, req: Request, next: Next) -> Response {
     let (id, secret) = (header_of(&req, "cf-access-client-id"), header_of(&req, "cf-access-client-secret"));
-    seen.lock().unwrap().push((req.uri().path().to_owned(), secret.clone()));
+    seen.locked().push((req.uri().path().to_owned(), secret.clone()));
     if id.as_deref() == Some("id.access") && secret.as_deref() == Some("s3cret") {
         next.run(req).await
     } else {
@@ -538,7 +539,7 @@ async fn other_site() -> (Url, Seen) {
 
 async fn note(State(seen): State<Seen>, req: Request, next: Next) -> Response {
     let secret = header_of(&req, "cf-access-client-secret");
-    seen.lock().unwrap().push((req.uri().path().to_owned(), secret));
+    seen.locked().push((req.uri().path().to_owned(), secret));
     next.run(req).await
 }
 
@@ -1550,7 +1551,7 @@ async fn a_connection_test_gives_up_on_a_port_that_never_answers() {
 }
 
 fn saved_for(profile: &str) -> Vec<Value> {
-    SAVED_KEYS.lock().unwrap().iter().filter(|(q, _)| q == &format!("profile={profile}")).map(|(_, b)| b.clone()).collect()
+    SAVED_KEYS.locked().iter().filter(|(q, _)| q == &format!("profile={profile}")).map(|(_, b)| b.clone()).collect()
 }
 
 #[tokio::test]
@@ -1641,7 +1642,7 @@ async fn a_provider_key_removal_never_follows_a_redirect_to_another_site() {
     let dashboard = sign_in_at(&serve(app).await, &sign_in("hunter2")).await.unwrap();
     let err = dashboard.remove_provider_key("default", "ANTHROPIC_API_KEY").await.unwrap_err();
     assert!(matches!(err, TransportError::Redirected(_)), "{err:?}");
-    assert!(other.lock().unwrap().is_empty(), "the request went to another site");
+    assert!(other.locked().is_empty(), "the request went to another site");
 }
 
 #[tokio::test]
@@ -1939,7 +1940,7 @@ async fn voice_requests_carry_the_gate_headers_too() {
     dashboard.transcribe("default", "audio/wav", b"RIFF").await.unwrap();
     dashboard.speak("default", "Hello").await.unwrap();
     assert!(dashboard.voice_setup("default").await.unwrap().speak);
-    let seen = seen.lock().unwrap();
+    let seen = seen.locked();
     let mut paths: Vec<&str> = seen.iter().map(|(path, _)| path.as_str()).collect();
     // The voice set-up's three requests go at once, in any order.
     paths[3..].sort_unstable();
@@ -1963,7 +1964,7 @@ async fn voice_redirects_to_another_origin_stop_without_sending_credentials_or_a
         assert!(matches!(&err, TransportError::Redirected(to) if *to == elsewhere.origin().ascii_serialization()), "{err:?}");
         assert!(!err.to_string().contains("s3cret"));
     }
-    assert!(other_seen.lock().unwrap().is_empty());
+    assert!(other_seen.locked().is_empty());
 }
 
 #[tokio::test]
@@ -1994,7 +1995,7 @@ async fn extra_headers_go_with_the_sign_in_rest_calls_and_the_socket() {
     assert_eq!(frame(next(&mut rx).await)["params"]["type"], "gateway.ready");
     assert_eq!(get_json(&dashboard, "api/sessions?order=recent").await["query"], "order=recent");
 
-    let seen = seen.lock().unwrap().clone();
+    let seen = seen.locked().clone();
     let paths: Vec<&str> = seen.iter().map(|(p, _)| p.as_str()).collect();
     assert_eq!(paths, ["/auth/password-login", "/api/auth/ws-ticket", "/api/ws", "/api/sessions"]);
     assert!(seen.iter().all(|(_, secret)| secret.as_deref() == Some("s3cret")), "{seen:?}");
@@ -2019,7 +2020,7 @@ async fn extra_headers_follow_a_redirect_within_the_dashboard_only() {
     let origin = elsewhere.origin().ascii_serialization();
     assert!(matches!(&err, TransportError::Redirected(to) if *to == origin), "{err:?}");
     assert!(!err.to_string().contains("s3cret"));
-    assert!(other_seen.lock().unwrap().is_empty(), "the other site was asked: {:?}", other_seen.lock().unwrap());
+    assert!(other_seen.locked().is_empty(), "the other site was asked: {:?}", other_seen.locked());
 }
 
 #[tokio::test]
@@ -2030,7 +2031,7 @@ async fn a_sign_in_redirected_to_another_site_stops_there() {
     let base = serve(Router::new().route("/auth/password-login", post(move || async move { Redirect::to(&login) }))).await;
     let err = sign_in_at(&base, &access_sign_in()).await.err().unwrap();
     assert!(matches!(err, TransportError::Redirected(_)), "{err:?}");
-    assert!(other_seen.lock().unwrap().is_empty());
+    assert!(other_seen.locked().is_empty());
 }
 
 #[tokio::test]
@@ -2054,7 +2055,7 @@ async fn a_password_never_follows_a_cross_origin_307_or_308_without_extra_header
         .await;
         let err = sign_in_at(&base, &sign_in("hunter2")).await.err().unwrap();
         assert!(matches!(err, TransportError::Redirected(_)), "{err:?}");
-        assert!(other_seen.lock().unwrap().is_empty(), "the password reached another origin");
+        assert!(other_seen.locked().is_empty(), "the password reached another origin");
     }
 }
 
@@ -2176,7 +2177,7 @@ async fn a_connection_test_sends_the_extra_headers_on_every_request() {
     let (elsewhere, _) = other_site().await;
     let (base, seen) = gated_stub(&elsewhere).await;
     transport::probe(&base, &access_sign_in(), "default").await.expect("test passes through the gate");
-    let seen = seen.lock().unwrap();
+    let seen = seen.locked();
     let paths: Vec<_> = seen.iter().map(|(p, _)| p.as_str()).collect();
     assert!(["/api/status", "/auth/password-login", "/api/ws"].iter().all(|p| paths.contains(p)), "{paths:?}");
     assert!(seen.iter().all(|(_, secret)| secret.as_deref() == Some("s3cret")), "{seen:?}");
@@ -2190,7 +2191,7 @@ async fn a_connection_test_stops_at_a_redirect_to_another_site() {
     let failed = transport::probe(&serve(app).await, &access_sign_in(), "default").await.unwrap_err();
     assert_eq!(failed.stage, Stage::Reach);
     assert!(failed.message.contains("another site"), "{}", failed.message);
-    assert!(other.lock().unwrap().is_empty());
+    assert!(other.locked().is_empty());
 }
 
 #[tokio::test]
@@ -2201,7 +2202,7 @@ async fn a_connection_test_stops_where_a_gateway_turns_it_away() {
     assert_eq!(failed.stage, Stage::Reach);
     assert!(failed.message.contains("answered 403"), "{}", failed.message);
     // It went no further: the password was never sent.
-    assert_eq!(seen.lock().unwrap().iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(), ["/api/status"]);
+    assert_eq!(seen.locked().iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(), ["/api/status"]);
 }
 
 #[tokio::test]
@@ -2216,7 +2217,7 @@ async fn a_provider_key_never_follows_a_redirect_to_another_site() {
     let dashboard = sign_in_at(&serve(app).await, &sign_in("hunter2")).await.unwrap();
     let err = dashboard.save_provider_key("default", "OPENROUTER_API_KEY", "sk-good").await.unwrap_err().to_string();
     assert!(err.contains("307") && !err.contains("sk-good"), "{err}");
-    assert!(other.lock().unwrap().is_empty(), "the key went to another site");
+    assert!(other.locked().is_empty(), "the key went to another site");
 }
 
 #[tokio::test]
@@ -2399,7 +2400,7 @@ async fn downloads_a_server_file_in_place_of_the_destination_and_reports_progres
     let dest = dir.join("data.bin");
     std::fs::write(&dest, "the owner's older copy").unwrap();
     let seen = Mutex::new(Vec::new());
-    let n = dashboard.download("/srv/data.bin", &dest, |done, total| seen.lock().unwrap().push((done, total))).await.expect("downloaded");
+    let n = dashboard.download("/srv/data.bin", &dest, |done, total| seen.locked().push((done, total))).await.expect("downloaded");
     assert_eq!(n, 300_000);
     let got = std::fs::read(&dest).unwrap();
     assert_eq!(got, (0..300_000u32).map(|i| (i % 251) as u8).collect::<Vec<u8>>());
@@ -2492,7 +2493,7 @@ async fn a_download_never_takes_over_a_file_already_named_like_its_part_file() {
 /// `{path, content}`. It answers with what it got, as Hermes answers `{ok, path, byteSize}`.
 async fn fs_write_text(State(writes): State<Arc<Mutex<Vec<String>>>>, headers: HeaderMap, RawQuery(query): RawQuery, Json(body): Json<Value>) -> Response {
     let path = body["path"].as_str().unwrap_or_default().to_owned();
-    writes.lock().unwrap().push(path.clone());
+    writes.locked().push(path.clone());
     if path == "/srv/readonly.md" {
         return (StatusCode::FORBIDDEN, Json(json!({"detail": "File is not writable"}))).into_response();
     }
@@ -2517,7 +2518,7 @@ async fn writes_an_artifacts_text_where_the_profiles_tools_run() {
     assert_eq!(got["byteSize"], text.len());
     assert_eq!(got["query"], "profile=work+two");
     assert_eq!(got["cookie"], "hermes_session_at=AT; hermes_session_rt=RT");
-    assert_eq!(*writes.lock().unwrap(), vec!["/srv/out/plan.md".to_owned()]);
+    assert_eq!(*writes.locked(), vec!["/srv/out/plan.md".to_owned()]);
     // A path under the home folder is the tools' own form too.
     dashboard.write_agent_text("default", "~/notes/todo.txt", "x", None).await.expect("a home path is sent");
 }
@@ -2546,7 +2547,7 @@ async fn an_artifact_write_refuses_credential_files_odd_paths_and_too_much_text(
     let big = "x".repeat(transport::AGENT_TEXT_MAX_BYTES as usize + 1);
     let err = dashboard.write_agent_text("default", "/srv/big.md", &big, None).await.err().unwrap();
     assert!(matches!(err, TransportError::FileTooLarge { .. }), "{err:?}");
-    assert!(writes.lock().unwrap().is_empty(), "nothing reached the server");
+    assert!(writes.locked().is_empty(), "nothing reached the server");
     let err = dashboard.write_agent_text("default", "/srv/readonly.md", "x", None).await.err().unwrap();
     assert!(matches!(&err, TransportError::Unexpected { status: 403, body } if body.contains("not writable")), "{err:?}");
 }
@@ -2558,7 +2559,7 @@ async fn the_generic_relay_still_refuses_writes_to_the_agent_fs_routes() {
         let err = dashboard.request("POST", path, Some(r#"{"path":"/srv/x.md","content":"x"}"#.into())).await.err().unwrap();
         assert!(matches!(err, TransportError::NotRelayed(_)), "{path}: {err:?}");
     }
-    assert!(writes.lock().unwrap().is_empty());
+    assert!(writes.locked().is_empty());
 }
 
 /// A stub dashboard with only sign-in and the upload route, and the server paths it was sent.
@@ -2579,7 +2580,7 @@ async fn uploads_a_local_file_as_hermes_takes_it_and_reports_progress() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let s = seen.clone();
     let got = dashboard
-        .upload("/srv/in/report.pdf", transport::UploadSource::File(local.clone()), false, move |done, total| s.lock().unwrap().push((done, total)))
+        .upload("/srv/in/report.pdf", transport::UploadSource::File(local.clone()), false, move |done, total| s.locked().push((done, total)))
         .await
         .expect("uploaded");
     let got: Value = serde_json::from_str(&got).unwrap();
@@ -2589,7 +2590,7 @@ async fn uploads_a_local_file_as_hermes_takes_it_and_reports_progress() {
     assert_eq!(got["size"], 700_000);
     assert_eq!(got["sum"], bytes.iter().map(|&b| b as u64).sum::<u64>());
     assert_eq!(got["cookie"], "hermes_session_at=AT; hermes_session_rt=RT");
-    let seen = seen.lock().unwrap();
+    let seen = seen.locked();
     assert_eq!(seen.first(), Some(&(0, Some(700_000))));
     assert_eq!(seen.last(), Some(&(700_000, Some(700_000))));
 }
@@ -2632,7 +2633,7 @@ async fn never_uploads_to_a_credential_file_or_more_than_hermes_takes() {
     std::fs::File::create(&big).unwrap().set_len(transport::MANAGED_FILE_MAX_BYTES + 1).unwrap();
     let err = dashboard.upload("/srv/big", transport::UploadSource::File(big.clone()), true, |_, _| {}).await.err().unwrap();
     assert!(matches!(err, TransportError::FileTooLarge { .. }), "{err:?}");
-    assert!(uploads.lock().unwrap().is_empty(), "nothing was sent");
+    assert!(uploads.locked().is_empty(), "nothing was sent");
     // Names that only look alike go.
     for path in ["/srv/env", "/srv/my.env", "/srv/config.yml", "/srv/pairings/x"] {
         dashboard.upload(path, transport::UploadSource::File(local.clone()), true, |_, _| {}).await.expect(path);
@@ -2650,7 +2651,7 @@ async fn saves_an_edits_text_through_the_upload_route() {
     assert_eq!(got["overwrite"], "true");
     let err = dashboard.upload("/srv/.env", transport::UploadSource::Bytes(b"X=1".to_vec()), true, |_, _| {}).await.err().unwrap();
     assert!(matches!(err, TransportError::NotRelayed(_)), "{err:?}");
-    assert_eq!(uploads.lock().unwrap().as_slice(), ["/srv/notes.md"]);
+    assert_eq!(uploads.locked().as_slice(), ["/srv/notes.md"]);
 }
 
 // ── Routes: same-server check and plain http (ADR 0120) ─────────────────────────────────────────────────────────
@@ -2671,7 +2672,7 @@ async fn installed(install: &'static str) -> (Url, Arc<Mutex<u32>>) {
             let counted = counted.clone();
             async move {
                 if req.uri().path() == "/auth/password-login" {
-                    *counted.lock().unwrap() += 1;
+                    *counted.locked() += 1;
                 }
                 next.run(req).await
             }
@@ -2703,7 +2704,7 @@ async fn reading_the_server_needs_no_sign_in_and_names_its_install() {
     let seen = transport::read_server(&transport::client(&HeaderMap::new()).unwrap(), &base, &HeaderMap::new(), None, Duration::from_secs(5)).await.unwrap();
     assert_eq!(seen.server, Some(transport::server_id("install-home")));
     assert!(seen.status.contains("0.22.5"));
-    assert_eq!(*logins.lock().unwrap(), 0);
+    assert_eq!(*logins.locked(), 0);
     let wrong = transport::read_server(
         &transport::client(&HeaderMap::new()).unwrap(),
         &base,
@@ -2723,14 +2724,14 @@ async fn a_route_that_reaches_another_server_never_gets_the_password() {
         transport::probe_expecting(&base, &sign_in("hunter2"), "default", Duration::from_secs(5), Duration::from_secs(5), Some(&expect)).await.unwrap_err();
     assert_eq!(failed.stage, Stage::Reach);
     assert!(failed.message.starts_with("Wrong server:"), "{}", failed.message);
-    assert_eq!(*logins.lock().unwrap(), 0, "the password went out");
+    assert_eq!(*logins.locked(), 0, "the password went out");
 
     // The same server passes, and the test says which it was.
     let (home, logins) = installed("install-home").await;
     let probed =
         transport::probe_expecting(&home, &sign_in("hunter2"), "default", Duration::from_secs(5), Duration::from_secs(5), Some(&expect)).await.unwrap();
     assert_eq!(probed.server, Some(expect));
-    assert_eq!(*logins.lock().unwrap(), 1);
+    assert_eq!(*logins.locked(), 1);
 }
 
 /// A dashboard-like server whose `/api/status` answers `status` (none: no such route, a 404), counting the sign-ins
@@ -2746,7 +2747,7 @@ async fn without_status(status: Option<StatusCode>) -> (Url, Arc<Mutex<u32>>) {
         let counted = counted.clone();
         async move {
             if req.uri().path() == "/auth/password-login" {
-                *counted.lock().unwrap() += 1;
+                *counted.locked() += 1;
             }
             next.run(req).await
         }
@@ -2768,7 +2769,7 @@ async fn a_route_whose_status_is_not_a_hermes_answer_never_gets_the_password() {
             let reached = transport::read_server(&transport::client(&HeaderMap::new()).unwrap(), &base, &HeaderMap::new(), expect, wait).await;
             assert!(reached.is_err(), "{status:?}, {expect:?}: the route counted as reached");
         }
-        assert_eq!(*logins.lock().unwrap(), 0, "{status:?}: the password went out");
+        assert_eq!(*logins.locked(), 0, "{status:?}: the password went out");
     }
     // No status at all is the wrong server; a server error keeps its own words, as the dashboard may be failing.
     let (base, _) = without_status(None).await;
@@ -2808,14 +2809,14 @@ async fn something_that_isnt_hermes_never_gets_the_password() {
     let app = Router::new().route("/api/status", get(|| async { "<html>Router admin</html>" })).route(
         "/auth/password-login",
         post(move || async move {
-            *counted.lock().unwrap() += 1;
+            *counted.locked() += 1;
             StatusCode::NOT_FOUND
         }),
     );
     let failed = transport::probe(&serve(app).await, &sign_in("hunter2"), "default").await.unwrap_err();
     assert_eq!(failed.stage, Stage::Reach);
     assert!(failed.message.contains("isn't a Hermes dashboard"), "{}", failed.message);
-    assert_eq!(*logins.lock().unwrap(), 0);
+    assert_eq!(*logins.locked(), 0);
 }
 
 #[test]
@@ -2890,7 +2891,7 @@ type Heard = Arc<Mutex<Vec<(String, String, Option<String>)>>>;
 
 async fn hear(State(heard): State<Heard>, req: Request, next: Next) -> Response {
     let auth = header_of(&req, "authorization");
-    heard.lock().unwrap().push((req.uri().path().to_owned(), req.uri().query().unwrap_or("").to_owned(), auth));
+    heard.locked().push((req.uri().path().to_owned(), req.uri().query().unwrap_or("").to_owned(), auth));
     next.run(req).await
 }
 
@@ -2964,7 +2965,7 @@ async fn a_token_signs_in_as_a_bearer_and_opens_the_socket_with_a_ticket_only() 
         .await
         .expect("pipe open");
     assert_eq!(frame(next(&mut rx).await)["params"]["type"], "gateway.ready");
-    let heard = heard.lock().unwrap().clone();
+    let heard = heard.locked().clone();
     let by_path = |p: &str| heard.iter().find(|(path, ..)| path == p).cloned().unwrap_or_else(|| panic!("no {p} in {heard:?}"));
     assert_eq!(by_path("/api/auth/me").2.as_deref(), Some("Bearer GOOD"));
     assert_eq!(by_path("/api/sessions").2.as_deref(), Some("Bearer GOOD"));
@@ -3004,7 +3005,7 @@ async fn a_token_isnt_sent_when_extra_headers_set_authorization() {
     let err = sign_in_at(&base, &SignIn { credential: Credential::Token("GOOD".into()), headers }).await.err().unwrap();
     assert!(matches!(err, TransportError::AuthorizationHeaderSet), "{err:?}");
     assert!(err.to_string().contains("Authorization"), "{err}");
-    assert!(heard.lock().unwrap().is_empty());
+    assert!(heard.locked().is_empty());
 }
 
 #[tokio::test]
@@ -3013,7 +3014,7 @@ async fn a_token_goes_only_to_a_server_that_lists_the_session_token_provider() {
     let failed = transport::probe_with(&base, &token("GOOD"), "default", Duration::from_secs(5)).await.unwrap_err();
     assert_eq!(failed.stage, Stage::SignIn);
     assert!(failed.message.starts_with("This Hermes server doesn't take a token"), "{}", failed.message);
-    assert!(heard.lock().unwrap().iter().all(|(_, _, auth)| auth.is_none()), "{:?}", heard.lock().unwrap());
+    assert!(heard.locked().iter().all(|(_, _, auth)| auth.is_none()), "{:?}", heard.locked());
     assert!(transport::offered(&token("GOOD"), None).is_ok(), "an unread status doesn't stop it; /api/auth/me checks the token");
     assert!(transport::offered(&sign_in("hunter2"), Some(r#"{"auth_providers":["session-token"]}"#)).is_ok());
 
@@ -3029,7 +3030,7 @@ async fn a_token_never_follows_a_redirect_to_another_site() {
     let dashboard = sign_in_at(&base, &token("GOOD")).await.expect("signed in");
     let err = dashboard.request("GET", "api/away", None).await.unwrap_err();
     assert!(err.to_string().contains("another site"), "{err}");
-    assert!(seen.lock().unwrap().is_empty(), "{:?}", seen.lock().unwrap());
+    assert!(seen.locked().is_empty(), "{:?}", seen.locked());
 }
 
 #[tokio::test]
@@ -3041,7 +3042,7 @@ async fn a_password_goes_to_the_provider_hermes_listed() {
         post(move |Json(body): Json<Value>| {
             let kept = kept.clone();
             async move {
-                kept.lock().unwrap().push(body);
+                kept.locked().push(body);
                 Json(json!({"ok": true}))
             }
         }),
@@ -3053,7 +3054,7 @@ async fn a_password_goes_to_the_provider_hermes_listed() {
     };
     sign_in_at(&base, &with("team-sso")).await.expect("signed in");
     sign_in_at(&base, &with("../evil")).await.expect("signed in");
-    let providers: Vec<Value> = logins.lock().unwrap().iter().map(|b| b["provider"].clone()).collect();
+    let providers: Vec<Value> = logins.locked().iter().map(|b| b["provider"].clone()).collect();
     assert_eq!(providers, vec![json!("team-sso"), json!("basic")]);
 }
 
@@ -3156,9 +3157,9 @@ async fn open_route_reporting(
 async fn steps_said(base: &Url) -> (Vec<Step>, bool) {
     let said = Arc::new(Mutex::new(Vec::new()));
     let to = said.clone();
-    let steps = Steps::reporting(move |s| to.lock().unwrap().push(s.step));
+    let steps = Steps::reporting(move |s| to.locked().push(s.step));
     let opened = tokio::time::timeout(GIVE_UP, open_route_reporting(base, Some(SHORT), &steps, |_| {})).await.expect("gave up in time").is_ok();
-    let said = said.lock().unwrap().clone();
+    let said = said.locked().clone();
     (said, opened)
 }
 
@@ -3295,7 +3296,7 @@ async fn accounts_stub() -> (Dashboard, Bodies) {
     let bodies = Bodies::default();
     let keep = |bodies: Bodies| {
         move |axum::extract::OriginalUri(uri): axum::extract::OriginalUri, Json(body): Json<Value>| async move {
-            bodies.lock().unwrap().push((uri.to_string(), body.clone()));
+            bodies.locked().push((uri.to_string(), body.clone()));
             body
         }
     };
@@ -3387,7 +3388,7 @@ async fn an_endpoint_is_checked_then_saved_with_the_models_found() {
     let (dashboard, bodies) = accounts_stub().await;
     let saved = dashboard.save_endpoint("work", &endpoint_form("Ollama", "http://ollama:11434/v1/", "", Some(" sk-local ")), false).await.unwrap();
     assert_eq!(saved, transport::EndpointSave::Saved { id: "ollama".into(), checked: true });
-    let bodies = bodies.lock().unwrap();
+    let bodies = bodies.locked();
     assert_eq!(bodies[0].0, "/api/providers/custom-endpoints/validate");
     assert_eq!(bodies[1].0, "/api/providers/custom-endpoints?profile=work");
     assert_eq!(
@@ -3400,7 +3401,7 @@ async fn an_endpoint_is_checked_then_saved_with_the_models_found() {
 async fn an_endpoint_is_saved_at_the_address_that_served_its_models_and_without_a_key_clears_one() {
     let (dashboard, bodies) = accounts_stub().await;
     dashboard.save_endpoint("work", &endpoint_form("Ollama", "http://ollama:11434", "", None), false).await.unwrap();
-    let bodies = bodies.lock().unwrap();
+    let bodies = bodies.locked();
     assert_eq!(bodies[1].1, json!({"name": "Ollama", "base_url": "http://ollama:11434/v1", "model": "qwen3:8b", "api_key": "", "models": ["qwen3:8b"]}));
 }
 
@@ -3410,7 +3411,7 @@ async fn an_endpoint_that_fails_the_check_isnt_saved_unless_asked_and_the_key_is
     let form = endpoint_form("Groq", "https://api.groq.com/openai/v1", "llama-3.3-70b", Some("gsk_secret"));
     let refused = dashboard.save_endpoint("work", &form, false).await.unwrap();
     assert_eq!(refused, transport::EndpointSave::CheckFailed { message: "The endpoint rejected the API key (the key).".into() });
-    assert_eq!(bodies.lock().unwrap().len(), 1, "only the check went out");
+    assert_eq!(bodies.locked().len(), 1, "only the check went out");
     let saved = dashboard.save_endpoint("work", &form, true).await.unwrap();
     assert_eq!(saved, transport::EndpointSave::Saved { id: "groq".into(), checked: false });
 }
@@ -3420,10 +3421,10 @@ async fn an_endpoint_without_a_model_needs_one_named_when_hermes_finds_none() {
     let (dashboard, bodies) = accounts_stub().await;
     let err = dashboard.save_endpoint("work", &endpoint_form("Empty", "http://empty:8000/v1", "", None), true).await.unwrap_err();
     assert!(matches!(&err, TransportError::Endpoint(m) if m.contains("model")), "{err:?}");
-    assert_eq!(bodies.lock().unwrap().len(), 1, "nothing was saved");
+    assert_eq!(bodies.locked().len(), 1, "nothing was saved");
     let refused = dashboard.save_endpoint("work", &endpoint_form("", "http://ollama:11434/v1", "", None), false).await.unwrap_err();
     assert!(matches!(refused, TransportError::Endpoint(_)), "{refused:?}");
-    assert_eq!(bodies.lock().unwrap().len(), 1, "a bad form sends nothing");
+    assert_eq!(bodies.locked().len(), 1, "a bad form sends nothing");
 }
 
 #[tokio::test]
@@ -3476,7 +3477,7 @@ async fn an_endpoint_id_that_is_a_dot_segment_once_decoded_is_refused_before_it_
         let err = dashboard.request("POST", &path, Some("{}".into())).await.unwrap_err();
         assert!(matches!(err, TransportError::NotRelayed(_)), "POST {path}: {err:?}");
     }
-    assert!(bodies.lock().unwrap().is_empty(), "nothing reached the server");
+    assert!(bodies.locked().is_empty(), "nothing reached the server");
 }
 
 #[tokio::test]

@@ -13,6 +13,7 @@
 //! sends everything still attached to it a close event, which is that platform's hangup.
 
 use crate::backlog::Backlog;
+use crate::lock::Locked;
 use base64::Engine;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -179,15 +180,15 @@ impl Terminals {
             }
         });
 
-        let mut next = self.next.lock().unwrap();
+        let mut next = self.next.locked();
         *next += 1;
-        self.open.lock().unwrap().insert(*next, Session { master, input, waiting, kill: Some(kill) });
+        self.open.locked().insert(*next, Session { master, input, waiting, kill: Some(kill) });
         Ok(*next)
     }
 
     /// Sends what the owner typed or pasted to terminal `id`, without waiting for the program to read it.
     pub fn write(&self, id: u64, data: &[u8]) -> Result<(), TerminalError> {
-        let open = self.open.lock().unwrap();
+        let open = self.open.locked();
         let session = open.get(&id).filter(|s| !s.input.is_closed()).ok_or(TerminalError::Gone)?;
         if !session.waiting.take(data.len()) {
             return Err(TerminalError::NotTakingInput);
@@ -197,13 +198,13 @@ impl Terminals {
 
     /// Tells terminal `id`, and so the shell on the server, its new size.
     pub fn resize(&self, id: u64, cols: u16, rows: u16) -> Result<(), TerminalError> {
-        let master = self.open.lock().unwrap().get(&id).map(|s| s.master.clone()).ok_or(TerminalError::Gone)?;
+        let master = self.open.locked().get(&id).map(|s| s.master.clone()).ok_or(TerminalError::Gone)?;
         master.resize(cols, rows).map_err(|e| TerminalError::Pty(e.to_string()))
     }
 
     /// Ends terminal `id`'s ssh. Its Exit event still comes. Closing one that has gone does nothing.
     pub fn close(&self, id: u64) {
-        if let Some(mut s) = self.open.lock().unwrap().remove(&id) {
+        if let Some(mut s) = self.open.locked().remove(&id) {
             if let Some(kill) = s.kill.take() {
                 let _ = kill.send(());
             }
@@ -310,6 +311,7 @@ mod pty {
 #[cfg(windows)]
 mod pty {
     use super::{Started, TerminalError};
+    use crate::lock::Locked;
     use portable_pty::{CommandBuilder, MasterPty, PtySize};
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -326,13 +328,13 @@ mod pty {
 
     impl Master {
         pub fn write(&self, data: &[u8]) -> std::io::Result<()> {
-            let mut input = self.input.lock().unwrap();
+            let mut input = self.input.locked();
             input.write_all(data)?;
             input.flush()
         }
 
         pub fn resize(&self, cols: u16, rows: u16) -> std::io::Result<()> {
-            let console = self.console.lock().unwrap();
+            let console = self.console.locked();
             let console = console.as_ref().ok_or_else(|| std::io::Error::other("the terminal has closed"))?;
             console.resize(size(cols, rows)).map_err(|e| std::io::Error::other(e.to_string()))
         }
@@ -397,7 +399,7 @@ mod pty {
             let _ = done.send(());
             // ConPTY keeps the output open until the console closes: closing it now ends what else is still attached
             // to it, and then the reader.
-            drop(open.lock().unwrap().take());
+            drop(open.locked().take());
             let code = if closed.load(Ordering::SeqCst) { None } else { status.ok().map(|s| s.exit_code() as i32) };
             let _ = exited.send(code);
         });
