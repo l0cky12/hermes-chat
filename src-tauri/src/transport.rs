@@ -1925,16 +1925,17 @@ impl Dashboard {
                 continue;
             };
             let (name, value) = (name.trim(), value.trim());
+            let kept = !value.is_empty() && !expired(attributes);
             if let Some(at) = jar.live.iter().position(|(n, _)| n == name) {
                 let (_, old) = jar.live.remove(at);
-                if old != value {
+                if !(kept && old == value) {
                     if jar.replaced.len() == REPLACED_COOKIES_KEPT {
                         jar.replaced.pop_front();
                     }
                     jar.replaced.push_back(old);
                 }
             }
-            if !value.is_empty() && !expired(attributes) {
+            if kept {
                 jar.live.push((name.to_owned(), value.to_owned()));
             }
         }
@@ -4027,10 +4028,13 @@ mod tests {
         let app = axum::Router::new()
             .route("/api/set", axum::routing::get(|| async { AppendHeaders([("set-cookie", "hermes_session_at=at-0123456789abcdef; Path=/")]) }))
             .route("/api/rotate", axum::routing::get(leak("hermes_session_at=at-fedcba9876543210; Path=/")))
-            .route("/api/remove", axum::routing::get(leak("hermes_session_at=; Max-Age=0; Path=/")));
-        let dashboard = dashboard_at(&serve(app).await);
-        dashboard.request("GET", "api/set", None).await.unwrap();
-        for path in ["api/rotate", "api/remove"] {
+            .route("/api/remove", axum::routing::get(leak("hermes_session_at=; Max-Age=0; Path=/")))
+            .route("/api/expire", axum::routing::get(leak("hermes_session_at=at-0123456789abcdef; Max-Age=0; Path=/")))
+            .route("/api/expired", axum::routing::get(leak("hermes_session_at=at-0123456789abcdef; Expires=Thu, 01 Jan 1970 00:00:00 GMT")));
+        let url = serve(app).await;
+        for path in ["api/rotate", "api/remove", "api/expire", "api/expired"] {
+            let dashboard = dashboard_at(&url);
+            dashboard.request("GET", "api/set", None).await.unwrap();
             match dashboard.request("GET", path, None).await {
                 Err(TransportError::Unexpected { status: 500, body }) => assert_eq!(body, super::HIDDEN, "{path}"),
                 other => panic!("{path}: {other:?}"),
