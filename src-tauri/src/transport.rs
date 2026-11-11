@@ -104,6 +104,9 @@ pub enum TransportError {
     NotRelayed(String),
     #[error("it's {:.1} MB now, over the {} MB limit", *.size as f64 / MIB as f64, .max / MIB)]
     FileTooLarge { size: u64, max: u64 },
+    /// An answer past the most `read_body` reads of it; `size`: what was announced or read when it stopped.
+    #[error("The server's answer is over {}, the most Hermes Chat reads of one, so it wasn't read.", size_text(*.max))]
+    AnswerTooLarge { size: u64, max: u64 },
     #[error("{0}")]
     File(String),
     /// The provider turned down an API key the owner typed (`POST /api/providers/validate`).
@@ -573,7 +576,7 @@ async fn read_status(http: &reqwest::Client, base: &Url, headers: &HeaderMap) ->
     let resp = http.get(endpoint(base, "api/status")).send().await.map_err(unreachable)?;
     let status = resp.status();
     if status.is_success() {
-        return resp.text().await.map_err(unreachable);
+        return small_answer(resp).await;
     }
     let kept = matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) || status.is_server_error();
     Err(match unexpected(resp, headers).await {
@@ -771,7 +774,7 @@ pub async fn read_methods(base: &Url, headers: &HeaderMap, status: Option<&str>,
             if !resp.status().is_success() {
                 return None;
             }
-            resp.text().await.ok()
+            small_answer(resp).await.ok()
         };
         tokio::time::timeout(wait, read).await.ok().flatten()
     } else {
@@ -1382,7 +1385,7 @@ impl Dashboard {
                     StatusCode::TOO_MANY_REQUESTS => return Err(TransportError::RateLimited),
                     _ => return Err(unexpected(me, &dashboard.hide).await),
                 }
-                let me: serde_json::Value = me.json().await.map_err(unreachable)?;
+                let me = small_json(me).await?;
                 // Only a provider Hermes ships is named: anything else the server put there could be the token itself.
                 match me["provider"].as_str() {
                     Some(TOKEN_PROVIDER) => Ok(dashboard),
@@ -1432,7 +1435,7 @@ impl Dashboard {
         if !ticket.status().is_success() {
             return Err(unexpected(ticket, &self.hide).await);
         }
-        let ticket: serde_json::Value = ticket.json().await.map_err(unreachable)?;
+        let ticket = small_json(ticket).await?;
         ticket["ticket"].as_str().map(str::to_owned).ok_or_else(|| TransportError::Unexpected { status: 200, body: "ws-ticket response has no ticket".into() })
     }
 
@@ -1695,25 +1698,18 @@ impl Dashboard {
         if let Some(json) = json {
             req = req.json(json);
         }
-        let mut resp = unless_stalled(ANSWER_IDLE_LIMIT, req.send()).await?;
+        let resp = unless_stalled(ANSWER_IDLE_LIMIT, req.send()).await?;
         self.keep_cookies(&resp);
         match resp.status() {
             s if s.is_success() => {}
             StatusCode::UNAUTHORIZED => return Err(TransportError::SignedOut),
             _ => return Err(unexpected(resp, &self.hide).await),
         }
-        let too_large = |size| TransportError::FileTooLarge { size, max: max_bytes };
-        if let Some(size) = resp.content_length().filter(|&n| n > max_bytes) {
-            return Err(too_large(size));
-        }
-        let mut body = Vec::new();
-        while let Some(chunk) = unless_stalled(ANSWER_IDLE_LIMIT, resp.chunk()).await? {
-            body.extend_from_slice(&chunk);
-            if body.len() as u64 > max_bytes {
-                return Err(too_large(body.len() as u64));
-            }
-        }
-        Ok(body)
+        read_body(resp, max_bytes, ANSWER_IDLE_LIMIT).await.map_err(|e| match e {
+            // These answers are files, and Outputs tells one over its limit by `FileTooLarge`'s text.
+            TransportError::AnswerTooLarge { size, max } => TransportError::FileTooLarge { size, max },
+            e => e,
+        })
     }
 
     /// Downloads the Server file at `server_path` through the managed-files route `GET api/files/download` (ADR 0023)
@@ -1834,7 +1830,7 @@ impl Dashboard {
         let resp = self.signed(Method::POST, url).multipart(form).send().await.map_err(unreachable)?;
         self.keep_cookies(&resp);
         match resp.status() {
-            s if s.is_success() => resp.text().await.map_err(unreachable),
+            s if s.is_success() => small_answer(resp).await,
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
             _ => Err(unexpected(resp, &self.hide).await),
         }
@@ -2853,16 +2849,55 @@ fn is_session_list(path: &str) -> bool {
 /// base64 JSON (src/hermes/remoteFiles.ts).
 const RELAY_MAX_BYTES: u64 = 64 * MIB;
 
+/// `n` bytes as an error names a limit: in whole MB, or whole KB under one MB.
+fn size_text(n: u64) -> String {
+    if n >= MIB {
+        format!("{} MB", n / MIB)
+    } else {
+        format!("{} KB", n.div_ceil(1024))
+    }
+}
+
 async fn unless_stalled<T>(limit: Duration, step: impl std::future::Future<Output = reqwest::Result<T>>) -> Result<T, TransportError> {
     tokio::time::timeout(limit, step).await.map_err(|_| TransportError::Stalled(limit.as_secs()))?.map_err(unreachable)
 }
 
-async fn text_unless_stalled(mut resp: reqwest::Response, limit: Duration) -> Result<String, TransportError> {
-    let mut body = Vec::new();
-    while let Some(part) = unless_stalled(limit, resp.chunk()).await? {
-        body.extend_from_slice(&part);
+/// A whole answer's body, at most `max` bytes: refused as `AnswerTooLarge` once its announced length or the bytes read
+/// pass `max`, so a huge or endless body can't fill memory, and as `Stalled` once `idle` passes without a part of it.
+async fn read_body(mut resp: reqwest::Response, max: u64, idle: Duration) -> Result<Vec<u8>, TransportError> {
+    let too_large = |size| TransportError::AnswerTooLarge { size, max };
+    if let Some(size) = resp.content_length().filter(|&n| n > max) {
+        return Err(too_large(size));
     }
-    Ok(String::from_utf8_lossy(&body).into_owned())
+    let mut body = Vec::new();
+    while let Some(part) = unless_stalled(idle, resp.chunk()).await? {
+        body.extend_from_slice(&part);
+        if body.len() as u64 > max {
+            return Err(too_large(body.len() as u64));
+        }
+    }
+    Ok(body)
+}
+
+/// A relayed answer's text, up to `RELAY_MAX_BYTES`.
+async fn text_unless_stalled(resp: reqwest::Response, limit: Duration) -> Result<String, TransportError> {
+    Ok(String::from_utf8_lossy(&read_body(resp, RELAY_MAX_BYTES, limit).await?).into_owned())
+}
+
+/// The most read of an answer that is only ever a little JSON: `/api/status`, about a KB or two from a real dashboard
+/// and read before anything is known about the server, the sign-in providers, the token check, a socket ticket and an
+/// upload's answer.
+const SMALL_ANSWER_MAX_BYTES: u64 = 64 * 1024;
+
+/// A small answer's text (`SMALL_ANSWER_MAX_BYTES`).
+async fn small_answer(resp: reqwest::Response) -> Result<String, TransportError> {
+    Ok(String::from_utf8_lossy(&read_body(resp, SMALL_ANSWER_MAX_BYTES, ANSWER_IDLE_LIMIT).await?).into_owned())
+}
+
+/// A small answer as JSON.
+async fn small_json(resp: reqwest::Response) -> Result<serde_json::Value, TransportError> {
+    let status = resp.status().as_u16();
+    serde_json::from_str(&small_answer(resp).await?).map_err(|_| TransportError::Unexpected { status, body: "the answer isn't JSON".into() })
 }
 
 fn describe(e: &reqwest::Error) -> String {
@@ -3600,6 +3635,66 @@ mod tests {
             Ok(Err(TransportError::FileTooLarge { size, max })) => assert_eq!((size, max), (relay_max + 1, relay_max)),
             Ok(other) => panic!("{other:?}"),
             Err(_) => panic!("still reading an answer announced past the relay limit"),
+        }
+    }
+
+    /// A server that answers every request 200 with a body that never ends.
+    async fn endless() -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let mut request = [0u8; 4096];
+                    let _ = sock.read(&mut request).await;
+                    sock.write_all(b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n").await.unwrap();
+                    let chunk = format!("4000\r\n{}\r\n", "x".repeat(0x4000));
+                    while sock.write_all(chunk.as_bytes()).await.is_ok() {}
+                });
+            }
+        });
+        url
+    }
+
+    /// `/api/status` is read before anything is known about the server, so whatever answers at a mistyped address
+    /// mustn't fill memory: a real status is a KB or two, and past 64 KiB it is given up.
+    #[tokio::test]
+    async fn a_status_that_never_ends_is_given_up_past_64_kib() {
+        let base = url::Url::parse(&endless().await).unwrap();
+        let headers = super::HeaderMap::new();
+        let read = super::read_server(&super::client(&headers).unwrap(), &base, &headers, None, Duration::from_secs(5)).await;
+        match read {
+            Err(TransportError::AnswerTooLarge { size, max }) => {
+                assert_eq!(max, 64 * 1024);
+                assert!(size > max && size < max + 1024 * 1024, "{size}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The socket ticket's answer is a few words of JSON; one that never ends is given up past 64 KiB.
+    #[tokio::test]
+    async fn a_ticket_that_never_ends_is_given_up_past_64_kib() {
+        let dashboard = dashboard_at(&endless().await);
+        match tokio::time::timeout(Duration::from_secs(5), dashboard.ws_ticket()).await {
+            Ok(Err(TransportError::AnswerTooLarge { max, .. })) => assert_eq!(max, 64 * 1024),
+            Ok(other) => panic!("{other:?}"),
+            Err(_) => panic!("still reading a ticket that never ends"),
+        }
+    }
+
+    /// A relayed answer is read up to the relay's 64 MiB: one announced past it is refused before any of it is read.
+    #[tokio::test]
+    async fn a_relayed_answer_announced_past_64_mib_is_refused_unread() {
+        let relay_max: u64 = 64 * 1024 * 1024;
+        let url = answers_then_waits(format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n", relay_max + 1)).await;
+        let limit = Duration::from_secs(2);
+        let resp = unless_stalled(limit, reqwest::Client::new().get(url).send()).await.unwrap();
+        match text_unless_stalled(resp, limit).await {
+            Err(TransportError::AnswerTooLarge { size, max }) => assert_eq!((size, max), (relay_max + 1, relay_max)),
+            other => panic!("{other:?}"),
         }
     }
 }
