@@ -54,7 +54,7 @@ describe("The pane's address box", () => {
   });
 
   it("explains a relative path, a file:// address, and an empty box", () => {
-    expect(parseAddress("notes.md", APP)).toHaveProperty("error", expect.stringContaining("starting with / or ~/"));
+    expect(parseAddress("docs/notes.md", APP)).toHaveProperty("error", expect.stringContaining("starting with / or ~/"));
     expect(parseAddress("file:///home/liam/notes.md", APP)).toEqual({ error: "To preview a file on this computer, use Open a file on this computer." });
     expect(parseAddress("   ", APP)).toHaveProperty("error");
   });
@@ -127,6 +127,36 @@ describe("Pages on a loopback address (issue #171)", () => {
     expect(parseAddress("localhost:99999", APP)).toEqual({ error: "That isn't a web address." });
     expect(parseAddress("postgres://localhost:5432/db", APP)).toEqual({ error: "Only http:// and https:// pages open in the preview, and postgres: isn't a web address." });
     expect(parseAddress("localhostfoo:3000", APP)).toHaveProperty("error", expect.stringContaining("http://"));
+  });
+
+  it("tries a bare domain over https first, with http to fall back to (issue #441)", () => {
+    const upgraded = (typed: string, https: string) =>
+      expect(parseAddress(typed, APP), typed).toEqual({ target: { kind: "web", url: https, fallback: new URL(https.replace(/^https:/, "http:")).href } });
+    upgraded("example.com", "https://example.com/");
+    upgraded("docs.github.com/en", "https://docs.github.com/en");
+    upgraded("example.com/a?b#c", "https://example.com/a?b#c");
+    upgraded("sub.example.co.uk:8443", "https://sub.example.co.uk:8443/");
+    upgraded("notes.md", "https://notes.md/");
+    // A port typed with a bare domain is kept, the http default included, though `URL` drops it from the fallback.
+    upgraded("example.com:80/a", "https://example.com:80/a");
+    // A typed http:// domain too, as Chrome's HTTPS-Upgrades does, unless it names a port of its own.
+    upgraded("http://example.com/x", "https://example.com/x");
+    expect(parseAddress("http://example.com:8080/", APP)).toEqual({ target: { kind: "web", url: "http://example.com:8080/" } });
+    expect(parseAddress("http://example.com:80/", APP)).toEqual({ target: { kind: "web", url: "http://example.com/" } });
+    expect(parseAddress("https://example.com", APP)).toEqual({ target: { kind: "web", url: "https://example.com/" } });
+  });
+
+  it("keeps loopback, IP and single-word addresses on http, and refuses what isn't a host", () => {
+    expect(parseAddress("localhost:3000", APP)).toEqual({ target: { kind: "web", url: "http://localhost:3000/" } });
+    expect(parseAddress("0.0.0.0:8000", APP)).toEqual({ target: { kind: "web", url: "http://0.0.0.0:8000/" } });
+    expect(parseAddress("192.168.1.5:8080/app", APP)).toEqual({ target: { kind: "web", url: "http://192.168.1.5:8080/app" } });
+    expect(parseAddress("http://intranet/", APP)).toEqual({ target: { kind: "web", url: "http://intranet/" } });
+    expect(parseAddress("http://[2001:db8::1]/", APP)).toEqual({ target: { kind: "web", url: "http://[2001:db8::1]/" } });
+    for (const raw of ["hello world", "example .com", "intranet", "-bad.example", "example.com:99999", "a@example.com"])
+      expect(parseAddress(raw, APP), raw).toHaveProperty("error", expect.stringMatching(/web address|example\.com/));
+    expect(parseAddress("hello world", APP)).toEqual({
+      error: "Enter a web address such as example.com or http://…, a port, or a full path on the Hermes server starting with / or ~/.",
+    });
   });
 
   it("takes a dev server's bare port as that port on localhost", () => {

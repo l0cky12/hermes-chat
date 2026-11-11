@@ -34,7 +34,7 @@ $S/hv up                          # stand-in dashboard (default)
 $S/hv up --dashboard http://127.0.0.4:47242   # a real Hermes dashboard you started (see below)
 ```
 
-`hv up` starts, each in its own process group: Xvfb on a free display from `:140` upward (1400×900; a display counts as ours only once our Xvfb holds its lock, so concurrent runs never share one), openbox, a private D-Bus session bus, the stand-in dashboard on a free loopback port, and tauri-driver on a free port. It prints `export HV_RUN=…`, the dashboard URL, and the evidence folder. If any step fails, `hv up` stops what it had started before it exits, the way `hv down` does. The app's `HOME` and `XDG_*` dirs are new and empty under the run dir, so every run starts at the Welcome screen with no saved connection.
+`hv up` starts, each in its own process group: Xvfb on a free display from `:140` upward (1400×900; a display counts as ours only once our Xvfb holds its lock, so concurrent runs never share one), openbox, a private D-Bus session bus that activates no services, the stand-in dashboard on a free loopback port, and tauri-driver on a free port. It prints `export HV_RUN=…`, the dashboard URL, and the evidence folder. If any step fails, `hv up` stops what it had started before it exits, the way `hv down` does. The app's `HOME` and `XDG_*` dirs are new and empty under the run dir, so every run starts at the Welcome screen with no saved connection.
 
 Then launch the app:
 
@@ -107,7 +107,7 @@ This ends the WebDriver session and kills the process groups this run started: t
 
 - The box is shared and other sessions run their own Xvfb, Vite and Hermes servers. `hv up` picks a free display and ports, and the doctor checks that our PID holds our port. Never drive or kill an instance this run didn't start.
 - `pkill -f <pattern>` also matches the Bash tool's own shell. Kill by the PIDs in `state.env`, or let `hv down` do it.
-- There is no keyring on the private bus. Setup says "Couldn't save the password in the system keyring", and after every relaunch the app opens on Sign in with the username kept and the password empty. This is expected here and is not a bug.
+- There is no keyring on the private bus, and the bus starts none: its config names no service directories, so nothing (a Secret Service, dconf, a portal) is activated with the owner's `HOME` (#497). A feature that needs a keyring starts one by hand ([launch.md](features/launch.md)). Setup says "Couldn't save the password in the system keyring", and after every relaunch the app opens on Sign in with the username kept and the password empty. This is expected here and is not a bug.
 - `cargo test` with the same `CARGO_TARGET_DIR` rebuilds `debug/hermes-chat` without `custom-protocol`, and the app then shows "Could not connect to localhost". Run `hv build` again before `hv up`.
 - WebKitGTK allows one automation session per app process. `wd.mjs open` refuses to open a second session while `$HV_RUN/session` exists.
 - At high load (`uptime` 30 or more), raise `wait` timeouts rather than adding sleeps.

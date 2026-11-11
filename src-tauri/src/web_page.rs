@@ -77,6 +77,30 @@ pub async fn check(url: &str, user_agent: &str) -> Result<Framing, String> {
     }
 }
 
+/// How long a typed address's https:// form has to answer before the address box opens it over http:// instead.
+/// Chrome's HTTPS-Upgrades waits 3 seconds.
+const HTTPS_FIRST_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Whether `url`, an https:// address the owner typed, answers at all (ADR 0103): any response counts, whatever its
+/// status. A refused connection, a name that doesn't resolve, a failed TLS handshake (a bad certificate included) or no
+/// answer within 3 seconds is `false`, and the address box opens the http:// address instead, as Chrome does. Nothing
+/// is skipped: the page view still loads the https:// address itself and checks its certificate. No redirects are
+/// followed and no cookies are sent or kept.
+pub async fn https_answers(url: &str) -> Result<bool, String> {
+    let url = web_url(url)?;
+    if url.scheme() != "https" {
+        return Err("Only an https:// address is tried first.".into());
+    }
+    Ok(answers(url, HTTPS_FIRST_TIMEOUT).await)
+}
+
+async fn answers(url: Url, timeout: Duration) -> bool {
+    let Ok(http) = reqwest::Client::builder().timeout(timeout).redirect(reqwest::redirect::Policy::none()).build() else {
+        return false;
+    };
+    http.get(url).header(ACCEPT, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8").send().await.is_ok()
+}
+
 /// The header in `headers` that refuses framing by a page on another origin, as sent, or `None`.
 ///
 /// An enforced CSP with `frame-ancestors` decides on its own, and `X-Frame-Options` is then ignored. A source list
@@ -241,16 +265,52 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn asks_a_page_under_localhost_on_127_0_0_1() {
+    /// A listener on 127.0.0.1 that answers each connection with `reply`, or holds it open without a word when `None`.
+    async fn listener(reply: Option<&'static str>) -> u16 {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
-            let (mut s, _) = listener.accept().await.unwrap();
-            let _ = s.read(&mut [0; 4096]).await;
-            s.write_all(b"HTTP/1.1 200 OK\r\nX-Frame-Options: DENY\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+                    match reply {
+                        Some(reply) => {
+                            let _ = socket.write_all(reply.as_bytes()).await;
+                        }
+                        None => tokio::time::sleep(Duration::from_secs(30)).await,
+                    }
+                });
+            }
         });
+        port
+    }
+
+    #[tokio::test]
+    async fn counts_any_answer_and_nothing_else() {
+        let not_found = listener(Some("HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")).await;
+        let url = |port: u16| Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert!(answers(url(not_found), Duration::from_secs(3)).await, "a 404 is an answer");
+        let silent = listener(None).await;
+        let started = std::time::Instant::now();
+        assert!(!answers(url(silent), Duration::from_millis(300)).await, "no answer in time");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        assert!(!answers(url(closed), Duration::from_secs(3)).await, "connection refused");
+    }
+
+    #[tokio::test]
+    async fn an_http_only_server_doesnt_answer_https() {
+        let plain = listener(Some("HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")).await;
+        assert_eq!(https_answers(&format!("https://127.0.0.1:{plain}/")).await, Ok(false));
+        assert!(https_answers(&format!("http://127.0.0.1:{plain}/")).await.is_err());
+        assert!(https_answers("https://liam:pw@example.com/").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn asks_a_page_under_localhost_on_127_0_0_1() {
+        let port = listener(Some("HTTP/1.1 200 OK\r\nX-Frame-Options: DENY\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")).await;
         let framing = check(&format!("http://p0123456789abcdef.localhost:{port}/"), "").await.unwrap();
         assert_eq!(framing, Framing::Refused { by: "X-Frame-Options: DENY".into() });
     }

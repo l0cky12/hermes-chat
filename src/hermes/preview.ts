@@ -13,7 +13,11 @@ export type PreviewTarget =
    * `on`: for a page on a loopback address (`loopbackOf`), whose loopback it is: the Hermes server's, through an SSH
    * tunnel (the default, since that is where Hermes runs what it starts), or this computer's (ADR 0114).
    */
-  | { kind: "web"; url: string; on?: PageOn }
+  /**
+   * `fallback`: for an address the owner typed that is tried over https:// first (ADR 0103), the http:// address that
+   * takes its place if the https:// one doesn't answer.
+   */
+  | { kind: "web"; url: string; on?: PageOn; fallback?: string }
   /**
    * `host`: on the dashboard's own machine, read through the managed files routes (ADR 0012), not where tools run.
    * `session`: the chat whose sandbox the path is in, an Output's (outputs.ts `sessionOf`, ADR 0062).
@@ -179,7 +183,7 @@ export function addressOf(t: PreviewTarget): string {
   }
 }
 
-/** The host Rust serves a server page's tunnel at: `127.0.0.1`, or on Windows the page's own name (ADR 0143). */
+/** The host Rust serves a server page's tunnel at: `127.0.0.1`, or on Windows the page's own name (ADR 0144). */
 const TUNNEL_HOST = /^(127\.0\.0\.1|p[0-9a-f]{16}\.localhost)$/;
 
 /**
@@ -196,6 +200,14 @@ export function tunnelUrl(raw: string, appOrigin: string): string | undefined {
 /** A path the server can read: absolute, or under its home (`~/`). Relative paths would resolve in Hermes's own folder. */
 export const isServerPath = (raw: string) => /^(\/|~\/)/.test(raw) && !raw.includes("\0") && raw.length <= 4096;
 
+/**
+ * A web address typed without a scheme: a domain name with a dot in it, or an IPv4 address, then an optional port,
+ * path, query or fragment. A single word without a dot stays an error: it is more often a file name or a typo than a
+ * host on the local network, which can still be typed with http://.
+ */
+const BARE_HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.?(?::\d{1,5})?(?:[/?#]|$)/i;
+const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+
 export function parseAddress(raw: string, appOrigin: string): { target: PreviewTarget } | { error: string } {
   const text = raw.trim();
   if (!text) return { error: "Enter a web address or a path on the Hermes server." };
@@ -204,11 +216,28 @@ export function parseAddress(raw: string, appOrigin: string): { target: PreviewT
   if (/^\d{1,5}$/.test(text) && +text > 0 && +text < 65536) return parseAddress(`localhost:${text}`, appOrigin);
   // `localhost:3000` as a dev server prints it, without its scheme: a web page on a loopback address.
   if (/^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d{1,5})?([/?#]|$)/i.test(text)) return parseAddress(`http://${text}`, appOrigin);
-  if (/^[a-z][a-z0-9+.-]*:/i.test(text)) {
-    const web = checkWebUrl(text, appOrigin);
-    return "url" in web ? { target: { kind: "web", url: web.url } } : web;
-  }
-  return { error: "Enter a web address starting with http:// or https://, or a full path on the Hermes server starting with / or ~/." };
+  // Before the scheme test, which `example.com:8443` would also pass.
+  if (BARE_HOST.test(text)) return webAddress(`http://${text}`, appOrigin, true);
+  if (/^[a-z][a-z0-9+.-]*:/i.test(text)) return webAddress(text, appOrigin, false);
+  return { error: "Enter a web address such as example.com or http://…, a port, or a full path on the Hermes server starting with / or ~/." };
+}
+
+/**
+ * A checked web address, tried over https:// first when it is http:// to a domain name. Loopback and IP addresses and
+ * single-word names stay http://: they are dev servers and machines on the local network, which rarely serve TLS. A
+ * typed http:// address keeps a port of its own, as Chrome's HTTPS-Upgrades does; a `bare` one is upgraded with it.
+ */
+function webAddress(raw: string, appOrigin: string, bare: boolean): { target: PreviewTarget } | { error: string } {
+  const web = checkWebUrl(raw, appOrigin);
+  if (!("url" in web)) return web;
+  const u = new URL(web.url);
+  // Read from the text, since `URL` drops a port that is the scheme's default: `http://example.com:80/` names one.
+  const port = /^[a-z][a-z0-9+.-]*:\/\/[^/?#@]*?:(\d+)(?:[/?#]|$)/i.exec(raw.trim())?.[1];
+  const domain = u.hostname.includes(".") && !IPV4.test(u.hostname) && !u.hostname.startsWith("[");
+  if (u.protocol !== "http:" || !domain || loopbackOf(u.href) || (!bare && port)) return { target: { kind: "web", url: web.url } };
+  u.protocol = "https:";
+  if (port) u.port = port;
+  return { target: { kind: "web", url: u.href, fallback: web.url } };
 }
 
 type ToolItem = Extract<Item, { kind: "tool" }>;

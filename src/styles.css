@@ -548,10 +548,14 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 .approval:focus-visible { outline: 2px solid var(--line-2); outline-offset: 2px; }
 .approval-head { display: flex; align-items: center; gap: 8px; font-size: calc(13rem / 14); font-weight: 500; color: var(--warn); }
 .approval.answered .approval-head { color: var(--muted); font-weight: 400; }
+/* A long command scrolls inside its box, which starts at its first line, so the card stays short enough that the
+   transcript sticking to its bottom can't push that line out of sight above the buttons (#489). */
 .approval-cmd {
   margin: 10px 0 8px; background: var(--code-bg); padding: 9px 12px; border-radius: 8px; font-size: calc(var(--mono-size) - 0.5px); white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-all; max-height: min(22em, 40vh); overflow-y: auto;
 }
+.approval-gap { color: var(--muted); font-style: italic; }
+.approval-lines { color: var(--muted); font-size: calc(12rem / 14); margin: -4px 0 8px; }
 .approval.answered .approval-cmd { margin: 6px 0 2px; color: var(--muted); }
 .approval-desc { color: var(--muted); font-size: calc(13rem / 14); }
 .approval-actions { display: flex; gap: 8px; margin-top: 12px; }
@@ -980,7 +984,8 @@ div.route-result { display: flex; flex-direction: column; gap: 6px; }
 .rail-brand { cursor: pointer; }
 .profile-name { font-weight: 600; letter-spacing: -0.01em; font-size: calc(15rem / 14); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-switch { position: relative; min-width: 0; }
-.profile-btn { display: flex; align-items: center; gap: 4px; max-width: 220px; padding: 3px 6px; margin-left: -6px; border-radius: 7px; }
+.sb-hide { flex: none; margin-left: 8px; }
+.profile-btn { display: flex; align-items: center; gap: 4px; max-width: min(220px, calc(100% + 6px)); padding: 3px 6px; margin-left: -6px; border-radius: 7px; }
 .profile-btn:hover, .profile-btn[aria-expanded="true"] { background: var(--raised-2); }
 .profile-chev { color: var(--muted); flex: none; }
 .profile-menu {
@@ -1660,6 +1665,7 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 }
 .where-server { background: rgba(121, 192, 255, 0.13); color: #8ec8ff; }
 .where-local { background: rgba(74, 222, 128, 0.12); color: var(--ok); }
+.where-insecure { background: rgba(245, 184, 74, 0.14); color: var(--warn); }
 :root[data-mode="light"] .where-server { background: rgba(5, 80, 174, 0.1); color: #0550ae; }
 .preview-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .preview-state {
@@ -2443,6 +2449,13 @@ label.memory-pick { cursor: pointer; }
 .bots-hidden { padding: 4px 8px; }
 .bots-hidden-toggle { display: inline-flex; align-items: center; gap: 4px; color: var(--faint); font-size: calc(11.5rem / 14); }
 .bots-hidden-toggle:hover { color: var(--text); }
+/* Bot mode: the Bots view's rows on the list panel's background, the open bot marked as .row.sel marks the open chat. */
+.sb-bots-head { margin: 0; padding-top: 6px; }
+.sb-bots .inbox-list { padding: 0; overflow: visible; }
+.sb-bots .inbox-leave { margin: 0 0 8px; }
+.sb-bots .inbox-row:hover { background: var(--hover); }
+.sb-bots .bots-row.is-current { background: var(--hover-2); box-shadow: inset 0 0 0 1px var(--line); }
+.sb-bots .bots-hidden { padding: 4px 6px; }
 @media (max-width: 520px) {
   .inbox { width: calc(100vw - 60px); }
 }

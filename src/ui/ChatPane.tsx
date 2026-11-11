@@ -1,6 +1,6 @@
 // Transcript, thinking, tool-call groups, Approval cards, find bar, composer and the Settle button, ported from the prototype.
 // Dictation and Read aloud come from Voice.tsx.
-import { createContext, memo, type ReactNode, type RefObject, useCallback, useContext, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, memo, type ReactNode, type RefObject, useCallback, startTransition, useContext, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, Columns2, CornerDownRight, EyeOff, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Square, Trash2, Wrench, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -138,6 +138,9 @@ const sameVersions = (a?: Map<number, Variant[]>, b?: Map<number, Variant[]>) =>
  */
 export type FindTarget = { query: string; itemId?: string; at: number };
 
+/** How long a new find query may wait for the transcript to mark it in the background before a streamed delta marks it. */
+const FIND_WAITS_MS = 200;
+
 /**
  * What to go to: a tool call, opened, by its call id (`Item.callId`), or a message by its stored row (`rowId`), as a
  * branch's link back does. `at` tells one request from the next.
@@ -181,6 +184,28 @@ export function refuseStrayFileDrops(target: Window = window) {
   };
   target.addEventListener("dragover", refuse);
   target.addEventListener("drop", refuse);
+}
+
+/**
+ * What a paste into the composer attaches. The webview pastes the text itself, except for a file copy, whose text is
+ * only the files' paths.
+ */
+export type PasteAttaches =
+  /** Files copied in a file manager: a `text/uri-list` of `file://` URIs, which WebKitGTK names but hides. Rust reads it. */
+  | { kind: "copied files" }
+  /** Files the paste event carries as bytes: a screenshot, or files copied in Explorer (Chromium). */
+  | { kind: "files"; files: File[]; keepText: boolean }
+  /** No text the page can see: WebKitGTK hides a clipboard image, and the text beside it, from the paste event. */
+  | { kind: "clipboard images" }
+  | { kind: "nothing" };
+
+export function pasteAttaches(data: { types: readonly string[]; files: ArrayLike<File>; getData(type: string): string }): PasteAttaches {
+  const files = Array.from(data.files);
+  const text = data.getData("text/plain");
+  if (files.length) return { kind: "files", files, keepText: !!text };
+  const uris = data.getData("text/uri-list").split(/\r?\n/).filter((l) => l && !l.startsWith("#"));
+  if (data.types.includes("text/uri-list") && uris.every((u) => u.startsWith("file:"))) return { kind: "copied files" };
+  return text ? { kind: "nothing" } : { kind: "clipboard images" };
 }
 
 /**
@@ -582,9 +607,22 @@ export function ChatPane({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // The transcript catches up with the find bar in the background, so re-marking a long chat doesn't hold up typing.
+  // The query the transcript marks. A new one is marked in the background, so re-marking a long chat doesn't hold up
+  // typing. A streamed delta renders the pane at once and starts that work again, so once a query has waited a moment
+  // the next delta marks it with it; useDeferredValue would wait for the reply to end (#435). Closing clears at once.
   const typed = findOpen ? query : "";
-  const q = useDeferredValue(typed);
+  const [q, setQ] = useState("");
+  /** The query being marked in the background, and since when; "" when none is. */
+  const asked = useRef({ query: "", at: 0 });
+  useLayoutEffect(() => {
+    if (q === typed) asked.current.query = "";
+    else if (!typed) setQ("");
+    else if (asked.current.query !== typed) {
+      asked.current = { query: typed, at: performance.now() };
+      startTransition(() => setQ(typed));
+    } else if (performance.now() - asked.current.at > FIND_WAITS_MS) setQ(typed);
+  });
+  const finding = q !== typed;
   const finds = useMemo(() => (q ? new RegExp(escapeRe(q), "i") : undefined), [q]);
 
   useLayoutEffect(() => {
@@ -672,7 +710,7 @@ export function ChatPane({
   }, []);
 
   const step = (d: number) => {
-    if (!count) return;
+    if (!count || finding) return;
     setMatchIndex((i) => (Math.min(i, count - 1) + d + count) % count);
     scrollToMatch.current = true;
     stickToBottom.current = false;
@@ -791,12 +829,12 @@ export function ChatPane({
               }}
             />
             <span className="find-count" aria-live="polite">
-              {query ? `${count ? Math.min(matchIndex, count - 1) + 1 : 0} of ${count}` : ""}
+              {!query ? "" : finding ? "Finding…" : `${count ? Math.min(matchIndex, count - 1) + 1 : 0} of ${count}`}
             </span>
-            <button className="icon-btn" title="Previous (↑ or Shift+Enter)" disabled={!count} onClick={() => step(-1)}>
+            <button className="icon-btn" title="Previous (↑ or Shift+Enter)" disabled={!count || finding} onClick={() => step(-1)}>
               <ChevronUp size={16} />
             </button>
-            <button className="icon-btn" title="Next (↓ or Enter)" disabled={!count} onClick={() => step(1)}>
+            <button className="icon-btn" title="Next (↓ or Enter)" disabled={!count || finding} onClick={() => step(1)}>
               <ChevronDown size={16} />
             </button>
             <button className="icon-btn" title="Close (Esc)" onClick={closeFind}>
@@ -1613,6 +1651,16 @@ function Composer({
       setRefused([`Couldn't attach the files: ${e instanceof Error ? e.message : String(e)}`]);
     }
   });
+  // Files copied in a file manager attach by path, as a drop does. Rust reads them, since WebKitGTK hides them.
+  const attachCopied = () => busy(async () => {
+    try {
+      const paths = await invoke<string[]>("attach_copied_files");
+      if (paths.length) await add(paths, () => open.current);
+      else setRefused(["Only files on this computer can be attached."]);
+    } catch (e) {
+      setRefused([`Couldn't attach the files: ${e instanceof Error ? e.message : String(e)}`]);
+    }
+  });
   const stageRef = useRef(stageFiles);
   stageRef.current = stageFiles;
 
@@ -1837,13 +1885,12 @@ function Composer({
           {...slash.inputProps}
           onChange={(e) => onText(e.target.value, inputKind(e.nativeEvent))}
           onPaste={(e) => {
-            // Only files are taken over; text pastes as it always has.
             if (dragging) return;
-            const files = Array.from(e.clipboardData.files);
-            if (files.length) {
-              e.preventDefault();
-              void stageFiles(files);
-            } else if (!e.clipboardData.getData("text/plain")) void stageFiles(clipboardImages());
+            const paste = pasteAttaches(e.clipboardData);
+            if (paste.kind === "copied files" || (paste.kind === "files" && !paste.keepText)) e.preventDefault();
+            if (paste.kind === "copied files") void attachCopied();
+            else if (paste.kind === "files") void stageFiles(paste.files);
+            else if (paste.kind === "clipboard images") void stageFiles(clipboardImages());
           }}
           onKeyDown={(e) => {
             if (slash.onKeyDown(e)) return;

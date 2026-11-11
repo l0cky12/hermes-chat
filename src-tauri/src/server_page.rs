@@ -740,7 +740,7 @@ struct Served {
 
 /// Every server page's tunnel listens on `127.0.0.1`, and cookies don't tell ports apart, so in one jar each page would
 /// get every other server page's cookies. On Linux each jar is a WebKit context of its own (`page_view`). On Windows the
-/// page is a frame in the app's one WebView2, so each jar is a host name instead (`host`, ADR 0143).
+/// page is a frame in the app's one WebView2, so each jar is a host name instead (`host`, ADR 0144).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Jar {
     target: String,
@@ -1050,7 +1050,7 @@ async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started
 
 /// The tunnel's listeners: on `127.0.0.1`, and with `ipv6` on `[::1]` at the same port. On Windows a page's name under
 /// `localhost` (`Jar::host`) resolves to both, so a program that listened on `[::1]` at the port would otherwise get the
-/// frame's requests and cookies (ADR 0143). The second is `None` without `ipv6`, and when this computer has no `::1`,
+/// frame's requests and cookies (ADR 0144). The second is `None` without `ipv6`, and when this computer has no `::1`,
 /// where nothing can listen. Any other failure there tries another port, since something may hold that one.
 async fn listen(ipv6: bool) -> std::io::Result<(TcpListener, Option<TcpListener>)> {
     for _ in 0..16 {
@@ -1568,7 +1568,8 @@ while True:
     #[tokio::test]
     async fn a_port_nothing_listens_on_says_so_and_leaves_nothing_running() {
         let fake = Fake::new("closed-port", "ok");
-        let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        let closed = crate::test_common::refusing();
+        let port = closed.addr.port();
         let pages = Arc::new(ServerPages::default());
         let e = open_page(&pages, &fake.program, "hermes", &format!("http://127.0.0.1:{port}/"), |_| {}).await.unwrap_err();
         match &e {
@@ -1868,8 +1869,8 @@ while True:
         let e = open_page(&pages, &fake.program, "hermes", &format!("http://localhost:{port}/"), |_| {}).await.unwrap_err();
         assert!(matches!(e, ServerPageError::PortClosed { .. }), "{e:?}");
         // A closed https port is still found out.
-        let closed = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
-        let e = open_page(&pages, &fake.program, "hermes", &format!("https://localhost:{closed}/"), |_| {}).await.unwrap_err();
+        let closed = crate::test_common::refusing();
+        let e = open_page(&pages, &fake.program, "hermes", &format!("https://localhost:{}/", closed.addr.port()), |_| {}).await.unwrap_err();
         assert!(matches!(e, ServerPageError::PortClosed { .. }), "{e:?}");
     }
 
