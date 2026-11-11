@@ -3,8 +3,10 @@
 //!
 //! The local end is made as a server page's is (ADR 0114, ADR 0098): ssh forwards a Unix socket in a private folder,
 //! and Rust binds `127.0.0.1:0`, keeps the listener and relays each connection to the socket. The port the sign-in
-//! sends the password to is never free for another program to take while ssh signs in.
+//! sends the password to is never free for another program to take while ssh signs in. Only Rust uses that port, so
+//! the relay serves this process alone: a page in the Preview, loaded by WebKit's own process, can't (ADR 0138).
 
+use crate::loopback_peer::Peers;
 use crate::server_page::{self, LocalEnd};
 use std::process::Stdio;
 use std::time::Duration;
@@ -110,7 +112,7 @@ async fn open_through(program: &str, target: &str, remote_port: u16, quick: Opti
     }
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| TunnelError::Spawn(e.to_string()))?;
     let local_port = listener.local_addr().map_err(|e| TunnelError::Spawn(e.to_string()))?.port();
-    let relay = tokio::spawn(server_page::serve(listener, end.address())).abort_handle();
+    let relay = tokio::spawn(server_page::serve(listener, end.address(), Peers::ThisProcess)).abort_handle();
     Ok(Tunnel { _child: child, _end: end, relay, local_port })
 }
 
