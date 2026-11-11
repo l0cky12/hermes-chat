@@ -751,8 +751,9 @@ async fn an_interrupted_commit_that_landed_leaves_the_index_matching_it() {
     };
     let mut child = helper().stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().unwrap();
     let mut stdin = child.stdin.take().unwrap();
+    // The request is one line, and stdin stays open, as `run` keeps it: its end would stop the helper by itself.
     stdin.write_all(&serde_json::to_vec(&req).unwrap()).await.unwrap();
-    drop(stdin);
+    stdin.write_all(b"\n").await.unwrap();
     for _ in 0..200 {
         if marker.exists() {
             break;
@@ -763,6 +764,7 @@ async fn an_interrupted_commit_that_landed_leaves_the_index_matching_it() {
     // What a dropped ssh does: the helper gets a signal while Git is still in the post-commit hook.
     unsafe { libc::kill(child.id().unwrap() as i32, libc::SIGTERM) };
     let _ = child.wait().await;
+    drop(stdin);
     if let Ok(pid) = std::fs::read_to_string(&pidfile) {
         unsafe { libc::kill(pid.trim().parse().unwrap(), libc::SIGKILL) };
     }
@@ -1343,4 +1345,369 @@ async fn publish_info_still_offers_push_when_gh_is_too_slow() {
     let p = repo_git::run(c, &Request::PublishInfo { repo: d.s() }).await.unwrap();
     assert_eq!(p["ahead"], 1, "{p}");
     assert!(p["github"]["error"].as_str().unwrap().contains("longer than"), "{p}");
+}
+
+// ── #475: a tag named like the branch ───────────────────────────────────────
+
+#[tokio::test]
+async fn a_tag_named_like_the_branch_never_changes_which_branch_is_pushed() {
+    let (d, remote) = github_written("tag-like-branch");
+    git(d.path(), &["tag", "feature"]);
+    // What `--short` trips on: with the tag there, the branch's short name is ambiguous.
+    assert_eq!(git(d.path(), &["symbolic-ref", "--short", "HEAD"]), "heads/feature");
+    // A local branch named like a remote one makes `%(refname:short)` ambiguous for the bases too.
+    git(d.path(), &["branch", "origin/main", "main"]);
+    // A stand-in gh that writes down what it was asked.
+    let bin = Dir::new("tag-like-branch-bin");
+    let asked = bin.path().join("asked");
+    write_executable(
+        &bin.path().join("gh"),
+        &format!(
+            "#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$1 $2\" in\n  'repo view') echo '{{\"nameWithOwner\":\"acme/widgets\",\"url\":\"https://github.com/acme/widgets\",\"defaultBranchRef\":{{\"name\":\"main\"}}}}';;\n  'pr list') echo '[]';;\n  'pr create') cat >/dev/null; echo 'https://github.com/acme/widgets/pull/7';;\n  'pr view') echo '{{\"number\":7,\"url\":\"https://github.com/acme/widgets/pull/7\"}}';;\nesac\n",
+            asked.display()
+        ),
+    );
+    let with_gh = |req: Request| {
+        let mut c = helper();
+        c.env("PATH", format!("{}:{}", bin.s(), std::env::var("PATH").unwrap()));
+        async move { repo_git::run(c, &req).await }
+    };
+
+    let p = with_gh(Request::PublishInfo { repo: d.s() }).await.unwrap();
+    assert_eq!(p["branch"], "feature", "{p}");
+    assert_eq!(p["remoteBranch"], "feature", "{p}");
+    assert_eq!(p["bases"], serde_json::json!(["main"]), "{p}");
+    let branch = p["branch"].as_str().unwrap().to_owned();
+    let remote_branch = p["remoteBranch"].as_str().unwrap().to_owned();
+
+    // Push sends the branch, named in full on the remote, and sets the branch's own upstream.
+    let h = head(&d);
+    ask(Request::Push {
+        repo: d.s(),
+        remote: "origin".into(),
+        push_url: shown_url(&d, "origin"),
+        branch: branch.clone(),
+        remote_branch: remote_branch.clone(),
+        expect: HeadExpect { head: Some(h.clone()) },
+    })
+    .await
+    .unwrap();
+    assert_eq!(git(remote.path(), &["rev-parse", "refs/heads/feature"]), h);
+    assert_eq!(git(remote.path(), &["for-each-ref", "--format=%(refname)", "refs/heads/heads"]), "", "no stray remote branch heads/feature");
+    assert_eq!(git(d.path(), &["config", "--get", "branch.feature.merge"]), "refs/heads/feature");
+    assert!(git(d.path(), &["config", "--list"]).lines().all(|l| !l.starts_with("branch.heads/")), "no upstream config for heads/feature");
+
+    // The pull request opens from the branch itself.
+    let r = with_gh(Request::PrCreate {
+        repo: d.s(),
+        branch: branch.clone(),
+        remote: "origin".into(),
+        github_repo: "acme/widgets".into(),
+        remote_branch,
+        base: "main".into(),
+        title: "Feature".into(),
+        body: String::new(),
+        draft: false,
+        expect: HeadExpect { head: Some(h) },
+    })
+    .await
+    .unwrap();
+    assert_eq!(r["pr"]["number"], 7, "{r}");
+    let asked = std::fs::read_to_string(&asked).unwrap();
+    assert!(asked.lines().any(|l| l.starts_with("pr create") && l.contains("--head feature ")), "{asked}");
+    assert!(!asked.contains("heads/feature"), "{asked}");
+
+    // The commit preview and the commit name it too.
+    write(d.path(), "notes.txt", b"more\n");
+    git(d.path(), &["add", "notes.txt"]);
+    let p = preview(&d).await;
+    assert_eq!(p["branch"], "feature");
+    assert_eq!(commit(&d, &p, "More").await.unwrap()["branch"], "feature");
+}
+
+// ── #482: a dropped connection ends the helper ──────────────────────────────
+
+/// The helper as sshd leaves it when the connection drops. sshd runs it without a terminal, so no hangup comes, and
+/// nobody kills it: only its pipes close. This stand-in for sshd starts the helper in the background on the same
+/// stdin, writes its pid to `pidfile`, and is itself what `run` kills when the request is given up.
+fn behind_sshd(pidfile: &Path) -> Command {
+    let mut c = Command::new("sh");
+    // sh gives a background job /dev/null for stdin unless it's given another: fd 3 keeps the real one.
+    c.arg("-c").arg(r#"exec 3<&0; sh -c "$1" <&3 3<&- & echo $! > "$2"; wait"#).arg("sh").arg(repo_git::remote_command()).arg(pidfile);
+    c.env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1");
+    c
+}
+
+/// Whether process `pid` has ended (a zombie nobody has reaped yet counts).
+fn ended(pid: i32) -> bool {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(s) => s.rsplit(')').next().is_some_and(|rest| rest.trim_start().starts_with('Z')),
+        Err(_) => (unsafe { libc::kill(pid, 0) }) != 0,
+    }
+}
+
+async fn pid_in(file: &Path) -> i32 {
+    for _ in 0..400 {
+        if let Some(pid) = std::fs::read_to_string(file).ok().and_then(|s| s.trim().parse().ok()) {
+            return pid;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("nothing wrote {}", file.display());
+}
+
+#[tokio::test]
+async fn a_dropped_connection_ends_the_helper_and_the_hook_it_was_waiting_on() {
+    let d = busy("dropped");
+    let hook_pid = d.path().join(".git/hook-pid");
+    let helper_pid = d.path().join(".git/helper-pid");
+    // A hook that ignores SIGTERM: it ends only with SIGKILL.
+    hook(&d, "pre-commit", &format!("trap '' TERM\necho $$ > '{}'\nexec sleep 300", hook_pid.display()));
+    git(d.path(), &["add", "notes.txt"]);
+    let p = preview(&d).await;
+    let before = head(&d);
+    let req = Request::Commit {
+        repo: d.s(),
+        message: "Never lands".into(),
+        expect: Expect { raw_sha: p["rawSha"].as_str().map(Into::into), head_ref: p["headRef"].as_str().map(Into::into), ..expect_of(&p) },
+    };
+    let command = behind_sshd(&helper_pid);
+    let task = tokio::spawn(async move { repo_git::run(command, &req).await });
+    let hook = pid_in(&hook_pid).await;
+    let helper = pid_in(&helper_pid).await;
+    assert!(!ended(helper) && !ended(hook), "the commit is waiting on its hook");
+    // The app gives up (its time limit, or the connection drops): ssh is killed and stdin closes.
+    task.abort();
+    let _ = task.await;
+    for _ in 0..300 {
+        if ended(helper) && ended(hook) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(ended(helper), "the helper ended with the connection");
+    assert!(ended(hook), "and so did the hook Git was running for it");
+    assert_eq!(head(&d), before, "nothing was committed");
+    let git_dir = std::fs::read_dir(d.path().join(".git")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+    assert!(!git_dir.iter().any(|n| n.starts_with("index.") || n.ends_with(".lock")), "no lock or index copy is left: {git_dir:?}");
+    // The checkout works as before.
+    let s = status(&d).await;
+    ask(Request::Stage { repo: d.s(), files: vec![stamp_of(&s, "other.txt")], expect: expect_of(&s) }).await.unwrap();
+}
+
+// ── #483: stale locks, lost answers, odd names, slow Status ─────────────────
+
+#[tokio::test]
+async fn a_failure_while_taking_the_index_lets_its_lock_go() {
+    let d = busy("enter-fails");
+    let s = status(&d).await;
+    // The index can't be copied, as on a full disk: here it's a folder.
+    let git_dir = d.path().join(".git");
+    std::fs::rename(git_dir.join("index"), git_dir.join("index.real")).unwrap();
+    std::fs::create_dir(git_dir.join("index")).unwrap();
+    assert!(ask(Request::Stage { repo: d.s(), files: vec![stamp_of(&s, "notes.txt")], expect: expect_of(&s) }).await.is_err());
+    assert!(!git_dir.join("index.lock").exists(), "the lock it took is let go");
+    std::fs::remove_dir(git_dir.join("index")).unwrap();
+    std::fs::rename(git_dir.join("index.real"), git_dir.join("index")).unwrap();
+    ask(Request::Stage { repo: d.s(), files: vec![stamp_of(&s, "notes.txt")], expect: expect_of(&s) }).await.unwrap();
+    assert_eq!(staged_names(&d), "notes.txt");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_name_that_isnt_utf8_is_listed_but_never_staged() {
+    use std::os::unix::ffi::OsStrExt;
+    let d = repo("latin1");
+    std::fs::write(d.path().join(std::ffi::OsStr::from_bytes(b"caf\xe9.txt")), b"x\n").unwrap();
+    write(d.path(), "notes.txt", b"changed\n");
+    let s = status(&d).await;
+    let e = entry(&s, "caf\u{fffd}.txt");
+    assert_eq!(e["nameLossy"], true, "{e}");
+    assert_eq!(entry(&s, "notes.txt").get("nameLossy"), None);
+    // Asked anyway, by the name shown: that names no file, so nothing is staged and the helper says so.
+    let err = ask(Request::Stage { repo: d.s(), files: vec![FileStamp { path: "caf\u{fffd}.txt".into(), worktree: None }], expect: expect_of(&s) })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(err), "stale");
+    assert_eq!(staged_names(&d), "");
+}
+
+#[tokio::test]
+async fn a_write_through_a_memory_mapping_after_the_list_is_still_caught() {
+    // Linux changes no file time for a write to a shared mapping's page that is already dirty, so only the bytes
+    // themselves show this change.
+    let d = busy("mmap");
+    let path = d.path().join("notes.txt");
+    let file = std::fs::File::options().read(true).write(true).open(&path).unwrap();
+    let len = file.metadata().unwrap().len() as usize;
+    use std::os::fd::AsRawFd;
+    let map = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, file.as_raw_fd(), 0) } as *mut u8;
+    assert_ne!(map as *mut libc::c_void, libc::MAP_FAILED);
+    unsafe { *map = b'O' };
+    // Long after that write, as an editor or agent leaves a file.
+    tokio::time::sleep(std::time::Duration::from_millis(2200)).await;
+    let s = status(&d).await;
+    unsafe { *map = b'Q' };
+    let e = ask(Request::Stage { repo: d.s(), files: vec![stamp_of(&s, "notes.txt")], expect: expect_of(&s) }).await.unwrap_err();
+    unsafe { libc::munmap(map as *mut libc::c_void, len) };
+    assert_eq!(kind(e), "stale");
+    assert_eq!(staged_names(&d), "");
+}
+
+#[tokio::test]
+async fn past_what_one_status_hashes_files_are_stamped_by_metadata_and_still_checked() {
+    let d = busy("hash-budget");
+    // With a full budget, every file is hashed.
+    let s = status(&d).await;
+    assert!(!entry(&s, "notes.txt")["worktree"].as_str().unwrap().starts_with("meta:"));
+    // With none left, each is stamped by its metadata.
+    let no_budget = |req: Request| {
+        let mut c = helper();
+        c.env("HERMES_REPO_TEST_HASH_BUDGET", "0");
+        async move { repo_git::run(c, &req).await }
+    };
+    let s = no_budget(Request::Status { repo: d.s() }).await.unwrap();
+    let notes = entry(&s, "notes.txt")["worktree"].as_str().unwrap().to_owned();
+    assert!(notes.starts_with("meta:"), "{notes}");
+    // A diff read later carries the same metadata stamp, so the screen can compare them.
+    let dd = diff(&d, "notes.txt", None, DiffSide::Unstaged, 3).await;
+    assert_eq!(dd["worktreeMeta"].as_str(), Some(notes.as_str()), "{dd}");
+    // Rewritten with the same size and its modification time set back: the change time still tells.
+    let path = d.path().join("notes.txt");
+    let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let mut new = std::fs::read(&path).unwrap();
+    new[4] = b'X';
+    std::fs::write(&path, &new).unwrap();
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(mtime).unwrap();
+    let err = ask(Request::Stage { repo: d.s(), files: vec![stamp_of(&s, "notes.txt")], expect: expect_of(&s) }).await.unwrap_err();
+    assert_eq!(kind(err), "stale");
+    // A file that didn't change stages from its metadata stamp, with the bytes it holds.
+    ask(Request::Stage { repo: d.s(), files: vec![stamp_of(&s, "other.txt")], expect: expect_of(&s) }).await.unwrap();
+    assert_eq!(git(d.path(), &["show", ":other.txt"]), "b");
+}
+
+#[tokio::test]
+async fn a_hook_that_ignores_sigterm_ends_when_the_commit_times_out() {
+    let d = busy("stubborn-hook");
+    let hook_pid = d.path().join(".git/hook-pid");
+    hook(&d, "pre-commit", &format!("trap '' TERM\necho $$ > '{}'\nexec sleep 300", hook_pid.display()));
+    git(d.path(), &["add", "notes.txt"]);
+    let p = preview(&d).await;
+    let mut c = helper();
+    c.env("HERMES_REPO_TEST_COMMIT_TIMEOUT", "2");
+    let expect = Expect { raw_sha: p["rawSha"].as_str().map(Into::into), head_ref: p["headRef"].as_str().map(Into::into), ..expect_of(&p) };
+    let e = repo_git::run(c, &Request::Commit { repo: d.s(), message: "Slow".into(), expect }).await.unwrap_err();
+    assert_eq!(kind(e), "timeout");
+    let hook = pid_in(&hook_pid).await;
+    assert!(ended(hook), "the hook doesn't outlive the helper's answer");
+    assert!(!d.path().join(".git/index.lock").exists());
+}
+
+#[tokio::test]
+async fn a_commit_git_made_is_reported_as_made_even_if_git_then_failed() {
+    let d = busy("exit-after-commit");
+    // A git that makes the commit, then exits 1, as when it can't write the new index afterwards.
+    let bin = Dir::new("exit-after-commit-bin");
+    let real = String::from_utf8(StdCommand::new("sh").arg("-c").arg("command -v git").output().unwrap().stdout).unwrap();
+    write_executable(&bin.path().join("git"), &format!("#!/bin/sh\n'{}' \"$@\"; s=$?\nfor a; do [ \"$a\" = commit ] && exit 1; done\nexit $s\n", real.trim()));
+    git(d.path(), &["add", "notes.txt"]);
+    let p = preview(&d).await;
+    let before = head(&d);
+    let mut c = helper();
+    c.env("PATH", format!("{}:{}", bin.s(), std::env::var("PATH").unwrap()));
+    let expect = Expect { raw_sha: p["rawSha"].as_str().map(Into::into), head_ref: p["headRef"].as_str().map(Into::into), ..expect_of(&p) };
+    let r = repo_git::run(c, &Request::Commit { repo: d.s(), message: "Made".into(), expect }).await.unwrap();
+    assert_ne!(head(&d), before);
+    assert_eq!(r["head"], Value::String(head(&d)));
+    assert_eq!(r["exitCode"], 1);
+}
+
+#[tokio::test]
+async fn a_hook_that_prints_a_lot_is_cut_to_its_end() {
+    let d = busy("loud-hook");
+    hook(&d, "pre-commit", "head -c 2000000 /dev/zero | tr '\\000' a\necho\necho 'the reason is at the end'\nexit 1");
+    git(d.path(), &["add", "notes.txt"]);
+    let p = preview(&d).await;
+    let e = serde_json::to_value(commit(&d, &p, "Loud").await.unwrap_err()).unwrap();
+    assert_eq!(e["kind"], "hook", "{}", e["message"]);
+    let out = e["output"].as_str().unwrap();
+    assert!(out.len() < 300 * 1024, "{} bytes", out.len());
+    assert!(out.starts_with("[The first ") && out.trim_end().ends_with("the reason is at the end"));
+}
+
+#[tokio::test]
+async fn the_remote_is_asked_for_the_branch_itself_not_a_ref_ending_like_it() {
+    let (d, remote) = with_remote("ls-remote-exact");
+    // A branch on the remote whose name ends like refs/heads/feature: ls-remote's pattern matches it too.
+    git(remote.path(), &["branch", "nested/refs/heads/feature", "main"]);
+    let h = ask(Request::RemoteHead { repo: d.s(), remote: "origin".into(), remote_branch: "feature".into() }).await.unwrap();
+    assert_eq!(h["remoteHead"], Value::Null, "{h}");
+}
+
+#[tokio::test]
+async fn a_stop_while_git_is_starting_still_stops_it() {
+    // The connection drops just as the helper starts Git: Git is running, but Popen hasn't handed the helper its
+    // handle yet. The stop waits until it has, so Git is stopped, not left to finish the commit on its own.
+    let d = busy("stop-at-spawn");
+    let marker = d.path().join(".git/hook-ran");
+    hook(&d, "pre-commit", &format!("trap '' TERM\nsleep 1\ntouch '{}'", marker.display()));
+    git(d.path(), &["add", "notes.txt"]);
+    let p = preview(&d).await;
+    let before = head(&d);
+    let mut c = helper();
+    c.env("HERMES_REPO_TEST_STOP_AT", "commit");
+    let expect = Expect { raw_sha: p["rawSha"].as_str().map(Into::into), head_ref: p["headRef"].as_str().map(Into::into), ..expect_of(&p) };
+    let e = repo_git::run(c, &Request::Commit { repo: d.s(), message: "Never".into(), expect }).await.unwrap_err();
+    assert_eq!(kind(e), "bad-reply", "it was stopped before it answered");
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    assert!(!marker.exists(), "Git didn't go on to run its hook");
+    assert_eq!(head(&d), before, "nor commit");
+    let git_dir = std::fs::read_dir(d.path().join(".git")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+    assert!(!git_dir.iter().any(|n| n.starts_with("index.") || n.ends_with(".lock")), "no lock or index copy is left: {git_dir:?}");
+}
+
+#[tokio::test]
+async fn a_drop_while_a_stubborn_command_is_being_stopped_still_ends_it() {
+    // A commit hits its time limit, and the helper starts stopping Git: SIGTERM, then up to 5 s before SIGKILL. The
+    // connection drops during those 5 s. That stop must not cut the first one short: this Git ignores SIGTERM, so only
+    // the SIGKILL at the end ends it.
+    let d = busy("drop-during-grace");
+    let bin = Dir::new("drop-during-grace-bin");
+    let git_pid = bin.path().join("git-pid");
+    let real = String::from_utf8(StdCommand::new("sh").arg("-c").arg("command -v git").output().unwrap().stdout).unwrap();
+    write_executable(
+        &bin.path().join("git"),
+        &format!(
+            "#!/bin/sh\nfor a; do [ \"$a\" = commit ] && {{ trap '' TERM; echo $$ > '{}'; exec sleep 300; }}; done\nexec '{}' \"$@\"\n",
+            git_pid.display(),
+            real.trim()
+        ),
+    );
+    git(d.path(), &["add", "notes.txt"]);
+    let p = preview(&d).await;
+    let helper_pid = bin.path().join("helper-pid");
+    let mut command = behind_sshd(&helper_pid);
+    command.env("PATH", format!("{}:{}", bin.s(), std::env::var("PATH").unwrap())).env("HERMES_REPO_TEST_COMMIT_TIMEOUT", "1");
+    let req = Request::Commit {
+        repo: d.s(),
+        message: "Stuck".into(),
+        expect: Expect { raw_sha: p["rawSha"].as_str().map(Into::into), head_ref: p["headRef"].as_str().map(Into::into), ..expect_of(&p) },
+    };
+    let task = tokio::spawn(async move { repo_git::run(command, &req).await });
+    let stuck = pid_in(&git_pid).await;
+    let helper = pid_in(&helper_pid).await;
+    // Past the 1 s time limit, and inside the 5 s grace that follows.
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    assert!(!ended(stuck) && !ended(helper), "the helper is still waiting out the grace");
+    task.abort();
+    let _ = task.await;
+    for _ in 0..300 {
+        if ended(stuck) && ended(helper) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(ended(stuck), "the Git that ignored SIGTERM was ended");
+    assert!(ended(helper), "and the helper with it");
+    assert!(!d.path().join(".git/index.lock").exists());
 }

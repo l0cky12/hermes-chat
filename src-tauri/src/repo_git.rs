@@ -411,7 +411,9 @@ pub async fn run_fed(
     on_progress: &(dyn Fn(serde_json::Value) + Send + Sync),
 ) -> Result<serde_json::Value, RepoError> {
     let mut body = prefix.unwrap_or_default().as_bytes().to_vec();
+    // One line: compact JSON escapes every newline inside a string.
     body.extend(serde_json::to_vec(request).map_err(|e| RepoError::BadReply(e.to_string()))?);
+    body.push(b'\n');
     command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     let mut child = command.spawn().map_err(|e| RepoError::Spawn(e.to_string()))?;
     let mut stdin = child.stdin.take().expect("piped stdin");
@@ -422,11 +424,17 @@ pub async fn run_fed(
         let write = async move {
             // A helper that never starts (no python3) closes stdin early; its exit status says why.
             let _ = stdin.write_all(&body).await;
-            drop(stdin);
+            // Kept open until the helper has answered and exited. The helper takes its end as the connection
+            // dropping, or this side giving up (the time limit drops it, and kills ssh), and stops what it's doing
+            // (ADR 0043): ssh runs it without a terminal, so no hangup reaches it.
+            stdin
         };
         let read_out = async {
             let mut buf = Vec::new();
             let _ = (&mut stdout).take(MAX_REPLY as u64 + 1).read_to_end(&mut buf).await;
+            // Past the cap the answer is refused below, but the rest is still read and dropped: a helper blocked on
+            // a full pipe would never exit, and a write that landed would only be reported at the time limit.
+            let _ = tokio::io::copy(&mut stdout, &mut tokio::io::sink()).await;
             buf
         };
         let read_err = async {
@@ -453,8 +461,9 @@ pub async fn run_fed(
             }
             buf
         };
-        let ((), out, err) = tokio::join!(write, read_out, read_err);
+        let (stdin, out, err) = tokio::join!(write, read_out, read_err);
         let status = child.wait().await;
+        drop(stdin);
         (status, out, err)
     };
     let (status, out, err) = tokio::time::timeout(limit, work).await.map_err(|_| RepoError::Timeout(limit.as_secs()))?;
@@ -539,6 +548,16 @@ mod tests {
         let err = run_fed(c, prefix.as_deref(), &request, &|_| {}).await.unwrap_err();
         let _ = std::fs::remove_dir_all(&dir);
         assert!(matches!(&err, RepoError::Helper { .. }), "the helper ran and answered the request: {err:?}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_answer_over_the_cap_is_refused_without_waiting_for_the_time_limit() {
+        // A program that writes more than the cap, then exits: it can only exit if all of it is read.
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(format!("head -c {} /dev/zero", MAX_REPLY + 4 * 1024 * 1024));
+        let r = tokio::time::timeout(Duration::from_secs(20), run(c, &Request::Status { repo: "/r".into() })).await;
+        assert!(matches!(r, Ok(Err(RepoError::BadReply(_)))), "{r:?}");
     }
 
     #[test]
