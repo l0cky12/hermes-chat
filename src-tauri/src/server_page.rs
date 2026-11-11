@@ -1242,7 +1242,6 @@ while True:
         port
     }
 
-    #[cfg(unix)]
     async fn get(url: &str) -> std::io::Result<String> {
         let u = Url::parse(url).unwrap();
         let mut s = tokio::net::TcpStream::connect(("127.0.0.1", u.port().unwrap())).await?;
@@ -1689,12 +1688,20 @@ while True:
         std::fs::remove_dir_all(&base).unwrap();
     }
 
-    /// The relay's port, in front of a Unix socket standing in for ssh's that answers every request with `body`,
-    /// serving programs run by `account`.
-    #[cfg(target_os = "linux")]
-    async fn relay_for(body: &'static str, account: loopback_peer::Account) -> (u16, SocketDir) {
-        let dir = SocketDir::new().unwrap();
-        let ssh = tokio::net::UnixListener::bind(dir.socket()).unwrap();
+    /// The relay's port, in front of a stand-in for ssh's end that answers every request with `body`, serving programs
+    /// run by `account`. The second value keeps the stand-in's end open.
+    async fn relay_for(body: &'static str, account: loopback_peer::Account) -> (u16, impl Sized) {
+        #[cfg(unix)]
+        let (ssh, address, end) = {
+            let dir = SocketDir::new().unwrap();
+            (tokio::net::UnixListener::bind(dir.socket()).unwrap(), dir.socket(), dir)
+        };
+        #[cfg(windows)]
+        let (ssh, address, end) = {
+            let ssh = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let port = ssh.local_addr().unwrap().port();
+            (ssh, port, ())
+        };
         tokio::spawn(async move {
             while let Ok((mut s, _)) = ssh.accept().await {
                 tokio::spawn(async move {
@@ -1707,22 +1714,40 @@ while True:
         });
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        tokio::spawn(serve_for(listener, dir.socket(), account));
-        (port, dir)
+        tokio::spawn(serve_for(listener, address, account));
+        (port, end)
     }
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn the_relay_answers_this_accounts_programs_and_closes_on_any_other_accounts() {
         let me = loopback_peer::this_account();
-        let (port, _dir) = relay_for("the dashboard", me).await;
+        let (port, _end) = relay_for("the dashboard", me).await;
         let mine = get(&format!("http://127.0.0.1:{port}/")).await.unwrap();
         assert!(mine.ends_with("the dashboard"), "this account's program is relayed: {mine:?}");
 
         // A relay that serves another account: this program's real connection is then a stranger's.
-        let (port, _dir) = relay_for("the dashboard", me + 1).await;
+        let (port, _end) = relay_for("the dashboard", me + 1).await;
         let theirs = get(&format!("http://127.0.0.1:{port}/")).await.unwrap_or_default();
         assert_eq!(theirs, "", "another account's program gets nothing");
+    }
+
+    /// The relay, serving this account, for `.github/windows-relay/other-account.ps1`: it writes the port to
+    /// `$RELAY_DIR/port` and serves until the script writes `$RELAY_DIR/done`.
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore]
+    async fn the_relay_for_a_program_run_by_another_account() {
+        let (port, _end) = relay_for("the dashboard", loopback_peer::this_account()).await;
+        let dir = std::path::PathBuf::from(std::env::var("RELAY_DIR").expect("RELAY_DIR"));
+        std::fs::write(dir.join("port"), port.to_string()).unwrap();
+        for _ in 0..600 {
+            if dir.join("done").exists() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        panic!("the script never wrote done");
     }
 
     #[cfg(unix)]
