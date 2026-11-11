@@ -24,7 +24,7 @@ import { chunkBlocks } from "./transcriptChunks";
 import { useTranscriptWindow } from "./transcriptWindow";
 import { SourceIcon, Spinner, StoredTime, composing, escapeRe, highlight } from "./bits";
 import { caretAfter, editStep, inputKind, type EditStep } from "./editKeys";
-import { ariaKeys, chordLabel, chordOf, chordParts, pick as pickCommand, pickApp, useBindings, type Chord } from "./keybindings";
+import { ariaKeys, chordLabel, chordParts, pick as pickCommand, pickApp, typeNewLine, useBindings, type Chord } from "./keybindings";
 import type { EditKind } from "../hermes/editHistory";
 import { wakeFull } from "../hermes/snooze";
 import { stagedFiles } from "../hermes/unsaved";
@@ -49,9 +49,6 @@ import { CopyButton, replyMarkdown } from "./CopyMessage";
 import { turnsOf, type ReplayKind, type Variant } from "../hermes/replay";
 import type { FollowUp } from "../hermes/uiPrefs";
 import { sttRoute } from "../hermes/sttRoute";
-
-const NATIVE_NEW_LINE: readonly string[] = ["Enter", "Shift+Enter"];
-const insertAsTyping = (text: string) => document.execCommand("insertText", false, text);
 
 /**
  * What a message sent while the chat's reply runs does (ADR 0057). `mode`: what Enter does, the Follow-up behavior
@@ -1867,10 +1864,7 @@ function Composer({
               e.preventDefault();
               // Enter queues or steers only while the hint below says so; Dictation hides it.
               if (!(queueing && dictation.active)) send(command === "sendOther");
-            } else if (command === "newLine" && !NATIVE_NEW_LINE.includes(chordOf(e)!)) {
-              e.preventDefault();
-              insertAsTyping("\n");
-            }
+            } else if (command === "newLine") typeNewLine(e);
           }}
         />
         <div className="composer-bar">

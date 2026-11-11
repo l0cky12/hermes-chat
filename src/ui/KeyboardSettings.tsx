@@ -1,4 +1,4 @@
-// Settings, the Keyboard Shortcuts tab: every command of the app (keybindings.ts, ADR 0097) under its group, with the
+// Settings, the Keyboard Shortcuts tab: every command of the app (keybindings.ts, ADR 0143) under its group, with the
 // condition its keys work under, its chords as key chips, and a way to change it: click the chips, press the new keys,
 // Save. A changed command shows Custom and a Reset; two commands on one chord show a warning naming the other. Keys
 // that stay as they are (undo, the screenshot shortcut, Escape in a dialog) are listed so they can be found. Changes

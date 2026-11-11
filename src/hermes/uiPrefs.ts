@@ -68,7 +68,7 @@ export type UIPrefs = {
   /** How many days a finished entry stays in the inbox before it is dismissed on its own, as if by hand; null: never. */
   inboxAutoDismissDays: number | null;
   /**
-   * The keyboard shortcuts the owner changed (ui/keybindings.ts, ADR 0097): each command's chords, by command id. Only
+   * The keyboard shortcuts the owner changed (ui/keybindings.ts, ADR 0143): each command's chords, by command id. Only
    * overrides, so a command never changed takes whatever default this version gives it. Checked for shape here only;
    * keybindings.ts drops an id or chord it doesn't accept.
    */

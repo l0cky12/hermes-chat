@@ -1,4 +1,4 @@
-// Every keyboard shortcut of the app, as one table of commands (ADR 0097): each command's title, the Settings group it
+// Every keyboard shortcut of the app, as one table of commands (ADR 0143): each command's title, the Settings group it
 // is listed under, the scope its keys work in, the When condition the page shows, and its default chords. The owner's
 // overrides live in the display preferences (uiPrefs.ts `keybindings`), as a diff from the defaults, so a later
 // version's new default still reaches an owner who never changed that command. Each handler keeps its own guards and
@@ -118,7 +118,12 @@ export const FIXED: readonly FixedKey[] = [
   { title: "Undo what the notice offers to undo", keys: [chord("Ctrl+Z")], when: "!textFieldFocus && noticeShown", group: "chat" },
   { title: "Close the chat's menu", keys: [chord("Escape")], when: "chatMenuOpen", group: "threads" },
   { title: "Keep Tab inside the chat's menu; the letter beside an item picks it", keys: [chord("Tab")], when: "chatMenuOpen", group: "threads" },
+  { title: "Add the folder whose path you typed to the project", keys: [chord("Enter")], when: "projectFolderFocus", group: "threads" },
+  { title: "Clear the filter of a project's context files", keys: [chord("Escape")], when: "contextFilterFocus", group: "threads" },
   { title: "Cancel a delete question, or close a dialog", keys: [chord("Escape")], when: "dialogOpen", group: "navigation" },
+  { title: "Move between a menu's items", keys: [chord("ArrowDown"), chord("ArrowUp"), chord("Home"), chord("End")], when: "menuOpen", group: "navigation" },
+  { title: "Close a menu, back to its button", keys: [chord("Escape")], when: "menuOpen", group: "navigation" },
+  { title: "Put back the Preview's address you were typing", keys: [chord("Escape")], when: "previewAddressFocus", group: "panels" },
 ];
 
 const splitChord = (c: Chord): { mods: string[]; key: string } => {
@@ -231,6 +236,14 @@ export function pick(e: KeyboardEvent | ReactKeyboardEvent, scope: Scope): Comma
   const b = getBindings();
   const hits = idsIn(scope).filter((id) => b[id].includes(chord));
   return hits.find((id) => isCustom(b, id)) ?? hits[0];
+}
+
+/** For a composer's New line: Enter and Shift+Enter break the line by themselves; any other chord types the break. */
+export function typeNewLine(e: KeyboardEvent | ReactKeyboardEvent): void {
+  const c = chordOf(e);
+  if (c === "Enter" || c === "Shift+Enter") return;
+  e.preventDefault();
+  document.execCommand("insertText", false, "\n");
 }
 
 /** Which app-wide command a key press is. Every window listener asks this, so one press runs one command. */

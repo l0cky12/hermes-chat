@@ -8,6 +8,7 @@ import { FakeHermes, row, type FakeProject } from "../hermes/fakeHermes";
 import { connect, type Hermes } from "../hermes/transport";
 import { PROJECTS_KEY, PROJECTS_VERSION, projectLinks, projectScope } from "../hermes/projectLinks";
 import { savedDefaults, type DefaultsDraft } from "../hermes/projectDefaults";
+import { setUIPrefs } from "../hermes/uiPrefs";
 import { Main } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
@@ -364,6 +365,25 @@ describe("the project screen", () => {
     await screen.findByRole("heading", { name: /^Budget$/ });
     expect(s.projects.default[0].name).toBe("Budget");
     expect(switcher().textContent).toContain("Budget");
+  });
+
+  it("renames on the chord the owner gave Confirm a rename, and cancels on Cancel a rename's (#285)", async () => {
+    setUIPrefs({ keybindings: { renameSave: ["Ctrl+Enter"], renameCancel: ["Ctrl+Q"] } });
+    const { s, user } = await openScreen();
+    await openPart(user, "Rename");
+    const input = screen.getByRole("textbox", { name: "Project name" });
+    await user.clear(input);
+    await user.type(input, "Budget{Enter}{Escape}");
+    expect(screen.getByRole("textbox", { name: "Project name" })).toBe(input);
+    expect(s.projects.default[0].name).toBe("Budget Tracker");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    await screen.findByRole("heading", { name: /^Budget$/ });
+    expect(s.projects.default[0].name).toBe("Budget");
+    await openPart(user, "Rename");
+    await user.type(screen.getByRole("textbox", { name: "Project name" }), " old");
+    await user.keyboard("{Control>}q{/Control}");
+    expect(screen.queryByRole("textbox", { name: "Project name" })).toBeNull();
+    expect(s.projects.default[0].name).toBe("Budget");
   });
 
   it("deletes the project after asking, and keeps its chats and folders", async () => {

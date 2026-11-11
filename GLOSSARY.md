@@ -180,7 +180,7 @@ A pointer at part of a web page in the Preview, staged in the composer: a Screen
 _Avoid_: comment (the official desktop app's word), inspector
 
 **Keyboard shortcut**:
-Keys that run one of the app's commands: Search all chats, Send, Next chat in the list. Every command is listed under Settings → Keyboard Shortcuts with its keys and the condition they work under, and the owner can change any of them there; a change applies at once, shows in every hint, and is kept on this computer. Ctrl stands for Ctrl or Cmd. Keys match only with exactly the modifiers pressed, so Shift+Enter and Enter are different commands. No key answers an Approval or stops a reply, on purpose (ADR 0097).
+Keys that run one of the app's commands: Search all chats, Send, Next chat in the list. Every command is listed under Settings → Keyboard Shortcuts with its keys and the condition they work under, and the owner can change any of them there; a change applies at once, shows in every hint, and is kept on this computer. Ctrl stands for Ctrl or Cmd. Keys match only with exactly the modifiers pressed, so Shift+Enter and Enter are different commands. No key answers an Approval or stops a reply, on purpose (ADR 0143).
 _Avoid_: keybinding (the code's word), hotkey, accelerator
 
 **Global shortcut** (removed):

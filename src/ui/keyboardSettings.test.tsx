@@ -131,6 +131,10 @@ describe("The Keyboard Shortcuts page", () => {
     expect(button("Reset all").hasAttribute("disabled")).toBe(true);
     expect(screen.getByText("Take a screenshot for the composer")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^Change Take a screenshot/ })).toBeNull();
+    for (const fixed of ["Move between a menu's items", "Close a menu, back to its button", "Put back the Preview's address you were typing", "Add the folder whose path you typed to the project"]) {
+      expect(screen.getByText(fixed)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: new RegExp(`^Change ${fixed}`) })).toBeNull();
+    }
   });
 
   it("captures a new chord on click, saves it as the owner's own, keeps it, and runs it at once", async () => {
