@@ -620,7 +620,7 @@ describe("A chat that leaves the list under a pane (#467)", () => {
 
     await user.type(composerIn(0), "Unlock the restic repo{Enter}");
     // The send waits out the reconnect first.
-    await waitFor(() => expect(vi.mocked(hermes.sendTracked).mock.settledResults).toHaveLength(1), { timeout: 10_000 });
+    await waitFor(() => expect(vi.mocked(hermes.sendTracked).mock.settledResults[0]?.type).toBe("fulfilled"), { timeout: 10_000 });
     await settle(hermes);
     await waitFor(() => expect(titleIn(0)).toBe("New chat"));
     expect(composerIn(0).value).toBe("Unlock the restic repo");
@@ -649,7 +649,7 @@ describe("A chat that leaves the list under a pane (#467)", () => {
 
     await user.type(composerIn(0), "Unlock the restic repo{Enter}");
     // The send waits out the reconnect first.
-    await waitFor(() => expect(vi.mocked(hermes.sendTracked).mock.settledResults).toHaveLength(1), { timeout: 10_000 });
+    await waitFor(() => expect(vi.mocked(hermes.sendTracked).mock.settledResults[0]?.type).toBe("fulfilled"), { timeout: 10_000 });
     await settle(hermes);
     await waitFor(() => expect(composerIn(0).value).toBe("Unlock the restic repo"));
     expect(titleIn(0)).toBe("New chat");
