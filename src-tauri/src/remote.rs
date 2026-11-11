@@ -13,7 +13,8 @@
 //! goes to it and its window comes forward; with none running, the app starts and keeps the link for its window.
 //!
 //! The requests travel over the session bus on Linux (remote/bus.rs) and over a named pipe of this user's on Windows
-//! (remote/pipe.rs); either way only this user's own programs can send one. A screenshot request only opens the
+//! (remote/pipe.rs); either way only this user's own programs can send one, and a launch hands its request only to
+//! this user's own Hermes Chat. A screenshot request only opens the
 //! picker: nothing is captured until the owner picks, and nothing is sent until they send the message. A link only
 //! shows a chat, once the window has checked it. On Wayland `Show`, `Toggle` and `OpenLink` take the activation token
 //! the desktop gave the command, if any, so the compositor lets the window take focus.
