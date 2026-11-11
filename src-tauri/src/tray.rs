@@ -502,12 +502,19 @@ pub fn tray_status(tray: tauri::State<'_, Tray>) -> TrayStatus {
     tray.status()
 }
 
-/// Turns Close to tray on or off, and answers what the file holds once written.
+/// Turns Close to tray on or off, and answers what the file holds once written. The file is written off the main
+/// thread.
 #[tauri::command]
-pub fn tray_set_close_to_tray(tray: tauri::State<'_, Tray>, on: bool) -> Result<TrayStatus, String> {
-    let path = tray.settings.lock().unwrap().clone().ok_or("There's no config folder to keep the setting in.")?;
-    write_settings(&path, &Settings { close_to_tray: on })?;
-    let kept = read_settings(&path).close_to_tray;
+pub async fn tray_set_close_to_tray(app: AppHandle, on: bool) -> Result<TrayStatus, String> {
+    tokio::task::spawn_blocking(move || set_close_to_tray(&app.state::<Tray>(), on)).await.map_err(|e| e.to_string())?
+}
+
+fn set_close_to_tray(tray: &Tray, on: bool) -> Result<TrayStatus, String> {
+    // Held until the file is read back, so a second switch can't write between this one's write and read.
+    let settings = tray.settings.lock().unwrap();
+    let path = settings.as_ref().ok_or("There's no config folder to keep the setting in.")?;
+    write_settings(path, &Settings { close_to_tray: on })?;
+    let kept = read_settings(path).close_to_tray;
     tray.close_to_tray.store(kept, Ordering::SeqCst);
     if kept != on {
         return Err(format!("{} didn't keep the setting.", path.display()));
