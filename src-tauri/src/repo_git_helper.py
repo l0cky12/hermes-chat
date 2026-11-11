@@ -8,6 +8,7 @@
 #
 # Kept to the Python 3.8 standard library.
 
+import contextlib
 import hashlib
 import json
 import os
@@ -66,8 +67,31 @@ def run(argv, cwd, read_only=True, stdin=None, timeout=60, merge_output=False, e
     """(exit status, stdout bytes, stderr bytes) of `argv`, which is always git or gh, never a shell."""
     if argv[0] not in ("git", "gh"):
         raise Refusal("internal", "Only git and gh are run.")
+    # A stop signal waits until the child is in CHILDREN: if it ended the helper inside Popen, the child would be
+    # running with nobody holding its handle to stop it. From then on, main() stops it however the helper ends.
+    with no_stop():
+        proc = spawn(argv, cwd, stdin, merge_output, read_only, extra_env)
+        if TEST_STOP_AT and TEST_STOP_AT in argv:
+            os.kill(os.getpid(), signal.SIGTERM)
+        CHILDREN.append(proc)
     try:
-        proc = subprocess.Popen(
+        out, err = proc.communicate(stdin, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        end_child(proc)
+        raise Refusal("timeout", "%s %s took longer than %d s, so it was stopped." % (argv[0], argv[1] if len(argv) > 1 else "", timeout))
+    except BaseException:
+        # A stop signal (the connection dropped) or a bug: the child doesn't outlive the helper.
+        end_child(proc)
+        raise
+    finally:
+        if proc in CHILDREN:
+            CHILDREN.remove(proc)
+    return proc.returncode, out, err or b""
+
+
+def spawn(argv, cwd, stdin, merge_output, read_only, extra_env):
+    try:
+        return subprocess.Popen(
             argv,
             cwd=cwd,
             # Its own process group, hooks and all, so stopping it stops everything it started (end_child).
@@ -79,16 +103,6 @@ def run(argv, cwd, read_only=True, stdin=None, timeout=60, merge_output=False, e
         )
     except FileNotFoundError:
         raise Refusal("unsupported", "%s isn't installed on the server, or isn't on the PATH ssh gives it." % argv[0])
-    try:
-        out, err = proc.communicate(stdin, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        end_child(proc)
-        raise Refusal("timeout", "%s %s took longer than %d s, so it was stopped." % (argv[0], argv[1] if len(argv) > 1 else "", timeout))
-    except BaseException:
-        # A stop signal (the connection dropped) or a bug: the child doesn't outlive the helper.
-        end_child(proc)
-        raise
-    return proc.returncode, out, err or b""
 
 
 def end_child(proc):
@@ -579,8 +593,7 @@ class LockedIndex:
 
     def __enter__(self):
         # A stop signal waits while the lock is taken, so it can't land between taking it and recording it in HELD.
-        mask = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
-        try:
+        with no_stop():
             try:
                 fd = os.open(self.lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
             except FileExistsError:
@@ -588,8 +601,6 @@ class LockedIndex:
             os.close(fd)
             self.held = True
             HELD.append(self)
-        finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
         # Python doesn't call __exit__ when __enter__ raises: a failed copy (a full disk) lets the lock go here, or
         # every later `git add` in this checkout would fail until it was deleted by hand.
         try:
@@ -1361,9 +1372,36 @@ GONE = threading.Event()
 COMMIT_TIMEOUT = int(os.environ.get("HERMES_REPO_TEST_COMMIT_TIMEOUT") or 600)
 
 
+# The children running now: main() stops any still here however the helper ends.
+CHILDREN = []
+# Where a stop signal waits: inside no_stop(), it's held until the end of it.
+STOPPING = {"depth": 0, "signal": None}
+# A test sends the helper a stop signal while it starts the git command with this argument.
+TEST_STOP_AT = os.environ.get("HERMES_REPO_TEST_STOP_AT")
+
+
 def stop(signum, frame):
     # Ending through SystemExit lets the index lock, and the worktree record's state, be put back on the way out.
+    if STOPPING["depth"]:
+        STOPPING["signal"] = signum
+        return
     raise SystemExit(128 + signum)
+
+
+@contextlib.contextmanager
+def no_stop():
+    """Holds a stop signal until two steps that must go together are both done, such as starting a child and
+    recording it. (Blocking the signal instead would pass the block on to the child, which then couldn't be stopped
+    by SIGTERM.) The held signal is raised once, at the end; cleanup after it runs normally."""
+    STOPPING["depth"] += 1
+    try:
+        yield
+    finally:
+        STOPPING["depth"] -= 1
+        held = STOPPING["signal"]
+        if held and not STOPPING["depth"]:
+            STOPPING["signal"] = None
+            raise SystemExit(128 + held)
 
 
 def watch_connection():
@@ -1373,8 +1411,6 @@ def watch_connection():
     limit). The helper gets SIGTERM and ends as for any stop signal: the command it's running and everything that
     command started end (end_child), and the index and the worktree record are put back. If it hasn't ended a while
     later, SIGKILL."""
-    # The stop signals go to the main thread, which handles them, and which can then hold them off (LockedIndex).
-    signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
     # The file descriptor, not sys.stdin: a daemon thread blocked inside Python's buffered reader holds its lock, and
     # the interpreter then aborts on the way out ("could not acquire lock ... at interpreter shutdown"). Nothing
     # follows the request line, so nothing is left in that reader's buffer.
@@ -1409,6 +1445,9 @@ def main():
         sys.stdout.write("\x1ehermes-repo\x1e" + json.dumps(reply))
         sys.stdout.flush()
     finally:
+        # Children first: Git lets go of its own locks as it ends, then the helper's are let go.
+        for proc in list(CHILDREN):
+            end_child(proc)
         for idx in list(HELD):
             idx.__exit__()
 

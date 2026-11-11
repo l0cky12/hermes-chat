@@ -1641,3 +1641,25 @@ async fn the_remote_is_asked_for_the_branch_itself_not_a_ref_ending_like_it() {
     let h = ask(Request::RemoteHead { repo: d.s(), remote: "origin".into(), remote_branch: "feature".into() }).await.unwrap();
     assert_eq!(h["remoteHead"], Value::Null, "{h}");
 }
+
+#[tokio::test]
+async fn a_stop_while_git_is_starting_still_stops_it() {
+    // The connection drops just as the helper starts Git: Git is running, but Popen hasn't handed the helper its
+    // handle yet. The stop waits until it has, so Git is stopped, not left to finish the commit on its own.
+    let d = busy("stop-at-spawn");
+    let marker = d.path().join(".git/hook-ran");
+    hook(&d, "pre-commit", &format!("trap '' TERM\nsleep 1\ntouch '{}'", marker.display()));
+    git(d.path(), &["add", "notes.txt"]);
+    let p = preview(&d).await;
+    let before = head(&d);
+    let mut c = helper();
+    c.env("HERMES_REPO_TEST_STOP_AT", "commit");
+    let expect = Expect { raw_sha: p["rawSha"].as_str().map(Into::into), head_ref: p["headRef"].as_str().map(Into::into), ..expect_of(&p) };
+    let e = repo_git::run(c, &Request::Commit { repo: d.s(), message: "Never".into(), expect }).await.unwrap_err();
+    assert_eq!(kind(e), "bad-reply", "it was stopped before it answered");
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    assert!(!marker.exists(), "Git didn't go on to run its hook");
+    assert_eq!(head(&d), before, "nor commit");
+    let git_dir = std::fs::read_dir(d.path().join(".git")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+    assert!(!git_dir.iter().any(|n| n.starts_with("index.") || n.ends_with(".lock")), "no lock or index copy is left: {git_dir:?}");
+}

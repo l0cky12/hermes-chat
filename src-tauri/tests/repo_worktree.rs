@@ -625,7 +625,8 @@ async fn two_retries_of_setup_cant_both_run() {
     let repo_path = s(&app);
     let first = tokio::spawn(async move {
         let req = Request::WorktreeSetup { repo: repo_path, id: ID.into() };
-        repo_git::run_streaming(helper(&[("HERMES_REPO_TEST_SETUP_DELAY", "2")]), &req, &move |l| {
+        // Long enough for the second Retry and the removal plan to run inside it, on a busy machine too.
+        repo_git::run_streaming(helper(&[("HERMES_REPO_TEST_SETUP_DELAY", "5")]), &req, &move |l| {
             if l["step"] == "setup" {
                 *flag.lock().unwrap() = true;
             }
@@ -835,4 +836,66 @@ async fn a_folder_written_with_a_trailing_slash_is_linked_like_one_without() {
     // The link is setup's own, not a change of the owner's.
     let l = list(&app).await;
     assert_eq!(tree(&l, &s(&wt))["dirty"]["untracked"], 0, "{l}");
+}
+
+/// The helper as sshd leaves it when the connection drops: started in the background on the same stdin, so killing
+/// what `run` started (as giving up does) closes only its stdin. Its pid goes to `pidfile`. (As in repo_git.rs.)
+fn behind_sshd(pidfile: &Path, env: &[(&str, &str)]) -> Command {
+    let mut c = Command::new("sh");
+    c.arg("-c").arg(r#"exec 3<&0; sh -c "$1" <&3 3<&- & echo $! > "$2"; wait"#).arg("sh").arg(repo_git::remote_command()).arg(pidfile);
+    c.env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_ALLOW_PROTOCOL", "file");
+    for (k, v) in env {
+        c.env(k, v);
+    }
+    c
+}
+
+fn ended(pid: i32) -> bool {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(s) => s.rsplit(')').next().is_some_and(|rest| rest.trim_start().starts_with('Z')),
+        Err(_) => (unsafe { libc::kill(pid, 0) }) != 0,
+    }
+}
+
+async fn wait_for(what: &str, ok: impl Fn() -> bool) {
+    for _ in 0..400 {
+        if ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("{what} didn't happen");
+}
+
+#[tokio::test]
+async fn a_connection_dropped_between_unlocking_and_removing_leaves_the_worktree_locked() {
+    let (d, app) = repo("drop-unlock");
+    create(&app, ID, "feature/u", false).await;
+    let wt = d.path().join("app-feature-u");
+    let p = remove_plan(&app, ID).await;
+    // A git that unlocks, then keeps the helper waiting, so the connection drops between the unlock and the removal.
+    let bin = Dir::new("drop-unlock-bin");
+    let marker = bin.path().join("unlocked");
+    let real = String::from_utf8(StdCommand::new("sh").arg("-c").arg("command -v git").output().unwrap().stdout).unwrap();
+    write_executable(
+        &bin.path().join("git"),
+        &format!("#!/bin/sh\n'{}' \"$@\" || exit $?\nfor a; do [ \"$a\" = unlock ] && {{ touch '{}'; exec sleep 300; }}; done\nexit 0\n", real.trim(), marker.display()),
+    );
+    let pidfile = bin.path().join("helper-pid");
+    let path = format!("{}:{}", s(bin.path()), std::env::var("PATH").unwrap());
+    let command = behind_sshd(&pidfile, &[("PATH", path.as_str())]);
+    let req = Request::WorktreeRemove { repo: s(&app), id: ID.into(), expect: p["stamp"].as_str().unwrap().into() };
+    let task = tokio::spawn(async move { repo_git::run(command, &req).await });
+    wait_for("the unlock", || marker.exists()).await;
+    let helper: i32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
+    task.abort();
+    let _ = task.await;
+    wait_for("the helper's end", || ended(helper)).await;
+
+    assert!(wt.is_dir(), "nothing was removed");
+    let listed = git(&app, &["worktree", "list", "--porcelain"]);
+    let entry = listed.split("\n\n").find(|e| e.contains("app-feature-u")).unwrap();
+    assert!(entry.contains(&format!("locked hermes-chat: managed worktree {ID}")), "locked again: {entry}");
+    let l = list(&app).await;
+    assert_eq!(tree(&l, &s(&wt))["managed"]["state"], "ready", "the record is as it was: {l}");
 }

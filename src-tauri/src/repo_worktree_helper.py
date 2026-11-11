@@ -1187,8 +1187,6 @@ def op_worktree_remove(req):
             again, _ = removal_facts(top, before)
             if again["blockers"] or again["stamp"] != facts["stamp"]:
                 raise Refusal("stale", "Files changed while they were being kept. Nothing was removed. Check the new preview.")
-            if tree.get("locked") is not None:
-                git_ok(["worktree", "unlock", rec["path"]], top, read_only=False)
             force = ["--force"] if (facts["keep"] or facts["submodules"]) else []
 
             def relock():
@@ -1197,9 +1195,11 @@ def op_worktree_remove(req):
                 git(["worktree", "lock", "--reason", LOCK_REASON + rec_id, rec["path"]], top, read_only=False)
 
             try:
+                if tree.get("locked") is not None:
+                    git_ok(["worktree", "unlock", rec["path"]], top, read_only=False)
                 code, out, err = git(["worktree", "remove"] + force + [rec["path"]], top, read_only=False, timeout=600)
             except BaseException:
-                # Timed out, or the connection dropped.
+                # The unlock or the removal failed, timed out, or the connection dropped.
                 relock()
                 raise
             if code != 0:
