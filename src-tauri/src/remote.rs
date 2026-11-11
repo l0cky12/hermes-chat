@@ -22,7 +22,6 @@
 #[cfg(target_os = "linux")]
 mod bus;
 #[cfg(target_os = "linux")]
-use crate::lock::Locked;
 use bus as desktop;
 #[cfg(windows)]
 mod pipe;
@@ -35,6 +34,7 @@ mod desktop {
     }
 }
 
+use crate::lock::Locked;
 use serde::{Deserialize, Serialize};
 use std::sync::{
     atomic::{AtomicU64, Ordering},

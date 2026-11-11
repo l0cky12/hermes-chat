@@ -48,6 +48,14 @@ pub(crate) fn runs_as_this_account(pid: u32) -> bool {
     this.is_some() && win::account_of(pid) == this
 }
 
+/// Whether file or folder `path` has the owner this process gives what it makes: its account, or the Administrators
+/// group when it runs elevated. False when either owner can't be read.
+#[cfg(windows)]
+pub(crate) fn owned_as_this_process_makes(path: &std::path::Path) -> bool {
+    let this = win::default_owner();
+    this.is_some() && win::owner_of(path) == this
+}
+
 /// Who a relay port serves.
 #[derive(Clone, Copy)]
 pub(crate) enum Peers {
@@ -112,14 +120,50 @@ mod win {
     use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE, NO_ERROR};
     use windows_sys::Win32::NetworkManagement::IpHelper::{GetExtendedTcpTable, MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID, TCP_TABLE_OWNER_PID_CONNECTIONS};
     use windows_sys::Win32::Networking::WinSock::AF_INET;
-    use windows_sys::Win32::Security::{GetLengthSid, GetTokenInformation, IsValidSid, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows_sys::Win32::Security::{GetLengthSid, GetTokenInformation, IsValidSid, TokenOwner, TokenUser, PSID, TOKEN_INFORMATION_CLASS, TOKEN_QUERY};
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION};
 
     pub(crate) const SID_SIZE: usize = 68;
 
     pub(super) fn this_account() -> Account {
         // SAFETY: the pseudo-handle for this process needs no closing.
-        unsafe { user_of(GetCurrentProcess()) }
+        unsafe { token_sid(GetCurrentProcess(), TokenUser) }
+    }
+
+    /// The owner this process gives what it makes (`TokenOwner`).
+    pub(super) fn default_owner() -> Account {
+        // SAFETY: the pseudo-handle for this process needs no closing.
+        unsafe { token_sid(GetCurrentProcess(), TokenOwner) }
+    }
+
+    /// The owner of file or folder `path`. `None` when Windows won't say.
+    pub(super) fn owner_of(path: &std::path::Path) -> Account {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
+        use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
+        use windows_sys::Win32::Security::{OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut owner: PSID = std::ptr::null_mut();
+        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: `wide` ends in a NUL. `owner` points into `descriptor`, which is freed once the SID is copied out.
+        unsafe {
+            let read = GetNamedSecurityInfoW(
+                wide.as_ptr(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                &mut owner,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut descriptor,
+            );
+            if read != ERROR_SUCCESS {
+                return None;
+            }
+            let account = sid_bytes(owner);
+            LocalFree(descriptor);
+            account
+        }
     }
 
     /// The account process `pid` runs as. `None` when Windows won't open the process or its token, which is the case
@@ -131,29 +175,36 @@ mod win {
             if process.is_null() {
                 return None;
             }
-            let user = user_of(process);
+            let user = token_sid(process, TokenUser);
             CloseHandle(process);
             user
         }
     }
 
+    /// The SID `class` names in `process`'s token: `TokenUser` or `TokenOwner`, which both start with the SID's pointer.
+    ///
     /// # Safety
     /// `process` is a live process handle with at least limited query access.
-    unsafe fn user_of(process: HANDLE) -> Account {
+    unsafe fn token_sid(process: HANDLE, class: TOKEN_INFORMATION_CLASS) -> Account {
         let mut token: HANDLE = std::ptr::null_mut();
         if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
             return None;
         }
-        // A TOKEN_USER and the SID it points to, which Windows puts right after it. 8-aligned, as TOKEN_USER needs.
+        // The structure and the SID it points to, which Windows puts right after it. 8-aligned, as it needs.
         let mut buf = [0u64; 16];
         let mut len = 0u32;
-        let read = GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), size_of_val(&buf) as u32, &mut len);
+        let read = GetTokenInformation(token, class, buf.as_mut_ptr().cast(), size_of_val(&buf) as u32, &mut len);
         CloseHandle(token);
         if read == 0 {
             return None;
         }
-        let sid = (*buf.as_ptr().cast::<TOKEN_USER>()).User.Sid;
-        if IsValidSid(sid) == 0 {
+        sid_bytes(*buf.as_ptr().cast::<PSID>())
+    }
+
+    /// # Safety
+    /// `sid` is null or points to memory Windows filled with a SID.
+    unsafe fn sid_bytes(sid: PSID) -> Account {
+        if sid.is_null() || IsValidSid(sid) == 0 {
             return None;
         }
         let n = GetLengthSid(sid) as usize;
@@ -355,5 +406,15 @@ mod windows_tests {
         assert!(admits(Peers::Account(this_account()), &server));
         assert!(!admits(Peers::Account(local_system()), &server));
         assert!(!admits(Peers::Account(None), &server), "an account the app couldn't read matches nothing");
+    }
+    #[test]
+    fn a_folder_this_process_made_has_its_owner_and_the_system_folder_doesnt() {
+        let dir = std::env::temp_dir().join(format!("hermes-owner-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(owned_as_this_process_makes(&dir));
+        let _ = std::fs::remove_dir(&dir);
+        let system = std::path::Path::new(&std::env::var("SystemRoot").unwrap()).join("System32");
+        assert!(!owned_as_this_process_makes(&system), "System32 is TrustedInstaller's");
+        assert!(!owned_as_this_process_makes(&dir), "a folder that's gone has no owner");
     }
 }

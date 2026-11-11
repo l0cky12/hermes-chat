@@ -516,13 +516,16 @@ pub fn sweep_scratch() {
 
 fn sweep_scratch_in(temp: &Path, now: std::time::SystemTime) {
     for dir in children(temp).into_iter().filter(|p| name_of(p).starts_with(SCRATCH_PREFIX)) {
-        // Not followed if it is a link: only a real folder, and on a shared `/tmp` only this account's, is deleted.
+        // Not followed if it is a link: only a real folder, and only this account's, is deleted, since the temp folder
+        // may be shared (`/tmp`, or a `TEMP` set to a shared folder). One whose owner can't be read is left.
         let Ok(found) = std::fs::symlink_metadata(&dir) else { continue };
         #[cfg(unix)]
         // SAFETY: `getuid` only reads this process's user id.
         let mine = std::os::unix::fs::MetadataExt::uid(&found) == unsafe { libc::getuid() };
-        #[cfg(not(unix))]
-        let mine = true;
+        #[cfg(windows)]
+        let mine = crate::loopback_peer::owned_as_this_process_makes(&dir);
+        #[cfg(not(any(unix, windows)))]
+        let mine = false;
         let stale = found.modified().is_ok_and(|at| now.duration_since(at).is_ok_and(|age| age >= SCRATCH_STALE_AFTER));
         if found.is_dir() && mine && stale && !removed(&dir) {
             eprintln!("hermes-chat: couldn't delete an old recording's folder, {}", dir.display());

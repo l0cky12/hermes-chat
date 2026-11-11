@@ -1133,11 +1133,11 @@ const ATTACHMENT_MAX_BYTES: u64 = 256 * MIB;
 
 /// How many frames wait behind the one being written. Only a slow write fills it (a big file frame on a slow uplink,
 /// #469), and no frame can go before that write ends anyway, so a bigger queue would only hold more memory. A JSON-RPC
-/// frame can't be dropped: past it, `Pipe::send` waits.
+/// frame can't be dropped: past it, `PipeSender::send` waits.
 const PIPE_QUEUE: usize = 16;
 
 /// A frame for the pipe task to write, and who hears once it has been written. `file`: a file frame's turn
-/// (`Pipe::send_file`), given back once it has been written.
+/// (`PipeSender::send_file`), given back once it has been written.
 struct Outgoing {
     text: String,
     written: Option<oneshot::Sender<Result<(), String>>>,
@@ -1146,13 +1146,26 @@ struct Outgoing {
 
 /// An open `/api/ws` connection. Dropping it closes the socket.
 pub struct Pipe {
-    outgoing: mpsc::Sender<Outgoing>,
-    /// One permit: a file frame is the whole file as base64, up to about 341 MiB, so one is read and held at a time.
-    files: std::sync::Arc<tokio::sync::Semaphore>,
+    sender: PipeSender,
     task: JoinHandle<()>,
 }
 
+/// What sends on a `Pipe`. A clone doesn't keep the socket open: once the `Pipe` is dropped, a send still waiting for
+/// its turn fails with `Closed`, so nothing queued for one connection goes out after it is replaced or signed out of.
+#[derive(Clone)]
+pub struct PipeSender {
+    outgoing: mpsc::Sender<Outgoing>,
+    /// One permit: a file frame is the whole file as base64, up to about 341 MiB, so one is read and held at a time.
+    files: std::sync::Arc<tokio::sync::Semaphore>,
+}
+
 impl Pipe {
+    pub fn sender(&self) -> PipeSender {
+        self.sender.clone()
+    }
+}
+
+impl PipeSender {
     /// Queue one frame, waiting while `PIPE_QUEUE` frames already wait.
     pub async fn send(&self, text: String) -> Result<(), TransportError> {
         self.outgoing.send(Outgoing { text, written: None, file: None }).await.map_err(|_| TransportError::Closed)
@@ -1162,7 +1175,7 @@ impl Pipe {
     /// `ATTACHMENT_MAX_BYTES`) without
     /// sending anything; the size is checked again after reading, in case it grew. The frame may take minutes to write
     /// on a slow uplink, so `Written` says when it has gone, and the webview can tell a long upload from a silent
-    /// Hermes (#469). Wait on it without holding the `Pipe`: dropping the pipe must still stop the write.
+    /// Hermes (#469).
     pub async fn send_file(&self, head: &str, path: &str, tail: &str, max_bytes: u64) -> Result<Written, TransportError> {
         let file = self.files.clone().acquire_owned().await.map_err(|_| TransportError::Closed)?;
         if self.outgoing.is_closed() {
@@ -1262,12 +1275,13 @@ where
         };
         on_event(PipeEvent::Closed { reason });
     });
-    Pipe { outgoing, files: std::sync::Arc::new(tokio::sync::Semaphore::new(1)), task }
+    Pipe { sender: PipeSender { outgoing, files: std::sync::Arc::new(tokio::sync::Semaphore::new(1)) }, task }
 }
 
 impl Drop for Pipe {
     fn drop(&mut self) {
         self.task.abort();
+        self.sender.files.close();
     }
 }
 
@@ -1319,13 +1333,25 @@ async fn open_pipe_socket(handshake: tokio_tungstenite::tungstenite::handshake::
     Ok(tokio_tungstenite::client_async_tls(handshake, CappedWrites(tcp)).await?.0)
 }
 
+/// The session cookies, and the values most recently replaced or removed: a request may have sent one of those just
+/// before, and its error page may repeat it (`Dashboard::hidden`).
+#[derive(Default)]
+struct Jar {
+    live: Vec<(String, String)>,
+    replaced: std::collections::VecDeque<String>,
+}
+
+/// How many replaced values the jar keeps hidden. The dashboard rotates its access and refresh cookies together, once
+/// an access token expires, so this covers requests still in flight across eight rotations.
+const REPLACED_COOKIES_KEPT: usize = 16;
+
 /// A signed-in dashboard session. It keeps the session cookies up to date: the dashboard rotates an
 /// expired access token through the refresh cookie on any request and sends the new ones back. A token sign-in has
 /// no cookies: its `Authorization` header goes with every request instead (ADR 0058).
 pub struct Dashboard {
     http: reqwest::Client,
     base: Url,
-    cookies: Mutex<Vec<(String, String)>>,
+    cookies: Mutex<Jar>,
     /// The owner's extra request headers, and a token sign-in's `Authorization`; `http` sends them all itself, the
     /// WebSocket handshake adds the extra headers.
     headers: HeaderMap,
@@ -1899,19 +1925,28 @@ impl Dashboard {
                 continue;
             };
             let (name, value) = (name.trim(), value.trim());
-            jar.retain(|(n, _)| n != name);
+            if let Some(at) = jar.live.iter().position(|(n, _)| n == name) {
+                let (_, old) = jar.live.remove(at);
+                if old != value {
+                    if jar.replaced.len() == REPLACED_COOKIES_KEPT {
+                        jar.replaced.pop_front();
+                    }
+                    jar.replaced.push_back(old);
+                }
+            }
             if !value.is_empty() && !expired(attributes) {
-                jar.push((name.to_owned(), value.to_owned()));
+                jar.live.push((name.to_owned(), value.to_owned()));
             }
         }
     }
 
-    /// What an error mustn't repeat to be shown: `hide`, and the value of each session cookie, as a `cookie` entry
-    /// that `shown_body` doesn't count as an extra request header. A value shorter than `HEADER_PIECE` is left out:
-    /// no session cookie is that short, and one such as `1` would hide nearly every error.
+    /// What an error mustn't repeat to be shown: `hide`, and the value of each session cookie, held or lately replaced
+    /// (`Jar`), as a `cookie` entry that `shown_body` doesn't count as an extra request header. A value shorter than
+    /// `HEADER_PIECE` is left out: no session cookie is that short, and one such as `1` would hide nearly every error.
     fn hidden(&self) -> HeaderMap {
         let mut hide = self.hide.clone();
-        for (_, value) in self.cookies.locked().iter().filter(|(_, v)| v.len() >= HEADER_PIECE) {
+        let jar = self.cookies.locked();
+        for value in jar.live.iter().map(|(_, v)| v).chain(&jar.replaced).filter(|v| v.len() >= HEADER_PIECE) {
             if let Ok(mut value) = HeaderValue::from_str(value) {
                 value.set_sensitive(true);
                 hide.append(header::COOKIE, value);
@@ -1936,7 +1971,7 @@ impl Dashboard {
 
     fn cookie_header(&self) -> String {
         let jar = self.cookies.locked();
-        jar.iter().map(|(n, v)| format!("{n}={v}")).collect::<Vec<_>>().join("; ")
+        jar.live.iter().map(|(n, v)| format!("{n}={v}")).collect::<Vec<_>>().join("; ")
     }
 }
 
@@ -3595,10 +3630,10 @@ mod tests {
         std::fs::write(&path, vec![7u8; size]).unwrap();
         let ws = super::open_pipe_socket(super::IntoClientRequest::into_client_request(format!("ws://{addr}/api/ws")).unwrap()).await.unwrap();
         let (events, mut heard) = tokio::sync::mpsc::unbounded_channel();
-        let pipe = std::sync::Arc::new(super::run_pipe(ws, move |e| drop(events.send(e)), super::HeaderMap::new()));
+        let pipe = super::run_pipe(ws, move |e| drop(events.send(e)), super::HeaderMap::new());
 
         let sending = {
-            let (pipe, path) = (pipe.clone(), path.to_string_lossy().into_owned());
+            let (pipe, path) = (pipe.sender(), path.to_string_lossy().into_owned());
             tokio::spawn(async move { pipe.send_file("{\"f\":\"", &path, "\"}", 64 * 1024 * 1024).await?.wait().await })
         };
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -3631,7 +3666,7 @@ mod tests {
         let ws = super::open_pipe_socket(super::IntoClientRequest::into_client_request(format!("ws://{addr}/api/ws")).unwrap()).await.unwrap();
         let pipe = super::run_pipe(ws, |_| {}, super::HeaderMap::new());
 
-        let written = pipe.send_file("{\"f\":\"", &path.to_string_lossy(), "\"}", 64 * 1024 * 1024).await.unwrap();
+        let written = pipe.sender().send_file("{\"f\":\"", &path.to_string_lossy(), "\"}", 64 * 1024 * 1024).await.unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
         drop(pipe);
         let ended = tokio::time::timeout(Duration::from_secs(5), written.wait()).await.expect("the write went on after the pipe was dropped");
@@ -3691,7 +3726,7 @@ mod tests {
     async fn an_attachment_limit_past_any_size_is_held_to_the_attachment_limit() {
         let (pipe, mut frames) = reading_pipe().await;
         let path = temp_file("attach-unlimited", b"abc");
-        match pipe.send_file("[", &path.to_string_lossy(), "]", u64::MAX).await {
+        match pipe.sender().send_file("[", &path.to_string_lossy(), "]", u64::MAX).await {
             Ok(written) => written.wait().await.unwrap(),
             Err(e) => panic!("{e:?}"),
         }
@@ -3699,7 +3734,7 @@ mod tests {
 
         let big = temp_file("attach-too-big", b"");
         std::fs::File::options().write(true).open(&big).unwrap().set_len(256 * 1024 * 1024 + 1).unwrap();
-        match pipe.send_file("[", &big.to_string_lossy(), "]", u64::MAX).await {
+        match pipe.sender().send_file("[", &big.to_string_lossy(), "]", u64::MAX).await {
             Err(TransportError::FileTooLarge { max, .. }) => assert_eq!(max, 256 * 1024 * 1024),
             Err(e) => panic!("{e:?}"),
             Ok(_) => panic!("a file over 256 MiB was sent"),
@@ -3790,7 +3825,7 @@ mod tests {
     }
 
     /// A pipe to a WebSocket server that reads nothing until `read` is sent, then hands each frame's text on.
-    async fn held_pipe() -> (std::sync::Arc<super::Pipe>, tokio::sync::oneshot::Sender<()>, tokio::sync::mpsc::UnboundedReceiver<String>) {
+    async fn held_pipe() -> (super::Pipe, tokio::sync::oneshot::Sender<()>, tokio::sync::mpsc::UnboundedReceiver<String>) {
         use futures_util::StreamExt;
         let listener = small_buffered_listener();
         let addr = listener.local_addr().unwrap();
@@ -3808,7 +3843,7 @@ mod tests {
             }
         });
         let ws = super::open_pipe_socket(super::IntoClientRequest::into_client_request(format!("ws://{addr}/api/ws")).unwrap()).await.unwrap();
-        (std::sync::Arc::new(super::run_pipe(ws, |_| {}, super::HeaderMap::new())), read, heard)
+        (super::run_pipe(ws, |_| {}, super::HeaderMap::new()), read, heard)
     }
 
     /// A JSON-RPC frame can't be dropped, so behind a write Hermes isn't reading, frames wait rather than pile up:
@@ -3816,13 +3851,14 @@ mod tests {
     #[tokio::test]
     async fn sending_waits_once_16_frames_are_queued_behind_a_slow_write() {
         let (pipe, read, mut frames) = held_pipe().await;
+        let sender = pipe.sender();
         let big = "x".repeat(24 * 1024 * 1024);
-        pipe.send(big.clone()).await.unwrap();
+        sender.send(big.clone()).await.unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
         for i in 0..16 {
-            tokio::time::timeout(Duration::from_secs(1), pipe.send(format!("{i}"))).await.expect("queued").unwrap();
+            tokio::time::timeout(Duration::from_secs(1), sender.send(format!("{i}"))).await.expect("queued").unwrap();
         }
-        let mut waiting = std::pin::pin!(pipe.send("16".into()));
+        let mut waiting = std::pin::pin!(sender.send("16".into()));
         assert!(tokio::time::timeout(Duration::from_millis(300), &mut waiting).await.is_err(), "a 17th frame queued behind the write");
         read.send(()).unwrap();
         tokio::time::timeout(Duration::from_secs(20), waiting).await.expect("still waiting once Hermes read").unwrap();
@@ -3841,7 +3877,7 @@ mod tests {
         let second = std::env::temp_dir().join(format!("hermes-transport-attach-second-{}", std::process::id()));
         let _ = std::fs::remove_file(&second);
         let send = |path: &std::path::Path| {
-            let (pipe, path) = (pipe.clone(), path.to_string_lossy().into_owned());
+            let (pipe, path) = (pipe.sender(), path.to_string_lossy().into_owned());
             tokio::spawn(async move { pipe.send_file("[", &path, "]", u64::MAX).await?.wait().await })
         };
         let sending_first = send(&first);
@@ -3855,6 +3891,50 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(20), sending_second).await.unwrap().unwrap().unwrap();
         assert_eq!(frames.recv().await.unwrap().len(), 2 + (24 * 1024 * 1024usize).div_ceil(3) * 4);
         assert_eq!(frames.recv().await.unwrap(), "[bGF0ZXI=]");
+        let _ = std::fs::remove_file(&first);
+        let _ = std::fs::remove_file(&second);
+    }
+
+    /// Signing out or connecting again drops the connection's pipe. A frame still waiting for room in the queue then
+    /// fails, rather than keeping the old socket open and going out on it once Hermes reads again.
+    #[tokio::test]
+    async fn a_send_waiting_for_room_fails_once_the_pipe_is_dropped() {
+        let (pipe, _read, _frames) = held_pipe().await;
+        let sender = pipe.sender();
+        sender.send("x".repeat(24 * 1024 * 1024)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        for i in 0..16 {
+            tokio::time::timeout(Duration::from_secs(1), sender.send(format!("{i}"))).await.expect("queued").unwrap();
+        }
+        let waiting = tokio::spawn(async move { sender.send("after sign-out".into()).await });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!waiting.is_finished(), "the 17th frame didn't wait");
+        drop(pipe);
+        let sent = tokio::time::timeout(Duration::from_secs(2), waiting).await.expect("still waiting after the pipe was dropped").unwrap();
+        assert!(matches!(sent, Err(TransportError::Closed)), "{sent:?}");
+    }
+
+    /// The same for an attachment waiting for the one being written: it fails without its file being read, and the
+    /// one being written stops too.
+    #[tokio::test]
+    async fn an_attachment_waiting_its_turn_fails_once_the_pipe_is_dropped() {
+        let (pipe, _read, _frames) = held_pipe().await;
+        let first = temp_file("attach-dropped-first", &vec![7u8; 24 * 1024 * 1024]);
+        let second = temp_file("attach-dropped-second", b"later");
+        let send = |path: &std::path::Path| {
+            let (pipe, path) = (pipe.sender(), path.to_string_lossy().into_owned());
+            tokio::spawn(async move { pipe.send_file("[", &path, "]", u64::MAX).await?.wait().await })
+        };
+        let sending_first = send(&first);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let sending_second = send(&second);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!sending_second.is_finished(), "the second attachment didn't wait its turn");
+        drop(pipe);
+        for sending in [sending_first, sending_second] {
+            let sent = tokio::time::timeout(Duration::from_secs(2), sending).await.expect("still sending after the pipe was dropped").unwrap();
+            assert!(matches!(sent, Err(TransportError::Closed)), "{sent:?}");
+        }
         let _ = std::fs::remove_file(&first);
         let _ = std::fs::remove_file(&second);
     }
@@ -3930,6 +4010,31 @@ mod tests {
         match dashboard.request("GET", "api/fail", None).await {
             Err(TransportError::Unexpected { status: 500, body }) => assert_eq!(body, "Internal Server Error"),
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// An error page answering a request with a cookie it replaces or removes in the same answer still doesn't show
+    /// the value that request sent.
+    #[tokio::test]
+    async fn an_error_repeating_a_cookie_it_replaces_is_not_shown() {
+        use axum::http::StatusCode;
+        use axum::response::AppendHeaders;
+        let leak = |set: &'static str| {
+            move |headers: axum::http::HeaderMap| async move {
+                (StatusCode::INTERNAL_SERVER_ERROR, AppendHeaders([("set-cookie", set)]), format!("no session for {}", cookie_of(&headers)))
+            }
+        };
+        let app = axum::Router::new()
+            .route("/api/set", axum::routing::get(|| async { AppendHeaders([("set-cookie", "hermes_session_at=at-0123456789abcdef; Path=/")]) }))
+            .route("/api/rotate", axum::routing::get(leak("hermes_session_at=at-fedcba9876543210; Path=/")))
+            .route("/api/remove", axum::routing::get(leak("hermes_session_at=; Max-Age=0; Path=/")));
+        let dashboard = dashboard_at(&serve(app).await);
+        dashboard.request("GET", "api/set", None).await.unwrap();
+        for path in ["api/rotate", "api/remove"] {
+            match dashboard.request("GET", path, None).await {
+                Err(TransportError::Unexpected { status: 500, body }) => assert_eq!(body, super::HIDDEN, "{path}"),
+                other => panic!("{path}: {other:?}"),
+            }
         }
     }
 

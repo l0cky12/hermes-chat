@@ -22,8 +22,9 @@ def import_line(path: pathlib.Path) -> str:
 def add_import(text: str, line: str) -> str:
     if line in text:
         return text
-    # After the file's leading `//!` docs and attributes, before its first `use`, or at the top.
-    m = re.search(r"^use ", text, re.M)
+    # Before the file's first `use` and the attributes on it (a `#[cfg]` there guards that `use`, not this one), else
+    # after the file's leading `//!` docs and attributes.
+    m = re.search(r"^(?:#\[.*\]\n)*use ", text, re.M)
     if m:
         return text[: m.start()] + line + text[m.start() :]
     m = re.match(r"(?:(?://!.*|#!\[.*\])\n)*\n?", text)

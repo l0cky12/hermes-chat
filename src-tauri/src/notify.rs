@@ -113,6 +113,10 @@ mod desktop {
     /// How long the thread listens before it looks for a new notification to post: how late one may show.
     const LISTEN: Duration = Duration::from_millis(200);
     const ENDED: &str = "The notification thread ended.";
+    /// How many notifications may wait while the thread posts one. A post can take `CALL_TIMEOUT` when the service
+    /// stalls, and one that has waited eight of those, 40 s, isn't news any more: past it, a new one is refused.
+    const WAITING: usize = 8;
+    const TOO_MANY: &str = "The notification service isn't keeping up, so this notification wasn't shown.";
 
     struct Post {
         app: AppHandle,
@@ -127,17 +131,24 @@ mod desktop {
         Closed(u32),
     }
 
-    static POSTS: OnceLock<mpsc::Sender<Post>> = OnceLock::new();
+    static POSTS: OnceLock<mpsc::SyncSender<Post>> = OnceLock::new();
 
     pub(super) async fn show(app: AppHandle, title: String, body: String) -> Result<(), String> {
         let posts = POSTS.get_or_init(|| {
-            let (posts, received) = mpsc::channel();
+            let (posts, received) = mpsc::sync_channel(WAITING);
             std::thread::spawn(move || run(received));
             posts
         });
         let (posted, outcome) = tokio::sync::oneshot::channel();
-        posts.send(Post { app, title, body, posted }).map_err(|_| ENDED.to_owned())?;
+        admit(posts, Post { app, title, body, posted })?;
         outcome.await.map_err(|_| ENDED.to_owned())?
+    }
+
+    fn admit<T>(posts: &mpsc::SyncSender<T>, post: T) -> Result<(), String> {
+        posts.try_send(post).map_err(|e| match e {
+            mpsc::TrySendError::Full(_) => TOO_MANY.to_owned(),
+            mpsc::TrySendError::Disconnected(_) => ENDED.to_owned(),
+        })
     }
 
     fn run(posts: mpsc::Receiver<Post>) {
@@ -227,6 +238,24 @@ mod desktop {
             }
             self.clickable.prune(Instant::now());
             !self.clickable.is_empty()
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn past_8_waiting_on_a_stalled_service_a_notification_is_refused() {
+            let (posts, stalled) = mpsc::sync_channel(WAITING);
+            for n in 0..WAITING {
+                admit(&posts, n).unwrap();
+            }
+            assert_eq!(admit(&posts, WAITING), Err(TOO_MANY.to_owned()));
+            stalled.recv().unwrap();
+            assert_eq!(admit(&posts, WAITING), Ok(()), "room again once the thread takes one");
+            drop(stalled);
+            assert_eq!(admit(&posts, 0), Err(ENDED.to_owned()));
         }
     }
 }

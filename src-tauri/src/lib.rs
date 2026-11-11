@@ -57,7 +57,7 @@ struct Connection {
     /// The webview's name for the attempt that opened it (`hermes_connect`'s `attempt`): every command names it (`held`).
     attempt: String,
     dashboard: Arc<Dashboard>,
-    pipe: Arc<Pipe>,
+    pipe: Pipe,
     _tunnel: Option<Tunnel>,
     /// The SSH target the sign-in went through, if it did: where the Preview's server pages go (server_page.rs).
     ssh_target: Option<String>,
@@ -373,7 +373,7 @@ async fn hermes_reopen(
     };
     match opened {
         Ok(pipe) => {
-            conn.pipe = Arc::new(pipe);
+            conn.pipe = pipe;
             Ok(())
         }
         Err(e) => {
@@ -452,7 +452,7 @@ async fn open_connection(
         Route::Url { .. } => ssh_route.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty() && !t.starts_with('-')),
     };
     let typed_token = typed_token.map(|t| (t, address));
-    Ok((Connection { attempt: String::new(), dashboard: Arc::new(dashboard), pipe: Arc::new(pipe), _tunnel: tunnel, ssh_target, typed_token }, route))
+    Ok((Connection { attempt: String::new(), dashboard: Arc::new(dashboard), pipe, _tunnel: tunnel, ssh_target, typed_token }, route))
 }
 
 /// Stops the connection `hermes_connect` is opening for `attempt`, or, if it hasn't begun, stops it before it does.
@@ -587,7 +587,7 @@ async fn hermes_save_endpoint(
 #[tauri::command]
 async fn hermes_send(state: State<'_, AppState>, attempt: String, frame: String) -> Result<(), String> {
     // The send waits while the pipe's queue is full; don't hold the lock meanwhile.
-    let pipe = held(&*state.0.lock().await, &attempt)?.pipe.clone();
+    let pipe = held(&*state.0.lock().await, &attempt)?.pipe.sender();
     pipe.send(frame).await.map_err(|e| e.to_string())
 }
 
@@ -604,10 +604,8 @@ async fn hermes_send_file(
 ) -> Result<(), String> {
     attachable.check(&path).map_err(|e| e.to_string())?;
     // Reading a big file takes a while; don't hold the lock, so a Stop can still go out.
-    let pipe = held(&*state.0.lock().await, &attempt)?.pipe.clone();
+    let pipe = held(&*state.0.lock().await, &attempt)?.pipe.sender();
     let written = pipe.send_file(&head, &path, &tail, max_bytes).await.map_err(|e| e.to_string())?;
-    // Let go of the pipe while the frame is written: replacing the connection drops it, which stops the write.
-    drop(pipe);
     written.wait().await.map_err(|e| e.to_string())
 }
 
