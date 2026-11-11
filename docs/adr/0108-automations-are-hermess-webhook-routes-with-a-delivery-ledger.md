@@ -49,7 +49,8 @@ against.
   what it can't show.
 - **Preview.** The editor renders the prompt and evaluates filters and the coalescing key the way Hermes's
   `_render_prompt`, `filter_matches` and `group_key` do. It is checked against Hermes's own code with
-  `tools/webhook-golden.py`. Python's regular expressions and integers past 2^53 are the known differences. Example events are
+  `tools/webhook-golden.py`. Python's regular expressions and integers past 2^53 are the known differences. A filter's
+  pattern is tested on a worker with a time limit (ADR 0138). Example events are
   synthetic; a pasted one is sanitised and stays on this computer. Event text is always shown as text.
 - **Retry** is never automatic. It is offered only for a failed delivery; when the failed attempt had started, the app
   asks first, since its tools may have acted and a retry undoes nothing. A retry whose answer was lost is sent again

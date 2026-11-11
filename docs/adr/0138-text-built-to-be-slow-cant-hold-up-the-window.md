@@ -1,6 +1,6 @@
-# Reply text costs what its length does, whatever its content
+# Text built to be slow can't hold up the window
 
-Issue #490. Some text took far longer to render than its length suggests, and froze the window. `$a ` repeated 20,000 times (60 KB) took 15 seconds, and a streamed reply rendered it again on every delta. An untagged code block of 200 KB took 3.6 seconds in WebKitGTK, and again on each find-in-chat keystroke. 40 KB of `a-a-a-…` took 2 seconds in Node and 17 in WebKitGTK to scan for secrets each time the export dialog opened. `bench/hostile.ts` times each case at doubling sizes, in Node and on the bench page in WebKitGTK.
+Issue #490. Some text took far longer to render than its length suggests, and froze the window. `$a ` repeated 20,000 times (60 KB) took 15 seconds, and a streamed reply rendered it again on every delta. An untagged code block of 200 KB took 3.6 seconds in WebKitGTK, and again on each find-in-chat keystroke. 40 KB of `a-a-a-…` took 2 seconds in Node and 17 in WebKitGTK to scan for secrets each time the export dialog opened. A webhook filter's pattern, such as `(a+)+$`, took four times as long for every two more characters of the example event it was tested on, on every keystroke in the automation editor. `bench/hostile.ts` times each case at doubling sizes, in Node and on the bench page in WebKitGTK.
 
 ## Decisions
 
@@ -9,6 +9,7 @@ Issue #490. Some text took far longer to render than its length suggests, and fr
 - **An untagged block's language is guessed from its first 4,000 characters.** The guess runs every grammar over the code it reads, 13 to 27 times the cost of highlighting in one language (10 to 100 KB, Node). The block is then highlighted whole in the guessed language. A block of 4,000 characters or fewer is guessed as before. If the start gives no guess, the block stays plain.
 - **All highlighted code is cached.** Blocks over 50,000 characters skipped the cache, so each find keystroke highlighted them again. With the 100,000-character limit, every highlighted block fits the 500,000-character cache. Copying a highlighted block from it costs about two fifths of highlighting it again.
 - **The secret rules can't scan a run again from each word in it.** A link's scheme is at most 32 characters, at most eight words name a password (`aws_secret_access_key` is four), and a JWT can't start right after a `-`.
+- **A webhook filter's pattern is tested on a worker, for at most 250 ms** (`src/hermes/patternRunner.ts`). A pattern's time can't be bounded by its text's length, so the editor never runs one on the UI thread. One runs at a time, the newest first. A worker that runs out of time is stopped and replaced, and the filter shows as too slow to test, with a note that Hermes may stall on it too. All, any and not combine a filter that can't be told with three-valued logic. WebKitGTK gives up on its own after 0.6 to 0.9 s and answers "no match"; V8, which WebView2 runs on Windows, never does.
 
 ## Considered options
 
@@ -21,3 +22,4 @@ Issue #490. Some text took far longer to render than its length suggests, and fr
 - An untagged block over 4,000 characters can be guessed differently than before, when its start reads as another language than the whole. ADR 0068 rejected guessing from fewer languages because every block would change. This changes only blocks longer than 4,000 characters, the ones whose guess cost the most.
 - A code block over 100,000 characters in a reply has no colours.
 - A JWT written straight after a `-` is not flagged in the export dialog.
+- A pattern found too slow stays too slow for that event text until the app restarts, even if it timed out only because the machine was busy.
