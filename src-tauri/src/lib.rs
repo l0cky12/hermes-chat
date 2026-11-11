@@ -18,6 +18,7 @@ pub mod mcp;
 pub mod media;
 pub mod notify;
 pub mod page_view;
+pub mod project_context;
 pub mod remote;
 pub mod repo_git;
 pub mod saved_password;
@@ -837,6 +838,15 @@ impl Transfers {
         self.epoch.load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// Refuses work asked for at `epoch` once the connection was closed or replaced since.
+    fn still(&self, epoch: u64) -> Result<(), String> {
+        if self.epoch() == epoch {
+            Ok(())
+        } else {
+            Err(TRANSFER_STOPPED.into())
+        }
+    }
+
     /// Runs `work` as transfer `id` until it ends or `files_cancel` or `stop_all` stops it, if no stop came since
     /// `epoch` (checked under the same lock `stop_all` takes, so a stop either reaches the work or keeps it from
     /// starting). Given an `id` still running, the older transfer is stopped; each run removes only its own entry.
@@ -893,11 +903,8 @@ struct Downloaded {
 /// The signed-in dashboard, if the connection is still the one that was current at `epoch`. Waiting for the connection
 /// lock can outlast a reconnect, so this checks again after.
 async fn dashboard_since(app: &tauri::AppHandle, epoch: u64) -> Result<Arc<Dashboard>, String> {
-    let transfers = app.state::<Transfers>();
     let dashboard = dashboard(&app.state::<AppState>()).await?;
-    if transfers.epoch() != epoch {
-        return Err(TRANSFER_STOPPED.into());
-    }
+    app.state::<Transfers>().still(epoch)?;
     Ok(dashboard)
 }
 
@@ -1063,6 +1070,103 @@ async fn fs_save_text(
         dashboard.write_agent_text(&profile, &path, &text, session.as_deref()).await.map_err(|e| e.to_string())
     };
     transfers.run(id, epoch, work).await
+}
+
+/// Opens the native Open dialog for files to add to a project's context (ADR 0135). The picked files become attachable
+/// (ADR 0129), so `context_upload` may send them. `[]`: the owner cancelled.
+#[tauri::command]
+async fn context_pick(app: tauri::AppHandle, attachable: State<'_, Attachable>) -> Result<Vec<LocalFile>, String> {
+    let paths = attach_picked_files(app, attachable.clone()).await?;
+    Ok(transport::stat_files(&attachable, &paths).await)
+}
+
+/// Names and sizes of files dropped on a project's Context card (ADR 0135). A path that isn't attachable (ADR 0129)
+/// comes back with an `error` and no size.
+#[tauri::command]
+async fn context_local_files(attachable: State<'_, Attachable>, paths: Vec<String>) -> Result<Vec<LocalFile>, String> {
+    Ok(transport::stat_files(&attachable, &paths).await)
+}
+
+/// Uploads the attached file `local` (up to 30 MB) to `server_path` in a project's context folder (ADR 0135), as
+/// transfer `id`, so `files_cancel` stops it and a closed or replaced connection never sends it (ADR 0023).
+/// `ssh_profile`: the profile's tools run over SSH, so only UTF-8 text up to 8 MiB goes.
+/// `overwrite` false: rejects with `exists` when a file is already there.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn context_upload(
+    app: tauri::AppHandle,
+    transfers: State<'_, Transfers>,
+    attachable: State<'_, Attachable>,
+    id: u64,
+    local: String,
+    server_path: String,
+    overwrite: bool,
+    ssh_profile: Option<String>,
+    on_progress: Channel<TransferProgress>,
+) -> Result<(), String> {
+    let epoch = transfers.epoch();
+    let file = project_context::AttachedFile::check(&attachable, &local)?;
+    let to = project_context::ContextPath::parse(&server_path)?;
+    let work = async move {
+        let dashboard = dashboard_since(&app, epoch).await?;
+        let report = move |done, total| {
+            let _ = on_progress.send(TransferProgress { done, total, dest: server_path.clone() });
+        };
+        project_context::upload(&dashboard, file, &to, overwrite, ssh_profile.as_deref(), report).await
+    };
+    transfers.run(id, epoch, work).await
+}
+
+/// Writes `text` as `server_path` in a project's context folder (ADR 0135). `overwrite` false: rejects with `exists`
+/// when a file is already there.
+#[tauri::command]
+async fn context_write_text(app: tauri::AppHandle, server_path: String, text: String, overwrite: bool, ssh_profile: Option<String>) -> Result<(), String> {
+    let epoch = app.state::<Transfers>().epoch();
+    let to = project_context::ContextPath::parse(&server_path)?;
+    project_context::write_text(&*dashboard_since(&app, epoch).await?, &to, text, overwrite, ssh_profile.as_deref()).await
+}
+
+/// Creates a project's context folder `path`, and any missing parents, in managed files (ADR 0135). Returns the path
+/// Hermes created.
+#[tauri::command]
+async fn context_mkdir(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let epoch = app.state::<Transfers>().epoch();
+    let dir = project_context::ContextDir::parse(&path)?;
+    project_context::mkdir(&*dashboard_since(&app, epoch).await?, &dir).await
+}
+
+/// Deletes the file `server_path` from a project's context folder in managed files (ADR 0135).
+#[tauri::command]
+async fn context_remove(app: tauri::AppHandle, server_path: String) -> Result<(), String> {
+    let epoch = app.state::<Transfers>().epoch();
+    let file = project_context::ContextPath::parse(&server_path)?;
+    project_context::remove(&*dashboard_since(&app, epoch).await?, &file).await
+}
+
+/// The text of `server_path` in a project's context folder, `size` bytes as listed, for full-text mode (ADR 0135).
+/// `None`: it holds no text Hermes Chat can read.
+#[tauri::command]
+async fn context_read_text(app: tauri::AppHandle, server_path: String, size: u64, ssh_profile: Option<String>) -> Result<Option<String>, String> {
+    let epoch = app.state::<Transfers>().epoch();
+    let file = project_context::ContextPath::parse(&server_path)?;
+    project_context::read_text(&*dashboard_since(&app, epoch).await?, &file, size, ssh_profile.as_deref()).await
+}
+
+/// A context file where `ssh_profile`'s tools run: its size there, and its text when it is plain text up to 512 KiB
+/// (ADR 0135).
+#[tauri::command]
+async fn context_ssh_file(app: tauri::AppHandle, server_path: String, ssh_profile: String) -> Result<project_context::SshFile, String> {
+    let epoch = app.state::<Transfers>().epoch();
+    let file = project_context::ContextPath::parse(&server_path)?;
+    project_context::ssh_file(&*dashboard_since(&app, epoch).await?, &file, &ssh_profile).await
+}
+
+/// Keeps `<main_folder>/context/` out of the Git repository it is in, through that repository's `info/exclude`, the
+/// only file it writes (ADR 0135). `none`: not in a repository.
+#[tauri::command]
+async fn context_git_exclude(app: tauri::AppHandle, main_folder: String, ssh_profile: Option<String>) -> Result<project_context::GitExclude, String> {
+    let epoch = app.state::<Transfers>().epoch();
+    project_context::git_exclude(&*dashboard_since(&app, epoch).await?, &main_folder, ssh_profile.as_deref()).await
 }
 
 /// Stops transfer `id`, if it is still running. A download's part file is removed; `dest` is left as it was.
@@ -1635,6 +1739,15 @@ pub fn run(screenshot: bool, link: Option<String>) {
             files_save_text,
             fs_save_text,
             files_cancel,
+            context_pick,
+            context_local_files,
+            context_upload,
+            context_write_text,
+            context_mkdir,
+            context_remove,
+            context_read_text,
+            context_ssh_file,
+            context_git_exclude,
             hermes_connect_cancel,
             hermes_probe,
             hermes_probe_cancel,
@@ -1774,6 +1887,16 @@ mod tests {
         assert!(super::read_transcript(&file("bin.md", &[0xff, 0xfe, 0x00]), 100).unwrap_err().contains("UTF-8"));
         assert!(super::read_transcript(&dir, 100).unwrap_err().contains("isn't a file"));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn work_asked_for_before_the_connection_was_replaced_is_refused() {
+        let transfers = super::Transfers::default();
+        let asked = transfers.epoch();
+        assert_eq!(transfers.still(asked), Ok(()));
+        transfers.stop_all();
+        assert_eq!(transfers.still(asked), Err(super::TRANSFER_STOPPED.to_owned()));
+        assert_eq!(transfers.still(transfers.epoch()), Ok(()));
     }
 
     #[tokio::test]

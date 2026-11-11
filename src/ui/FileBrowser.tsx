@@ -26,7 +26,8 @@ import { useModal } from "./modal";
 import { FileEditor } from "./FileEditor";
 import { EDIT_MAX_BYTES } from "../hermes/textEdit";
 
-type Preview =
+/** A file's preview, from the click until its contents are read. `ask`: its type is unknown, and it may be text. */
+export type Preview =
   | { entry: RemoteEntry; state: "loading" }
   | { entry: RemoteEntry; state: "ready"; result: RemotePreview }
   | { entry: RemoteEntry; state: "ask" }
@@ -645,7 +646,11 @@ function Transfers({ files }: { files: RemoteFiles }) {
   );
 }
 
-function PreviewPane({
+/**
+ * A file's preview: its path, size and type, and its text or image. `files`: Server files, for Download; left out for a
+ * file that isn't on the dashboard's machine. `onEdit` and `onOpenAsText` left out: the preview only shows.
+ */
+export function PreviewPane({
   preview,
   files,
   connected,
@@ -654,27 +659,27 @@ function PreviewPane({
   onClose,
 }: {
   preview: Preview;
-  files: RemoteFiles;
+  files?: RemoteFiles;
   connected: boolean;
-  onOpenAsText: () => void;
-  onEdit: () => void;
+  onOpenAsText?: () => void;
+  onEdit?: () => void;
   onClose: () => void;
 }) {
   const { entry } = preview;
   const result = preview.state === "ready" ? preview.result : undefined;
-  const why = files.cantDownload(entry);
+  const why = files?.cantDownload(entry);
   const cantDownload = why ?? (connected ? undefined : "Hermes isn't connected.");
   return (
     <aside className="files-preview" aria-label={`Preview of ${entry.name}`}>
       <div className="files-preview-head">
         <h2 title={entry.name}>{entry.name}</h2>
         <div className="files-preview-actions">
-          {result?.kind === "text" && result.size <= EDIT_MAX_BYTES && (
+          {onEdit && result?.kind === "text" && result.size <= EDIT_MAX_BYTES && (
             <button className="btn" disabled={!connected} title="Edit this text file and save it back to the server" onClick={onEdit}>
               <FilePen size={14} aria-hidden /> Edit
             </button>
           )}
-          {entry.kind === "file" && (
+          {files && entry.kind === "file" && (
             <button className="btn" disabled={!!cantDownload} title={cantDownload ?? "Save a copy on this computer. You pick where."} onClick={() => void files.download(entry)}>
               <Download size={14} aria-hidden /> Download…
             </button>
@@ -726,7 +731,7 @@ function PreviewPane({
             {preview.error}
           </p>
         )}
-        {preview.state === "ask" && (
+        {preview.state === "ask" && onOpenAsText && (
           <div className="files-preview-msg">
             <p>Hermes doesn't say what kind of file this is.</p>
             <button className="btn" disabled={!connected} onClick={onOpenAsText}>
