@@ -49,14 +49,21 @@ impl TokenEntry {
     }
 }
 
+/// Whether `id` is a saved connection's id, a UUID as the webview makes it: lowercase letters, digits and dashes, 8 to
+/// 64 of them.
+pub fn is_connection_id(id: &str) -> bool {
+    (8..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+pub const NOT_A_CONNECTION: &str = "That isn't a saved connection's id.";
+
 /// The keyring account for `base` (`PASSWORD`, `HEADERS` or `TOKEN`) of one connection. `None`: the migrated connection's own
-/// entry. An id is a UUID as the webview makes it: lowercase letters, digits and dashes, 8 to 64 of them, so it can't
-/// name another entry.
+/// entry. Only a connection's id (`is_connection_id`) is taken, so it can't name another entry.
 pub fn account(base: &str, connection: Option<&str>) -> Result<String, String> {
     match connection {
         None => Ok(base.to_string()),
-        Some(id) if (8..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') => Ok(format!("{base}/{id}")),
-        Some(_) => Err("That isn't a saved connection's id.".to_string()),
+        Some(id) if is_connection_id(id) => Ok(format!("{base}/{id}")),
+        Some(_) => Err(NOT_A_CONNECTION.to_string()),
     }
 }
 

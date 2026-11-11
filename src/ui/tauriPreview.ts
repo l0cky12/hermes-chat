@@ -28,7 +28,8 @@ export type WebPages = {
   openInBrowser(url: string): Promise<string | null>;
   /** Where there is one (Linux), the Preview's own page view, which takes the frame's place (ADR 0081). */
   native?: NativePages;
-  devServers(): Promise<DevServers>;
+  /** `attempt`: Rust's name for the connection whose server to look on (`Hermes.connectionId`). */
+  devServers(attempt?: string): Promise<DevServers>;
 };
 
 export type Listening = { port: number; process?: string };
@@ -76,7 +77,7 @@ export const tauriWebPages: WebPages = {
   check: (url) => invoke<Framing>("preview_check_web", { url, userAgent: navigator.userAgent }).catch(asError),
   openInBrowser: (url) => invoke<string | null>("preview_open_in_browser", { url }).catch(asError),
   ...(/\bLinux\b/.test(navigator.userAgent) && { native: tauriNativePages }),
-  devServers: () => invoke<DevServers>("preview_dev_servers").catch(asError),
+  devServers: (attempt) => invoke<DevServers>("preview_dev_servers", { attempt: attempt ?? "" }).catch(asError),
 };
 
 /**
@@ -105,9 +106,10 @@ export type OpeningPage = { page: Promise<ServerPage>; close(): void };
 export type ServerPages = {
   /**
    * Opens a tunnel for `url`. `page` rejects with a `ServerPageError`. `onClosed` hears, once, if the tunnel ends
-   * without `close`: ssh exited, or the app left the server.
+   * without `close`: ssh exited, or the app left the server. `attempt`: Rust's name for the connection whose server it
+   * is (`Hermes.connectionId`).
    */
-  open(url: string, onClosed: (message: string) => void): OpeningPage;
+  open(url: string, onClosed: (message: string) => void, attempt?: string): OpeningPage;
 };
 
 const asServerPageError = (e: unknown) =>
@@ -116,13 +118,13 @@ const asServerPageError = (e: unknown) =>
   );
 
 export const tauriServerPages: ServerPages = {
-  open: (url, onClosed) => {
+  open: (url, onClosed, attempt) => {
     // The page's name in Rust from the start, so closing it while ssh connects ends that ssh too.
     const key = crypto.randomUUID();
     const onEvent = new Channel<{ kind: "closed"; message: string }>();
     onEvent.onmessage = (e) => onClosed(e.message);
     return {
-      page: invoke<ServerPage>("preview_server_open", { url, key, onEvent }).catch(asServerPageError),
+      page: invoke<ServerPage>("preview_server_open", { url, key, attempt: attempt ?? "", onEvent }).catch(asServerPageError),
       close: () => void invoke("preview_server_close", { key }).catch(() => {}),
     };
   },

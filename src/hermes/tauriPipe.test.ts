@@ -24,7 +24,7 @@ describe("A Rust command that fails", () => {
     ["cancelTransfer", (p) => p.cancelTransfer(1)],
     ["close", (p) => p.close()],
   ])("%s rejects with an Error naming why", async (_, call) => {
-    const pipe = await tauriPipe(nas)(() => {}, "default");
+    const pipe = await tauriPipe(nas, "saved-connection-1")(() => {}, "default");
     const got = await call(pipe).catch((e: unknown) => e);
     expect(got).toBeInstanceOf(Error);
     expect((got as Error).message).toBe("The connection to Hermes is closed.");

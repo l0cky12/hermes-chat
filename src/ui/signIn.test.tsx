@@ -107,9 +107,9 @@ describe("The real pipe", () => {
   it("hands Rust the headers for a URL, and none for SSH", async () => {
     const { tauriPipe } = await import("../hermes/tauriPipe");
     const headers = [{ name: "X-A", value: "1" }];
-    await tauriPipe({ ...blank, headers })(() => {}, "default");
+    await tauriPipe({ ...blank, headers }, "saved-connection-1")(() => {}, "default");
     expect(invoke).toHaveBeenLastCalledWith("hermes_connect", expect.objectContaining({ target: { kind: "url", url: blank.url, headers } }));
-    await tauriPipe({ ...blank, mode: "ssh", headers })(() => {}, "default");
+    await tauriPipe({ ...blank, mode: "ssh", headers }, "saved-connection-1")(() => {}, "default");
     expect(invoke).toHaveBeenLastCalledWith("hermes_connect", expect.objectContaining({ target: { kind: "ssh", target: "liam@hermes" } }));
   });
 });

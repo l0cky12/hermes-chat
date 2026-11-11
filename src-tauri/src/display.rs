@@ -6,10 +6,11 @@
 //!
 //! Two ways a socket ends, because Hermes reads them differently (ADR 0039). The Screen letting go (`close`) is a normal
 //! close (1000): the viewer left, so control the owner took goes back to the agent. The connection being replaced or
-//! closed (`close_all`, as transfers are stopped, ADR 0023) abandons every socket with no close frame: to Hermes that
+//! closed (`close_for`, as transfers are stopped, ADR 0023) abandons each of its sockets with no close frame: to Hermes that
 //! is a dropped link, which keeps the owner in control, since they may be part-way through a sign-in. Leaving on
 //! purpose hands control back over `/api/ws` first (transport.ts `releaseScreen`).
 
+use crate::live::ConnectionId;
 use crate::transport::{Dashboard, TransportError};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
@@ -110,35 +111,36 @@ pub async fn open(dashboard: Arc<Dashboard>, ticket: &str, on_event: impl Fn(Dis
     Ok(DisplaySocket { outgoing })
 }
 
-/// The screen sockets open now, by id.
+/// The screen sockets open now, by id, each with the connection it was opened on.
 #[derive(Default)]
 pub struct Displays {
     next: AtomicU64,
-    /// Counts the times every socket was closed, so one opened across a reconnect is closed too.
-    epoch: AtomicU64,
-    open: Mutex<HashMap<u64, DisplaySocket>>,
+    open: Mutex<HashMap<u64, (ConnectionId, DisplaySocket)>>,
+    /// Counts the times each connection's sockets were closed, so one opened across a reconnect is closed too. Locked
+    /// only while `open` is, or alone.
+    epochs: Mutex<HashMap<ConnectionId, u64>>,
 }
 
 impl Displays {
-    pub fn epoch(&self) -> u64 {
-        self.epoch.load(Ordering::SeqCst)
+    pub fn epoch(&self, connection: &ConnectionId) -> u64 {
+        self.epochs.lock().unwrap().get(connection).copied().unwrap_or(0)
     }
 
-    /// Keeps `socket` under a new id, unless every socket was closed since `epoch`: then it is abandoned, as
-    /// `close_all` would have, and the answer is None.
-    pub fn keep(&self, epoch: u64, socket: DisplaySocket) -> Option<u64> {
+    /// Keeps `socket` under a new id, unless `connection`'s sockets were closed since `epoch`: then it is abandoned,
+    /// as `close_for` would have, and the answer is None.
+    pub fn keep(&self, connection: &ConnectionId, epoch: u64, socket: DisplaySocket) -> Option<u64> {
         let mut open = self.open.lock().unwrap();
-        if self.epoch() != epoch {
+        if self.epoch(connection) != epoch {
             socket.abandon();
             return None;
         }
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
-        open.insert(id, socket);
+        open.insert(id, (connection.clone(), socket));
         Some(id)
     }
 
     pub fn send(&self, id: u64, bytes: Vec<u8>) -> Result<(), TransportError> {
-        self.open.lock().unwrap().get(&id).ok_or(TransportError::Closed)?.send(bytes)
+        self.open.lock().unwrap().get(&id).ok_or(TransportError::Closed)?.1.send(bytes)
     }
 
     /// Closes socket `id`; one already gone is left alone.
@@ -146,13 +148,16 @@ impl Displays {
         self.open.lock().unwrap().remove(&id);
     }
 
-    /// Abandons every socket: the connection they were opened on is going. Hermes sees dropped links, so control the
-    /// owner holds stays theirs; leaving on purpose has already handed it back.
-    pub fn close_all(&self) {
+    /// Abandons every socket opened on `connection`, which is going; another connection's stay. Hermes sees dropped
+    /// links, so control the owner holds stays theirs; leaving on purpose has already handed it back.
+    pub fn close_for(&self, connection: &ConnectionId) {
         let mut open = self.open.lock().unwrap();
-        self.epoch.fetch_add(1, Ordering::SeqCst);
-        for (_, socket) in open.drain() {
-            socket.abandon();
+        *self.epochs.lock().unwrap().entry(connection.clone()).or_default() += 1;
+        let going: Vec<u64> = open.iter().filter(|(_, (on, _))| on == connection).map(|(id, _)| *id).collect();
+        for id in going {
+            if let Some((_, socket)) = open.remove(&id) {
+                socket.abandon();
+            }
         }
     }
 }
@@ -170,21 +175,38 @@ mod tests {
     }
 
     #[test]
-    fn a_socket_kept_after_close_all_is_closed_instead() {
+    fn a_socket_kept_after_its_connection_went_is_closed_instead() {
         let displays = Displays::default();
+        let one = ConnectionId::parse("server-one").unwrap();
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let epoch = displays.epoch();
-        displays.close_all();
-        assert_eq!(displays.keep(epoch, DisplaySocket { outgoing: tx }), None);
+        let epoch = displays.epoch(&one);
+        displays.close_for(&one);
+        assert_eq!(displays.keep(&one, epoch, DisplaySocket { outgoing: tx }), None);
         // Abandoned, as the connection it was opened on went: no normal close for Hermes to take as leaving.
         assert!(matches!(rx.try_recv(), Ok(Out::Abandon)));
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let id = displays.keep(displays.epoch(), DisplaySocket { outgoing: tx }).unwrap();
+        let id = displays.keep(&one, displays.epoch(&one), DisplaySocket { outgoing: tx }).unwrap();
         displays.send(id, vec![1, 2]).unwrap();
-        displays.close_all();
+        displays.close_for(&one);
         assert!(matches!(rx.try_recv(), Ok(Out::Bytes(b)) if b == [1, 2]));
         assert!(matches!(rx.try_recv(), Ok(Out::Abandon)), "the connection going abandons the socket");
         assert!(matches!(displays.send(id, vec![3]), Err(TransportError::Closed)));
+    }
+
+    #[test]
+    fn one_connection_going_leaves_another_connections_sockets_open() {
+        let displays = Displays::default();
+        let (one, two) = (ConnectionId::parse("server-one").unwrap(), ConnectionId::parse("server-two").unwrap());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let asked = displays.epoch(&two);
+        let kept = displays.keep(&two, asked, DisplaySocket { outgoing: tx }).unwrap();
+        displays.close_for(&one);
+        displays.send(kept, vec![7]).unwrap();
+        assert!(matches!(rx.try_recv(), Ok(Out::Bytes(b)) if b == [7]));
+        assert!(rx.try_recv().is_err(), "the other connection's socket was abandoned");
+        // A socket asked for on the connection still open, before the other went, is kept too.
+        let (tx, _rx) = mpsc::unbounded_channel();
+        assert!(displays.keep(&two, asked, DisplaySocket { outgoing: tx }).is_some());
     }
 }
