@@ -258,6 +258,13 @@ export function row(id: string, daysAgo: number, over: Partial<SessionRow> = {})
   return { id, source: "gui", title: `Chat ${id}`, preview: "", started_at: at, last_active: at, message_count: 2, pinned: false, archived: false, last_read_at: null, ...over };
 }
 
+/** `row`, read up to its own last activity. A read mark taken from the clock separately could land a millisecond before
+ * that activity, and leave the chat unread. */
+export function readRow(id: string, daysAgo: number, over: Partial<SessionRow> = {}): SessionRow {
+  const r = row(id, daysAgo, over);
+  return { ...r, last_read_at: r.last_active };
+}
+
 /** A session edit's body without the request id and revision every edit carries. */
 export function editFlags(body: Record<string, unknown> | undefined) {
   const { request_id: _id, expected_revision: _revision, ...flags } = body ?? {};
@@ -538,6 +545,8 @@ export class FakeHermes {
   /** The subagents `subagent.interrupt` stopped. */
   readonly interrupted: string[] = [];
   private created = new Map<string, { source: string; profile?: string; hidden?: boolean; title?: string }>(); // runtime id, until the first prompt stores it
+  /** Every stored key `session.create` minted, for a resume of one that never got a row. */
+  private minted = new Map<string, { source: string; profile?: string }>();
 
   /**
    * The profile's `.env` rows as `GET /api/env` lists them (`hermes_cli/web_routers/config_env.py` at the deployed
@@ -734,6 +743,7 @@ export class FakeHermes {
       const stored = `20261031_12000${n}_abc123`;
       this.runtime.set(runtimeId, stored);
       this.runtimeProfile.set(runtimeId, (r.params.profile as string | undefined) || "default");
+      this.minted.set(stored, { source: String(r.params.source ?? "tui"), profile: r.params.profile as string | undefined });
       this.created.set(runtimeId, {
         source: String(r.params.source ?? "tui"),
         profile: r.params.profile as string | undefined,
@@ -757,6 +767,13 @@ export class FakeHermes {
     },
     "session.resume": (r) => {
       const stored = String(r.params.session_id);
+      // A key `session.create` minted that never got a row (its first prompt never went in) gets one now, and resumes
+      // with no history (`_resume_materialize_minted` at the deployed `bf0203a`).
+      const minted = this.minted.get(stored);
+      if (minted && /^\d{8}_\d{6}_[0-9a-f]{6}$/.test(stored) && !this.store(minted.profile)?.some((s) => s.id === stored)) {
+        this.minted.delete(stored);
+        this.store(minted.profile)?.push(row(stored, 0, { source: minted.source, title: null, preview: "", message_count: 0 }));
+      }
       if (!this.store(r.params.profile as string | undefined)?.some((s) => s.id === stored)) return this.fail(r.id, 4007, `session not found: ${stored}`);
       // A session waiting on the owner is still live after its connection dropped: the resume reattaches it, with
       // the requests still open (`_resume_reuse_live`, `_live_session_payload` at the deployed `bf0203a`).

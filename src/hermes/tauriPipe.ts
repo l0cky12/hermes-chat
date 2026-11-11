@@ -125,10 +125,10 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
     const pipe: Pipe = {
       route,
       connectionId: attempt,
-      send: (frame) => invoke("hermes_send", { attempt, frame }),
+      send: (frame) => invoke<void>("hermes_send", { attempt, frame }).catch(asError),
       request: (method, path, body) => invoke<string>("hermes_request", { attempt, method, path, body }).catch(asError),
       getLimited: (path, maxBytes) => invoke<string>("hermes_get_limited", { attempt, path, maxBytes }).catch(asError),
-      statFiles: (paths) => invoke<LocalFile[]>("hermes_stat_files", { paths }),
+      statFiles: (paths) => invoke<LocalFile[]>("hermes_stat_files", { paths }).catch(asError),
       sendFile: (head, path, tail, maxBytes) => invoke<void>("hermes_send_file", { attempt, head, path, tail, maxBytes }).catch(asError),
       saveProviderKey: (profile, key, value) => invoke<SavedKey>("hermes_save_provider_key", { attempt, profile, key, value }).catch(asError),
       removeProviderKey: (profile, key) => invoke<void>("hermes_remove_provider_key", { attempt, profile, key }).catch(asError),
@@ -153,7 +153,7 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
         return invoke<Downloaded | null>("files_download", { attempt, id, path, name, onProgress: channel }).then((got) => got ?? undefined, asError);
       },
       pickUpload: () => invoke<PickedUpload | null>("files_pick_upload").then((p) => p ?? undefined, asError),
-      discardUpload: (token) => invoke<void>("files_discard_pick", { token }),
+      discardUpload: (token) => invoke<void>("files_discard_pick", { token }).catch(asError),
       upload: (id, token, path, overwrite, onProgress) => {
         const channel = new Channel<TransferProgress>();
         channel.onmessage = onProgress;
@@ -161,7 +161,7 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
       },
       saveText: (id, path, text, overwrite) => invoke<string>("files_save_text", { attempt, id, path, text, overwrite }).catch(asError),
       fsSaveText: (id, profile, path, text, session) => invoke<string>("fs_save_text", { attempt, id, profile, path, text, session: session ?? null }).catch(asError),
-      cancelTransfer: (id) => invoke("files_cancel", { id }),
+      cancelTransfer: (id) => invoke<void>("files_cancel", { id }).catch(asError),
       context: {
         pick: () => invoke<LocalFile[]>("context_pick").catch(asError),
         localFiles: (paths) => invoke<LocalFile[]>("context_local_files", { paths }).catch(asError),
@@ -194,7 +194,7 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
         await opening<void>("hermes_reopen", { profile, connection: attempt }, onEvent, signal, onStep);
         return pipe;
       },
-      close: () => invoke("hermes_disconnect"),
+      close: () => invoke<void>("hermes_disconnect").catch(asError),
     };
     return pipe;
   };

@@ -192,7 +192,7 @@ Another take on one turn of a chat, made with Edit under the owner's message or 
 _Avoid_: variant (in the UI), alternative, retry, rerun
 
 **Draft**:
-The text the owner has typed in a chat's composer and not sent. Each chat keeps its own draft, and so does the New chat pane, separately for each connection and profile. A draft is still there after switching chats or restarting the app. Sending or queuing it empties it. A message Hermes doesn't take becomes a Failed message, not a draft again. Only when a new chat can't be started does the text come back into the composer. Attachments aren't kept in a draft.
+The text the owner has typed in a chat's composer and not sent. Each chat keeps its own draft, and so does the New chat pane, separately for each connection and profile. A draft is still there after switching chats or restarting the app. Sending or queuing it empties it. A message Hermes doesn't take becomes a Failed message, not a draft again. The text comes back into the composer only when a new chat can't be started, or when the chat has left the list before the message went in. A chat open in a pane that Hermes no longer has (deleted elsewhere) gives way to the New chat pane, and its draft goes there too. One that is only older than the list reaches, or archived elsewhere, stays open. Attachments aren't kept in a draft.
 _Avoid_: unsent message, saved message
 
 **Queued message**:
@@ -244,7 +244,7 @@ The owner's setting that has closing the window hide it in the tray instead of q
 _Avoid_: minimize to tray, background mode, run in background
 
 **Failed message**:
-A message sent from this app that Hermes didn't take, or may not have. Either the connection dropped, or the app closed, before Hermes confirmed it. It stays in its chat with its words and files, says why, and offers Retry, Edit and Dismiss. Retry sends the same words and files again as a new message. Edit takes the words back into the composer. Nothing sends it again on its own. For one Hermes may have, the chat's history is read back once Hermes is connected. If the history has it, the message shows from the history. If not, it is marked failed (ADR 0006). Failed messages are kept on this computer, and Clear local cache keeps them.
+A message sent from this app that Hermes didn't take, or may not have. Either the connection dropped, or the app closed, before Hermes confirmed it. It stays in its chat with its words and files, says why, and offers Retry, Edit and Dismiss. Retry sends the same words and files again as a new message. Edit takes the words back into the composer. Nothing sends it again on its own. For one Hermes may have, the chat's history is read back once Hermes is connected. If the history has it, the message shows from the history. If not, it is marked failed (ADR 0006). Failed messages are kept on this computer, and Clear local cache keeps them. A chat holding one stays in the list even when Hermes has no row for it, such as a new chat whose first message failed.
 _Avoid_: undelivered, pending, unsent message
 
 **Stopped**:

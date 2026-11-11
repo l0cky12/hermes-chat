@@ -81,8 +81,11 @@ const highlightCode = rehypeHighlight({ detect: true });
  */
 const highlighted = lru<{ className: unknown; children: ElementContent[] }>(500_000);
 
-/** Code longer than this, such as a whole file in the preview pane, is highlighted each time rather than copied in. */
-const CACHE_ONE_CHARS = 50_000;
+/** Code longer than this stays plain: highlighting it would hold up the window (#490). */
+export const HIGHLIGHT_MAX_CHARS = 100_000;
+
+/** An untagged block's language is guessed from this much of its start, since the guess runs every grammar over it. */
+const GUESS_FROM_CHARS = 4_000;
 
 /** Whether highlight.js has to guess `code`'s language, by running every grammar over it. */
 const guessing = (code: Element) => !classes(code).some((c) => /^(lang-|language-|no-?highlight$)/.test(c));
@@ -93,10 +96,21 @@ const guessing = (code: Element) => !classes(code).some((c) => /^(lang-|language
  * render it again from the cache (#451).
  */
 function highlight(code: Element, pre: Element, file: VFile, guessed?: () => void) {
+  const text = toText(code, { whitespace: "pre" });
+  if (text.length > HIGHLIGHT_MAX_CHARS) return plain(code);
   // Only this block, on its own; the rest of the tree is not highlight.js's to walk.
-  const run = (code: Element) => highlightCode({ type: "root", children: [{ ...pre, children: [code] }] }, file);
-  const key = JSON.stringify(code.properties.className ?? null) + "\n" + toText(code, { whitespace: "pre" });
-  if (key.length > CACHE_ONE_CHARS) return run(code);
+  const one = (code: Element) => highlightCode({ type: "root", children: [{ ...pre, children: [code] }] }, file);
+  const run = (code: Element) => {
+    if (guessing(code) && text.length > GUESS_FROM_CHARS) {
+      const start: Element = { ...code, properties: { ...code.properties, className: classes(code) }, children: [{ type: "text", value: text.slice(0, GUESS_FROM_CHARS) }] };
+      one(start);
+      const language = classes(start).find((c) => c.startsWith("language-"));
+      if (!language) return plain(code);
+      code.properties.className = [...classes(code), language];
+    }
+    one(code);
+  };
+  const key = JSON.stringify(code.properties.className ?? null) + "\n" + text;
   const hit = highlighted.get(key);
   if (!hit && guessed && guessing(code)) {
     const later = structuredClone(code);

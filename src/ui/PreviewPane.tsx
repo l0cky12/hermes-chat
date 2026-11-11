@@ -35,6 +35,7 @@ import {
   type WebTarget,
 } from "../hermes/preview";
 import { Markdown } from "./Markdown";
+import { HIGHLIGHT_MAX_CHARS } from "./markdownPipeline";
 import { Spinner, fmtSize } from "./bits";
 import { Menu } from "./ChatMenu";
 import { ServerPageError, type DevServers, type Listening, type LocalFiles, type NativePage, type NativePages, type ServerPages, type WebPages } from "./tauriPreview";
@@ -43,17 +44,15 @@ import { canGoBack, canGoForward, type HistoryStep, type PreviewHistory } from "
 import type { ArtifactStore } from "../hermes/artifacts";
 import { ArtifactEditor } from "./ArtifactEditor";
 
-/** Text past this many characters shows without highlighting, which would hold up the window. */
-const HIGHLIGHT_MAX_CHARS = 100_000;
 /** When a web page that hasn't loaded gets a note that it may never show. */
 const SLOW_PAGE_MS = 15_000;
 
 /**
- * What a framed web page may use. It may run scripts, send forms and use its own storage under its own origin, which is
- * never the app's (preview.ts `checkWebUrl`). WebKitGTK keeps no third-party cookies for it. It may not navigate the app's
- * window, open windows, or download.
+ * What a framed web page may use. It may run scripts and send forms. It may not navigate the app's window, open windows,
+ * or download. Its origin is opaque, wherever it moves the frame: WebView2 gives every frame Tauri's IPC, and Tauri
+ * turns down a call whose origin is `null` (ADR 0138).
  */
-const WEB_SANDBOX = "allow-scripts allow-forms allow-same-origin";
+const WEB_SANDBOX = "allow-scripts allow-forms";
 const WEB_PERMISSIONS = [
   "camera",
   "microphone",
@@ -379,7 +378,7 @@ function MoreMenu({
           <div className="menu-sep" />
           <div className="preview-menu-note">
             Pages here run on their own, with no access to Hermes Chat or your sign-in, and only you can use them.
-            {framed && " Links you follow inside a page don't change the address here."}
+            {framed && " Links you follow inside a page don't change the address here. Pages here can't use their own storage, so some sites work only in your browser."}
           </div>
         </Menu>
       )}
@@ -603,10 +602,8 @@ function TextView({ view, name }: { view: Extract<FileView, { kind: "text" }>; n
 function FramedWebView({ url, src, check, onOpenInBrowser }: { url: string; src: string; check: (url: string) => Promise<Framing>; onOpenInBrowser: () => void }) {
   const [loaded, setLoaded] = useState(false);
   const [slow, setSlow] = useState(false);
-  const [closed, setClosed] = useState(false);
   const [framing, setFraming] = useState<Framing>();
   const [showAnyway, setShowAnyway] = useState(false);
-  const frame = useRef<HTMLIFrameElement>(null);
   const checkRef = useRef(check);
   checkRef.current = check;
   useEffect(() => {
@@ -624,32 +621,7 @@ function FramedWebView({ url, src, check, onOpenInBrowser }: { url: string; src:
       live = false;
     };
   }, [src]);
-  const onLoad = () => {
-    // A page that redirected the frame onto the app's own origin could reach the app; such a frame is emptied at once.
-    // The frame-src policy (index.html) and Tauri's invoke key are the main guards; this is the last one (ADR 0007).
-    try {
-      const href = frame.current?.contentWindow?.location.href;
-      if (href !== undefined && href !== "about:blank") {
-        frame.current!.src = "about:blank";
-        setClosed(true);
-        return;
-      }
-    } catch {
-      // Cross-origin, as it should be.
-    }
-    setLoaded(true);
-  };
   const host = hostOf(url);
-  if (closed)
-    return (
-      <div className="preview-state preview-error" role="alert">
-        <AlertTriangle size={18} />
-        <div>
-          <div className="preview-state-title">This page was closed</div>
-          <div>It tried to load Hermes Chat's own pages inside the preview.</div>
-        </div>
-      </div>
-    );
   if (framing?.kind === "refused" && !showAnyway)
     return (
       <div className="preview-state preview-error" role="alert">
@@ -681,14 +653,13 @@ function FramedWebView({ url, src, check, onOpenInBrowser }: { url: string; src:
     <div className="preview-web">
       <div className="preview-web-frame">
         <iframe
-          ref={frame}
           className="preview-frame"
           title={`Web page: ${url}`}
           src={src}
           sandbox={WEB_SANDBOX}
           allow={WEB_PERMISSIONS}
           referrerPolicy="no-referrer"
-          onLoad={onLoad}
+          onLoad={() => setLoaded(true)}
         />
         {!loaded &&
           (framing?.kind === "unreachable" ? (

@@ -43,7 +43,7 @@ jobs:
           workspaces: src-tauri
       # tauri::generate_context! needs frontendDist (../dist) to exist at compile time.
       - run: mkdir -p dist
-      - run: cargo test --lib --test transport --test media --test screenshot --test update
+      - run: cargo test --lib --test transport --test proxy --test media --test screenshot --test update
         working-directory: src-tauri
       # Pastes into a WebKitGTK view, on a display of its own because it empties the clipboard.
       - run: xvfb-run -a cargo test --test clipboard -- --ignored
