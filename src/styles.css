@@ -3096,6 +3096,8 @@ label.memory-pick { cursor: pointer; }
 .automation-checks li.pass svg { color: var(--ok); flex: none; }
 .automation-checks li.fail { color: var(--muted); }
 .automation-checks li.fail svg { color: var(--bad); flex: none; }
+.automation-checks li.checking { color: var(--muted); }
+.automation-checks li.too-slow svg { color: var(--warn); flex: none; }
 .automation-verdict { margin: 4px 0 0; font-weight: 600; }
 .automation-verdict.good { color: var(--ok); }
 .automation-rendered { margin: 0; }
