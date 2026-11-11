@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { FakeHermes } from "./fakeHermes";
 import { asReadBack, PersonaApi, PersonaError, personaError, sameSoul, soulNotes } from "./persona";
 import { connect, type Hermes } from "./transport";
-import type { RestMethod } from "./pipe";
+import { RestError, type RestMethod } from "./pipe";
 
 const running: Hermes[] = [];
 afterEach(async () => {
@@ -68,19 +68,19 @@ describe("reading SOUL.md", () => {
     const { server, api } = await signedIn();
     server.soulRoutes = false;
     expect(await rejection(api.read("default"))).toMatchObject({ kind: "unsupported", message: expect.stringContaining("GET /api/profiles/{name}/soul") });
-    expect(personaError(new Error(`The dashboard answered 404: {"detail":"Not Found"}`), "default", false).kind).toBe("unsupported");
+    expect(personaError(new RestError(404, `{"detail":"Not Found"}`), "default", false).kind).toBe("unsupported");
     server.soulRoutes = true;
     delete server.otherProfiles.work;
     expect(await rejection(api.read("work"))).toMatchObject({ kind: "no-profile", status: 404 });
-    server.soulReadError = `The dashboard answered 500: {"detail":"Could not read SOUL.md: [Errno 13] Permission denied: '/home/liam/.hermes/SOUL.md'"}`;
+    server.soulReadError = new RestError(500, `{"detail":"Could not read SOUL.md: [Errno 13] Permission denied: '/home/liam/.hermes/SOUL.md'"}`);
     expect(await rejection(api.read("default"))).toMatchObject({ kind: "permission", message: expect.stringContaining("Permission denied") });
-    server.soulReadError = `The dashboard answered 403: {"detail":"Forbidden"}`;
+    server.soulReadError = new RestError(403, `{"detail":"Forbidden"}`);
     expect(await rejection(api.read("default"))).toMatchObject({ kind: "permission" });
-    server.soulReadError = "The dashboard sign-in has expired. Sign in again.";
+    server.soulReadError = new RestError(401, "", "The dashboard sign-in has expired. Sign in again.");
     expect(await rejection(api.read("default"))).toMatchObject({ kind: "signed-out" });
     server.soulReadError = "Can't reach the Hermes dashboard: connection refused";
     expect(await rejection(api.read("default"))).toMatchObject({ kind: "disconnected" });
-    server.soulReadError = `The dashboard answered 500: Internal Server Error`;
+    server.soulReadError = new RestError(500, `Internal Server Error`);
     expect(await rejection(api.read("default"))).toMatchObject({ kind: "error", message: expect.stringContaining("500") });
   });
 
@@ -155,7 +155,7 @@ describe("saving SOUL.md", () => {
   it("keeps the edit and says why when Hermes refuses the write", async () => {
     const { server, api } = await signedIn();
     const base = await api.read("default");
-    server.soulWriteError = `The dashboard answered 500: {"detail":"Could not write SOUL.md: [Errno 30] Read-only file system: '/home/liam/.hermes/SOUL.md'"}`;
+    server.soulWriteError = new RestError(500, `{"detail":"Could not write SOUL.md: [Errno 30] Read-only file system: '/home/liam/.hermes/SOUL.md'"}`);
     const e = await rejection(api.save("default", base, "# Mine\n"));
     expect(e).toMatchObject({ kind: "permission", status: 500, message: expect.stringContaining("Read-only file system") });
     expect(server.souls.default).toBe(SOUL);
@@ -179,7 +179,7 @@ describe("saving SOUL.md", () => {
   it("can't tell, and says so, when the write's answer and the read-back both fail", async () => {
     const { server, api } = await signedIn();
     const base = await api.read("default");
-    server.soulWriteLost = `The dashboard answered 502: Bad Gateway`;
+    server.soulWriteLost = new RestError(502, `Bad Gateway`);
     server.afterSoulWrite = () => (server.soulReadError = "Can't reach the Hermes dashboard: connection refused");
     const e = await rejection(api.save("default", base, "# Mine\n"));
     expect(e?.message).toMatch(/^Couldn't tell whether SOUL\.md was saved/);
@@ -188,7 +188,7 @@ describe("saving SOUL.md", () => {
   it("reports a save it couldn't read back as unverified, not saved", async () => {
     const { server, api } = await signedIn();
     const base = await api.read("default");
-    server.afterSoulWrite = () => (server.soulReadError = `The dashboard answered 500: Internal Server Error`);
+    server.afterSoulWrite = () => (server.soulReadError = new RestError(500, `Internal Server Error`));
     expect(await api.save("default", base, "# Mine\n")).toMatchObject({ kind: "unverified", previous: base, problem: { kind: "error" } });
   });
 
@@ -196,7 +196,7 @@ describe("saving SOUL.md", () => {
     const { server, api } = await signedIn();
     const base = await api.read("default");
     server.rest["PUT /api/profiles/default/soul"] = () => {
-      throw new Error(`The dashboard answered 405: {"detail":"Method Not Allowed"}`);
+      throw new RestError(405, `{"detail":"Method Not Allowed"}`);
     };
     expect(await rejection(api.save("default", base, "# Mine\n"))).toMatchObject({ kind: "unsupported", message: expect.stringContaining("PUT") });
     expect(server.souls.default).toBe(SOUL);

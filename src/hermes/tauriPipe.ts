@@ -3,7 +3,7 @@
 // webview.
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { CustomEndpoint, EndpointSave, ProviderSignIn } from "./accounts";
-import type { LocalFile, OpenPipe, Pipe, PipeEvent, Route, ToolsetGuards, Transcript, VoiceSetup } from "./pipe";
+import { RestError, type LocalFile, type OpenPipe, type Pipe, type PipeEvent, type Route, type ToolsetGuards, type Transcript, type VoiceSetup } from "./pipe";
 import type { GitExclude } from "./projectContextFiles";
 import type { Downloaded, PickedUpload, TransferProgress } from "./remoteFiles";
 import type { Probe, Probed, ProbeFailure, SavedKey } from "./setup";
@@ -11,8 +11,17 @@ import { routedPipe, type ReachRoute, type RouteDetails, type RoutedHooks } from
 import type { SignInWay } from "./connections";
 import type { Step } from "./attempts";
 
-// A failed command rejects with the Rust error's text, not an Error.
-export const asError = (e: unknown) => Promise.reject(new Error(String(e)));
+/**
+ * A failed command rejects with the Rust error's text, not an Error; one that calls the dashboard with a `RelayError`,
+ * whose status and body, when the dashboard answered, make a `RestError`.
+ */
+export const asError = (e: unknown) => {
+  if (e && typeof e === "object" && typeof (e as { message?: unknown }).message === "string") {
+    const { message, status, body } = e as { message: string; status?: unknown; body?: unknown };
+    return Promise.reject(typeof status === "number" ? new RestError(status, typeof body === "string" ? body : "", message) : new Error(message));
+  }
+  return Promise.reject(new Error(String(e)));
+};
 
 /** Base64 to bytes. */
 function fromBase64(b64: string): Uint8Array {
@@ -110,68 +119,71 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
   const target = targetOf(d);
   return async (onEvent, profile, signal) => {
     const args = { target, credential: credentialOf(d), profile, expectServer: opts.expectServer ?? null, quick: opts.quick, sshRoute: opts.sshRoute ?? null };
-    const route = await opening<Route>("hermes_connect", args, onEvent, signal, opts.onStep);
+    // Names this connection: every command below names it too, so one sent after it was replaced reaches nothing (#474).
+    const attempt = crypto.randomUUID();
+    const route = await opening<Route>("hermes_connect", args, onEvent, signal, opts.onStep, attempt);
     const pipe: Pipe = {
       route,
-      send: (frame) => invoke("hermes_send", { frame }),
-      request: (method, path, body) => invoke<string>("hermes_request", { method, path, body }).catch(asError),
-      getLimited: (path, maxBytes) => invoke<string>("hermes_get_limited", { path, maxBytes }).catch(asError),
-      statFiles: (paths) => invoke<LocalFile[]>("hermes_stat_files", { paths }),
-      sendFile: (head, path, tail, maxBytes) => invoke<void>("hermes_send_file", { head, path, tail, maxBytes }).catch(asError),
-      saveProviderKey: (profile, key, value) => invoke<SavedKey>("hermes_save_provider_key", { profile, key, value }).catch(asError),
-      removeProviderKey: (profile, key) => invoke<void>("hermes_remove_provider_key", { profile, key }).catch(asError),
-      providerSignIns: (profile) => invoke<ProviderSignIn[]>("hermes_provider_sign_ins", { profile }).catch(asError),
-      customEndpoints: (profile) => invoke<CustomEndpoint[]>("hermes_custom_endpoints", { profile }).catch(asError),
-      saveEndpoint: (profile, form, anyway) => invoke<EndpointSave>("hermes_save_endpoint", { profile, form, anyway }).catch(asError),
+      connectionId: attempt,
+      send: (frame) => invoke<void>("hermes_send", { attempt, frame }).catch(asError),
+      request: (method, path, body) => invoke<string>("hermes_request", { attempt, method, path, body }).catch(asError),
+      getLimited: (path, maxBytes) => invoke<string>("hermes_get_limited", { attempt, path, maxBytes }).catch(asError),
+      statFiles: (paths) => invoke<LocalFile[]>("hermes_stat_files", { paths }).catch(asError),
+      sendFile: (head, path, tail, maxBytes) => invoke<void>("hermes_send_file", { attempt, head, path, tail, maxBytes }).catch(asError),
+      saveProviderKey: (profile, key, value) => invoke<SavedKey>("hermes_save_provider_key", { attempt, profile, key, value }).catch(asError),
+      removeProviderKey: (profile, key) => invoke<void>("hermes_remove_provider_key", { attempt, profile, key }).catch(asError),
+      providerSignIns: (profile) => invoke<ProviderSignIn[]>("hermes_provider_sign_ins", { attempt, profile }).catch(asError),
+      customEndpoints: (profile) => invoke<CustomEndpoint[]>("hermes_custom_endpoints", { attempt, profile }).catch(asError),
+      saveEndpoint: (profile, form, anyway) => invoke<EndpointSave>("hermes_save_endpoint", { attempt, profile, form, anyway }).catch(asError),
       // The recording goes as the raw body, not as a JSON list of numbers.
       transcribe: (profile, audio, mime) =>
         invoke<Transcript>("hermes_transcribe", audio, {
-          headers: { "x-mime": encodeURIComponent(mime), "x-profile": encodeURIComponent(profile) },
+          headers: { "x-mime": encodeURIComponent(mime), "x-profile": encodeURIComponent(profile), "x-attempt": attempt },
         }).catch(asError),
       speak: async (profile, text) => {
-        const got = await invoke<{ mime: string; audio: string; provider?: string }>("hermes_speak", { profile, text }).catch(asError);
+        const got = await invoke<{ mime: string; audio: string; provider?: string }>("hermes_speak", { attempt, profile, text }).catch(asError);
         return { ...got, audio: fromBase64(got.audio) };
       },
-      voiceSetup: (profile) => invoke<VoiceSetup>("hermes_voice_setup", { profile }).catch(asError),
-      toolsetGuards: (profile) => invoke<ToolsetGuards>("hermes_toolset_guards", { profile }).catch(asError),
-      mcpEdit: (profile, edit) => invoke<void>("hermes_mcp_edit", { profile, edit }).catch(asError),
+      voiceSetup: (profile) => invoke<VoiceSetup>("hermes_voice_setup", { attempt, profile }).catch(asError),
+      toolsetGuards: (profile) => invoke<ToolsetGuards>("hermes_toolset_guards", { attempt, profile }).catch(asError),
+      mcpEdit: (profile, edit) => invoke<void>("hermes_mcp_edit", { attempt, profile, edit }).catch(asError),
       download: (id, path, name, onProgress) => {
         const channel = new Channel<TransferProgress>();
         channel.onmessage = onProgress;
-        return invoke<Downloaded | null>("files_download", { id, path, name, onProgress: channel }).then((got) => got ?? undefined, asError);
+        return invoke<Downloaded | null>("files_download", { attempt, id, path, name, onProgress: channel }).then((got) => got ?? undefined, asError);
       },
       pickUpload: () => invoke<PickedUpload | null>("files_pick_upload").then((p) => p ?? undefined, asError),
-      discardUpload: (token) => invoke<void>("files_discard_pick", { token }),
+      discardUpload: (token) => invoke<void>("files_discard_pick", { token }).catch(asError),
       upload: (id, token, path, overwrite, onProgress) => {
         const channel = new Channel<TransferProgress>();
         channel.onmessage = onProgress;
-        return invoke<string>("files_upload", { id, token, path, overwrite, onProgress: channel }).catch(asError);
+        return invoke<string>("files_upload", { attempt, id, token, path, overwrite, onProgress: channel }).catch(asError);
       },
-      saveText: (id, path, text, overwrite) => invoke<string>("files_save_text", { id, path, text, overwrite }).catch(asError),
-      fsSaveText: (id, profile, path, text, session) => invoke<string>("fs_save_text", { id, profile, path, text, session: session ?? null }).catch(asError),
-      cancelTransfer: (id) => invoke("files_cancel", { id }),
+      saveText: (id, path, text, overwrite) => invoke<string>("files_save_text", { attempt, id, path, text, overwrite }).catch(asError),
+      fsSaveText: (id, profile, path, text, session) => invoke<string>("fs_save_text", { attempt, id, profile, path, text, session: session ?? null }).catch(asError),
+      cancelTransfer: (id) => invoke<void>("files_cancel", { id }).catch(asError),
       context: {
         pick: () => invoke<LocalFile[]>("context_pick").catch(asError),
         localFiles: (paths) => invoke<LocalFile[]>("context_local_files", { paths }).catch(asError),
         upload: (id, local, serverPath, overwrite, sshProfile, onProgress) => {
           const channel = new Channel<TransferProgress>();
           channel.onmessage = onProgress;
-          return invoke<void>("context_upload", { id, local, serverPath, overwrite, sshProfile: sshProfile ?? null, onProgress: channel }).catch(asError);
+          return invoke<void>("context_upload", { attempt, id, local, serverPath, overwrite, sshProfile: sshProfile ?? null, onProgress: channel }).catch(asError);
         },
-        writeText: (serverPath, text, overwrite, sshProfile) => invoke<void>("context_write_text", { serverPath, text, overwrite, sshProfile: sshProfile ?? null }).catch(asError),
-        mkdir: (path) => invoke<string>("context_mkdir", { path }).catch(asError),
-        remove: (serverPath) => invoke<void>("context_remove", { serverPath }).catch(asError),
+        writeText: (serverPath, text, overwrite, sshProfile) => invoke<void>("context_write_text", { attempt, serverPath, text, overwrite, sshProfile: sshProfile ?? null }).catch(asError),
+        mkdir: (path) => invoke<string>("context_mkdir", { attempt, path }).catch(asError),
+        remove: (serverPath) => invoke<void>("context_remove", { attempt, serverPath }).catch(asError),
         readText: (serverPath, size, sshProfile) =>
-          invoke<string | null>("context_read_text", { serverPath, size, sshProfile: sshProfile ?? null }).then((text) => text ?? undefined, asError),
+          invoke<string | null>("context_read_text", { attempt, serverPath, size, sshProfile: sshProfile ?? null }).then((text) => text ?? undefined, asError),
         sshFile: (serverPath, sshProfile) =>
-          invoke<{ size: number; text: string | null }>("context_ssh_file", { serverPath, sshProfile }).then(({ size, text }) => (text === null ? { size } : { size, text }), asError),
-        gitExclude: (mainFolder, sshProfile) => invoke<GitExclude>("context_git_exclude", { mainFolder, sshProfile: sshProfile ?? null }).catch(asError),
+          invoke<{ size: number; text: string | null }>("context_ssh_file", { attempt, serverPath, sshProfile }).then(({ size, text }) => (text === null ? { size } : { size, text }), asError),
+        gitExclude: (mainFolder, sshProfile) => invoke<GitExclude>("context_git_exclude", { attempt, mainFolder, sshProfile: sshProfile ?? null }).catch(asError),
       },
       openDisplay: async (ticket, onData, onClose) => {
         // RFB bytes arrive raw, as an ArrayBuffer; the close, once, as JSON.
         const channel = new Channel<ArrayBuffer | { code: number; reason: string }>();
         channel.onmessage = (m) => (m instanceof ArrayBuffer ? onData(m) : onClose(m.code, m.reason));
-        const id = await invoke<number>("display_open", { ticket, onEvent: channel }).catch(asError);
+        const id = await invoke<number>("display_open", { attempt, ticket, onEvent: channel }).catch(asError);
         return {
           // The owner's keys and pointer go as the raw body.
           send: (bytes) => void invoke("display_send", bytes, { headers: { "x-display-id": String(id) } }).catch(() => {}),
@@ -179,10 +191,10 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
         };
       },
       reopen: async (onEvent, profile, signal, onStep) => {
-        await opening<void>("hermes_reopen", { profile }, onEvent, signal, onStep);
+        await opening<void>("hermes_reopen", { profile, connection: attempt }, onEvent, signal, onStep);
         return pipe;
       },
-      close: () => invoke("hermes_disconnect"),
+      close: () => invoke<void>("hermes_disconnect").catch(asError),
     };
     return pipe;
   };
@@ -190,14 +202,20 @@ function routePipe(d: SignInDetails, opts: { expectServer?: string; quick: boole
 
 /** Runs `command`, which opens `/api/ws`, with `args`: frames go to `onEvent`, each step as it starts to `onStep`, and
  * aborting `signal` stops it. */
-async function opening<T>(command: string, args: Record<string, unknown>, onEvent: (e: PipeEvent) => void, signal?: AbortSignal, onStep?: (s: Step, at?: number) => void): Promise<T> {
+async function opening<T>(
+  command: string,
+  args: Record<string, unknown>,
+  onEvent: (e: PipeEvent) => void,
+  signal?: AbortSignal,
+  onStep?: (s: Step, at?: number) => void,
+  attempt: string = crypto.randomUUID(),
+): Promise<T> {
   const channel = new Channel<PipeEvent>();
   channel.onmessage = onEvent;
   // src-tauri connect_steps.rs `Started`.
   const steps = new Channel<{ step: Step; at: number }>();
   steps.onmessage = (s) => onStep?.(s.step, s.at);
-  // Names this opening, so stopping it can't stop a later one (src-tauri `hermes_connect_cancel`).
-  const attempt = crypto.randomUUID();
+  // `attempt` names this opening, so stopping it can't stop a later one (src-tauri `hermes_connect_cancel`).
   const stop = () => void invoke("hermes_connect_cancel", { attempt }).catch(() => {});
   signal?.addEventListener("abort", stop, { once: true });
   if (signal?.aborted) stop();

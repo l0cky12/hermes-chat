@@ -4,6 +4,7 @@ import { FakeHermes, row } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
 import type { Item } from "./model";
 import { BranchUnconfirmed, connect } from "./transport";
+import { RestError } from "./pipe";
 
 /**
  * A chat "c1" as Hermes stores it: a hidden project instruction, a question answered with a tool call, a message sent
@@ -437,7 +438,7 @@ describe("Branch from here: a dropped connection", () => {
     // The list can't be read once Hermes has answered.
     server.handlers["session.branch"] = (r) => {
       server.rest["GET /api/sessions"] = () => {
-        throw new Error("The dashboard answered 502");
+        throw new RestError(502, "", "The dashboard answered 502");
       };
       branchCall(r);
     };
@@ -475,7 +476,7 @@ describe("Branch from here: a dropped connection", () => {
     const { chatId } = await hermes.branch(await hermes.previewBranch("c1", itemWith("81% full")));
     await hermes.idle();
     server.rest[`DELETE /api/sessions/${chatId}`] = () => {
-      throw new Error("The dashboard answered 500");
+      throw new RestError(500, "", "The dashboard answered 500");
     };
     expect(await hermes.delete(chatId)).toBe(false);
     expect(hermes.getSnapshot().branches.links[chatId]).toMatchObject({ parentId: "c1" });

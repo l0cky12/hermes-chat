@@ -191,6 +191,24 @@ describe("Hermes transport", () => {
     expect(chat(id).items[2]).toMatchObject({ status: "done", durationS: 0.2, result: "92% used", summary: "1 line" });
   });
 
+  it("keeps each tool call apart when a provider uses the same call id again in a later turn", async () => {
+    const { server, hermes, chat, runtime } = await signedIn();
+    const id = await hermes.newChat();
+    for (const [prompt, command, result] of [["check disk", "df -h", "92% used"], ["check memory", "free -h", "3 GB free"]]) {
+      await hermes.send(id, prompt);
+      server.event(runtime(id), "message.start");
+      server.event(runtime(id), "tool.start", { tool_id: "call_0", name: "terminal", args: { command }, preview: command });
+      server.event(runtime(id), "tool.complete", { tool_id: "call_0", name: "terminal", result });
+      server.event(runtime(id), "message.complete", { text: "Done.", status: "complete" });
+    }
+    const tools = chat(id).items.filter((i) => i.kind === "tool");
+    expect(new Set(chat(id).items.map((i) => i.id)).size).toBe(chat(id).items.length);
+    expect(tools).toMatchObject([
+      { callId: "call_0", preview: "df -h", status: "done", result: "92% used" },
+      { callId: "call_0", preview: "free -h", status: "done", result: "3 GB free" },
+    ]);
+  });
+
   it("shows a failed turn as an error", async () => {
     const { server, hermes, chat, runtime } = await signedIn();
     const id = await hermes.newChat();

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { FakeHermes } from "./fakeHermes";
 import { connect, type Hermes } from "./transport";
 import { CronApi, CronConflict, CronError, cronError, deliveryProblems, missedRunNote, statusLabel, type JobFields } from "./cronJobs";
+import { RestError } from "./pipe";
 
 const running: Hermes[] = [];
 afterEach(async () => {
@@ -261,7 +262,7 @@ describe("run history", () => {
     await expect(new CronApi(async () => ({ messages: [] })).runResult("default", run)).resolves.toEqual({});
     await expect(
       new CronApi(async () => {
-        throw new Error('The dashboard answered 404: {"detail":"Session not found"}');
+        throw new RestError(404, '{"detail":"Session not found"}');
       }).runResult("default", run),
     ).rejects.toMatchObject({ kind: "gone", message: "This run's session isn't on the server any more." });
   });
@@ -299,14 +300,14 @@ describe("delivery", () => {
 describe("permission failures and overlapping runs", () => {
   it("says the dashboard refused, and changes nothing, when it doesn't allow a write", async () => {
     const { s, cron } = await setUp();
-    s.cron.failNext = { match: /^POST /, when: "before", message: 'The dashboard answered 403: {"detail":"Forbidden"}' };
+    s.cron.failNext = { match: /^POST /, when: "before", message: new RestError(403, '{"detail":"Forbidden"}') };
     await expect(cron.create("default", fields(), false)).rejects.toMatchObject({ kind: "forbidden", message: "The dashboard doesn't allow this: Forbidden" });
     expect(s.cron.jobs.default).toHaveLength(0);
     // A refusal is certain, so the next press sends at once instead of warning about a job that may exist.
     await cron.create("default", fields(), false);
     expect(s.cron.jobs.default).toHaveLength(1);
     const job = (await cron.list("default"))[0];
-    s.cron.failNext = { match: /pause$/, when: "before", message: 'The dashboard answered 403: {"detail":"Forbidden"}' };
+    s.cron.failNext = { match: /pause$/, when: "before", message: new RestError(403, '{"detail":"Forbidden"}') };
     await expect(cron.setPaused("default", job, true)).rejects.toMatchObject({ kind: "forbidden" });
     expect(s.cron.jobs.default[0].enabled).toBe(true);
   });
@@ -314,14 +315,14 @@ describe("permission failures and overlapping runs", () => {
   it("says a reading the dashboard refuses is refused, not missing", async () => {
     const { s, cron } = await setUp();
     const route = s.cron.route.bind(s.cron);
-    s.cron.route = (req) => (req.path === "/api/cron/jobs" ? () => Promise.reject(new Error('The dashboard answered 403: {"detail":"Not allowed for this user"}')) : route(req));
+    s.cron.route = (req) => (req.path === "/api/cron/jobs" ? () => Promise.reject(new RestError(403, '{"detail":"Not allowed for this user"}')) : route(req));
     await expect(cron.list("default")).rejects.toMatchObject({ kind: "forbidden", message: "The dashboard doesn't allow this: Not allowed for this user" });
   });
 
   it("doesn't start a second run while one is under way", async () => {
     const { s, cron } = await setUp();
     const job = await cron.create("default", fields(), false);
-    s.cron.failNext = { match: /trigger$/, when: "before", message: 'The dashboard answered 409: {"detail":"Job is already running or was claimed by another scheduler"}' };
+    s.cron.failNext = { match: /trigger$/, when: "before", message: new RestError(409, '{"detail":"Job is already running or was claimed by another scheduler"}') };
     await expect(cron.runNow("default", job)).rejects.toMatchObject({ kind: "busy", message: "This job is running already. Its result shows here once it finishes." });
     expect(s.cron.jobs.default[0].last_run_at).toBeNull();
   });
@@ -681,18 +682,18 @@ describe("profiles", () => {
 
 describe("errors and labels", () => {
   it.each([
-    ["Not connected to Hermes.", "offline"],
-    ["The chat connection is closed.", "offline"],
-    ["Can't reach the Hermes dashboard: connection reset", "unknown"],
-    ['The dashboard answered 404: {"detail":"Not Found"}', "unsupported"],
-    ['The dashboard answered 404: {"detail":"Job not found"}', "gone"],
-    ['The dashboard answered 403: {"detail":"Forbidden"}', "forbidden"],
-    ["The dashboard sign-in has expired. Sign in again.", "forbidden"],
-    ['The dashboard answered 409: {"detail":"Job is already running or was claimed by another scheduler"}', "busy"],
-    ['The dashboard answered 400: {"detail":"Invalid duration: \'banana\'."}', "refused"],
-    ['The dashboard answered 500: {"detail":"boom"}', "unknown"],
-    ["Hermes Chat doesn't relay POST api/cron/jobs.", "unsupported"],
-  ])("%s → %s", (message, kind) => expect(cronError(new Error(message)).kind).toBe(kind));
+    [new Error("Not connected to Hermes."), "offline"],
+    [new Error("The chat connection is closed."), "offline"],
+    [new Error("Can't reach the Hermes dashboard: connection reset"), "unknown"],
+    [new RestError(404, '{"detail":"Not Found"}'), "unsupported"],
+    [new RestError(404, '{"detail":"Job not found"}'), "gone"],
+    [new RestError(403, '{"detail":"Forbidden"}'), "forbidden"],
+    [new RestError(401, "", "The dashboard sign-in has expired. Sign in again."), "forbidden"],
+    [new RestError(409, '{"detail":"Job is already running or was claimed by another scheduler"}'), "busy"],
+    [new RestError(400, '{"detail":"Invalid duration: \'banana\'."}'), "refused"],
+    [new RestError(500, '{"detail":"boom"}'), "unknown"],
+    [new Error("Hermes Chat doesn't relay POST api/cron/jobs."), "unsupported"],
+  ])("%s → %s", (e, kind) => expect(cronError(e).kind).toBe(kind));
 
   it("words last statuses", () => {
     expect(statusLabel("ok")).toEqual({ text: "Succeeded", tone: "good" });

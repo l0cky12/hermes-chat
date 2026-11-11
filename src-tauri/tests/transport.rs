@@ -1119,8 +1119,27 @@ async fn slow_stub() -> Dashboard {
         .route("/auth/password-login", post(login))
         .route("/api/sessions", get(list))
         .route("/api/skills", get(five_minutes))
-        .route("/api/memory/providers/{name}/setup", post(five_minutes));
+        .route("/api/memory/providers/{name}/setup", post(five_minutes))
+        .route("/api/sessions/{id}", get(std::future::pending::<()>).patch(std::future::pending::<()>));
     sign_in_at(&serve(app).await, &sign_in("hunter2")).await.expect("signed in")
+}
+
+/// Issue #473: any other call Hermes takes and never answers is given up too, once ten minutes pass without a byte, so
+/// a feature waiting on it gets its answer.
+#[tokio::test(start_paused = true)]
+async fn any_call_hermes_never_answers_fails_after_ten_minutes_without_a_byte() {
+    let dashboard = slow_stub().await;
+    let body = Some(json!({"pinned": true}).to_string());
+    gives_up_after_ten_minutes("GET", dashboard.request("GET", "api/sessions/s1", None)).await;
+    gives_up_after_ten_minutes("PATCH", dashboard.request("PATCH", "api/sessions/s1", body)).await;
+    gives_up_after_ten_minutes("get_limited", dashboard.get_limited("api/sessions/s1", 1000)).await;
+}
+
+async fn gives_up_after_ten_minutes(call: &str, answer: impl std::future::Future<Output = Result<String, TransportError>>) {
+    let started = tokio::time::Instant::now();
+    let err = tokio::time::timeout(Duration::from_secs(3600), answer).await.expect("the call gave up within the hour").err().unwrap();
+    assert!(matches!(err, TransportError::Stalled(600)), "{call}: {err:?}");
+    assert_eq!(started.elapsed().as_secs(), 600, "{call}");
 }
 
 #[tokio::test(start_paused = true)]
@@ -2506,7 +2525,21 @@ async fn writes_an_artifacts_text_where_the_profiles_tools_run() {
 #[tokio::test]
 async fn an_artifact_write_refuses_credential_files_odd_paths_and_too_much_text() {
     let (dashboard, writes) = fs_write_stub().await;
-    for path in ["/srv/.env", "/home/me/.hermes/auth.json", "/srv/mcp-tokens/x.json", "relative.md", "/srv/a/../b.md", "/srv/dir/", "/srv/a\0b"] {
+    for path in [
+        "/srv/.env",
+        "/home/me/.hermes/auth.json",
+        "/srv/mcp-tokens/x.json",
+        "relative.md",
+        "/srv/a/../b.md",
+        "/srv/dir/",
+        "/srv/a\0b",
+        "/home/u/.hermes/.env/.",
+        "/home/u/.hermes/auth.json/.",
+        "/home/u/.hermes/config.yaml/.",
+        "~/.hermes/.env/.",
+        "/home/u/.hermes/x/../.env",
+        "/srv/mcp-tokens/./x.json",
+    ] {
         let err = dashboard.write_agent_text("default", path, "x", None).await.err().unwrap();
         assert!(matches!(err, TransportError::NotRelayed(_)), "{path}: {err:?}");
     }
@@ -3433,4 +3466,45 @@ async fn removing_an_endpoint_through_the_relay_doesnt_pass_on_the_key_previews_
     let (dashboard, _) = accounts_stub().await;
     let answer = dashboard.request("DELETE", "api/providers/custom-endpoints/ollama?profile=work", None).await.unwrap();
     assert_eq!(answer, r#"{"ok":true}"#);
+}
+
+#[tokio::test]
+async fn an_endpoint_id_that_is_a_dot_segment_once_decoded_is_refused_before_it_reaches_another_route() {
+    let (dashboard, bodies) = accounts_stub().await;
+    for id in ["%2e%2e", "%2E%2e", ".%2e", "%2e.", "%2e"] {
+        let path = format!("api/providers/custom-endpoints/{id}/activate?profile=work");
+        let err = dashboard.request("POST", &path, Some("{}".into())).await.unwrap_err();
+        assert!(matches!(err, TransportError::NotRelayed(_)), "POST {path}: {err:?}");
+    }
+    assert!(bodies.lock().unwrap().is_empty(), "nothing reached the server");
+}
+
+#[tokio::test]
+async fn the_config_reaches_the_window_without_its_credentials() {
+    let dashboard = signed_in().await;
+    let got = dashboard.request("GET", "api/config?profile=default", None).await.unwrap();
+    for secret in ["sk-model-SECRET", "gsk-SECRET", "el-SECRET", "sk-tts-SECRET", "xi-SECRET", "sk-live-SECRET"] {
+        assert!(!got.contains(secret), "{secret} reached the window: {got}");
+    }
+    let got: Value = serde_json::from_str(&got).unwrap();
+    assert_eq!(got["tts"]["openai"], json!({"voice": "alloy", "model": "gpt-4o-mini-tts", "consent_attestation": "c-SECRET"}), "everything else is kept");
+    assert_eq!(got["stt"]["groq"], json!({"model": "whisper-large-v3-turbo", "language": ""}));
+    assert_eq!(got["model"], json!({"default": "glm-5.3-flash"}));
+}
+
+#[tokio::test]
+async fn the_relay_never_reads_the_raw_config_or_the_lists_rust_reads_for_the_window() {
+    let (dashboard, _) = accounts_stub().await;
+    for path in [
+        "api/config/raw",
+        "api/%63onfig/raw",
+        "api//config/raw",
+        "api/providers/oauth?profile=work",
+        "api/providers/custom-endpoints?profile=work",
+        "api/providers/custom-endpoints/",
+        "api/providers//oauth",
+    ] {
+        let err = dashboard.request("GET", path, None).await.unwrap_err();
+        assert!(matches!(err, TransportError::NotRelayed(_)), "GET {path}: {err:?}");
+    }
 }

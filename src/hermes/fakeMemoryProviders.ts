@@ -4,6 +4,7 @@
 // research doc "Memory providers"). As probed: the declared surface writes only the keys sent and switches the provider
 // without checking it's ready; the legacy one writes, then refuses (400) a provider that isn't ready.
 import type { RestRequest } from "./fakeHermes";
+import { RestError } from "./pipe";
 
 export type FakeField = {
   key: string;
@@ -36,7 +37,7 @@ export type FakeProvider = {
   docsUrl?: string;
 };
 
-const answered = (status: number, detail: string) => new Error(`The dashboard answered ${status}: ${JSON.stringify({ detail })}`);
+const answered = (status: number, detail: string) => new RestError(status, JSON.stringify({ detail }));
 const host = (profile: string) => (profile === "default" ? "hermes" : `hermes_${profile}`);
 
 /** Honcho's declared surface, trimmed to what the tests use. */
@@ -95,7 +96,7 @@ export class FakeMemoryProviders {
   /** The next write fails this way: `lost` before it changes anything, `stored` after. */
   dropNext?: "lost" | "stored";
   /** `GET /api/memory` fails this way for these profiles. */
-  readFailures: Record<string, string> = {};
+  readFailures: Record<string, Error> = {};
   /** No `/api/memory*` routes, as an old server answers. */
   routes = true;
 
@@ -135,7 +136,7 @@ export class FakeMemoryProviders {
 
   /** `GET /api/memory`'s `active` and `providers` for `profile`. */
   memory(profile: string, fallback: string) {
-    if (this.readFailures[profile]) throw new Error(this.readFailures[profile]);
+    if (this.readFailures[profile]) throw this.readFailures[profile];
     return {
       active: this.activeOf(profile, fallback),
       providers: this.found(profile).map((p) => ({

@@ -30,7 +30,7 @@
 // Nothing is taken on trust: every change is checked against a fresh read first (another client may have changed it),
 // and reported as saved only once a read afterwards shows it.
 
-import type { ToolsetGuards } from "./pipe";
+import { RestError, type ToolsetGuards } from "./pipe";
 
 export type { ToolsetGuards };
 
@@ -142,22 +142,19 @@ const CONFIG_ONLY = new Set(["stt"]);
 /** A failed dashboard call: the HTTP status and Hermes's reason when it answered, none when it couldn't be reached. */
 export type Failure = { status?: number; reason: string; signedOut?: boolean; notRelayed?: boolean };
 
-/** Reads an error the way the Rust relay and FakeHermes word it: `The dashboard answered 404: {"detail":…}`. */
+/** Reads a failed call: a dashboard answer (`RestError`), a call the relay refused to send, or neither. */
 export function failureOf(e: unknown): Failure {
   const message = e instanceof Error ? e.message : String(e);
-  if (/sign-in has expired/i.test(message)) return { status: 401, reason: message, signedOut: true };
-  if (/^Hermes Chat doesn't relay /.test(message)) return { reason: message, notRelayed: true };
-  const m = /^The dashboard answered (\d{3}): ([\s\S]*)$/.exec(message);
-  if (!m) return { reason: message };
-  let reason = m[2].trim();
+  if (!(e instanceof RestError)) return /^Hermes Chat doesn't relay /.test(message) ? { reason: message, notRelayed: true } : { reason: message };
+  if (e.status === 401) return { status: 401, reason: message, signedOut: true };
+  let reason = e.detail;
   try {
-    const d = JSON.parse(reason).detail;
-    if (typeof d === "string" && d.trim()) reason = d.trim();
-    else if (Array.isArray(d)) reason = d.map((x) => str(obj(x).msg)).filter(Boolean).join("; ") || reason;
+    const d = JSON.parse(e.body).detail;
+    if (Array.isArray(d)) reason = d.map((x) => str(obj(x).msg)).filter(Boolean).join("; ") || reason;
   } catch {
     // Not JSON, or cut short by the relay: the text as it came.
   }
-  return { status: Number(m[1]), reason };
+  return { status: e.status, reason };
 }
 
 /** FastAPI's own "no such route", as opposed to a route refusing, which names its own reason. */

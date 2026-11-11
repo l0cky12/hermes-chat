@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import { CAPABILITIES, CapabilityStore, reportText, type CapabilityIO } from "./capabilities";
 import { RpcError } from "./transport";
+import { RestError } from "./pipe";
 
 declare const process: { env: Record<string, string | undefined> };
 const BASE = process.env.HERMES_LIVE_DASHBOARD;
@@ -57,8 +58,8 @@ async function signedIn() {
       sent.push(`GET ${path.split("?")[0]}`);
       const res = await send("GET", path);
       const text = await res.text();
-      if (res.status === 401) throw new Error("The dashboard sign-in has expired. Sign in again.");
-      if (!res.ok) throw new Error(`The dashboard answered ${res.status}: ${text.slice(0, 300)}`);
+      if (res.status === 401) throw new RestError(401, "", "The dashboard sign-in has expired. Sign in again.");
+      if (!res.ok) throw new RestError(res.status, text.slice(0, 300));
       if (maxBytes !== undefined && text.length > maxBytes) throw new Error(`it's ${(text.length / 2 ** 20).toFixed(1)} MB now, over the ${Math.floor(maxBytes / 2 ** 20)} MB limit`);
       return text;
     },

@@ -1,7 +1,7 @@
 // Markdown with highlighted, copyable code blocks, typeset math, mermaid diagrams and find-in-chat marks. Ported from
 // the prototype. Single newlines are kept as line breaks, since replies often put one item per line. Links open in the
 // preview pane, never in the app's own window (previewContext.tsx).
-import { Children, Fragment, isValidElement, memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
+import { Children, Fragment, isValidElement, memo, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, CodeXml, Copy, Image as ImageIcon, Workflow } from "lucide-react";
@@ -145,16 +145,22 @@ const components: Components = {
 /**
  * One piece of Markdown, rendered again only when its text, the find-in-chat query, or whether it is still growing
  * changes. `growing`: it is the end of a reply still streaming in, and ends in code that isn't finished, which stays
- * plain until it is.
+ * plain until it is. `live`: it is part of a reply still streaming in, so code whose language has to be guessed shows
+ * plain in the render that finishes it, and highlighted in the next, after the guess (#451). `live` changing is not a
+ * reason to render again: a reply ending would otherwise render each of its blocks again.
  */
-const Part = memo(function Part({ text, query, growing }: { text: string; query: string; growing: boolean }) {
-  const plugins = useMemo(() => rehypePlugins(query, growing ? text : undefined), [query, growing, text]);
-  return (
-    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={plugins} components={components}>
-      {text}
-    </ReactMarkdown>
-  );
-});
+const Part = memo(
+  function Part({ text, query, growing, live }: { text: string; query: string; growing: boolean; live: boolean }) {
+    const [, guessed] = useReducer((n: number) => n + 1, 0);
+    const plugins = useMemo(() => rehypePlugins(query, growing ? text : undefined, live ? guessed : undefined), [query, growing, text, live]);
+    return (
+      <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={plugins} components={components}>
+        {text}
+      </ReactMarkdown>
+    );
+  },
+  (a, b) => a.text === b.text && a.query === b.query && a.growing === b.growing,
+);
 
 /**
  * `query`: the find-in-chat text to mark. `streaming`: the text is a reply still coming in, a delta at a time. From then
@@ -166,16 +172,16 @@ export const Markdown = memo(function Markdown({ text, query = "", streaming = f
   const streamed = useRef(false);
   const split = useRef<Blocks | undefined>(undefined);
   streamed.current ||= streaming;
-  if (!streamed.current) return <Part text={text} query={query} growing={false} />;
+  if (!streamed.current) return <Part text={text} query={query} growing={false} live={false} />;
   // A cache of the last split, so each delta parses only from the last blocks on; the same text gives the same blocks.
   const blocks = (split.current = splitBlocks(text, split.current));
-  if (blocks.whole) return <Part text={text} query={query} growing={streaming && !!blocks.blocks[blocks.blocks.length - 1]?.open} />;
+  if (blocks.whole) return <Part text={text} query={query} growing={streaming && !!blocks.blocks[blocks.blocks.length - 1]?.open} live={streaming} />;
   const last = blocks.blocks.length - 1;
   // A "\n" between blocks, as between the top-level elements of the text rendered in one piece.
   return blocks.blocks.map((b, i) => (
     <Fragment key={i}>
       {i > 0 && "\n"}
-      <Part text={b.text} query={query} growing={streaming && i === last && b.open} />
+      <Part text={b.text} query={query} growing={streaming && i === last && b.open} live={streaming} />
     </Fragment>
   ));
 });

@@ -35,7 +35,8 @@ export type DownloadProgress = { name: string; done: number; total: number };
 export type LocalModels = { dir: string; models: LocalModel[]; downloading?: DownloadProgress | null };
 
 /** A recording to transcribe where the owner chose. `side`: one side alone (Settings' Test). `signal`: drops it. */
-export type TranscribeRequest = { audio: Uint8Array; mime: string; profile?: string; side?: SttSide; signal?: AbortSignal };
+/** `connection`: the live connection's name (`Hermes.connectionId`), which a transcription on Hermes must give (#474). */
+export type TranscribeRequest = { audio: Uint8Array; mime: string; profile?: string; connection?: string; side?: SttSide; signal?: AbortSignal };
 
 export type LocalSttApi = {
   state: () => Promise<LocalSttState>;
@@ -78,10 +79,11 @@ export const tauriLocalStt: LocalSttApi = {
   cancelDownload: () => invoke<void>("local_stt_cancel_download").catch(asError),
   remove: (name) => invoke<LocalModels>("local_stt_delete", { name }).catch(asError),
   // The recording goes as the raw body, as it does to Hermes (tauriPipe.ts); the run id lets a cancel reach Rust.
-  transcribe: ({ audio, mime, profile, side, signal }) => {
+  transcribe: ({ audio, mime, profile, connection, side, signal }) => {
     const run = `${Date.now().toString(36)}-${++runs}`;
     const headers: Record<string, string> = { "x-mime": encodeURIComponent(mime), "x-stt-run": run };
     if (profile) headers["x-profile"] = encodeURIComponent(profile);
+    if (connection) headers["x-attempt"] = connection;
     if (side) headers["x-stt-side"] = side;
     // Dropped before it went: nothing to send, and nothing for Rust to stop.
     if (signal?.aborted) return Promise.reject(new SttCancelled());

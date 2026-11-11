@@ -15,15 +15,21 @@ const TEXT = "Rotate the nginx logs,\n  then restart it ✓";
 const ROTATE = "/home/liam/rotate.sh";
 
 let store: Map<string, string>;
+/** While set, writes to localStorage throw, as when it is full. */
+let full = false;
 beforeEach(() => {
   store = new Map();
+  full = false;
   vi.stubGlobal("localStorage", {
     get length() {
       return store.size;
     },
     key: (i: number) => [...store.keys()][i] ?? null,
     getItem: (k: string) => store.get(k) ?? null,
-    setItem: (k: string, v: string) => void store.set(k, v),
+    setItem: (k: string, v: string) => {
+      if (full) throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+      store.set(k, v);
+    },
     removeItem: (k: string) => void store.delete(k),
   });
   vi.useFakeTimers();
@@ -92,6 +98,16 @@ describe("Case 1: the send fails before Hermes accepts it", () => {
     // The message says it; there's no separate error line.
     expect(chat().items.filter((i) => i.kind === "error")).toEqual([]);
     expect(stored()).toEqual([]);
+  });
+
+  it("Hermes refuses a message sent while a reply runs: the reply still shows as running", async () => {
+    const { server, hermes, chat } = await ready();
+    expect(await hermes().send("c1", "Check the disks")).toEqual({ delivery: "accepted" });
+    server.event(chat().runtimeId!, "message.start");
+    server.rejectPrompt = { code: 4009, message: "session busy" };
+
+    expect(await hermes().send("c1", TEXT)).toEqual({ delivery: "unsent", reason: "session busy" });
+    expect(chat()).toMatchObject({ running: true });
   });
 
   it("the connection can't take the frame: failed, and nothing reached Hermes", async () => {
@@ -361,6 +377,61 @@ describe("Case 4: the app restarts mid-flight", () => {
   });
 });
 
+describe("A new chat whose first message failed (#468)", () => {
+  /** A chat started here, whose first message Hermes refused, so Hermes has no row for it. */
+  async function failedFirst() {
+    const server = new FakeHermes();
+    server.sessions = [row("c1", 0)];
+    let hermes = await launch(server);
+    const id = await hermes.newChat();
+    server.rejectPrompt = { code: 4009, message: "session busy" };
+    await hermes.send(id, TEXT);
+    server.rejectPrompt = undefined;
+    const chat = () => hermes.getSnapshot().chats.find((c) => c.id === id);
+    expect(chat()?.items).toMatchObject([{ text: TEXT, outgoing: { state: "failed", reason: "session busy" } }]);
+    expect(server.sessions.some((s) => s.id === id)).toBe(false);
+    const relaunch = async () => {
+      await hermes.close();
+      hermes = await launch(server);
+      return hermes;
+    };
+    return { server, hermes: () => hermes, id, chat, relaunch };
+  }
+
+  it("stays in the list, with its Failed message, after the connection drops and the list is read again", async () => {
+    const { server, hermes, chat } = await failedFirst();
+    server.drop();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(hermes().getSnapshot().status).toBe("connected");
+    await hermes().idle();
+    expect(server.restRequests.filter((r) => r.path === "/api/sessions").length).toBeGreaterThan(1);
+    expect(chat()?.items).toMatchObject([{ text: TEXT, outgoing: { state: "failed", reason: "session busy" } }]);
+  });
+
+  it("stays after a restart, and Retry sends it in that chat", async () => {
+    const { server, hermes, id, chat, relaunch } = await failedFirst();
+    await relaunch();
+    await hermes().idle();
+    const failed = chat()?.items.at(-1);
+    expect(failed).toMatchObject({ text: TEXT, outgoing: { state: "failed" } });
+
+    expect(await hermes().retry(id, failed!.id)).toEqual({ delivery: "accepted" });
+    expect(chat()?.items).toMatchObject([{ kind: "user", text: TEXT }]);
+    expect(chat()?.items.some(isOutgoing)).toBe(false);
+    expect((server.transcripts[id] ?? []).filter((m) => m.role === "user" && m.text === TEXT)).toHaveLength(1);
+  });
+
+  it("goes once the owner dismisses its message, at the next list read", async () => {
+    const { server, hermes, id, chat } = await failedFirst();
+    server.drop();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hermes().idle();
+    hermes().dismiss(id, chat()!.items[0].id);
+    await hermes().sync();
+    expect(chat()).toBeUndefined();
+  });
+});
+
 describe("The outbox on this computer", () => {
   it("a failed message survives a cache save/reload cycle, attachments and all, and stays out of the Saved copy", async () => {
     const { server, hermes, chat, relaunch } = await ready();
@@ -379,6 +450,23 @@ describe("The outbox on this computer", () => {
     // Clear local cache deletes the lists and Saved copies; the owner's unsent words stay, as drafts do.
     after.clearCache();
     expect(kept()).toMatchObject([{ text: TEXT }]);
+  });
+
+  it("a failed message storage refused is kept in memory across a profile switch and back", async () => {
+    const { server, hermes, chat } = await ready();
+    server.otherProfiles = { work: [] };
+    full = true;
+    server.rejectPrompt = { code: 4009, message: "session busy" };
+    await hermes().send("c1", TEXT);
+
+    await hermes().switchProfile("work");
+    await hermes().switchProfile("default");
+    await hermes().open("c1");
+    expect(chat().items.at(-1)).toMatchObject({ text: TEXT, outgoing: { state: "failed", reason: "session busy" } });
+    // Once storage takes a write again, letting it go is saved as usual.
+    full = false;
+    hermes().dismiss("c1", chat().items.at(-1)!.id);
+    expect(localChatCache(nas).loadOutbox("default")).toEqual({});
   });
 
   it("Retry sends the same words and files again, as a new message", async () => {

@@ -8,7 +8,7 @@
 // The voice set-up Rust reads in the app (`Dashboard::voice_setup`) is stood in for by `setupFrom` below, which keeps the
 // same keys of the config; the Rust filter itself is tested in src-tauri/tests/transport.rs.
 import { describe, expect, it } from "vitest";
-import type { VoiceSetup } from "./pipe";
+import { RestError, type VoiceSetup } from "./pipe";
 import { VoiceSettingsApi, activeOf, emptyDraft } from "./voiceSettings";
 
 declare const process: { env: Record<string, string | undefined> };
@@ -55,7 +55,7 @@ async function signedIn() {
     sent.push(`${method} ${path.split("?")[0]}`);
     const res = await send(method, path, body);
     const text = await res.text();
-    if (!res.ok) throw new Error(`The dashboard answered ${res.status}: ${text}`);
+    if (!res.ok) throw new RestError(res.status, text);
     return JSON.parse(text);
   };
   const api = new VoiceSettingsApi(rest, async (profile) => setupFrom(await rest("GET", `api/config?profile=${profile}`)));

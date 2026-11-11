@@ -30,6 +30,7 @@ import {
   type UsageChat,
   type UsageIo,
 } from "./usageAnalytics";
+import { RestError } from "./pipe";
 
 const DAY = 86_400;
 const H = 3_600_000;
@@ -145,6 +146,13 @@ describe("Reading a period", () => {
     expect(data.profiles[0].hermes).toMatchObject({ state: "failed", error: expect.stringContaining("503") });
   });
 
+  it("doesn't take a server error whose text quotes a 404 for a missing route (#486)", async () => {
+    const server = fixture();
+    server.analyticsRefused = { status: 500, detail: "upstream answered 404: Not Found" };
+    const data = await collectUsage(await io(server), ["default"], week());
+    expect(data.profiles[0].hermes).toMatchObject({ state: "failed", error: expect.stringContaining("500") });
+  });
+
   it("doesn't ask for Hermes's sums for a custom period, which they can't cover", async () => {
     const server = fixture();
     const p = periodOf({ kind: "custom", from: dayIn("UTC", NOW - 3 * DAY * 1000), to: dayIn("UTC", NOW) }, "UTC", NOW);
@@ -157,7 +165,7 @@ describe("Reading a period", () => {
     const server = fixture();
     server.otherProfiles = { work: [] };
     const base = await io(server);
-    const failing: UsageIo = { ...base, page: (profile, o, l) => (profile === "work" ? Promise.reject(new Error("The dashboard answered 503: busy")) : base.page(profile, o, l)) };
+    const failing: UsageIo = { ...base, page: (profile, o, l) => (profile === "work" ? Promise.reject(new RestError(503, "busy")) : base.page(profile, o, l)) };
     const data = await collectUsage(failing, ["default", "work"], week());
     expect(data.profiles.map((p) => [p.profile, p.state])).toEqual([
       ["default", "ok"],
@@ -170,7 +178,7 @@ describe("Reading a period", () => {
   it("counts a segment it couldn't read as missing, and the chat as partial", async () => {
     const server = fixture();
     const base = await io(server);
-    const data = await collectUsage({ ...base, session: () => Promise.reject(new Error("The dashboard answered 500: x")) }, ["default"], week());
+    const data = await collectUsage({ ...base, session: () => Promise.reject(new RestError(500, "x")) }, ["default"], week());
     const long = data.chats.find((c) => c.id === "tip")!;
     expect(long.missing).toBe(1);
     expect(data.missingSegments).toBe(1);
@@ -316,7 +324,7 @@ describe("Usage Hermes didn't record", () => {
 
   it("keeps Hermes's own sums for a profile whose chats couldn't all be read, without comparing them", async () => {
     const page = vi.fn(async (_p: string, offset: number) => {
-      if (offset) throw new Error("The dashboard answered 503: busy");
+      if (offset) throw new RestError(503, "busy");
       return { rows: Array.from({ length: 100 }, (_, i) => ({ id: `c${i}`, started_at: NOW / 1000 - i, input_tokens: 1, output_tokens: 1 })), total: 500 };
     });
     const hermesTotals = async () => ({ totals: { total_sessions: 500, total_input: 500 }, by_task: [{ task: "title_generation", api_calls: 3 }] });
@@ -333,7 +341,7 @@ describe("Comparing with Hermes's own sums", () => {
   const hermesTotals = async () => ({ totals: { total_sessions: 2, total_input: 20, total_output: 2, total_cache_read: 0, total_api_calls: 2 } });
 
   it("doesn't compare when a segment couldn't be read, so the gap isn't put down to subagent runs", async () => {
-    const data = await collectUsage({ page: async () => ({ rows: [lineageRow(0)], total: 1 }), session: () => Promise.reject(new Error("The dashboard answered 500: x")), hermesTotals }, ["default"], week());
+    const data = await collectUsage({ page: async () => ({ rows: [lineageRow(0)], total: 1 }), session: () => Promise.reject(new RestError(500, "x")), hermesTotals }, ["default"], week());
     const [check] = crossCheck(data);
     expect(check).toMatchObject({ complete: false, incomparable: "segments" });
   });

@@ -163,7 +163,7 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
     try {
       return parseListing(await io.get(`api/files?${new URLSearchParams({ path })}`), Date.now());
     } catch (e) {
-      throw e instanceof RemoteFilesError ? e : explain(messageOf(e), "list");
+      throw e instanceof RemoteFilesError ? e : explain(e, "list");
     }
   };
 

@@ -11,7 +11,7 @@
 // - An edit sends only the fields the owner changed, after checking that nobody changed the job's shown fields since
 //   the owner opened it (`update`). Fields this app doesn't show are never sent, so Hermes keeps them.
 import { rowText } from "./branch";
-import type { RestMethod } from "./pipe";
+import { RestError, type RestMethod } from "./pipe";
 import { CapabilityUnsupportedError } from "./capabilities";
 import { type Schedule, type Zone, knownZone, offsetAt, offsetLabel, parseSchedule, storedSchedule } from "./schedule";
 
@@ -311,23 +311,21 @@ const sentence = (s: string) => {
 };
 
 /**
- * A failed call as the owner reads it, and whether it may have taken effect. The Rust relay words a dashboard error
- * `The dashboard answered 404: {"detail":…}`; it can't reach the dashboard as `Can't reach the Hermes dashboard: …`.
+ * A failed call as the owner reads it, and whether it may have taken effect. A dashboard answer is a `RestError`; the
+ * Rust relay words one it can't reach as `Can't reach the Hermes dashboard: …`.
  */
 export function cronError(e: unknown): CronError {
   if (e instanceof CronError) return e;
   const message = e instanceof Error ? e.message : String(e);
   if (message === "Not connected to Hermes." || message === "The chat connection is closed.")
     return new CronError("offline", "Hermes Chat isn't connected to Hermes, so nothing was sent. Jobs keep running on the server.");
-  if (/sign-in has expired/.test(message)) return new CronError("forbidden", "The dashboard sign-in has expired, so nothing was changed. Sign in again.");
+  if (e instanceof RestError && e.status === 401) return new CronError("forbidden", "The dashboard sign-in has expired, so nothing was changed. Sign in again.");
   if (e instanceof CapabilityUnsupportedError) return new CronError("unsupported", "This Hermes server has no scheduled jobs, so nothing was sent. Updating Hermes adds them.");
-  if (/doesn't relay/.test(message)) return new CronError("unsupported", "This version of Hermes Chat can't send that to Hermes.");
-  const m = /^The dashboard answered (\d{3}): ([\s\S]*)$/.exec(message);
-  if (!m) return new CronError("unknown", `Hermes didn't answer: ${message}`);
-  const status = Number(m[1]);
-  let detail: unknown = m[2].trim();
+  if (!(e instanceof RestError)) return /doesn't relay/.test(message) ? new CronError("unsupported", "This version of Hermes Chat can't send that to Hermes.") : new CronError("unknown", `Hermes didn't answer: ${message}`);
+  const status = e.status;
+  let detail: unknown = e.body.trim();
   try {
-    detail = JSON.parse(m[2]).detail ?? detail;
+    detail = JSON.parse(e.body).detail ?? detail;
   } catch {
     // Not JSON, or cut short by the relay: the text as it came.
   }
@@ -335,7 +333,7 @@ export function cronError(e: unknown): CronError {
   if ((status === 404 || status === 405) && said === "Not Found") return new CronError("unsupported", "This Hermes server has no scheduled jobs. Updating Hermes adds them.");
   if (status === 404 && /^Profile '.*' does not exist\.$/.test(said)) return new CronError("gone", `${said} It may have been deleted in another Hermes client.`);
   if (status === 404) return new CronError("gone", "This job isn't on the server any more: it was deleted in another Hermes client.");
-  if (status === 401 || status === 403) return new CronError("forbidden", `The dashboard doesn't allow this: ${said}`);
+  if (status === 403) return new CronError("forbidden", `The dashboard doesn't allow this: ${said}`);
   if (status === 409) return new CronError("busy", sentence(said));
   if (status === 503 && /Session store/i.test(said)) return new CronError("unavailable", "Run history isn't kept until this profile's gateway has started on the server.");
   // A 424 means Hermes saved the job but an external scheduler didn't take it; the read-back sorts out the rest.

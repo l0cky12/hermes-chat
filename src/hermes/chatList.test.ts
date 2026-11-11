@@ -3,6 +3,7 @@ import { FakeHermes, row } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
 import type { Chat } from "./model";
 import { type ChatCache, connect } from "./transport";
+import { RestError } from "./pipe";
 
 async function signedIn(server = new FakeHermes(), cache?: ChatCache) {
   const hermes = await connect(server.openPipe, "default", cache);
@@ -165,7 +166,7 @@ describe("Chat list sync", () => {
     const { hermes, chats } = await signedIn(server);
     await hermes.sync();
     server.rest["GET /api/sessions"] = () => {
-      throw new Error("The dashboard answered 503: store busy");
+      throw new RestError(503, "store busy");
     };
     await hermes.sync();
     expect(hermes.getSnapshot()).toMatchObject({ syncError: "Couldn't refresh the chat list: The dashboard answered 503: store busy" });
@@ -242,7 +243,7 @@ describe("Active is Hermes's pinned flag", () => {
     const id = await hermes.newChat();
     server.rest[`GET /api/sessions/${id}/mutation-snapshot`] = () => ({ session_id: id, exists: false, runtime_revision: 0 });
     server.rest[`PATCH /api/sessions/${id}`] = () => {
-      throw new Error(`The dashboard answered 404: {"detail":"not_found"}`);
+      throw new RestError(404, `{"detail":"not_found"}`);
     };
     await hermes.send(id, "hello");
     await hermes.sync();
@@ -260,7 +261,7 @@ describe("Active is Hermes's pinned flag", () => {
     const { server, hermes, chat } = await signedIn();
     const id = await hermes.newChat();
     server.rest[`PATCH /api/sessions/${id}`] = () => {
-      throw new Error("The dashboard answered 503: busy");
+      throw new RestError(503, "busy");
     };
     await hermes.send(id, "hello");
     server.event(server.runtimeIdOf(id)!, "message.complete", { text: "Hi!", status: "complete" });
@@ -276,7 +277,7 @@ describe("Active is Hermes's pinned flag", () => {
     const { hermes, chat } = await signedIn(server, cache);
     const id = await hermes.newChat();
     const refuse = () => {
-      throw new Error(`The dashboard answered 404: {"detail":"not_found"}`);
+      throw new RestError(404, `{"detail":"not_found"}`);
     };
     server.rest[`PATCH /api/sessions/${id}`] = refuse;
     await hermes.send(id, "hello");

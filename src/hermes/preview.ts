@@ -4,7 +4,8 @@
 // the native Open dialog; Rust reads it (src-tauri/src/transport.rs `read_local_text`). Web pages load in a sandboxed
 // frame (ADR 0007). Everything shown is untrusted: nothing here turns it into HTML the app itself renders.
 import type { Item } from "./model";
-import { SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, SESSION_GONE, type RemotePreview } from "./remoteFiles";
+import { RestError, sessionNotFound } from "./pipe";
+import { SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, type RemotePreview } from "./remoteFiles";
 import type { ArtifactRef } from "./artifacts";
 
 export type PreviewTarget =
@@ -303,20 +304,19 @@ function unsupported(name: string, mime: string | undefined, size?: number): Fil
 /** `read-text`'s answer (`hermes_cli/web_routers/files.py` `fs_read_text` at the deployed `bf0203a`). */
 type ReadText = { binary?: boolean; byteSize?: number; language?: string; mimeType?: string; path?: string; text?: string; truncated?: boolean };
 
-/** A failed dashboard request, as the Rust relay and FakeHermes word it: `The dashboard answered 404: {"detail":…}`. */
+/** A failed dashboard request in the owner's words. */
 function serverFileError(e: unknown): Error {
   const message = e instanceof Error ? e.message : String(e);
   if (message === "Not connected to Hermes.") return new Error("Files on the server can't be read while Hermes Chat isn't connected.");
-  const m = /^The dashboard answered (\d{3}): ([\s\S]*)$/.exec(message);
-  if (!m) return new Error(message);
-  let detail = m[2].trim();
+  if (!(e instanceof RestError)) return new Error(message);
+  let detail = e.body.trim();
   try {
     const d = JSON.parse(detail).detail;
     if (typeof d === "string") detail = d;
   } catch {
     // Not JSON (or cut short by the relay): the text as it came.
   }
-  const status = Number(m[1]);
+  const status = e.status;
   if (status === 404 && detail === "Not Found") return new Error("This Hermes server can't read files for the preview.");
   if (status === 404 && detail === "File not found") return new Error("There's no file at this path on the Hermes server.");
   if (status === 404 && detail.startsWith(SANDBOX_NOT_FOUND_PREFIX)) return new Error(SANDBOX_MISSING);
@@ -339,7 +339,7 @@ export async function readServerFile(get: (pathAndQuery: string) => Promise<unkn
   const query = () => new URLSearchParams({ path, profile, ...(chat && { session_id: chat }) }).toString();
   const fetch = (route: string) =>
     get(`${route}?${query()}`).catch((e) => {
-      if (!chat || !SESSION_GONE.test(e instanceof Error ? e.message : String(e))) throw e;
+      if (!chat || !sessionNotFound(e)) throw e;
       chat = undefined;
       return get(`${route}?${query()}`);
     });

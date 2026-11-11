@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FakeHermes, row, type TranscriptMessage } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
 import { connect } from "./transport";
+import { RestError } from "./pipe";
 
 /** A stored time, Unix seconds, as Hermes keeps it. */
 const T = 1_793_620_000;
@@ -229,7 +230,7 @@ describe("Times on a turn sent from here", () => {
     const { server, hermes, items } = await listed();
     server.userRowId = 41;
     server.rest["GET /api/sessions/a/messages"] = () => {
-      throw new Error("The dashboard answered 500");
+      throw new RestError(500, "", "The dashboard answered 500");
     };
     await hermes.send("a", "Hi");
     server.event(server.runtimeIdOf("a")!, "message.complete", completed("Hello!", { row_ids: [41, 42], user_row_id: 41, final_assistant_row_id: 42 }));

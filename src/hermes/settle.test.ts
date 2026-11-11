@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { editFlags, FakeHermes, row, type RestRequest } from "./fakeHermes";
 import { connect } from "./transport";
+import { RestError } from "./pipe";
 
 async function listed(...rows: ReturnType<typeof row>[]) {
   const server = new FakeHermes();
@@ -163,7 +164,7 @@ describe("Settling and unsettling", () => {
   it("reports a settle the server refused, keeps the chat Settled, and tries again on the next refresh", async () => {
     const { server, hermes, chat, stored } = await listed(row("a", 1, { pinned: true }));
     server.rest["PATCH /api/sessions/a"] = () => {
-      throw new Error("The dashboard answered 503: busy");
+      throw new RestError(503, "busy");
     };
     await hermes.settle("a");
     expect(hermes.getSnapshot().syncError).toBe("Couldn't keep a chat Settled on the server: The dashboard answered 503: busy");
@@ -181,7 +182,7 @@ describe("Settling and unsettling", () => {
     const hermes = await connect(server.openPipe);
     const id = await hermes.newChat();
     server.rest[`PATCH /api/sessions/${id}`] = () => {
-      throw new Error(`The dashboard answered 404: {"detail":"Session not found"}`);
+      throw new RestError(404, `{"detail":"Session not found"}`);
     };
     await hermes.send(id, "hello");
     await hermes.settle(id);
@@ -236,7 +237,7 @@ describe("Settling many chats at once", () => {
   it("puts a chat whose write failed back in Active, names it, and doesn't write it again", async () => {
     const { server, hermes, chat, stored } = await listed(row("a", 1, { pinned: true }), row("b", 2, { pinned: true }));
     server.rest["PATCH /api/sessions/b"] = () => {
-      throw new Error("The dashboard answered 503: busy");
+      throw new RestError(503, "busy");
     };
     expect(await hermes.settleAll(["a", "b"])).toEqual(["b"]);
     expect([chat("a").settled, chat("b").settled]).toEqual([true, false]);
@@ -254,7 +255,7 @@ describe("Settling many chats at once", () => {
     const { server, hermes, chat } = await listed(row("a", 1, { pinned: true }));
     server.rest["PATCH /api/sessions/a"] = async () => {
       await tick();
-      throw new Error("The dashboard answered 503: busy");
+      throw new RestError(503, "busy");
     };
     const done = hermes.settleAll(["a"]);
     await tick();

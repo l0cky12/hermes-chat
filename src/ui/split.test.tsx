@@ -12,6 +12,7 @@ import { connect, type Hermes } from "../hermes/transport";
 import { UI_PREFS_KEY } from "../hermes/uiPrefs";
 import { Main, type Screenshots } from "../App";
 import type { Captured } from "../hermes/screenshots";
+import { RestError } from "../hermes/pipe";
 
 const drops = vi.hoisted(() => new Set<(e: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({
@@ -572,5 +573,114 @@ describe("Compare", () => {
     } finally {
       stop();
     }
+  });
+});
+
+describe("A chat that leaves the list under a pane (#467)", () => {
+  it("the pane goes to New chat with what was typed, and sending it starts a chat", async () => {
+    const { server, hermes, user } = await signedIn();
+    // The drafts store outlives each test's localStorage, so earlier tests' drafts here are cleared first.
+    await user.clear(composerIn(0));
+    await user.click(rowButton("Nightly backup"));
+    await settle(hermes);
+    await user.clear(composerIn(0));
+    await user.type(composerIn(0), "Unlock the restic repo");
+
+    // Deleted in another client while the connection was down: the list read on reconnecting no longer has it.
+    server.sessions = server.sessions.filter((s) => s.id !== "backup");
+    server.drop();
+    await waitFor(() => expect(hermes.getSnapshot().status).toBe("connected"), { timeout: 5_000 });
+    await settle(hermes);
+    await waitFor(() => expect(titleIn(0)).toBe("New chat"));
+    expect(composerIn(0).value).toBe("Unlock the restic repo");
+    expect(pane(0).textContent).toContain("no longer on Hermes");
+
+    await user.type(composerIn(0), "{Enter}");
+    await waitFor(() => expect(prompts(server)).toHaveLength(1));
+    expect(prompts(server)[0].params.text).toBe("Unlock the restic repo");
+    expect(server.requests.filter((r) => r.method === "session.create")).toHaveLength(1);
+    await waitFor(() => expect(titleIn(0)).not.toBe("New chat"));
+  });
+
+  it("a message sent as its chat leaves the list comes back into the composer, with why", async () => {
+    const { server, hermes, user } = await signedIn();
+    // The drafts store outlives each test's localStorage, so earlier tests' drafts here are cleared first.
+    await user.clear(composerIn(0));
+    await user.click(rowButton("Nightly backup"));
+    await settle(hermes);
+    await user.clear(composerIn(0));
+    // The list read that drops the chat lands between the owner pressing Enter and the message going in.
+    const sendTracked = hermes.sendTracked.bind(hermes);
+    vi.spyOn(hermes, "sendTracked").mockImplementation(async (...args) => {
+      server.sessions = server.sessions.filter((s) => s.id !== "backup");
+      server.drop();
+      await vi.waitFor(() => expect(hermes.getSnapshot().status).toBe("connected"), { timeout: 5_000 });
+      await hermes.idle();
+      return sendTracked(...args);
+    });
+
+    await user.type(composerIn(0), "Unlock the restic repo{Enter}");
+    // The send waits out the reconnect first.
+    await waitFor(() => expect(vi.mocked(hermes.sendTracked).mock.settledResults[0]?.type).toBe("fulfilled"), { timeout: 10_000 });
+    await settle(hermes);
+    await waitFor(() => expect(titleIn(0)).toBe("New chat"));
+    expect(composerIn(0).value).toBe("Unlock the restic repo");
+    expect(prompts(server)).toHaveLength(0);
+    expect(pane(0).textContent).toContain("no longer on Hermes");
+  });
+
+  it("a message sent as Hermes is found to have deleted its chat lands in New chat, even when the next check fails", async () => {
+    const { server, hermes, user } = await signedIn();
+    await user.clear(composerIn(0));
+    await user.click(rowButton("Nightly backup"));
+    await settle(hermes);
+    await user.clear(composerIn(0));
+    // While the message is on its way, the list read drops the chat, Hermes answers that it has no such chat, and the
+    // pane gives way. A later look-up of the chat fails.
+    const sendTracked = hermes.sendTracked.bind(hermes);
+    vi.spyOn(hermes, "sendTracked").mockImplementation(async (...args) => {
+      server.sessions = server.sessions.filter((s) => s.id !== "backup");
+      server.drop();
+      await vi.waitFor(() => expect(hermes.getSnapshot().status).toBe("connected"), { timeout: 5_000 });
+      await hermes.idle();
+      await vi.waitFor(() => expect(titleIn(0)).toBe("New chat"), { timeout: 5_000 });
+      server.rest["GET /api/sessions/backup"] = () => Promise.reject(new RestError(500, "busy"));
+      return sendTracked(...args);
+    });
+
+    await user.type(composerIn(0), "Unlock the restic repo{Enter}");
+    // The send waits out the reconnect first.
+    await waitFor(() => expect(vi.mocked(hermes.sendTracked).mock.settledResults[0]?.type).toBe("fulfilled"), { timeout: 10_000 });
+    await settle(hermes);
+    await waitFor(() => expect(composerIn(0).value).toBe("Unlock the restic repo"));
+    expect(titleIn(0)).toBe("New chat");
+    expect(prompts(server)).toHaveLength(0);
+  });
+
+  it("a chat in a tab, older than the list reaches, keeps its tab and Draft when a list read leaves it out", async () => {
+    const { server, hermes, user } = await signedIn();
+    await user.clear(composerIn(0));
+    await user.click(rowButton("Nightly backup"));
+    await settle(hermes);
+    await user.clear(composerIn(0));
+    await user.type(composerIn(0), "Unlock the restic repo");
+    await user.click(within(pane(0)).getByRole("button", { name: "New tab" }));
+    const tabs = () => Array.from(pane(0).querySelectorAll(".tab-open")).map((t) => t.textContent);
+    expect(tabs()).toEqual(["Nightly backup", "New chat"]);
+
+    // Quiet for six weeks and no longer pinned: the list read on reconnecting leaves it out, but Hermes still has it.
+    server.sessions = server.sessions.map((s) => (s.id === "backup" ? row("backup", 42, { title: "Nightly backup" }) : s));
+    server.drop();
+    await waitFor(() => expect(hermes.getSnapshot().status).toBe("connected"), { timeout: 5_000 });
+    await settle(hermes);
+    await waitFor(() => expect(server.restRequests.some((r) => r.path === "/api/sessions/backup")).toBe(true));
+    await settle(hermes);
+    expect(tabs()).toEqual(["Nightly backup", "New chat"]);
+    expect(composerIn(0).value).toBe("");
+
+    await user.click(within(pane(0)).getByText("Nightly backup", { selector: ".tab-open *, .tab-open" }));
+    await settle(hermes);
+    expect(titleIn(0)).toBe("Nightly backup");
+    expect(composerIn(0).value).toBe("Unlock the restic repo");
   });
 });

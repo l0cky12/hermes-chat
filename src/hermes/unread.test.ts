@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { editFlags, FakeHermes, row, type RestRequest } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
 import { connect, type ChatCache } from "./transport";
+import { RestError } from "./pipe";
 
 async function listed(rows: ReturnType<typeof row>[], profile = "default", cache?: ChatCache) {
   const server = new FakeHermes();
@@ -133,7 +134,7 @@ describe("The unread dot", () => {
   it("comes back quietly if the server didn't store the read", async () => {
     const { server, hermes, chat } = await listed([row("a", 1, { last_read_at: 0 })]);
     server.rest["PATCH /api/sessions/a"] = () => {
-      throw new Error("The dashboard answered 500");
+      throw new RestError(500, "", "The dashboard answered 500");
     };
     await hermes.open("a");
     hermes.leave("a");

@@ -30,7 +30,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
@@ -235,12 +235,28 @@ pub fn client(headers: &HeaderMap) -> Result<reqwest::Client, TransportError> {
 /// `client`, with redirects kept to the dashboard's origin even without extra headers when `always` is set, as for a
 /// request that carries a provider key.
 fn client_kept_to_origin(headers: &HeaderMap, always: bool) -> Result<reqwest::Client, TransportError> {
-    let mut http = reqwest::Client::builder().default_headers(headers.clone());
+    let mut http = reqwest::Client::builder()
+        .default_headers(headers.clone())
+        .no_proxy()
+        .connect_timeout(CONNECT_LIMIT)
+        .tcp_keepalive(KEEPALIVE_IDLE)
+        .tcp_keepalive_interval(KEEPALIVE_INTERVAL)
+        .tcp_keepalive_retries(KEEPALIVE_RETRIES);
     if always || !headers.is_empty() {
         http = http.redirect(redirect::Policy::custom(same_origin_redirects));
     }
     http.build().map_err(unreachable)
 }
+
+/// How long opening a connection to the dashboard may take before the call fails.
+const CONNECT_LIMIT: Duration = Duration::from_secs(15);
+
+/// A kept-alive connection that went half-open, as one does across a suspend, is found by keepalive probes and closed,
+/// so a call on it fails instead of waiting for good (#473): the first probe after 30 s without traffic, then one each
+/// 10 s, given up after 3 unanswered.
+const KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+const KEEPALIVE_RETRIES: u32 = 3;
 
 /// With extra headers set, a redirect is followed only within the dashboard's origin (scheme, host and port), so
 /// the headers never reach another site. reqwest only strips its own credential headers on such a redirect.
@@ -1103,33 +1119,176 @@ pub enum PipeEvent {
     Closed { reason: String },
 }
 
+/// A frame for the pipe task to write, and who hears once it has been written.
+struct Outgoing {
+    text: String,
+    written: Option<oneshot::Sender<Result<(), String>>>,
+}
+
 /// An open `/api/ws` connection. Dropping it closes the socket.
 pub struct Pipe {
-    outgoing: mpsc::UnboundedSender<String>,
+    outgoing: mpsc::UnboundedSender<Outgoing>,
     task: JoinHandle<()>,
 }
 
 impl Pipe {
     pub fn send(&self, text: String) -> Result<(), TransportError> {
-        self.outgoing.send(text).map_err(|_| TransportError::Closed)
+        self.outgoing.send(Outgoing { text, written: None }).map_err(|_| TransportError::Closed)
     }
 
-    /// Send one frame: `head`, the file at `path` as base64, then `tail`. Refuses a file over
-    /// `max_bytes` without sending anything; the size is checked again after reading, in case it grew.
-    pub async fn send_file(&self, head: &str, path: &str, tail: &str, max_bytes: u64) -> Result<(), TransportError> {
+    /// Queue one frame: `head`, the file at `path` as base64, then `tail`. Refuses a file over `max_bytes` without
+    /// sending anything; the size is checked again after reading, in case it grew. The frame may take minutes to write
+    /// on a slow uplink, so `Written` says when it has gone, and the webview can tell a long upload from a silent
+    /// Hermes (#469). Wait on it without holding the `Pipe`: dropping the pipe must still stop the write.
+    pub async fn send_file(&self, head: &str, path: &str, tail: &str, max_bytes: u64) -> Result<Written, TransportError> {
         let bytes = read_capped(path, max_bytes).await?;
-        let mut frame = String::with_capacity(head.len() + bytes.len().div_ceil(3) * 4 + tail.len());
-        frame.push_str(head);
-        base64::engine::general_purpose::STANDARD.encode_string(&bytes, &mut frame);
-        frame.push_str(tail);
-        self.send(frame)
+        let mut text = String::with_capacity(head.len() + bytes.len().div_ceil(3) * 4 + tail.len());
+        text.push_str(head);
+        base64::engine::general_purpose::STANDARD.encode_string(&bytes, &mut text);
+        drop(bytes);
+        text.push_str(tail);
+        let (written, sent) = oneshot::channel();
+        self.outgoing.send(Outgoing { text, written: Some(written) }).map_err(|_| TransportError::Closed)?;
+        Ok(Written(sent))
     }
+}
+
+/// A frame `Pipe::send_file` queued, until it has been written to the socket.
+pub struct Written(oneshot::Receiver<Result<(), String>>);
+
+impl Written {
+    /// Resolves once the frame has been written. `Closed` when the pipe was dropped or its socket ended first.
+    pub async fn wait(self) -> Result<(), TransportError> {
+        match self.0.await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(TransportError::WebSocket(e)),
+            Err(_) => Err(TransportError::Closed),
+        }
+    }
+}
+
+/// What the pipe does with one thing read from the socket: frames go to `on_event`. `Some(reason)`: the socket is done.
+fn heard(msg: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>, on_event: &impl Fn(PipeEvent), hide: &HeaderMap) -> Option<String> {
+    match msg {
+        // The server writes newline-delimited JSON-RPC; one WS message may carry several.
+        Some(Ok(Message::Text(text))) => {
+            for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                on_event(PipeEvent::Frame { text: line.to_owned() });
+            }
+            None
+        }
+        Some(Ok(Message::Close(frame))) => Some(frame.map_or("closed by the server".into(), |f| {
+            // A gateway in front of the dashboard may close with the header values it turned down.
+            let why = if repeats_header(&f.reason, hide) { HIDDEN } else { f.reason.as_str() };
+            format!("closed by the server ({} {why})", f.code)
+        })),
+        Some(Ok(_)) => None,
+        Some(Err(e)) => Some(e.to_string()),
+        None => Some("closed by the server".into()),
+    }
+}
+
+/// Runs an open `/api/ws` socket: writes what `Pipe` queues, one frame at a time, and hands every frame Hermes sends
+/// to `on_event`, also while a big frame is still being written (an attachment can take minutes on a slow uplink,
+/// #469). `hide`: what a close reason mustn't repeat.
+fn run_pipe<S>(ws: tokio_tungstenite::WebSocketStream<S>, on_event: impl Fn(PipeEvent) + Send + 'static, hide: HeaderMap) -> Pipe
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (outgoing, mut to_server) = mpsc::unbounded_channel::<Outgoing>();
+    let task = tokio::spawn(async move {
+        let (mut sink, mut stream) = ws.split();
+        let reason = 'socket: loop {
+            tokio::select! {
+                out = to_server.recv() => match out {
+                    Some(Outgoing { text, written }) => {
+                        let mut write = std::pin::pin!(sink.send(Message::text(text)));
+                        let wrote = loop {
+                            tokio::select! {
+                                wrote = &mut write => break wrote.map_err(|e| e.to_string()),
+                                msg = stream.next() => if let Some(reason) = heard(msg, &on_event, &hide) {
+                                    if let Some(written) = written {
+                                        let _ = written.send(Err(reason.clone()));
+                                    }
+                                    break 'socket reason;
+                                },
+                            }
+                        };
+                        let failed = wrote.as_ref().err().cloned();
+                        if let Some(written) = written {
+                            let _ = written.send(wrote);
+                        }
+                        if let Some(e) = failed {
+                            break e;
+                        }
+                    }
+                    None => {
+                        let _ = sink.close().await;
+                        break "closed by the app".into();
+                    }
+                },
+                msg = stream.next() => if let Some(reason) = heard(msg, &on_event, &hide) {
+                    break reason;
+                },
+            }
+        };
+        on_event(PipeEvent::Closed { reason });
+    });
+    Pipe { outgoing, task }
 }
 
 impl Drop for Pipe {
     fn drop(&mut self) {
         self.task.abort();
     }
+}
+
+/// The most one write hands the socket. Windows takes a write of any size whole while its send buffer isn't full, and
+/// tungstenite writes a frame in one call, so a big file frame counted as written at once while it still waited to go
+/// out, and the silence check started over during the upload (#469). Capped, a write backs up there as it does on Linux.
+/// Not smaller: tungstenite moves the rest of the frame down after each write, so a 256 MiB file over loopback takes
+/// 6.5 s at 1 MiB (1.9 s uncapped, 24 s at 256 KiB). What is left when the frame counts as written, about this much,
+/// goes in the 45 s silence limit down to about 256 kbit/s.
+const WRITE_CAP: usize = 1024 * 1024;
+
+/// A socket whose writes take at most `WRITE_CAP` bytes each.
+struct CappedWrites<S>(S);
+
+impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for CappedWrites<S> {
+    fn poll_read(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &mut tokio::io::ReadBuf<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
+    }
+}
+
+impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for CappedWrites<S> {
+    fn poll_write(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_write(cx, &buf[..buf.len().min(WRITE_CAP)])
+    }
+    fn poll_flush(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_flush(cx)
+    }
+    fn poll_shutdown(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_shutdown(cx)
+    }
+}
+
+type PipeSocket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<CappedWrites<tokio::net::TcpStream>>>;
+
+/// Opens `/api/ws` as `connect_async` does, over a socket with capped writes.
+async fn open_pipe_socket(handshake: tokio_tungstenite::tungstenite::handshake::client::Request) -> Result<PipeSocket, tokio_tungstenite::tungstenite::Error> {
+    use tokio_tungstenite::tungstenite::error::{Error, UrlError};
+    let uri = handshake.uri();
+    let host = uri.host().ok_or(Error::Url(UrlError::NoHostName))?.trim_start_matches('[').trim_end_matches(']').to_owned();
+    let port = uri
+        .port_u16()
+        .or(match uri.scheme_str() {
+            Some("wss") => Some(443),
+            Some("ws") => Some(80),
+            _ => None,
+        })
+        .ok_or(Error::Url(UrlError::UnsupportedUrlScheme))?;
+    let tcp = tokio::net::TcpStream::connect((host.as_str(), port)).await.map_err(Error::Io)?;
+    Ok(tokio_tungstenite::client_async_tls(handshake, CappedWrites(tcp)).await?.0)
 }
 
 /// A signed-in dashboard session. It keeps the session cookies up to date: the dashboard rotates an
@@ -1250,52 +1409,12 @@ impl Dashboard {
             )
             .await?;
         let handshake = self.ws_handshake("api/ws", &[("ticket", &ticket), ("profile", profile)])?;
-        let connecting = async { tokio_tungstenite::connect_async(handshake).await.map_err(|e| TransportError::WebSocket(e.to_string())) };
-        let (ws, _) = steps
+        let connecting = async { open_pipe_socket(handshake).await.map_err(|e| TransportError::WebSocket(e.to_string())) };
+        let ws = steps
             .run(Step::WebSocket, within(limits.map(|l| l.socket), connecting, |s| TransportError::WebSocket(format!("it didn't open within {s}s."))))
             .await?;
 
-        let (outgoing, mut to_server) = mpsc::unbounded_channel::<String>();
-        let headers = self.hide.clone();
-        let task = tokio::spawn(async move {
-            let (mut sink, mut stream) = ws.split();
-            let reason = loop {
-                tokio::select! {
-                    out = to_server.recv() => match out {
-                        Some(text) => {
-                            if let Err(e) = sink.send(Message::text(text)).await {
-                                break e.to_string();
-                            }
-                        }
-                        None => {
-                            let _ = sink.close().await;
-                            break "closed by the app".into();
-                        }
-                    },
-                    msg = stream.next() => match msg {
-                        // The server writes newline-delimited JSON-RPC; one WS message may carry several.
-                        Some(Ok(Message::Text(text))) => {
-                            for line in text.lines().filter(|l| !l.trim().is_empty()) {
-                                on_event(PipeEvent::Frame { text: line.to_owned() });
-                            }
-                        }
-                        Some(Ok(Message::Close(frame))) => {
-                            break frame.map_or("closed by the server".into(), |f| {
-                                // A gateway in front of the dashboard may close with the header values it turned down.
-                                let why = if repeats_header(&f.reason, &headers) { HIDDEN } else { f.reason.as_str() };
-                                format!("closed by the server ({} {why})", f.code)
-                            });
-                        }
-                        Some(Ok(_)) => {}
-                        Some(Err(e)) => break e.to_string(),
-                        None => break "closed by the server".into(),
-                    },
-                }
-            };
-            on_event(PipeEvent::Closed { reason });
-        });
-
-        Ok(Pipe { outgoing, task })
+        Ok(run_pipe(ws, on_event, self.hide.clone()))
     }
 
     /// A single-use ticket for `/api/ws`.
@@ -1348,6 +1467,8 @@ impl Dashboard {
     /// (`provider_account_write`, ADR 0133).
     /// `DELETE api/env` is refused whatever the body: a key leaves the server only through
     /// `Dashboard::remove_provider_key`, which checks that it is a model provider's (ADR 0095).
+    /// `GET api/config` comes back without its credentials, and `GET` on the raw config and on the sign-in and endpoint
+    /// lists is refused (ADR 0138).
     /// Returns the response body on 2xx.
     pub async fn request(&self, method: &str, path_and_query: &str, body: Option<String>) -> Result<String, TransportError> {
         let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
@@ -1388,22 +1509,27 @@ impl Dashboard {
         if method == Method::DELETE && is_env_route(&routed) {
             return Err(TransportError::NotRelayed(format!("{method} {path}")));
         }
-        let list = method == Method::GET && is_session_list(&routed);
+        let segments: Vec<&str> = routed.split('/').filter(|seg| !seg.is_empty()).collect();
+        // The config as written, and the two lists Rust reads without their previews (ADR 0133, ADR 0138).
+        if method == Method::GET && matches!(segments.as_slice(), ["api", "config", "raw"] | ["api", "providers", "oauth" | "custom-endpoints"]) {
+            return Err(TransportError::NotRelayed(format!("{method} {path}")));
+        }
+        let config = method == Method::GET && segments == ["api", "config"];
+        let idle = if method == Method::GET && is_session_list(&routed) { SESSION_LIST_IDLE_LIMIT } else { ANSWER_IDLE_LIMIT };
         // Hermes answers removing an endpoint with the endpoints left, each with its key's preview (ADR 0133).
         let answer_unread = method == Method::DELETE && routed.starts_with("api/providers/custom-endpoints/");
         let mut req = self.signed(method, url);
         if let Some(body) = body {
             req = req.header(header::CONTENT_TYPE, "application/json").body(body);
         }
-        let resp = if list { unless_stalled(SESSION_LIST_IDLE_LIMIT, req.send()).await? } else { req.send().await.map_err(unreachable)? };
+        let resp = unless_stalled(idle, req.send()).await?;
         self.keep_cookies(&resp);
         match resp.status() {
-            s if s.is_success() && list => text_unless_stalled(resp, SESSION_LIST_IDLE_LIMIT).await,
             s if s.is_success() && answer_unread => Ok(r#"{"ok":true}"#.to_owned()),
-            s if s.is_success() => resp.text().await.map_err(unreachable),
+            s if s.is_success() && config => config_without_credentials(&text_unless_stalled(resp, idle).await?),
+            s if s.is_success() => text_unless_stalled(resp, idle).await,
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
-            _ if list => Err(unexpected_sent(resp, &self.hide, "", Some(SESSION_LIST_IDLE_LIMIT)).await),
-            _ => Err(unexpected(resp, &self.hide).await),
+            _ => Err(unexpected_sent(resp, &self.hide, "", Some(idle)).await),
         }
     }
 
@@ -1510,7 +1636,7 @@ impl Dashboard {
     async fn post_audio(&self, path: &str, profile: &str, body: &serde_json::Value) -> Result<AudioAnswer, TransportError> {
         let mut url = endpoint(&self.base, path);
         url.query_pairs_mut().append_pair("profile", profile);
-        let resp = self.signed(Method::POST, url).json(body).send().await.map_err(unreachable)?;
+        let resp = unless_stalled(ANSWER_IDLE_LIMIT, self.signed(Method::POST, url).json(body).send()).await?;
         self.keep_cookies(&resp);
         let status = resp.status();
         if status == StatusCode::UNAUTHORIZED {
@@ -1519,7 +1645,7 @@ impl Dashboard {
         if status.is_redirection() {
             return Err(unexpected(resp, &self.hide).await);
         }
-        let text = resp.text().await.map_err(unreachable)?;
+        let text = text_unless_stalled(resp, ANSWER_IDLE_LIMIT).await?;
         if status.is_success() {
             return serde_json::from_str(&text)
                 .map(AudioAnswer::Done)
@@ -1561,7 +1687,7 @@ impl Dashboard {
         if let Some(json) = json {
             req = req.json(json);
         }
-        let mut resp = req.send().await.map_err(unreachable)?;
+        let mut resp = unless_stalled(ANSWER_IDLE_LIMIT, req.send()).await?;
         self.keep_cookies(&resp);
         match resp.status() {
             s if s.is_success() => {}
@@ -1573,7 +1699,7 @@ impl Dashboard {
             return Err(too_large(size));
         }
         let mut body = Vec::new();
-        while let Some(chunk) = resp.chunk().await.map_err(unreachable)? {
+        while let Some(chunk) = unless_stalled(ANSWER_IDLE_LIMIT, resp.chunk()).await? {
             body.extend_from_slice(&chunk);
             if body.len() as u64 > max_bytes {
                 return Err(too_large(body.len() as u64));
@@ -1731,10 +1857,10 @@ impl Dashboard {
         let body = agent_text_body(path, text, session)?;
         let query = url::form_urlencoded::Serializer::new(String::new()).append_pair("profile", profile).finish();
         let (url, _) = relay_url(&self.base, "api/fs/write-text", &query)?;
-        let resp = self.signed(Method::POST, url).json(&body).send().await.map_err(unreachable)?;
+        let resp = unless_stalled(ANSWER_IDLE_LIMIT, self.signed(Method::POST, url).json(&body).send()).await?;
         self.keep_cookies(&resp);
         match resp.status() {
-            s if s.is_success() => resp.text().await.map_err(unreachable),
+            s if s.is_success() => text_unless_stalled(resp, ANSWER_IDLE_LIMIT).await,
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
             _ => Err(unexpected(resp, &self.hide).await),
         }
@@ -1816,12 +1942,23 @@ pub fn protected_server_path(path: &str) -> bool {
         "bws_cache.enc.json",
         ".git-credentials",
     ];
-    let name = path.rsplit('/').next().unwrap_or_default().to_lowercase();
+    // The path as the server resolves it: `/x/.env/.` is `.env`.
+    let mut parts: Vec<String> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(part.to_lowercase()),
+        }
+    }
+    let name = parts.last().map(String::as_str).unwrap_or_default();
     name == ".env"
         || name.starts_with(".env.")
         || name == ".envrc"
-        || NAMES.contains(&name.as_str())
-        || path.split('/').any(|part| matches!(part.to_lowercase().as_str(), "mcp-tokens" | "pairing"))
+        || NAMES.contains(&name)
+        || parts.iter().any(|part| matches!(part.as_str(), "mcp-tokens" | "pairing"))
 }
 
 /// A download's hidden part file beside its destination, removed when dropped unless `keep` was called: a failed,
@@ -2023,7 +2160,10 @@ pub fn import_body_allowed(body: Option<&str>) -> bool {
 /// for and the routed one must stay under `api/` without `.` or `..` segments.
 fn relay_url(base: &Url, path: &str, query: &str) -> Result<(Url, String), TransportError> {
     let refused = || TransportError::NotRelayed(path.to_owned());
-    let under_api = |p: &str| p.starts_with("api/") && !p.split('/').any(|seg| seg == ".." || seg == ".");
+    // The allow-lists judge the path as given, so the URL parser mustn't change it: it resolves `.` and `..` spelled
+    // as `%2e` too, and reads `\` as `/`.
+    let dot = |seg: &str| matches!(percent_encoding::percent_decode_str(seg).decode_utf8_lossy().as_ref(), "." | "..");
+    let under_api = |p: &str| p.starts_with("api/") && !p.split(['/', '\\']).any(dot);
     if !under_api(path) {
         return Err(refused());
     }
@@ -2037,6 +2177,50 @@ fn relay_url(base: &Url, path: &str, query: &str) -> Result<(Url, String), Trans
         return Err(refused());
     }
     Ok((url, routed))
+}
+
+/// `GET api/config`'s answer without the values Hermes treats as credentials (`_is_secret_config_key` in
+/// `hermes_cli/config.py`): Hermes sends the config as written, provider keys and all (ADR 0138).
+fn config_without_credentials(text: &str) -> Result<String, TransportError> {
+    fn drop_credentials(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.retain(|key, v| v.is_object() || v.is_array() || !credential_key(key));
+                map.values_mut().for_each(drop_credentials);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(drop_credentials),
+            _ => {}
+        }
+    }
+    let mut config: serde_json::Value =
+        serde_json::from_str(text).map_err(|_| TransportError::Unexpected { status: 200, body: "the profile's config isn't JSON".into() })?;
+    drop_credentials(&mut config);
+    Ok(config.to_string())
+}
+
+/// A config key whose value Hermes treats as a credential: one of its names, or ending in one of its suffixes, with
+/// `-` read as `_` (`X-API-Key`).
+fn credential_key(key: &str) -> bool {
+    const NAMES: [&str; 15] = [
+        "api_key",
+        "apikey",
+        "key",
+        "token",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "secret",
+        "client_secret",
+        "password",
+        "passwd",
+        "authorization",
+        "private_key",
+        "bearer",
+        "jwt",
+    ];
+    const SUFFIXES: [&str; 6] = ["_api_key", "_token", "_secret", "_password", "_key", "_access_key"];
+    let key = key.to_lowercase().replace('-', "_");
+    NAMES.contains(&key.as_str()) || SUFFIXES.iter().any(|suffix| key.ends_with(suffix))
 }
 
 /// The dashboard's routes that write or delete files on the server: managed files (`api/files...`) and the agent's
@@ -2462,7 +2646,7 @@ fn shown_body(status: StatusCode, text: &str, headers: &HeaderMap) -> String {
 /// A failed answer as an error, with the start of its body. Reads only the first few KB, so a huge or endless error
 /// body can't fill memory. `headers`: what the request carried that mustn't be shown (`shown_body`).
 async fn unexpected(resp: reqwest::Response, headers: &HeaderMap) -> TransportError {
-    unexpected_sent(resp, headers, "", None).await
+    unexpected_sent(resp, headers, "", Some(ANSWER_IDLE_LIMIT)).await
 }
 
 /// `unexpected` for a request whose body carried `secret`, such as a password: an error that repeats it anywhere, as
@@ -2642,9 +2826,14 @@ fn unreachable(e: reqwest::Error) -> TransportError {
 
 /// Hermes serves `api/sessions` from a read-only query of at most 100 rows, each SQLite read waiting at most 5 s for a
 /// lock (hermes_cli/web_routers/sessions.py; `_READ_BUSY_TIMEOUT_S` in hermes_state.py), so a minute without a byte is a
-/// stall. Other routes may stay silent for minutes and still answer: memory provider setup runs installs of up to
-/// 300 s each (hermes_cli/web_routers/memory_providers.py).
+/// stall.
 const SESSION_LIST_IDLE_LIMIT: Duration = Duration::from_secs(60);
+
+/// How long any other dashboard call may go without a byte from Hermes before it is given up as `Stalled` (#473). Other
+/// routes may stay silent for minutes and still answer: memory provider setup runs an install of up to 300 s
+/// (hermes_cli/web_routers/memory_providers.py), so this is twice that. A call still sending its body counts as silent:
+/// at this limit a 25 MB recording needs about 45 KB/s.
+const ANSWER_IDLE_LIMIT: Duration = Duration::from_secs(600);
 
 fn is_session_list(path: &str) -> bool {
     let mut segs = path.split('/').filter(|seg| !seg.is_empty());
@@ -2818,10 +3007,10 @@ impl Dashboard {
         if let Some(body) = body {
             req = req.header(header::CONTENT_TYPE, "application/json").body(body);
         }
-        let resp = req.send().await.map_err(unreachable)?;
+        let resp = unless_stalled(ANSWER_IDLE_LIMIT, req.send()).await?;
         self.keep_cookies(&resp);
         match resp.status() {
-            s if s.is_success() => resp.text().await.map_err(unreachable),
+            s if s.is_success() => text_unless_stalled(resp, ANSWER_IDLE_LIMIT).await,
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
             _ if show_failure => Err(unexpected(resp, &self.hide).await),
             s => Err(TransportError::Unexpected { status: s.as_u16(), body: "(not shown, as it may hold the key)".into() }),
@@ -2899,20 +3088,14 @@ impl Dashboard {
     /// `PUT /api/mcp/servers` with the whole map; a refusal is shown without any secret the map held.
     async fn write_mcp_map(&self, http: &reqwest::Client, url: Url, edited: &crate::mcp::Edited) -> Result<(), TransportError> {
         let body = json!({ "servers": edited.servers }).to_string();
-        let resp = http
-            .put(url)
-            .header(header::COOKIE, self.cookie_header())
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(body)
-            .send()
-            .await
-            .map_err(unreachable)?;
+        let put = http.put(url).header(header::COOKIE, self.cookie_header()).header(header::CONTENT_TYPE, "application/json").body(body);
+        let resp = unless_stalled(ANSWER_IDLE_LIMIT, put.send()).await?;
         self.keep_cookies(&resp);
         match resp.status() {
             s if s.is_success() => Ok(()),
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
             s => {
-                let answer = resp.text().await.unwrap_or_default();
+                let answer = text_unless_stalled(resp, ANSWER_IDLE_LIMIT).await.unwrap_or_default();
                 // Neither a secret the map held nor a value of the owner's extra request headers is shown.
                 let body = shown_body(s, &crate::mcp::scrubbed(&answer, &edited.secrets), &self.hide);
                 Err(TransportError::Unexpected { status: s.as_u16(), body })
@@ -3197,5 +3380,104 @@ mod tests {
         let err = text_unless_stalled(resp, limit).await.unwrap_err();
         assert!(matches!(err, TransportError::Stalled(_)), "{err:?}");
         assert!(started.elapsed() >= limit + Duration::from_millis(50), "{:?}", started.elapsed());
+    }
+
+    /// A listener whose accepted sockets take little before the test reads them, so the client's write backs up soon.
+    fn small_buffered_listener() -> tokio::net::TcpListener {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.set_recv_buffer_size(64 * 1024).unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        socket.listen(1).unwrap()
+    }
+
+    /// Windows takes one write of any size whole while its send buffer isn't full, so a frame written in one call
+    /// counted as gone at once (#469). The pipe's socket hands it at most `WRITE_CAP` a write, and loses nothing.
+    #[tokio::test]
+    async fn the_pipe_socket_takes_a_big_frame_a_capped_piece_at_a_time() {
+        use tokio::io::AsyncWriteExt;
+        let frame: Vec<u8> = (0..3 * super::WRITE_CAP + 5).map(|i| i as u8).collect();
+        let mut socket = super::CappedWrites(Vec::new());
+        assert_eq!(socket.write(&frame).await.unwrap(), super::WRITE_CAP);
+        socket.write_all(&frame[super::WRITE_CAP..]).await.unwrap();
+        assert_eq!(socket.0, frame);
+    }
+
+    /// #469: a file frame big enough to fill the socket's buffers is still being written when Hermes speaks. The pipe
+    /// hands that frame to the webview at once, and `send_file` resolves only once the whole file has gone.
+    #[tokio::test]
+    async fn the_pipe_keeps_hearing_hermes_while_a_big_file_is_still_being_written() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+
+        let listener = small_buffered_listener();
+        let addr = listener.local_addr().unwrap();
+        let (speak, spoken) = tokio::sync::oneshot::channel::<()>();
+        let (read, reading) = tokio::sync::oneshot::channel::<()>();
+        let (got, received) = tokio::sync::oneshot::channel::<usize>();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            // Hermes takes frames this big; tungstenite's own default stops at 16 MiB.
+            let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default().max_frame_size(None).max_message_size(None);
+            let (mut sink, mut stream) = tokio_tungstenite::accept_async_with_config(sock, Some(config)).await.unwrap().split();
+            // Nothing is read until the test says so, so the client's write backs up.
+            spoken.await.unwrap();
+            sink.send(Message::text("{\"jsonrpc\":\"2.0\",\"method\":\"event\"}")).await.unwrap();
+            reading.await.unwrap();
+            while let Some(Ok(msg)) = stream.next().await {
+                if let Message::Text(text) = msg {
+                    let _ = got.send(text.len());
+                    break;
+                }
+            }
+            std::future::pending::<()>().await;
+        });
+
+        let path = std::env::temp_dir().join(format!("hermes-pipe-469-{}.bin", std::process::id()));
+        let size = 24 * 1024 * 1024;
+        std::fs::write(&path, vec![7u8; size]).unwrap();
+        let ws = super::open_pipe_socket(super::IntoClientRequest::into_client_request(format!("ws://{addr}/api/ws")).unwrap()).await.unwrap();
+        let (events, mut heard) = tokio::sync::mpsc::unbounded_channel();
+        let pipe = std::sync::Arc::new(super::run_pipe(ws, move |e| drop(events.send(e)), super::HeaderMap::new()));
+
+        let sending = {
+            let (pipe, path) = (pipe.clone(), path.to_string_lossy().into_owned());
+            tokio::spawn(async move { pipe.send_file("{\"f\":\"", &path, "\"}", 64 * 1024 * 1024).await?.wait().await })
+        };
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!sending.is_finished(), "send_file resolved before Hermes read the file");
+        speak.send(()).unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(5), heard.recv()).await.expect("nothing heard while the file was being written");
+        assert!(matches!(event, Some(super::PipeEvent::Frame { .. })), "{event:?}");
+        assert!(!sending.is_finished(), "send_file resolved before Hermes read the file");
+
+        read.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(20), sending).await.unwrap().unwrap().unwrap();
+        assert_eq!(received.await.unwrap(), "{\"f\":\"".len() + size.div_ceil(3) * 4 + "\"}".len());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Replacing the connection drops its pipe, and that stops a file frame still being written: the wait ends with
+    /// `Closed` instead of the old socket writing on (#469).
+    #[tokio::test]
+    async fn dropping_the_pipe_stops_a_file_frame_still_being_written() {
+        let listener = small_buffered_listener();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            // Accepted and never read, so the client's write backs up.
+            let _ws = tokio_tungstenite::accept_async(sock).await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let path = std::env::temp_dir().join(format!("hermes-pipe-469-drop-{}.bin", std::process::id()));
+        std::fs::write(&path, vec![7u8; 24 * 1024 * 1024]).unwrap();
+        let ws = super::open_pipe_socket(super::IntoClientRequest::into_client_request(format!("ws://{addr}/api/ws")).unwrap()).await.unwrap();
+        let pipe = super::run_pipe(ws, |_| {}, super::HeaderMap::new());
+
+        let written = pipe.send_file("{\"f\":\"", &path.to_string_lossy(), "\"}", 64 * 1024 * 1024).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        drop(pipe);
+        let ended = tokio::time::timeout(Duration::from_secs(5), written.wait()).await.expect("the write went on after the pipe was dropped");
+        assert!(matches!(ended, Err(TransportError::Closed)), "{ended:?}");
+        let _ = std::fs::remove_file(&path);
     }
 }

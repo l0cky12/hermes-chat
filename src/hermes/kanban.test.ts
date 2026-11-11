@@ -6,6 +6,7 @@ import { FakeHermes, row } from "./fakeHermes";
 import { KanbanWatch, POLL_EVERY_MS, SCAN_EVERY_MS, type SeenTask } from "./kanban";
 import { chatSections } from "./snooze";
 import { LIVE_MIN_GAP_MS, connect, type Hermes } from "./transport";
+import { RestError } from "./pipe";
 
 const running: Hermes[] = [];
 afterEach(async () => {
@@ -454,7 +455,7 @@ describe("the board scan's schedule", () => {
     let asked = 0;
     const watch = watchWith(async () => {
       asked++;
-      if (asked === 2) throw new Error("The dashboard answered 502: Bad Gateway");
+      if (asked === 2) throw new RestError(502, "Bad Gateway");
       return { boards: [{ slug: "default", current: true, archived: false }], current: "default" };
     });
     watch.start();

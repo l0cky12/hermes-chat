@@ -21,6 +21,8 @@ import {
   typedFilterValue,
 } from "./automations";
 import { FakeWebhooks, type SessionRow } from "./fakeHermes";
+import { RestError } from "./pipe";
+import { testPattern } from "./pyRegex";
 
 describe("the preview matches Hermes's webhook adapter", () => {
   it(`renders every golden template as Hermes ${golden.hermes} does`, () => {
@@ -34,7 +36,7 @@ describe("the preview matches Hermes's webhook adapter", () => {
   it("evaluates every golden filter as Hermes does", () => {
     for (const c of golden.filters) {
       const payload = golden.payloads[c.payload as keyof typeof golden.payloads];
-      expect(filterMatches(c.spec, payload, c.event, c.headers), `${c.payload}: ${JSON.stringify(c.spec)}`).toBe(c.out);
+      expect(filterMatches(c.spec, payload, c.event, c.headers, testPattern), `${c.payload}: ${JSON.stringify(c.spec)}`).toBe(c.out);
     }
   });
 
@@ -53,11 +55,53 @@ describe("the preview matches Hermes's webhook adapter", () => {
   it("says whether an example event would start a task, and with what prompt", () => {
     const f = { name: "triage", events: ["issues"], prompt: "#{issue.number} {issue.title} {issue.nope}", filters: [{ field: "action", equals: "opened" }], coalesce: undefined };
     const payload = { action: "opened", issue: { number: 3, title: "<script>x</script>" } };
-    const p = preview(f, payload, "issues");
+    const p = preview(f, payload, "issues", testPattern);
     expect(p).toMatchObject({ eventTaken: true, starts: true, prompt: "#3 <script>x</script> {issue.nope}", missing: ["issue.nope"] });
-    expect(preview(f, payload, "push")).toMatchObject({ eventTaken: false, starts: false });
-    expect(preview({ ...f, filters: [{ field: "action", equals: "closed" }] }, payload, "issues").starts).toBe(false);
-    expect(preview({ ...f, coalesce: { key: "pull_request.number", windowSeconds: 30, maxWaitSeconds: 300 } }, payload, "issues")).toMatchObject({ ungrouped: true, group: undefined });
+    expect(preview(f, payload, "push", testPattern)).toMatchObject({ eventTaken: false, starts: false });
+    expect(preview({ ...f, filters: [{ field: "action", equals: "closed" }] }, payload, "issues", testPattern).starts).toBe(false);
+    expect(preview({ ...f, coalesce: { key: "pull_request.number", windowSeconds: 30, maxWaitSeconds: 300 } }, payload, "issues", testPattern)).toMatchObject({ ungrouped: true, group: undefined });
+  });
+
+  it("leaves a filter's pattern to the test it is given, never running it on the calling thread (#490)", () => {
+    // `(a+)+$` backtracks: each 2 more "a"s before the "!" take 4 times as long, and 24 already take most of a second.
+    const f = { name: "x", events: [], prompt: "", filters: [{ field: "issue.title", regex: "(a+)+$" }], coalesce: undefined };
+    const payload = { issue: { title: `${"a".repeat(24)}!` } };
+    const asked: [string, string][] = [];
+    const started = performance.now();
+    const p = preview(f, payload, "issues", (pattern: string, text: string) => (asked.push([pattern, text]), "checking" as const));
+    expect(performance.now() - started).toBeLessThan(250);
+    expect(asked).toEqual([["(a+)+$", payload.issue.title]]);
+    expect(p.filters[0].matches).toBe("checking");
+    expect(p.starts).toBe("checking");
+  });
+
+  it("combines patterns not yet known by Kleene's logic, still checking while any part may resolve", () => {
+    const answers = { yes: true, no: false, wait: "checking", slow: "too-slow" } as const;
+    const test = (pattern: string) => answers[pattern as keyof typeof answers];
+    const r = (p: keyof typeof answers) => ({ field: "action", regex: p });
+    const matches = (spec: unknown) => filterMatches(spec, { action: "opened" }, "issues", {}, test);
+    expect(matches(r("slow"))).toBe("too-slow");
+    expect(matches({ all: [] })).toBe(true);
+    expect(matches({ all: [r("yes"), r("wait")] })).toBe("checking");
+    expect(matches({ all: [r("slow"), r("no")] })).toBe(false);
+    expect(matches({ all: [r("slow"), r("wait")] })).toBe("checking");
+    expect(matches({ all: [r("yes"), r("slow")] })).toBe("too-slow");
+    expect(matches({ any: [] })).toBe(false);
+    expect(matches({ any: [r("slow"), r("yes")] })).toBe(true);
+    expect(matches({ any: [r("no"), r("slow")] })).toBe("too-slow");
+    expect(matches({ any: [r("no"), r("slow"), r("wait")] })).toBe("checking");
+    expect(matches({ not: r("yes") })).toBe(false);
+    expect(matches({ not: r("wait") })).toBe("checking");
+    expect(matches({ not: { any: [r("no"), r("slow")] } })).toBe("too-slow");
+    // A missing field never reaches the pattern.
+    expect(matches({ field: "nope", regex: "slow" })).toBe(false);
+
+    const f = { name: "x", events: ["issues"], prompt: "", filters: [r("slow"), { field: "action", equals: "closed" }], coalesce: undefined };
+    expect(preview(f, { action: "opened" }, "issues", test)).toMatchObject({ starts: false, slow: true });
+    expect(preview({ ...f, filters: [r("yes"), r("slow")] }, { action: "opened" }, "issues", test)).toMatchObject({ starts: "too-slow", slow: true });
+    expect(preview({ ...f, filters: [r("slow"), r("wait")] }, { action: "opened" }, "issues", test)).toMatchObject({ starts: "checking", slow: true });
+    expect(preview({ ...f, filters: [r("slow")] }, { action: "opened" }, "push", test).starts).toBe(false);
+    expect(preview({ ...f, filters: [r("yes")] }, { action: "opened" }, "issues", test)).toMatchObject({ starts: true, slow: false });
   });
 
   it("creates names of at most 64 characters, by Hermes's rule", () => {
@@ -122,7 +166,7 @@ function harness(contract = true, sessions: SessionRow[] = []) {
     if (url.pathname === "/api/sessions") return { sessions: sessions.filter((s) => s.source === url.searchParams.get("source")) };
     if (url.pathname === "/api/cron/delivery-targets") return { targets: [{ id: "local", name: "Local" }, { id: "telegram", name: "Telegram", home_target_set: true }] };
     const h = fake.route({ method, path: url.pathname, query: url.searchParams, body: body as Record<string, unknown> | undefined });
-    if (!h) throw new Error('The dashboard answered 404: {"detail":"Not Found"}');
+    if (!h) throw new RestError(404, '{"detail":"Not Found"}');
     return JSON.parse(JSON.stringify(await h()));
   };
   return { fake, api: new AutomationsApi(rest), calls };

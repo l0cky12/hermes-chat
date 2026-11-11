@@ -8,7 +8,7 @@ import userEvent from "@testing-library/user-event";
 import { useState, useSyncExternalStore } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, fakeEnv } from "../hermes/fakeHermes";
-import type { OpenPipe } from "../hermes/pipe";
+import { RestError, type OpenPipe } from "../hermes/pipe";
 import { connect, type Hermes } from "../hermes/transport";
 import { appearanceStore } from "./appearance";
 import { ProviderSettings } from "./ProviderSettings";
@@ -107,7 +107,7 @@ describe("Settings → Providers", () => {
     const s = new FakeHermes();
     const open: OpenPipe = async (onEvent, profile, signal) => {
       const pipe = await s.openPipe(onEvent, profile, signal);
-      return { ...pipe, saveProviderKey: async (_p, _e, key) => Promise.reject(new Error(`The dashboard answered 422: input ${key}`)) };
+      return { ...pipe, saveProviderKey: async (_p, _e, key) => Promise.reject(new RestError(422, `input ${key}`)) };
     };
     const { user } = await shown({ s, open });
     await screen.findByLabelText("Provider");
@@ -423,7 +423,7 @@ describe("Settings → Providers for another profile", () => {
     await screen.findByLabelText("Provider");
     const rows = s.rest["GET /api/env"];
     s.rest["GET /api/env"] = () => {
-      throw new Error(`The dashboard answered 500: {"detail":"Internal server error"}`);
+      throw new RestError(500, `{"detail":"Internal server error"}`);
     };
     await removeOpenRouter(user);
     await screen.findByText("Removed the OpenRouter key, but the list couldn't be read again to confirm it.");

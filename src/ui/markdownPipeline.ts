@@ -81,17 +81,51 @@ const highlightCode = rehypeHighlight({ detect: true });
  */
 const highlighted = lru<{ className: unknown; children: ElementContent[] }>(500_000);
 
-/** Code longer than this, such as a whole file in the preview pane, is highlighted each time rather than copied in. */
-const CACHE_ONE_CHARS = 50_000;
+/** Code longer than this stays plain: highlighting it would hold up the window (#490). */
+export const HIGHLIGHT_MAX_CHARS = 100_000;
 
-function highlight(code: Element, pre: Element, file: VFile) {
+/** An untagged block's language is guessed from this much of its start, since the guess runs every grammar over it. */
+const GUESS_FROM_CHARS = 4_000;
+
+/** Whether highlight.js has to guess `code`'s language, by running every grammar over it. */
+const guessing = (code: Element) => !classes(code).some((c) => /^(lang-|language-|no-?highlight$)/.test(c));
+
+/**
+ * Highlights `code`, from the cache when it can. With `guessed`, code whose language has to be guessed, and isn't in
+ * the cache, is left plain in this render: the guess runs after it, in a task of its own, then `guessed` is called to
+ * render it again from the cache (#451).
+ */
+function highlight(code: Element, pre: Element, file: VFile, guessed?: () => void) {
+  const text = toText(code, { whitespace: "pre" });
+  if (text.length > HIGHLIGHT_MAX_CHARS) return plain(code);
   // Only this block, on its own; the rest of the tree is not highlight.js's to walk.
-  const run = () => highlightCode({ type: "root", children: [{ ...pre, children: [code] }] }, file);
-  const key = JSON.stringify(code.properties.className ?? null) + "\n" + toText(code, { whitespace: "pre" });
-  if (key.length > CACHE_ONE_CHARS) return run();
+  const one = (code: Element) => highlightCode({ type: "root", children: [{ ...pre, children: [code] }] }, file);
+  const run = (code: Element) => {
+    if (guessing(code) && text.length > GUESS_FROM_CHARS) {
+      const start: Element = { ...code, properties: { ...code.properties, className: classes(code) }, children: [{ type: "text", value: text.slice(0, GUESS_FROM_CHARS) }] };
+      one(start);
+      const language = classes(start).find((c) => c.startsWith("language-"));
+      if (!language) return plain(code);
+      code.properties.className = [...classes(code), language];
+    }
+    one(code);
+  };
+  const key = JSON.stringify(code.properties.className ?? null) + "\n" + text;
   const hit = highlighted.get(key);
+  if (!hit && guessed && guessing(code)) {
+    const later = structuredClone(code);
+    plain(code);
+    setTimeout(() => {
+      if (!highlighted.get(key)) {
+        run(later);
+        highlighted.set(key, { className: later.properties.className, children: later.children }, key.length);
+      }
+      guessed();
+    });
+    return;
+  }
   if (!hit) {
-    run();
+    run(code);
     // A copy, since find-in-chat marks are put into the tree, and the tree's copy is the one marked.
     highlighted.set(key, structuredClone({ className: code.properties.className, children: code.children }), key.length);
     return;
@@ -145,9 +179,9 @@ function typeset(tex: string, display: boolean): ElementContent[] | undefined {
  * math's `<code class="language-math">`, a block's in a `<pre>`). `source`: the Markdown being rendered, when it ends
  * in code or math still coming in (markdownBlocks.ts says which); the code or math at its very end then stays plain,
  * with `data-growing` on its `<code>`, until it is finished, so a streaming reply isn't highlighted again, and its
- * language guessed again, on every delta (ADR 0068).
+ * language guessed again, on every delta (ADR 0068). `guessed`: see `highlight`.
  */
-function rehypeCode(source?: string) {
+function rehypeCode(source?: string, guessed?: () => void) {
   const growing = (node: Element) => source !== undefined && !source.slice(node.position?.end.offset ?? 0).trim();
   return () => (tree: Root, file: VFile) =>
     visit(tree, "element", (node, index, parent) => {
@@ -161,7 +195,7 @@ function rehypeCode(source?: string) {
         return SKIP;
       }
       if (!math) {
-        highlight(code, node, file);
+        highlight(code, node, file, guessed);
         return SKIP;
       }
       const formula = typeset(toText(code, { whitespace: "pre" }).trim(), code !== node || classes(code).includes("math-display"));
@@ -177,7 +211,8 @@ const highlightOnly = [rehypeCode()];
 
 /**
  * The rehype plugins for Markdown marking `query`. `growingIn`: the Markdown, when it is the end of a reply still
- * streaming in.
+ * streaming in. `guessed`: when given, a language guess waits until after this render, and `guessed` is called once it
+ * is made, to render again.
  */
-export const rehypePlugins = (query: string, growingIn?: string) =>
-  query || growingIn !== undefined ? [rehypeCode(growingIn), ...(query ? [rehypeFind(query)] : [])] : highlightOnly;
+export const rehypePlugins = (query: string, growingIn?: string, guessed?: () => void) =>
+  query || growingIn !== undefined || guessed ? [rehypeCode(growingIn, guessed), ...(query ? [rehypeFind(query)] : [])] : highlightOnly;

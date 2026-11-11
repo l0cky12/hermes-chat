@@ -12,6 +12,7 @@ import { connect, type Hermes } from "../hermes/transport";
 import { projectScope } from "../hermes/projectLinks";
 import { Main } from "../App";
 import { ChatList } from "./Sidebar";
+import { RestError } from "../hermes/pipe";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
@@ -271,7 +272,7 @@ describe("Settle all, in the app", () => {
     server.sessions.push(row("c", 6, { pinned: true, title: "Taxes" }));
     const { hermes, user } = await signedIn(server);
     server.rest["PATCH /api/sessions/b"] = () => {
-      throw new Error("The dashboard answered 503: busy");
+      throw new RestError(503, "busy");
     };
     await settleEverything(user, hermes);
     expect(toast()).toContain("Settled 2 chats. 1 chat couldn't be settled and is still in the Inbox.");
@@ -294,7 +295,7 @@ describe("Settle all, in the app", () => {
     const { hermes, user } = await signedIn(server);
     for (const id of ["a", "b"])
       server.rest[`PATCH /api/sessions/${id}`] = () => {
-        throw new Error("The dashboard answered 503: busy");
+        throw new RestError(503, "busy");
       };
     await settleEverything(user, hermes);
     expect(toast()).toContain("Couldn't settle 2 chats. They're still in the Inbox.");

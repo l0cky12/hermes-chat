@@ -13,6 +13,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CronApi, CronConflict, type RestFn } from "./cronJobs";
 import { parseSchedule } from "./schedule";
+import { RestError } from "./pipe";
 
 // This app's tsconfig has no Node types; vitest runs the file in Node.
 declare const process: { env: Record<string, string | undefined> };
@@ -34,7 +35,7 @@ function dashboard(): RestFn & { raw: RestFn } {
     if (!cookie) await send("POST", "auth/password-login", { provider: "basic", username: process.env.HERMES_LIVE_USER, password: process.env.HERMES_LIVE_PASSWORD });
     const res = await send(method, path, body);
     const text = await res.text();
-    if (!res.ok) throw new Error(`The dashboard answered ${res.status}: ${text.slice(0, 300)}`);
+    if (!res.ok) throw new RestError(res.status, text.slice(0, 300));
     return JSON.parse(text);
   };
   return Object.assign(rest as RestFn, { raw: rest as RestFn });

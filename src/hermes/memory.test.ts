@@ -4,6 +4,7 @@
 // (research doc "Memory"). Every entry here is synthetic.
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeHermes } from "./fakeHermes";
+import { RestError } from "./pipe";
 import { connect, type Hermes } from "./transport";
 import {
   MemoryConflictError,
@@ -375,6 +376,23 @@ describe("any profile's memory through the profile-scoped routes (ADR 0118)", ()
     return s;
   };
   const rest = (s: FakeHermes) => s.restRequests.filter((r) => r.path.startsWith("/api/learning")).map((r) => `${r.method} ${r.path}?${r.query}`);
+
+  it("tells a sign-in or permission refusal by the dashboard's status, not by words in its body (#486)", async () => {
+    const cases: [RestError, boolean][] = [
+      [new RestError(401, "", "The dashboard sign-in has expired. Sign in again."), true],
+      [new RestError(403, '{"detail":"Not allowed"}'), true],
+      [new RestError(502, "<html>Forbidden by upstream policy: 401</html>"), false],
+    ];
+    for (const [error, permission] of cases) {
+      const s = withRoutes();
+      s.rest["GET /api/learning/graph"] = () => {
+        throw error;
+      };
+      const { hermes } = await setUp(s);
+      const e = await hermes.memory.load("research").catch((x: unknown) => x);
+      expect(e instanceof MemoryPermissionError, `${error.status}: ${String(e)}`).toBe(permission);
+    }
+  });
 
   it("reads a profile the dashboard doesn't run as, naming it in every call, and no socket call", async () => {
     const { s, hermes } = await setUp(withRoutes());
