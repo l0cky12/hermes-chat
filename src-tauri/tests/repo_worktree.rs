@@ -809,3 +809,30 @@ async fn a_worktree_from_the_first_design_is_not_taken_for_one_made_here() {
     assert_eq!(std::fs::read(app.join(".git/hermes-chat/worktrees.json")).unwrap(), first);
     assert!(app.join(".git/hermes-chat/managed-worktrees.json").is_file());
 }
+
+// ── #483: repository and worktree helper bugs ───────────────────────────────
+
+#[tokio::test]
+async fn a_folder_written_with_a_trailing_slash_is_linked_like_one_without() {
+    let (d, app) = repo("include-slash");
+    // As .gitignore writes it. Kept with its slash, setup made an empty folder there and failed to link it; a Retry
+    // then answered "ready" over the empty folder.
+    write(&app, ".worktreeinclude", "node_modules/\n.env/\n");
+    write(&app, "node_modules/pkg/index.js", "x\n");
+    write(&app, ".env", "A=1\n");
+    let p = plan(&app, "main", "feature/slash", true, "", true).await.unwrap();
+    assert_eq!(p["setup"][0]["entry"], "node_modules");
+    assert_eq!(p["setup"][0]["action"], "link");
+    assert_eq!(p["setup"][1]["entry"], ".env");
+    assert_eq!(p["setup"][1]["action"], "skip", "a slash names a folder, and .env is a file: {}", p["setup"][1]);
+
+    let made = ask(create_req(&app, ID, &p, true)).await.unwrap();
+    assert_eq!(made["worktree"]["state"], "ready", "{made}");
+    let wt = d.path().join("app-feature-slash");
+    assert!(std::fs::symlink_metadata(wt.join("node_modules")).unwrap().file_type().is_symlink());
+    assert_eq!(read(&wt, "node_modules/pkg/index.js"), "x\n");
+    assert!(!wt.join(".env").exists());
+    // The link is setup's own, not a change of the owner's.
+    let l = list(&app).await;
+    assert_eq!(tree(&l, &s(&wt))["dirty"]["untracked"], 0, "{l}");
+}

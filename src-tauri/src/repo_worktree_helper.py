@@ -265,9 +265,11 @@ def setup_links(rec):
     path = rec.get("path") or ""
     for e in (rec.get("setup") or {}).get("entries") or []:
         if e.get("action") == "link" and e.get("result") == "linked":
-            full = os.path.join(path, e.get("entry", ""))
-            if os.path.islink(full) and os.readlink(full) == e.get("target"):
-                links.add(e["entry"])
+            # A record written before entries lost their trailing slash may still have one.
+            entry = (e.get("entry") or "").rstrip("/")
+            full = os.path.join(path, entry)
+            if entry and os.path.islink(full) and os.readlink(full) == e.get("target"):
+                links.add(entry)
     return links
 
 
@@ -301,7 +303,7 @@ def changes(path, links):
             parts = f.split(" ", 10)
             rows.append({"kind": "conflict", "xy": parts[1], "sub": parts[2] != "N...", "path": parts[10]})
         elif f.startswith("? "):
-            if f[2:] not in links:
+            if f[2:].rstrip("/") not in links:
                 rows.append({"kind": "untracked", "xy": "??", "sub": False, "path": f[2:]})
     return rows, info
 
@@ -505,9 +507,10 @@ def slug(name):
 
 
 def resolve_commit(top, ref):
-    if not isinstance(ref, str) or not ref.strip() or ref.startswith("-") or re.search(r"[\x00-\x1f]", ref):
+    ref = ref.strip() if isinstance(ref, str) else ""
+    # Checked after the strip: " -x" is the ref "-x", which reads as an option.
+    if not ref or ref.startswith("-") or re.search(r"[\x00-\x1f]", ref):
         raise Refusal("bad-ref", "Enter the base as a branch, tag or commit, such as main or origin/main.")
-    ref = ref.strip()
     code, out, _ = git(["rev-parse", "-q", "--verify", "--end-of-options", ref + "^{commit}"], top)
     if code != 0:
         raise Refusal("bad-ref", "There's no commit %s in this repository. The screen never fetches: fetch it first if it's on a remote." % ref)
@@ -609,7 +612,11 @@ def include_plan(source, dest):
     tracks is skipped, so a change to a tracked file in the source checkout is never carried over."""
     plan = []
     root = os.path.realpath(source)
-    for entry in include_entries(source):
+    for written in include_entries(source):
+        # `node_modules/` names the folder `node_modules`, as in .gitignore. Kept with the slash, the link would be
+        # made inside the folder it names: an empty folder is made, and the link fails.
+        entry = written.rstrip("/") or written
+        folder_only = entry != written
         item = {"entry": entry, "action": "skip", "reason": None, "size": None}
         src = os.path.join(source, entry)
         dst = os.path.normpath(os.path.join(dest, entry))
@@ -623,6 +630,8 @@ def include_plan(source, dest):
             item["reason"] = "There's nothing at that path in %s." % source
         elif tracked(source, entry):
             item["reason"] = "Git tracks it, so the worktree gets it from the base commit."
+        elif os.path.isfile(src) and folder_only:
+            item["reason"] = "It ends in /, so it names a folder, and %s is a file." % entry
         elif os.path.isfile(src):
             item["action"], item["size"] = "copy", os.path.getsize(src)
         elif os.path.isdir(src):
@@ -1181,9 +1190,20 @@ def op_worktree_remove(req):
             if tree.get("locked") is not None:
                 git_ok(["worktree", "unlock", rec["path"]], top, read_only=False)
             force = ["--force"] if (facts["keep"] or facts["submodules"]) else []
-            code, out, err = git(["worktree", "remove"] + force + [rec["path"]], top, read_only=False, timeout=600)
-            if code != 0:
+
+            def relock():
+                # Locked again, so `git worktree remove` and `prune` run elsewhere leave it alone. If Git removed it
+                # after all, there's nothing to lock, and that's fine.
                 git(["worktree", "lock", "--reason", LOCK_REASON + rec_id, rec["path"]], top, read_only=False)
+
+            try:
+                code, out, err = git(["worktree", "remove"] + force + [rec["path"]], top, read_only=False, timeout=600)
+            except BaseException:
+                # Timed out, or the connection dropped.
+                relock()
+                raise
+            if code != 0:
+                relock()
                 raise Refusal("git", "Git didn't remove the worktree.%s" % (" Its changes are kept in %s." % kept["ref"] if kept else ""), text(err) + text(out))
         except BaseException:
             restore(rec, before)

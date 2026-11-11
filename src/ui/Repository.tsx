@@ -48,6 +48,8 @@ import {
   type PrSummary,
   type PublishInfo,
   type Pushed,
+  actionable,
+  lostAnswer,
 } from "../hermes/repo";
 import { Spinner } from "./bits";
 import { useModal } from "./modal";
@@ -588,7 +590,7 @@ export function RepositoryScreen({
                                 change={c}
                                 selected={c.key === selected}
                                 onSelect={() => setSelected(c.key)}
-                                checked={c.side === "conflict" || c.submodule ? undefined : checked.has(c.key)}
+                                checked={actionable(c) ? checked.has(c.key) : undefined}
                                 onCheck={(on) => tick(c.key, on)}
                               />
                             </li>
@@ -641,7 +643,7 @@ export function RepositoryScreen({
                 diff={diff}
                 stale={diff.state === "ready" ? diffStale(shown, entryOf(change.path), diff.data) : undefined}
                 busy={!!writing || loading}
-                onStage={change.side === "conflict" || change.submodule ? undefined : () => (change.side === "staged" ? unstage([change]) : stage([change]))}
+                onStage={actionable(change) ? () => (change.side === "staged" ? unstage([change]) : stage([change])) : undefined}
                 onHunk={(i) => diff.state === "ready" && hunk(change, diff.data, i)}
                 onRefresh={() => read(repo, target)}
                 context={context}
@@ -817,33 +819,34 @@ function CommitDialog({
   }, [review.phase]);
 
   const commit = (p: Preview) => {
+    /** What a failed or unreadable answer means: a refusal goes back to the preview; a lost or garbled answer (the
+     * server's python killed while a hook ran, say) leaves whether Git committed unknown until HEAD is read again. */
+    const failed = (error: RepoFailure) => {
+      if (!lostAnswer(error)) return setReview({ phase: "ready", preview: p, error });
+      setReview({ phase: "unknown", preview: p });
+      api.run(target, { op: "status", repo: top }).then(
+        (v) => {
+          if (!alive.current) return;
+          const s = asStatus(v);
+          setReview({ phase: "unknown", preview: p, moved: s.head !== p.head, head: s.head });
+        },
+        () => undefined,
+      );
+    };
     setReview({ phase: "committing", preview: p });
     api.run(target, { op: "commit", repo: top, message: text, expect: { head: p.head, index: p.index, rawSha: p.rawSha, headRef: p.headRef } }).then(
       (v) => {
         if (!alive.current) return;
+        let result: Committed;
         try {
-          const result = asCommitted(v);
-          setReview({ phase: "committed", preview: p, result });
-          onCommitted(result);
+          result = asCommitted(v);
         } catch (e) {
-          setReview({ phase: "ready", preview: p, error: asRepoFailure(e) });
+          return failed(asRepoFailure(e));
         }
+        setReview({ phase: "committed", preview: p, result });
+        onCommitted(result);
       },
-      (e: unknown) => {
-        if (!alive.current) return;
-        const error = asRepoFailure(e);
-        if (error.kind !== "timeout" && error.kind !== "spawn" && !error.kind.startsWith("ssh")) return setReview({ phase: "ready", preview: p, error });
-        // The answer was lost: whether Git committed isn't known until HEAD is read again.
-        setReview({ phase: "unknown", preview: p });
-        api.run(target, { op: "status", repo: top }).then(
-          (v) => {
-            if (!alive.current) return;
-            const s = asStatus(v);
-            setReview({ phase: "unknown", preview: p, moved: s.head !== p.head, head: s.head });
-          },
-          () => undefined,
-        );
-      },
+      (e: unknown) => alive.current && failed(asRepoFailure(e)),
     );
   };
 
@@ -951,6 +954,9 @@ function CommitDialog({
                 {review.result.branch ? <> on <span className="mono">{review.result.branch}</span></> : null}.
               </span>
             </p>
+            {!!review.result.exitCode && (
+              <p className="repo-notice warn">Git made the commit, then exited with an error (status {review.result.exitCode}). What it printed is below.</p>
+            )}
             {!review.result.matches && (
               <div className="repo-notice warn">
                 A hook changed what was committed. The commit holds:
@@ -1206,7 +1212,7 @@ function PushDialog({ api, target, top, info: p, onClose }: { api: RepoApi; targ
       (e: unknown) => {
         if (!alive.current) return;
         const error = asRepoFailure(e);
-        if (!(error.kind === "timeout" || error.kind.startsWith("ssh") || error.kind === "spawn")) return setState({ phase: "ready", error });
+        if (!lostAnswer(error)) return setState({ phase: "ready", error });
         // Whether it was pushed isn't known: ask the remote itself, never the cached tracking ref.
         setState({ phase: "unknown" });
         api.run(target, { op: "remoteHead", repo: top, remote: p.remote!, remoteBranch: p.remoteBranch! }).then(
@@ -1641,6 +1647,8 @@ function FileRow({
         <span className="badge">binary</span>
       ) : c.submodule ? (
         <span className="badge">submodule</span>
+      ) : c.nameLossy ? (
+        <span className="badge">name not UTF-8</span>
       ) : (
         c.counts && (
           <span className="repo-counts small">
@@ -1806,6 +1814,8 @@ function DiffNotices({ change, parsed, reply }: { change: Change; parsed: Return
   }
   if (parsed.binary) notes.push({ tone: "info", text: "Binary file: Git shows no lines for it." });
   if (parsed.submodule || change.submodule) notes.push({ tone: "info", text: "A submodule: the change is the commit it points at." });
+  if (change.nameLossy)
+    notes.push({ tone: "warn", text: "This file's name isn't UTF-8, so it's shown with � and the screen can't name it to Git. Stage or unstage it in the Terminal." });
   if (parsed.rename) notes.push({ tone: "info", text: `Renamed from ${parsed.rename.from}${parsed.rename.similarity ? ` (${parsed.rename.similarity} similar)` : ""}.` });
   if (parsed.copy) notes.push({ tone: "info", text: `Copied from ${parsed.copy.from}.` });
   if (parsed.newFile && change.side !== "untracked") notes.push({ tone: "info", text: `New file${parsed.newMode ? `, mode ${parsed.newMode}` : ""}.` });

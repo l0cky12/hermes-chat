@@ -57,7 +57,7 @@ Each step is printed on stderr as a progress line, and Rust passes it on as it c
 
 ### A dropped connection during creation or setup
 
-A dropped ssh ends the helper (SIGHUP, or SIGKILL when the app gives up), and a `git worktree add` it was running ends with it. The record names the helper that marked it busy: pid, boot id and process start time, so a reused pid isn't taken for it. The next list finds that helper gone, and reports `create-interrupted`, `setup-interrupted` or `remove-interrupted` in place of `creating`, `setup` or `removing`.
+A dropped ssh ends the helper, and a `git worktree add` it was running ends with it. ssh runs the helper without a terminal (`-T`), so no hangup reaches it: sshd only closes its pipes. So the app keeps the helper's stdin open until it has the answer, and the helper watches it (#482). Its end means the connection dropped, or the app gave up at its time limit and killed ssh. The helper leads its own process group, and on that end it sends the whole group SIGTERM, Git and its hooks included, so Git lets go of its lock files and the helper puts the record's state back. Each child gets 5 s, then SIGKILL, and whatever is left when the helper exits gets SIGKILL too. The record names the helper that marked it busy: pid, boot id and process start time, so a reused pid isn't taken for it. The next list finds that helper gone, and reports `create-interrupted`, `setup-interrupted` or `remove-interrupted` in place of `creating`, `setup` or `removing`.
 
 - **Setup cut off:** Retry runs setup again.
 - **Cut off after Git made the worktree:** Retry locks it and finishes.
@@ -177,6 +177,7 @@ Ownership could also move to Hermes's own `worktree_registry` (per profile, toda
     - new and existing branches, and a dirty source checkout;
     - setup that fails and is retried, two Retries at once, and a failing `post-checkout` hook;
     - a creation killed during setup, and found again;
+    - a connection dropped while a commit's hook runs, with the helper started the way sshd leaves it, outside the killed process (`tests/repo_git.rs`): the helper and the hook end, and no lock is left;
     - at removal: dirty, untracked, staged (with `-f` too) and unpushed work kept, a detached HEAD, an ignored setup link, and ignored files that appear after the preview;
     - submodules, Protected and foreign-locked worktrees, and attached chats and processes blocking removal;
     - a second task holding the lock.
