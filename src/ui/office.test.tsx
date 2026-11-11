@@ -21,7 +21,6 @@ import { EMPTY_OFFICE_MEMORY } from "./OfficeBuilding";
 import { setWindowHidden } from "./windowState";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 /** The scene the building mounted last, and what it was told. */
 const drawn = vi.hoisted(() => ({

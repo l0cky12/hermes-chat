@@ -14,6 +14,7 @@
 //   the same `command.dispatch` a leading `/skill` would make, with every skill named stacked in front of the words.
 import { COMMANDS, type Rpc } from "./commands";
 import type { SkillsView } from "./skills";
+import { isObj } from "./values";
 
 /** A skill the composer offers: its command name (`key`, no slash), the name it declares, and what it's for. */
 export type SkillCommand = { key: string; name: string; description: string };
@@ -36,7 +37,6 @@ export type SkillRun = { keys: string[]; instruction: string; call: SkillCall; p
 /** Hermes loads at most this many skills for one message (`skill_commands._MAX_STACKED_SKILLS`). */
 export const MAX_SKILLS = 5;
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 /** This app's command names, which win over a skill's at the start of a message. Read when used: the modules import each other. */
 const isCommandName = (name: string) => COMMANDS.some((c) => c.name === name);
 

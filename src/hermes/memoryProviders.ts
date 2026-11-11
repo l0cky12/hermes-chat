@@ -18,6 +18,7 @@
 //
 // Hermes picks the provider when it builds a chat's agent, so a change reaches chats started after it.
 import { failureOf, type Failure } from "./toolsets";
+import { errorText } from "./values";
 
 /** One signed-in dashboard REST call; resolves to the parsed JSON body. */
 export type Rest = (method: "GET" | "PUT" | "POST", pathAndQuery: string, body?: unknown) => Promise<unknown>;
@@ -339,7 +340,7 @@ export class MemoryProvidersApi {
           const store = m.active && STORES[m.active] ? await this.form(profile, m.active).then(storeOf, () => undefined) : undefined;
           return { profile, ok: true, active: m.active, ...(status ? { status } : {}), ...(store ? { store } : {}) };
         } catch (e) {
-          return { profile, ok: false, reason: e instanceof Error ? e.message : String(e) };
+          return { profile, ok: false, reason: errorText(e) };
         }
       }),
     );

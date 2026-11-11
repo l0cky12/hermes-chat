@@ -7,6 +7,7 @@ import { AlertTriangle, ExternalLink, Info, LogIn, LogOut } from "lucide-react";
 import type { AccountsApi, Listed, ProviderSignIn, StartedSignIn } from "../hermes/accounts";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
 import { Spinner } from "./bits";
+import { errorText } from "../hermes/values";
 
 export type SignInApi = Pick<AccountsApi, "signIns" | "startSignIn" | "waitSignIn" | "cancelSignIn" | "signedIn" | "signOut">;
 
@@ -25,7 +26,6 @@ const IDLE: Ui = { kind: "idle" };
 
 type Note = { id?: string; ok: boolean; text: string };
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function SignInSettings({
@@ -64,7 +64,7 @@ export function SignInSettings({
         return l;
       },
       (e) => {
-        if (live(scope) && read === reads.current) setLoadError(messageOf(e));
+        if (live(scope) && read === reads.current) setLoadError(errorText(e));
         return undefined;
       },
     );
@@ -78,17 +78,19 @@ export function SignInSettings({
     setNote(undefined);
     if (connected) void load(scope);
     return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
       scopes.current++;
       const s = session.current;
       session.current = undefined;
       if (s) void api.cancelSignIn(profile, s);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [api, profile, connected]);
 
   const busy = ui.kind !== "idle" && ui.kind !== "confirmSignOut";
 
   const open = (url: string, id: string) =>
-    void Promise.resolve(openUrl(url)).catch((e) => setNote({ id, ok: false, text: `Couldn't open your browser: ${messageOf(e)} Open ${url} yourself.` }));
+    void Promise.resolve(openUrl(url)).catch((e) => setNote({ id, ok: false, text: `Couldn't open your browser: ${errorText(e)} Open ${url} yourself.` }));
 
   /** After a cancel: Hermes may have finished the sign-in before the cancel reached it, so the list says. */
   const afterCancel = async (scope: number, p: ProviderSignIn) => {
@@ -105,7 +107,7 @@ export function SignInSettings({
     let ended: { approved: true } | { approved: false; why: string };
     for (;;) {
       const t0 = Date.now();
-      const progress = await api.waitSignIn(profile, p.id, started.session).catch((e: unknown) => ({ state: "failed" as const, why: `Lost track of it: ${messageOf(e)}` }));
+      const progress = await api.waitSignIn(profile, p.id, started.session).catch((e: unknown) => ({ state: "failed" as const, why: `Lost track of it: ${errorText(e)}` }));
       if (!mine()) return afterCancel(scope, p);
       if (progress.state === "approved") ended = { approved: true };
       else if (progress.state === "failed") ended = { approved: false, why: progress.why };
@@ -143,7 +145,7 @@ export function SignInSettings({
     } catch (e) {
       if (!live(scope)) return;
       setUi(IDLE);
-      setNote({ id: p.id, ok: false, text: `Couldn't start the sign-in: ${messageOf(e)}` });
+      setNote({ id: p.id, ok: false, text: `Couldn't start the sign-in: ${errorText(e)}` });
       return;
     }
     if (!live(scope)) {
@@ -172,7 +174,7 @@ export function SignInSettings({
     try {
       await api.signOut(profile, p.id);
     } catch (e) {
-      failed = messageOf(e);
+      failed = errorText(e);
     }
     if (!live(scope)) return;
     // The list decides, as for a key: Hermes's 409 says it had nothing stored, which may still leave it signed in.

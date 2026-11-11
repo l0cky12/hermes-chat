@@ -261,6 +261,8 @@ export type InboxAcks = {
   restore(e: InboxEntry): void;
   subscribe(fn: () => void): () => void;
   getSnapshot(): Dismissed;
+  /** Reads the stored dismissals again: a profile's rename or delete rewrote them (profileLocalData.ts). */
+  reload(): void;
 };
 
 /**
@@ -277,13 +279,16 @@ export function inboxAcks(storage: AckStorage, scope: string, now = () => Date.n
         .sort((a, b) => b[1][1] - a[1][1])
         .slice(0, ACK_MAX),
     );
-  let state: Dismissed = {};
-  try {
-    const read = JSON.parse(storage.getItem(key) ?? "{}");
-    if (read && typeof read === "object") state = pruned(read);
-  } catch {
-    // A damaged record is as good as none.
-  }
+  const load = (): Dismissed => {
+    try {
+      const read = JSON.parse(storage.getItem(key) ?? "{}");
+      if (read && typeof read === "object") return pruned(read);
+    } catch {
+      // A damaged record is as good as none.
+    }
+    return {};
+  };
+  let state: Dismissed = load();
   const listeners = new Set<() => void>();
   const save = (next: Dismissed) => {
     state = pruned(next);
@@ -335,5 +340,9 @@ export function inboxAcks(storage: AckStorage, scope: string, now = () => Date.n
       return () => void listeners.delete(fn);
     },
     getSnapshot: () => state,
+    reload: () => {
+      state = load();
+      listeners.forEach((fn) => fn());
+    },
   };
 }

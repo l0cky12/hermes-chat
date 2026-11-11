@@ -107,7 +107,7 @@ async function populated() {
     JSON.stringify({
       v: 1,
       theme: "dark",
-      reasoningBlocks: false,
+      checkUpdatesOnLaunch: false,
       terminalKind: "local",
       lastOpenChat: { default: "chat-a" },
       templates: [
@@ -199,7 +199,7 @@ describe("a backup", () => {
     // A new revision, so an editor open elsewhere can't save over it unseen.
     expect(JSON.parse(fresh.defaults.text!).scopes[scope]["proj-1"]).toEqual({ rev: 3, instructions: "Answer in British English.", folder: "/srv/proj" });
     const prefs = JSON.parse(fresh.storage.getItem("hermes-ui-prefs")!);
-    expect(prefs).toMatchObject({ theme: "dark", reasoningBlocks: false, terminalKind: "local" });
+    expect(prefs).toMatchObject({ theme: "dark", checkUpdatesOnLaunch: false, terminalKind: "local" });
     expect(prefs.templates.map((t: { id: string; project?: { scope: string } }) => [t.id, t.project?.scope])).toEqual([
       ["tpl-1", undefined],
       ["tpl-2", scope],

@@ -11,7 +11,6 @@ import { UI_PREFS_KEY, getUIPrefs, setUIPrefs } from "../hermes/uiPrefs";
 import { Main } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -162,7 +161,10 @@ describe("across a restart", () => {
     s.openPipe = async (onEvent, profile) => {
       const pipe = await rest(onEvent, profile);
       const request = pipe.request.bind(pipe);
-      return { ...pipe, request: async (method, path, body) => (path.includes("api/sessions?") && await gate, request(method, path, body)) } as typeof pipe;
+      return { ...pipe, request: async (method, path, body) => {
+        if (path.includes("api/sessions?")) await gate;
+        return request(method, path, body);
+      } } as typeof pipe;
     };
     const hermes = await connect(s.openPipe);
     running.push(hermes);

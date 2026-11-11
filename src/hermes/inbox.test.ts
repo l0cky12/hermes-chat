@@ -83,8 +83,8 @@ describe("The inbox", () => {
     expect(entries[0]).toMatchObject({ title: "Chat work-asks", at: busyAt * 1000, summary: expect.stringContaining("waiting for your answer") });
     expect(entries[1]).toMatchObject({ title: "Chat work-done", at: expect.any(Number) });
     expect(entries.filter(needsOwner).length).toBe(2);
-    // Reading the server for the inbox resumed, answered or marked nothing.
-    expect(server.requests.map((r) => r.method).filter((m) => m !== "client.capabilities")).toEqual(["subagent.roster", "session.active_list"]);
+    // Reading the server for the inbox resumed, answered or marked nothing. Connecting reads the bots (ADR 0066).
+    expect(server.requests.map((r) => r.method).filter((m) => m !== "client.capabilities" && m !== "profiles.list")).toEqual(["subagent.roster", "session.active_list"]);
     expect(server.restRequests.filter((r) => r.method !== "GET")).toEqual([]);
     expect(server.approvalAnswers).toEqual([]);
   });

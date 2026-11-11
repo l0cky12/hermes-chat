@@ -1,6 +1,5 @@
 //! The preview's framing check and "Open in your browser" against local sites (issue #55).
 
-#[cfg(target_os = "linux")]
 mod common;
 
 use axum::http::{header, HeaderMap, StatusCode};
@@ -62,8 +61,8 @@ async fn says_a_site_refuses_when_its_answer_does() {
 #[tokio::test]
 async fn says_when_the_site_cant_be_reached() {
     // A port nothing listens on: WebKitGTK never fires the frame's `load` for this, so the pane would spin.
-    let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();
-    match web_page::check(&format!("http://{closed}/"), UA).await.unwrap() {
+    let closed = common::refusing();
+    match web_page::check(&format!("http://{}/", closed.addr), UA).await.unwrap() {
         Framing::Unreachable { message } => assert!(message.to_lowercase().contains("refused"), "{message}"),
         other => panic!("{other:?}"),
     }

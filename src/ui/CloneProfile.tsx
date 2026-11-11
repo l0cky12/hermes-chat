@@ -6,21 +6,21 @@ import { Check, CircleAlert, Minus, TriangleAlert } from "lucide-react";
 import {
   CATEGORIES,
   CATEGORY_LABELS,
-  nameProblem,
   preview,
   type FailedSkill,
   type Outcome,
   type Part,
   type Plan,
   type ProfileCloneApi,
-  type ProfileRow,
   type Result,
   type Source,
   type Stage,
   type StageState,
 } from "../hermes/profileClone";
+import { nameProblem, type ProfileRow } from "../hermes/profiles";
 import { Spinner, composing } from "./bits";
 import { useModal } from "./modal";
+import { errorText } from "../hermes/values";
 
 const PARTS: Part[] = ["persona", "model", "description", "skills"];
 const STAGES: Stage[] = ["name", "create", "skills", "check"];
@@ -36,7 +36,7 @@ function suggestName(source: string, profiles: readonly ProfileRow[]): string {
   }
 }
 
-const listProblem = (e: unknown) => `Couldn't list profiles: ${e instanceof Error ? e.message : String(e)}`;
+const listProblem = (e: unknown) => `Couldn't list profiles: ${errorText(e)}`;
 
 const STATE_ICON: Record<Result["state"], ReactElement> = {
   copied: <Check size={13} aria-label="Copied" className="clone-ok" />,
@@ -54,12 +54,15 @@ export function CloneProfileDialog({
   current,
   returnTo,
   onOpen,
+  onMade,
   onClose,
 }: {
   api: ProfileCloneApi;
   current: string;
   returnTo?: RefObject<HTMLElement | null>;
   onOpen: (name: string) => void;
+  /** Called with the new profile's name once Hermes has it (Settings → Profiles selects it). */
+  onMade?: (name: string) => void;
   onClose: () => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -106,12 +109,13 @@ export function CloneProfileDialog({
     );
     api.source(sourceName, list).then(
       (s) => current && setSource(s),
-      (e: unknown) => current && setSourceError(`Couldn't read ${sourceName}: ${e instanceof Error ? e.message : String(e)}`),
+      (e: unknown) => current && setSourceError(`Couldn't read ${sourceName}: ${errorText(e)}`),
     );
     return () => void (current = false);
   }, [api, sourceName, reads]);
   useEffect(() => {
     if (profiles && !named) setName(suggestName(sourceName, profiles));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [profiles, sourceName]);
 
   const onStage = (stage: Stage, state: StageState, note?: string) => live.current && setStages((s) => ({ ...s, [stage]: { state, note } }));
@@ -123,11 +127,12 @@ export function CloneProfileDialog({
     try {
       out = await work();
     } catch (e) {
-      out = { kind: "unsure", problem: e instanceof Error ? e.message : String(e) };
+      out = { kind: "unsure", problem: errorText(e) };
     }
     if (!live.current) return;
     setRunning(false);
     setOutcome(out);
+    if (out.kind === "made") onMade?.(out.name);
     // A name taken meanwhile shows against the list as it is now. The source read at open still stands.
     if (out.kind === "refused")
       api.profiles().then(
@@ -151,7 +156,7 @@ export function CloneProfileDialog({
       await api.remove(target);
       if (live.current) setDeleted(true);
     } catch (e) {
-      if (live.current) setDeleteError(e instanceof Error ? e.message : String(e));
+      if (live.current) setDeleteError(errorText(e));
     }
     if (!live.current) return;
     setRunning(false);

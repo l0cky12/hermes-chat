@@ -3,6 +3,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { asError } from "./tauriPipe";
 import { clearCachedChats } from "./chatCache";
 import { updater, type Progress } from "./updates";
+import { errorText } from "./values";
 
 export const appUpdates = updater({
   invoke: <T>(cmd: string, args?: Record<string, unknown>) => invoke<T>(cmd, args).catch(asError),
@@ -26,6 +27,6 @@ export async function restoreDraftsAfterRestart(): Promise<string | undefined> {
   try {
     await appUpdates.restoreAfterRestart();
   } catch (e) {
-    return e instanceof Error ? e.message : String(e);
+    return errorText(e);
   }
 }

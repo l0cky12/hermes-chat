@@ -3,6 +3,7 @@ import { Check, ChevronDown, Shield, ShieldCheck, ShieldQuestionMark, Zap } from
 import { PICK_COPY, badgeOf, type ApprovalPick, type ApprovalsBadge } from "../hermes/approvals";
 import type { Approvals } from "../hermes/model";
 import { useDismiss, useReturnFocus } from "./bits";
+import { errorText } from "../hermes/values";
 
 /**
  * `approvals`: the chat's, as Hermes reported them; undefined until it has. `profile`: the profile Smart and Manual
@@ -23,8 +24,6 @@ function faceOf(b: ApprovalsBadge) {
 
 const tickedOf = (b: ApprovalsBadge): ApprovalPick | undefined => (b.kind === "mode" ? b.mode : b.kind === "yolo" ? "yolo" : undefined);
 
-const reasonOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
 export function ApprovalsPill({ approvals, connected, profile, onPick }: ApprovalsPillProps) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -43,7 +42,7 @@ export function ApprovalsPill({ approvals, connected, profile, onPick }: Approva
       },
       (e: unknown) => {
         setBusy(false);
-        setError(reasonOf(e));
+        setError(errorText(e));
       },
     );
   };

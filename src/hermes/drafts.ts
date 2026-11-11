@@ -33,6 +33,11 @@ export type Drafts = {
   /** Puts back text that didn't go, unless the owner has typed something new there meanwhile. */
   putBack(key: string, text: string): void;
   subscribe(fn: () => void): () => void;
+  /**
+   * Moves each Draft held in memory, with its undo history, where `move` says (null: drops it), after a profile was
+   * renamed or deleted (profileLocalData.ts). The stored copies are the caller's to move.
+   */
+  move(move: (key: string) => string | null | undefined): void;
 };
 
 /**
@@ -94,6 +99,18 @@ export function drafts(storage: DraftStorage, now = Date.now): Drafts {
     subscribe(fn) {
       listeners.add(fn);
       return () => void listeners.delete(fn);
+    },
+    move(move) {
+      let moved = false;
+      for (const map of [texts, histories] as Map<string, unknown>[])
+        for (const [key, value] of [...map]) {
+          const to = move(key);
+          if (to === undefined) continue;
+          moved = true;
+          map.delete(key);
+          if (to !== null) map.set(to, value);
+        }
+      if (moved) notify();
     },
   };
 }

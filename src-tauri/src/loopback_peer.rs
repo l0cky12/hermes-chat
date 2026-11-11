@@ -3,8 +3,8 @@
 //! the sign-in tunnel's; only the owner's own programs may use a server page's, which WebKit's network process loads.
 //!
 //! On Linux the peer's socket is looked up in `/proc/net/tcp` and `/proc/net/tcp6`, which name each socket's owner
-//! and inode. TCP has no `SO_PEERCRED`. On Windows the peer's row in the IPv4 TCP table names the process that holds
-//! it, and that process's token names its account. A connection whose row or owner can't be found or read is refused.
+//! and inode. TCP has no `SO_PEERCRED`. On Windows the peer's row in the IPv4 or IPv6 TCP table names the process that
+//! holds it, and that process's token names its account. A connection whose row or owner can't be found or read is refused.
 //! Other platforms, which the app isn't built for, admit every connection.
 
 #[cfg(target_os = "linux")]
@@ -78,8 +78,8 @@ pub(crate) fn admits(peers: Peers, tcp: &tokio::net::TcpStream) -> bool {
 
 #[cfg(windows)]
 pub(crate) fn admits(peers: Peers, tcp: &tokio::net::TcpStream) -> bool {
-    let (Ok(SocketAddr::V4(local)), Ok(SocketAddr::V4(peer))) = (tcp.local_addr(), tcp.peer_addr()) else { return false };
-    let Ok(rows) = win::tcp_table() else { return false };
+    let (Ok(local), Ok(peer)) = (tcp.local_addr(), tcp.peer_addr()) else { return false };
+    let Ok(rows) = win::tcp_table(local.is_ipv6()) else { return false };
     let Some(pid) = far_end(&rows, local, peer) else { return false };
     match peers {
         Peers::ThisProcess => pid == std::process::id(),
@@ -92,34 +92,36 @@ pub(crate) fn admits(_peers: Peers, _tcp: &tokio::net::TcpStream) -> bool {
     true
 }
 
-#[cfg(windows)]
-use std::net::SocketAddr;
 #[cfg(any(windows, test))]
-use std::net::SocketAddrV4;
+use std::net::SocketAddr;
 
-/// One row of Windows' IPv4 TCP table: a connection's two ends and the process that holds it.
+/// One row of Windows' IPv4 or IPv6 TCP table: a connection's two ends and the process that holds it.
 #[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Row {
-    local: SocketAddrV4,
-    remote: SocketAddrV4,
+    local: SocketAddr,
+    remote: SocketAddr,
     pid: u32,
 }
 
 /// The process holding the peer's end of a connection the relay accepted on `local` from `peer`: the row whose local
 /// end is `peer` and whose remote end is `local`.
 #[cfg(any(windows, test))]
-fn far_end(rows: &[Row], local: SocketAddrV4, peer: SocketAddrV4) -> Option<u32> {
+fn far_end(rows: &[Row], local: SocketAddr, peer: SocketAddr) -> Option<u32> {
+    // Only the address and port: a row names no IPv6 flow label, and loopback has no scope.
+    let (local, peer) = (SocketAddr::new(local.ip(), local.port()), SocketAddr::new(peer.ip(), peer.port()));
     rows.iter().find(|r| r.local == peer && r.remote == local).map(|r| r.pid)
 }
 
 #[cfg(windows)]
 mod win {
     use super::{Account, Row};
-    use std::net::SocketAddrV4;
+    use std::net::{Ipv6Addr, SocketAddr, SocketAddrV4};
     use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE, NO_ERROR};
-    use windows_sys::Win32::NetworkManagement::IpHelper::{GetExtendedTcpTable, MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID, TCP_TABLE_OWNER_PID_CONNECTIONS};
-    use windows_sys::Win32::Networking::WinSock::AF_INET;
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetExtendedTcpTable, MIB_TCP6ROW_OWNER_PID, MIB_TCP6TABLE_OWNER_PID, MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID, TCP_TABLE_OWNER_PID_CONNECTIONS,
+    };
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
     use windows_sys::Win32::Security::{GetLengthSid, GetTokenInformation, IsValidSid, TokenOwner, TokenUser, PSID, TOKEN_INFORMATION_CLASS, TOKEN_QUERY};
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION};
 
@@ -213,14 +215,16 @@ mod win {
         Some(out)
     }
 
-    /// Every established IPv4 TCP connection on this computer, with the process that holds each end.
-    pub(super) fn tcp_table() -> std::io::Result<Vec<Row>> {
+    /// Every established IPv4 (or, with `ipv6`, IPv6) TCP connection on this computer, with the process that holds each
+    /// end.
+    pub(super) fn tcp_table(ipv6: bool) -> std::io::Result<Vec<Row>> {
+        let family = if ipv6 { AF_INET6 } else { AF_INET };
         let mut buf: Vec<u64> = Vec::new();
         loop {
             let mut size = (buf.len() * 8) as u32;
             let table = if buf.is_empty() { std::ptr::null_mut() } else { buf.as_mut_ptr().cast() };
             // SAFETY: `table` is null with a size of 0, or `buf`, which holds `size` bytes, 8-aligned as the table needs.
-            let r = unsafe { GetExtendedTcpTable(table, &mut size, 0, AF_INET.into(), TCP_TABLE_OWNER_PID_CONNECTIONS, 0) };
+            let r = unsafe { GetExtendedTcpTable(table, &mut size, 0, family.into(), TCP_TABLE_OWNER_PID_CONNECTIONS, 0) };
             match r {
                 NO_ERROR if !buf.is_empty() => break,
                 NO_ERROR => return Ok(Vec::new()),
@@ -228,17 +232,34 @@ mod win {
                 e => return Err(std::io::Error::from_raw_os_error(e as i32)),
             }
         }
-        let table = buf.as_ptr().cast::<MIB_TCPTABLE_OWNER_PID>();
-        // SAFETY: Windows filled `buf` with a table that starts at `table`'s `table` field. At most as many rows as fit
-        // in `buf` are read.
-        let rows = unsafe {
-            let first = std::ptr::addr_of!((*table).table).cast::<MIB_TCPROW_OWNER_PID>();
-            let fit = (buf.len() * 8 - (first as usize - table as usize)) / size_of::<MIB_TCPROW_OWNER_PID>();
-            std::slice::from_raw_parts(first, ((*table).dwNumEntries as usize).min(fit))
-        };
-        // Addresses and ports are in network byte order, a port in the low two bytes of its field.
-        let end = |addr: u32, port: u32| SocketAddrV4::new(addr.to_ne_bytes().into(), u16::from_be(port as u16));
-        Ok(rows.iter().map(|r| Row { local: end(r.dwLocalAddr, r.dwLocalPort), remote: end(r.dwRemoteAddr, r.dwRemotePort), pid: r.dwOwningPid }).collect())
+        // Ports are in network byte order, in the low two bytes of their field.
+        let port = |p: u32| u16::from_be(p as u16);
+        // SAFETY: Windows filled `buf` with a table of `family`'s rows.
+        Ok(if ipv6 {
+            let end = |addr: [u8; 16], p: u32| SocketAddr::new(Ipv6Addr::from(addr).into(), port(p));
+            unsafe { rows::<MIB_TCP6ROW_OWNER_PID>(&buf, std::mem::offset_of!(MIB_TCP6TABLE_OWNER_PID, table)) }
+                .iter()
+                .map(|r| Row { local: end(r.ucLocalAddr, r.dwLocalPort), remote: end(r.ucRemoteAddr, r.dwRemotePort), pid: r.dwOwningPid })
+                .collect()
+        } else {
+            // Addresses are in network byte order too.
+            let end = |addr: u32, p: u32| SocketAddrV4::new(addr.to_ne_bytes().into(), port(p)).into();
+            unsafe { rows::<MIB_TCPROW_OWNER_PID>(&buf, std::mem::offset_of!(MIB_TCPTABLE_OWNER_PID, table)) }
+                .iter()
+                .map(|r| Row { local: end(r.dwLocalAddr, r.dwLocalPort), remote: end(r.dwRemoteAddr, r.dwRemotePort), pid: r.dwOwningPid })
+                .collect()
+        })
+    }
+
+    /// The rows of a table in `buf`: its `dwNumEntries`, then rows from `offset`. At most as many as fit in `buf`.
+    ///
+    /// # Safety
+    /// `buf` holds a table that `GetExtendedTcpTable` filled with rows of type `T`, which start at `offset`.
+    unsafe fn rows<T>(buf: &[u64], offset: usize) -> &[T] {
+        let entries = *buf.as_ptr().cast::<u32>() as usize;
+        let first = buf.as_ptr().cast::<u8>().add(offset).cast::<T>();
+        let fit = (buf.len() * 8 - offset) / size_of::<T>();
+        std::slice::from_raw_parts(first, entries.min(fit))
     }
 }
 
@@ -380,7 +401,7 @@ mod row_tests {
 
     #[test]
     fn the_peers_row_names_the_process_that_holds_it() {
-        let at = |s: &str| s.parse::<SocketAddrV4>().unwrap();
+        let at = |s: &str| s.parse::<SocketAddr>().unwrap();
         let (relay, peer) = (at("127.0.0.1:8080"), at("127.0.0.1:54321"));
         let served = Row { local: relay, remote: peer, pid: 10 };
         let theirs = Row { local: peer, remote: relay, pid: 20 };

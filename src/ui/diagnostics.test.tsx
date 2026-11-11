@@ -14,7 +14,6 @@ import { queryWords, searchText, textMatches } from "./settingsSearch";
 import { RestError } from "../hermes/pipe";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -56,6 +55,7 @@ const NEW = {
   "RPC profiles.list": { profiles: [{ name: "default", is_default: true, canonical_session: null }] },
   "GET api/tools/toolsets": [],
   "GET api/profiles/default/soul": {},
+  "GET api/profiles": { profiles: [] },
   "GET api/skills": [],
   "GET api/files": {},
   "GET api/cron/jobs": [],
@@ -134,6 +134,16 @@ describe("Connection diagnostics", () => {
     act(() => store.connected(1, "default", {}, Promise.resolve({})));
     expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringMatching(/Hermes didn't answer any check/));
     expect(within(row$("Skills")).getByText("Couldn't check")).toBeTruthy();
+  });
+
+  it("names a change Hermes was found to lack in its row, while the rest of the feature stays supported", async () => {
+    const store = scriptedStore(NEW);
+    diagnostics(store);
+    act(() => store.connected(1, "default", {}, Promise.resolve({ server_requests: ["approval"] })));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toMatch(/Checked/));
+    act(() => store.observeWrite(1, { route: "api/profiles/work", verb: "PATCH" }, new RestError(405, `{"detail":"Method Not Allowed"}`)));
+    expect(within(row$("Profiles")).getByText(/Hermes has no route for PATCH \/api\/profiles\/\{name\}, so that change is disabled/)).toBeTruthy();
+    expect(within(row$("Profiles")).getByText("Supported")).toBeTruthy();
   });
 
   it("copies a report without secrets, and says so", async () => {
@@ -333,7 +343,7 @@ describe("in the app", () => {
       <Main
         hermes={hermes}
         connection={{ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }}
-        webPages={{ check: async () => ({ kind: "allowed" }) as never, openInBrowser: opens, devServers: async () => ({ server: { kind: "listed", ports: [] }, local: [] }) }}
+        webPages={{ check: async () => ({ kind: "allowed" }) as never, httpsAnswers: async () => true, openInBrowser: opens, devServers: async () => ({ server: { kind: "listed", ports: [] }, local: [] }) }}
         onSignOut={async () => {}}
       />,
     );

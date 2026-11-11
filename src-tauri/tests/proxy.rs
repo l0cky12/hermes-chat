@@ -28,7 +28,7 @@ async fn recording() -> (u16, Arc<Mutex<Vec<String>>>) {
 }
 
 #[tokio::test]
-async fn a_proxy_in_the_environment_never_sees_a_dashboard_request() {
+async fn a_proxy_in_the_environment_never_sees_a_dashboard_or_server_page_request() {
     let (proxy_port, proxy) = recording().await;
     let (dashboard_port, dashboard) = recording().await;
     let proxy_url = format!("http://127.0.0.1:{proxy_port}");
@@ -57,4 +57,12 @@ async fn a_proxy_in_the_environment_never_sees_a_dashboard_request() {
 
     let seen = proxy.locked().clone();
     assert!(seen.is_empty(), "the proxy saw dashboard requests: {seen:?}");
+
+    // On Windows a server page's frame is at a name of its own under `localhost` (ADR 0144), which no proxy reaches.
+    let (page_port, page) = recording().await;
+    let framing = hermes_chat::web_page::check(&format!("http://p0123456789abcdef.localhost:{page_port}/"), "").await;
+    assert!(framing.is_ok(), "{framing:?}");
+    assert!(page.locked().iter().any(|r| r.starts_with("GET / ")), "the page got the framing check");
+    let seen = proxy.locked().clone();
+    assert!(seen.is_empty(), "the proxy saw the framing check: {seen:?}");
 }

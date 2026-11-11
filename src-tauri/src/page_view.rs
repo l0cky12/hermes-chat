@@ -797,7 +797,7 @@ mod tests {
                 let _ = stream.write_all(response.as_bytes());
             }
         });
-        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+        let closed = crate::test_common::refusing();
 
         gtk::init().expect("a display");
         let sent = Arc::new(Mutex::new(Vec::<Value>::new()));
@@ -857,7 +857,7 @@ mod tests {
         step("a link the page follows that redirects", &script("document.getElementById('b').click()"), vec![at("/b", false)]);
         step("a redirect the app asks for", &go("/redirect-to-c"), vec![at("/c", true)]);
         step("Reload", &|| imp::reload_in(&view, &moves), vec![at("/c", true)]);
-        let unreachable = url::Url::parse(&format!("http://{closed}/")).unwrap();
+        let unreachable = url::Url::parse(&format!("http://{}/", closed.addr)).unwrap();
         imp::go_in(&view, &moves, unreachable);
         run(1500);
         let got: Vec<Value> = std::mem::take(&mut *sent.locked());

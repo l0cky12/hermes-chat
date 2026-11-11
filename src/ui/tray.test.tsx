@@ -7,14 +7,12 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import { memoryCache } from "../hermes/memoryCache";
 import { connect, type Hermes } from "../hermes/transport";
-import type { TrayStatus } from "../hermes/tauriTray";
 import { FakeTray } from "../hermes/fakeTray";
 import { Main } from "../App";
 import { TraySettings } from "./TraySettings";
 import { setWindowHidden } from "./windowState";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};

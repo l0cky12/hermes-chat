@@ -24,8 +24,7 @@ import type { RemoteFiles } from "../hermes/remoteFiles";
 import { PreviewPane, type Preview } from "./FileBrowser";
 import { Spinner, composing, menuArrows, useDismiss } from "./bits";
 import { useModal } from "./modal";
-
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
+import { errorText } from "../hermes/values";
 
 /** The default model the capacity is measured against: its name, and its context window once a chat has reported one. */
 export type CapacityModel = { name?: string; window?: number };
@@ -126,6 +125,7 @@ export function ContextCard({
   }, [key, connected]);
   useEffect(() => {
     if (connected && state.kind === "ready") void refreshRef.current();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [model.window]);
 
   useDismiss(adder, doing.kind === "menu", () => setDoing((d) => (d.kind === "menu" ? { kind: "idle" } : d)));
@@ -141,7 +141,7 @@ export function ContextCard({
     try {
       next = await run((text) => said.push(text));
     } catch (e) {
-      said.push(messageOf(e));
+      said.push(errorText(e));
     }
     if (shown.current !== asked) return;
     setNotes(said);
@@ -164,7 +164,7 @@ export function ContextCard({
           await files.upload(profile, dir, to.writes, f, false);
         } catch (e) {
           if (e instanceof ContextExistsError) taken.push(f);
-          else note(messageOf(e));
+          else note(errorText(e));
         }
       if (taken.length) return { kind: "replace", dir, writes: to.writes, files: taken };
     });
@@ -203,7 +203,7 @@ export function ContextCard({
         setNotes([]);
       } catch (e) {
         if (shown.current !== asked) return;
-        setDoing(e instanceof ContextExistsError ? { ...form, taken: name, saving: false } : { ...form, saving: false, error: messageOf(e) });
+        setDoing(e instanceof ContextExistsError ? { ...form, taken: name, saving: false } : { ...form, saving: false, error: errorText(e) });
       }
       await refresh();
     })();
@@ -222,7 +222,7 @@ export function ContextCard({
     const still = (d: Doing) => d.kind === "preview" && d.preview.entry.path === entry.path && shown.current === asked;
     files.preview(profile, writes, file).then(
       (result) => setDoing((d) => (still(d) ? { kind: "preview", writes, preview: { entry, state: "ready", result } } : d)),
-      (e) => setDoing((d) => (still(d) ? { kind: "preview", writes, preview: { entry, state: "failed", error: messageOf(e) } } : d)),
+      (e) => setDoing((d) => (still(d) ? { kind: "preview", writes, preview: { entry, state: "failed", error: errorText(e) } } : d)),
     );
   };
 
