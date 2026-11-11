@@ -357,6 +357,16 @@ describe("The building", () => {
     expect(onOpen.mock.calls[0][0]).toMatchObject({ profile: "work", chatId: "deploy" });
   });
 
+  it("gives the scene the tower again when a floor's count changes, though nothing on the open floor moved, so its labels are laid out at their new size", async () => {
+    const { rerender } = office("building", { rooms: sample("work"), profiles: ["work"] });
+    await waitFor(() => expect(drawn.scene?.tower).toEqual([{ profile: "work", agents: 1, lit: true }]));
+    const drawnFloors = drawn.scene!.floors.length;
+    const second: Room = { key: "work notes", profile: "work", chatId: "notes", title: "Notes", desks: [{ key: "work notes reply", agent: { kind: "reply" }, name: "The chat's reply", state: "running" }] };
+    rerender({ rooms: [...sample("work"), second] });
+    await waitFor(() => expect(drawn.scene!.tower).toEqual([{ profile: "work", agents: 2, lit: true }]));
+    expect(drawn.scene!.floors).toHaveLength(drawnFloors);
+  });
+
   it("opens again on the floor last looked at, from the picture it last drew, so an agent dismissed meanwhile walks out", async () => {
     const floorMemory = fresh();
     const { user, unmount } = office("building", { rooms: sample("work"), profiles: ["work"], floorMemory });
@@ -532,6 +542,22 @@ describe("The building", () => {
     act(() => drawn.scene!.events.onHover(undefined));
     act(() => void vi.advanceTimersByTime(300));
     expect(shown()).toEqual([]);
+  });
+
+  it("keeps a tag the pointer reaches straight from its character's head, though the canvas lets go of it after", async () => {
+    office("building");
+    await waitFor(() => expect(drawn.scene?.floor).toBeTruthy());
+    const tag = () => document.querySelector<HTMLElement>('[data-desk="default audit a"]')!;
+    const shown = () => Array.from(document.querySelectorAll("[data-hover]")).map((t) => t.getAttribute("data-desk"));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    act(() => drawn.scene!.events.onHover("default audit a"));
+    // WebKitGTK's order for one move from the head onto the tag (probed for #459): React's enter, from the canvas's
+    // pointerout; then the canvas's pointerleave, which the scene reports as no character; then the move, on the tag.
+    fireEvent.pointerEnter(tag());
+    act(() => drawn.scene!.events.onHover(undefined));
+    fireEvent.pointerMove(tag());
+    act(() => void vi.advanceTimersByTime(1_000));
+    expect(shown()).toEqual(["default audit a"]);
   });
 
   it("moves the shown tag straight to the next character the pointer reaches", async () => {
