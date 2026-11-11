@@ -254,10 +254,8 @@ describe("Outputs", () => {
     await openChat(user, "Quarterly report");
     await openOutputs(user);
     expect(shown()).toHaveLength(200);
-    // Found in the footer, not across the whole table, where these two lookups took about 15% of the test's time.
-    const more = within(document.querySelector<HTMLElement>(".files-more")!);
-    expect(more.getByText(/Showing 200 of 250/)).toBeTruthy();
-    await user.click(more.getByRole("button", { name: "Show 50 more" }));
+    expect(screen.getByText(/Showing 200 of 250/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Show 50 more" }));
     expect(shown()).toHaveLength(250);
     await user.type(screen.getByRole("textbox", { name: /Search outputs/ }), "f249.");
     expect(shown()).toEqual(["f249.txt"]);
