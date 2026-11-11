@@ -193,6 +193,47 @@ describe("Reconnecting", () => {
     expect(status()).toBe("connected");
   });
 
+  it("keeps the connection while an attachment takes a minute and a half to upload and Hermes can't answer meanwhile (#469)", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("a", 0)];
+    server.files["/home/me/big.log"] = "x".repeat(1024);
+    // Like the real pipe: the file's frame takes 90 s to write, and every frame sent meanwhile waits behind it, so
+    // nothing comes back from Hermes until it has gone.
+    const slow: OpenPipe = async (...args) => {
+      const pipe = await server.openPipe(...args);
+      let behind: string[] | undefined;
+      return {
+        ...pipe,
+        send: async (frame) => void (behind ? behind.push(frame) : await pipe.send(frame)),
+        sendFile: async (...file) => {
+          behind = [];
+          await new Promise((r) => setTimeout(r, 90_000));
+          await pipe.sendFile(...file);
+          const waiting = behind;
+          behind = undefined;
+          for (const frame of waiting) await pipe.send(frame);
+        },
+      };
+    };
+    const hermes = await connect(slow);
+    await hermes.sync();
+    await hermes.open("a");
+    const { attachments } = await hermes.checkAttachments(["/home/me/big.log"]);
+
+    const sent = hermes.send("a", "Look at this log", attachments);
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(server.opened).toBe(1);
+    expect(hermes.getSnapshot()).toMatchObject({ status: "connected", closedReason: undefined });
+    expect(await sent).toEqual({ delivery: "accepted" });
+    expect(server.last("prompt.submit")!.params.text).toBe("@file:attachments/big.log\n\nLook at this log");
+
+    // Once the file has gone, the pings, and the silence check, start again.
+    const pings = () => server.requests.filter((r) => r.method === "gateway.ping").length;
+    const before = pings();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(pings()).toBeGreaterThan(before);
+  });
+
   it("refreshes the chat list after reconnecting while a list read on the dropped connection never answers", async () => {
     const server = new FakeHermes();
     server.sessions = [row("old", 1)];

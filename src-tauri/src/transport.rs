@@ -30,7 +30,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
@@ -1103,33 +1103,176 @@ pub enum PipeEvent {
     Closed { reason: String },
 }
 
+/// A frame for the pipe task to write, and who hears once it has been written.
+struct Outgoing {
+    text: String,
+    written: Option<oneshot::Sender<Result<(), String>>>,
+}
+
 /// An open `/api/ws` connection. Dropping it closes the socket.
 pub struct Pipe {
-    outgoing: mpsc::UnboundedSender<String>,
+    outgoing: mpsc::UnboundedSender<Outgoing>,
     task: JoinHandle<()>,
 }
 
 impl Pipe {
     pub fn send(&self, text: String) -> Result<(), TransportError> {
-        self.outgoing.send(text).map_err(|_| TransportError::Closed)
+        self.outgoing.send(Outgoing { text, written: None }).map_err(|_| TransportError::Closed)
     }
 
-    /// Send one frame: `head`, the file at `path` as base64, then `tail`. Refuses a file over
-    /// `max_bytes` without sending anything; the size is checked again after reading, in case it grew.
-    pub async fn send_file(&self, head: &str, path: &str, tail: &str, max_bytes: u64) -> Result<(), TransportError> {
+    /// Queue one frame: `head`, the file at `path` as base64, then `tail`. Refuses a file over `max_bytes` without
+    /// sending anything; the size is checked again after reading, in case it grew. The frame may take minutes to write
+    /// on a slow uplink, so `Written` says when it has gone, and the webview can tell a long upload from a silent
+    /// Hermes (#469). Wait on it without holding the `Pipe`: dropping the pipe must still stop the write.
+    pub async fn send_file(&self, head: &str, path: &str, tail: &str, max_bytes: u64) -> Result<Written, TransportError> {
         let bytes = read_capped(path, max_bytes).await?;
-        let mut frame = String::with_capacity(head.len() + bytes.len().div_ceil(3) * 4 + tail.len());
-        frame.push_str(head);
-        base64::engine::general_purpose::STANDARD.encode_string(&bytes, &mut frame);
-        frame.push_str(tail);
-        self.send(frame)
+        let mut text = String::with_capacity(head.len() + bytes.len().div_ceil(3) * 4 + tail.len());
+        text.push_str(head);
+        base64::engine::general_purpose::STANDARD.encode_string(&bytes, &mut text);
+        drop(bytes);
+        text.push_str(tail);
+        let (written, sent) = oneshot::channel();
+        self.outgoing.send(Outgoing { text, written: Some(written) }).map_err(|_| TransportError::Closed)?;
+        Ok(Written(sent))
     }
+}
+
+/// A frame `Pipe::send_file` queued, until it has been written to the socket.
+pub struct Written(oneshot::Receiver<Result<(), String>>);
+
+impl Written {
+    /// Resolves once the frame has been written. `Closed` when the pipe was dropped or its socket ended first.
+    pub async fn wait(self) -> Result<(), TransportError> {
+        match self.0.await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(TransportError::WebSocket(e)),
+            Err(_) => Err(TransportError::Closed),
+        }
+    }
+}
+
+/// What the pipe does with one thing read from the socket: frames go to `on_event`. `Some(reason)`: the socket is done.
+fn heard(msg: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>, on_event: &impl Fn(PipeEvent), hide: &HeaderMap) -> Option<String> {
+    match msg {
+        // The server writes newline-delimited JSON-RPC; one WS message may carry several.
+        Some(Ok(Message::Text(text))) => {
+            for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                on_event(PipeEvent::Frame { text: line.to_owned() });
+            }
+            None
+        }
+        Some(Ok(Message::Close(frame))) => Some(frame.map_or("closed by the server".into(), |f| {
+            // A gateway in front of the dashboard may close with the header values it turned down.
+            let why = if repeats_header(&f.reason, hide) { HIDDEN } else { f.reason.as_str() };
+            format!("closed by the server ({} {why})", f.code)
+        })),
+        Some(Ok(_)) => None,
+        Some(Err(e)) => Some(e.to_string()),
+        None => Some("closed by the server".into()),
+    }
+}
+
+/// Runs an open `/api/ws` socket: writes what `Pipe` queues, one frame at a time, and hands every frame Hermes sends
+/// to `on_event`, also while a big frame is still being written (an attachment can take minutes on a slow uplink,
+/// #469). `hide`: what a close reason mustn't repeat.
+fn run_pipe<S>(ws: tokio_tungstenite::WebSocketStream<S>, on_event: impl Fn(PipeEvent) + Send + 'static, hide: HeaderMap) -> Pipe
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (outgoing, mut to_server) = mpsc::unbounded_channel::<Outgoing>();
+    let task = tokio::spawn(async move {
+        let (mut sink, mut stream) = ws.split();
+        let reason = 'socket: loop {
+            tokio::select! {
+                out = to_server.recv() => match out {
+                    Some(Outgoing { text, written }) => {
+                        let mut write = std::pin::pin!(sink.send(Message::text(text)));
+                        let wrote = loop {
+                            tokio::select! {
+                                wrote = &mut write => break wrote.map_err(|e| e.to_string()),
+                                msg = stream.next() => if let Some(reason) = heard(msg, &on_event, &hide) {
+                                    if let Some(written) = written {
+                                        let _ = written.send(Err(reason.clone()));
+                                    }
+                                    break 'socket reason;
+                                },
+                            }
+                        };
+                        let failed = wrote.as_ref().err().cloned();
+                        if let Some(written) = written {
+                            let _ = written.send(wrote);
+                        }
+                        if let Some(e) = failed {
+                            break e;
+                        }
+                    }
+                    None => {
+                        let _ = sink.close().await;
+                        break "closed by the app".into();
+                    }
+                },
+                msg = stream.next() => if let Some(reason) = heard(msg, &on_event, &hide) {
+                    break reason;
+                },
+            }
+        };
+        on_event(PipeEvent::Closed { reason });
+    });
+    Pipe { outgoing, task }
 }
 
 impl Drop for Pipe {
     fn drop(&mut self) {
         self.task.abort();
     }
+}
+
+/// The most one write hands the socket. Windows takes a write of any size whole while its send buffer isn't full, and
+/// tungstenite writes a frame in one call, so a big file frame counted as written at once while it still waited to go
+/// out, and the silence check started over during the upload (#469). Capped, a write backs up there as it does on Linux.
+/// Not smaller: tungstenite moves the rest of the frame down after each write, so a 256 MiB file over loopback takes
+/// 6.5 s at 1 MiB (1.9 s uncapped, 24 s at 256 KiB). What is left when the frame counts as written, about this much,
+/// goes in the 45 s silence limit down to about 256 kbit/s.
+const WRITE_CAP: usize = 1024 * 1024;
+
+/// A socket whose writes take at most `WRITE_CAP` bytes each.
+struct CappedWrites<S>(S);
+
+impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for CappedWrites<S> {
+    fn poll_read(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &mut tokio::io::ReadBuf<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
+    }
+}
+
+impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for CappedWrites<S> {
+    fn poll_write(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_write(cx, &buf[..buf.len().min(WRITE_CAP)])
+    }
+    fn poll_flush(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_flush(cx)
+    }
+    fn poll_shutdown(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_shutdown(cx)
+    }
+}
+
+type PipeSocket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<CappedWrites<tokio::net::TcpStream>>>;
+
+/// Opens `/api/ws` as `connect_async` does, over a socket with capped writes.
+async fn open_pipe_socket(handshake: tokio_tungstenite::tungstenite::handshake::client::Request) -> Result<PipeSocket, tokio_tungstenite::tungstenite::Error> {
+    use tokio_tungstenite::tungstenite::error::{Error, UrlError};
+    let uri = handshake.uri();
+    let host = uri.host().ok_or(Error::Url(UrlError::NoHostName))?.trim_start_matches('[').trim_end_matches(']').to_owned();
+    let port = uri
+        .port_u16()
+        .or(match uri.scheme_str() {
+            Some("wss") => Some(443),
+            Some("ws") => Some(80),
+            _ => None,
+        })
+        .ok_or(Error::Url(UrlError::UnsupportedUrlScheme))?;
+    let tcp = tokio::net::TcpStream::connect((host.as_str(), port)).await.map_err(Error::Io)?;
+    Ok(tokio_tungstenite::client_async_tls(handshake, CappedWrites(tcp)).await?.0)
 }
 
 /// A signed-in dashboard session. It keeps the session cookies up to date: the dashboard rotates an
@@ -1250,52 +1393,12 @@ impl Dashboard {
             )
             .await?;
         let handshake = self.ws_handshake("api/ws", &[("ticket", &ticket), ("profile", profile)])?;
-        let connecting = async { tokio_tungstenite::connect_async(handshake).await.map_err(|e| TransportError::WebSocket(e.to_string())) };
-        let (ws, _) = steps
+        let connecting = async { open_pipe_socket(handshake).await.map_err(|e| TransportError::WebSocket(e.to_string())) };
+        let ws = steps
             .run(Step::WebSocket, within(limits.map(|l| l.socket), connecting, |s| TransportError::WebSocket(format!("it didn't open within {s}s."))))
             .await?;
 
-        let (outgoing, mut to_server) = mpsc::unbounded_channel::<String>();
-        let headers = self.hide.clone();
-        let task = tokio::spawn(async move {
-            let (mut sink, mut stream) = ws.split();
-            let reason = loop {
-                tokio::select! {
-                    out = to_server.recv() => match out {
-                        Some(text) => {
-                            if let Err(e) = sink.send(Message::text(text)).await {
-                                break e.to_string();
-                            }
-                        }
-                        None => {
-                            let _ = sink.close().await;
-                            break "closed by the app".into();
-                        }
-                    },
-                    msg = stream.next() => match msg {
-                        // The server writes newline-delimited JSON-RPC; one WS message may carry several.
-                        Some(Ok(Message::Text(text))) => {
-                            for line in text.lines().filter(|l| !l.trim().is_empty()) {
-                                on_event(PipeEvent::Frame { text: line.to_owned() });
-                            }
-                        }
-                        Some(Ok(Message::Close(frame))) => {
-                            break frame.map_or("closed by the server".into(), |f| {
-                                // A gateway in front of the dashboard may close with the header values it turned down.
-                                let why = if repeats_header(&f.reason, &headers) { HIDDEN } else { f.reason.as_str() };
-                                format!("closed by the server ({} {why})", f.code)
-                            });
-                        }
-                        Some(Ok(_)) => {}
-                        Some(Err(e)) => break e.to_string(),
-                        None => break "closed by the server".into(),
-                    },
-                }
-            };
-            on_event(PipeEvent::Closed { reason });
-        });
-
-        Ok(Pipe { outgoing, task })
+        Ok(run_pipe(ws, on_event, self.hide.clone()))
     }
 
     /// A single-use ticket for `/api/ws`.
@@ -3264,5 +3367,104 @@ mod tests {
         let err = text_unless_stalled(resp, limit).await.unwrap_err();
         assert!(matches!(err, TransportError::Stalled(_)), "{err:?}");
         assert!(started.elapsed() >= limit + Duration::from_millis(50), "{:?}", started.elapsed());
+    }
+
+    /// A listener whose accepted sockets take little before the test reads them, so the client's write backs up soon.
+    fn small_buffered_listener() -> tokio::net::TcpListener {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.set_recv_buffer_size(64 * 1024).unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        socket.listen(1).unwrap()
+    }
+
+    /// Windows takes one write of any size whole while its send buffer isn't full, so a frame written in one call
+    /// counted as gone at once (#469). The pipe's socket hands it at most `WRITE_CAP` a write, and loses nothing.
+    #[tokio::test]
+    async fn the_pipe_socket_takes_a_big_frame_a_capped_piece_at_a_time() {
+        use tokio::io::AsyncWriteExt;
+        let frame: Vec<u8> = (0..3 * super::WRITE_CAP + 5).map(|i| i as u8).collect();
+        let mut socket = super::CappedWrites(Vec::new());
+        assert_eq!(socket.write(&frame).await.unwrap(), super::WRITE_CAP);
+        socket.write_all(&frame[super::WRITE_CAP..]).await.unwrap();
+        assert_eq!(socket.0, frame);
+    }
+
+    /// #469: a file frame big enough to fill the socket's buffers is still being written when Hermes speaks. The pipe
+    /// hands that frame to the webview at once, and `send_file` resolves only once the whole file has gone.
+    #[tokio::test]
+    async fn the_pipe_keeps_hearing_hermes_while_a_big_file_is_still_being_written() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+
+        let listener = small_buffered_listener();
+        let addr = listener.local_addr().unwrap();
+        let (speak, spoken) = tokio::sync::oneshot::channel::<()>();
+        let (read, reading) = tokio::sync::oneshot::channel::<()>();
+        let (got, received) = tokio::sync::oneshot::channel::<usize>();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            // Hermes takes frames this big; tungstenite's own default stops at 16 MiB.
+            let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default().max_frame_size(None).max_message_size(None);
+            let (mut sink, mut stream) = tokio_tungstenite::accept_async_with_config(sock, Some(config)).await.unwrap().split();
+            // Nothing is read until the test says so, so the client's write backs up.
+            spoken.await.unwrap();
+            sink.send(Message::text("{\"jsonrpc\":\"2.0\",\"method\":\"event\"}")).await.unwrap();
+            reading.await.unwrap();
+            while let Some(Ok(msg)) = stream.next().await {
+                if let Message::Text(text) = msg {
+                    let _ = got.send(text.len());
+                    break;
+                }
+            }
+            std::future::pending::<()>().await;
+        });
+
+        let path = std::env::temp_dir().join(format!("hermes-pipe-469-{}.bin", std::process::id()));
+        let size = 24 * 1024 * 1024;
+        std::fs::write(&path, vec![7u8; size]).unwrap();
+        let ws = super::open_pipe_socket(super::IntoClientRequest::into_client_request(format!("ws://{addr}/api/ws")).unwrap()).await.unwrap();
+        let (events, mut heard) = tokio::sync::mpsc::unbounded_channel();
+        let pipe = std::sync::Arc::new(super::run_pipe(ws, move |e| drop(events.send(e)), super::HeaderMap::new()));
+
+        let sending = {
+            let (pipe, path) = (pipe.clone(), path.to_string_lossy().into_owned());
+            tokio::spawn(async move { pipe.send_file("{\"f\":\"", &path, "\"}", 64 * 1024 * 1024).await?.wait().await })
+        };
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!sending.is_finished(), "send_file resolved before Hermes read the file");
+        speak.send(()).unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(5), heard.recv()).await.expect("nothing heard while the file was being written");
+        assert!(matches!(event, Some(super::PipeEvent::Frame { .. })), "{event:?}");
+        assert!(!sending.is_finished(), "send_file resolved before Hermes read the file");
+
+        read.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(20), sending).await.unwrap().unwrap().unwrap();
+        assert_eq!(received.await.unwrap(), "{\"f\":\"".len() + size.div_ceil(3) * 4 + "\"}".len());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Replacing the connection drops its pipe, and that stops a file frame still being written: the wait ends with
+    /// `Closed` instead of the old socket writing on (#469).
+    #[tokio::test]
+    async fn dropping_the_pipe_stops_a_file_frame_still_being_written() {
+        let listener = small_buffered_listener();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            // Accepted and never read, so the client's write backs up.
+            let _ws = tokio_tungstenite::accept_async(sock).await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let path = std::env::temp_dir().join(format!("hermes-pipe-469-drop-{}.bin", std::process::id()));
+        std::fs::write(&path, vec![7u8; 24 * 1024 * 1024]).unwrap();
+        let ws = super::open_pipe_socket(super::IntoClientRequest::into_client_request(format!("ws://{addr}/api/ws")).unwrap()).await.unwrap();
+        let pipe = super::run_pipe(ws, |_| {}, super::HeaderMap::new());
+
+        let written = pipe.send_file("{\"f\":\"", &path.to_string_lossy(), "\"}", 64 * 1024 * 1024).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        drop(pipe);
+        let ended = tokio::time::timeout(Duration::from_secs(5), written.wait()).await.expect("the write went on after the pipe was dropped");
+        assert!(matches!(ended, Err(TransportError::Closed)), "{ended:?}");
+        let _ = std::fs::remove_file(&path);
     }
 }

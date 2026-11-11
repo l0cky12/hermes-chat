@@ -535,7 +535,10 @@ async fn hermes_send_file(
         Some(conn) => conn.pipe.clone(),
         None => return Err(transport::TransportError::Closed.to_string()),
     };
-    pipe.send_file(&head, &path, &tail, max_bytes).await.map_err(|e| e.to_string())
+    let written = pipe.send_file(&head, &path, &tail, max_bytes).await.map_err(|e| e.to_string())?;
+    // Let go of the pipe while the frame is written: replacing the connection drops it, which stops the write.
+    drop(pipe);
+    written.wait().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

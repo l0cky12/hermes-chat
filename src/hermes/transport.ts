@@ -625,6 +625,9 @@ export class Hermes {
   private retryTimer?: ReturnType<typeof setTimeout>;
   private heartbeat?: ReturnType<typeof setInterval>;
   private lastHeard = 0;
+  /** File frames on this connection that Rust hasn't finished writing. While one is, Hermes's answers to the pings
+   * queued behind it can't come, so silence doesn't count against it (#469). A new connection starts a new set. */
+  private uploads = new Set<object>();
   private connectedAt = 0;
   private closing = false;
   /** Chats resumed on a connection that has since dropped: how many of their items the next resume replaces with the
@@ -1220,6 +1223,7 @@ export class Hermes {
     this.pipe = pipe;
     this.pipeProfile = profile;
     this.lastHeard = this.connectedAt = Date.now();
+    this.uploads = new Set();
     this.heartbeat = setInterval(() => this.beat(), PING_EVERY_MS);
     this.update({ status: "connected", closedReason: undefined, route: pipe.route, unsecure: isUnsecure(pipe.route) });
     this.kanbanWatch.start();
@@ -2756,15 +2760,15 @@ export class Hermes {
    * the owner retries or dismisses it, or reading the history back settles it. Nothing here ever sends it again.
    */
   async send(chatId: string, text: string, attachments: Attachment[] = [], skill?: SkillCall): Promise<Delivery> {
-    return (await this.deliver(chatId, text, attachments, undefined, skill)).delivery;
+    return (await this.sendTracked(chatId, text, attachments, skill)).delivery;
   }
 
   /**
    * Sends a message as `send` does, and also says which item in the chat it is, so a Voice conversation can follow the
    * reply to that message and no other (ADR 0111). `itemId` is missing only when the chat isn't in the list.
    */
-  sendTracked(chatId: string, text: string): Promise<{ delivery: Delivery; itemId?: string }> {
-    return this.deliver(chatId, text, []);
+  sendTracked(chatId: string, text: string, attachments: Attachment[] = [], skill?: SkillCall): Promise<{ delivery: Delivery; itemId?: string }> {
+    return this.deliver(chatId, text, attachments, undefined, skill);
   }
 
   /**
@@ -2966,6 +2970,9 @@ export class Hermes {
       title: c.items.length === 0 && c.runtimeId && !isBotChat(c) ? (text || attachments[0]?.name || c.title).slice(0, 48) : c.title,
       items: [...c.items, user],
     }));
+    // A chat's first message names it, and the chat goes in the saved list then, as Hermes has no row for it yet: a
+    // first message that fails comes back in its chat after a restart (#468).
+    if (chat.items.length === 0) this.saveList(profile, this.snapshot.chats);
     for (const fn of this.sendListeners) fn(profile, chatId);
     // Kept from the start, so a message on its way when the app closes isn't lost.
     const kept = this.saveOutbox(chatId);
@@ -4037,6 +4044,8 @@ export class Hermes {
 
   /** Pings Hermes, or drops the connection if it has gone quiet; any frame counts as an answer. */
   private beat() {
+    // A ping would only wait behind the file, and the wait is the upload, not Hermes going quiet.
+    if (this.uploads.size > 0) return;
     if (Date.now() - this.lastHeard > SILENCE_LIMIT_MS) return this.dropped("Hermes stopped answering.");
     this.request("gateway.ping", {}).catch(() => {});
   }
@@ -4405,12 +4414,15 @@ export class Hermes {
         return c && sameFields(c, next) ? c : next;
       });
     // Chats started or resumed on this connection stay even before Hermes stores them (a new chat has no row
-    // until its first prompt), and so do chats picked from a search and chats being archived or restored.
+    // until its first prompt), and so do chats picked from a search and chats being archived or restored. So does a
+    // chat holding a message sent from here that Hermes hasn't confirmed, or a queue: a new chat whose first message
+    // failed has no row either, and its message stays until the owner retries or dismisses it (ADR 0006, #468).
     const listedIds = new Set(listed.map((c) => c.id));
+    const holdsUnsent = (c: Chat) => c.items.some(isOutgoing) || !!this.snapshot.queues[c.id]?.items.length;
     // One Hermes now lists as a Bot Chat, such as an ordinary chat renamed to the title in another client, stays out
     // of the list from now on, and is marked so every Bot Chat rule applies to it (ADR 0066).
     const onThisConnection = this.snapshot.chats
-      .filter((c) => (c.runtimeId || this.revealed.has(c.id) || this.archiveWanted.has(profile, c.id)) && !listedIds.has(c.id))
+      .filter((c) => (c.runtimeId || this.revealed.has(c.id) || this.archiveWanted.has(profile, c.id) || holdsUnsent(c)) && !listedIds.has(c.id))
       .map((c) => (botChats.has(c.id) && !c.bot ? { ...c, bot: true, title: BOT_CHAT_TITLE } : c));
     const chats = [...onThisConnection, ...listed];
     const wasUnlisted = !this.hasListed();
@@ -4791,13 +4803,26 @@ export class Hermes {
     const sent = !file
       ? pipe.send(frame)
       : rest.length === 0 && tail !== undefined
-        ? pipe.sendFile(head, file.path, tail, file.maxBytes)
+        ? this.upload(() => pipe.sendFile(head, file.path, tail, file.maxBytes))
         : Promise.reject(new Error("the request has no single place for the file"));
     sent.catch((err) => {
       this.pending.get(id)?.reject(err instanceof Error ? err : new Error(String(err)));
       this.pending.delete(id);
     });
     return done;
+  }
+
+  /** A file frame going out: the silence check waits while it is written, and starts over once it has gone. */
+  private async upload(write: () => Promise<void>) {
+    const uploads = this.uploads;
+    const upload = {};
+    uploads.add(upload);
+    try {
+      await write();
+    } finally {
+      uploads.delete(upload);
+      if (uploads === this.uploads) this.lastHeard = Date.now();
+    }
   }
 
   /**
