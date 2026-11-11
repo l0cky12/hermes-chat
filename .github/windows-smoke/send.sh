@@ -2,9 +2,10 @@
 # The Windows smoke test (#308, ADR 0069). Starts the stand-in dashboard, the real Windows app with WebView2's remote debugging port on, and
 # msedgedriver attached to that port (Microsoft's "attach" approach: the app sets its own WebView2 user data folder, so
 # msedgedriver's "launch" approach through tauri-driver waited in vain for DevToolsActivePort in a folder of its own).
-# Then drives the app through wd.mjs: Welcome -> Setup -> signed in -> open "Nightly backup failing" -> type -> Enter.
-# Collects evidence at every step into $HV_RUN/evidence and never stops at the first failure, so the evidence is complete;
-# the verdict at the end fails the job when the message didn't show, didn't reach the server, or the page threw.
+# Then drives the app through wd.mjs: Welcome -> Setup -> signed in -> open "Nightly backup failing" -> type -> Enter,
+# then opens a hostile page in the Preview. Collects evidence at every step into $HV_RUN/evidence and never stops at the
+# first failure, so the evidence is complete; the verdict at the end fails the job when the message didn't show, didn't
+# reach the server, the page threw, or the Preview's page reached an app command.
 set -uo pipefail
 REPO=$(git rev-parse --show-toplevel)
 S=$REPO/.claude/skills/verify-hermes-chat/scripts
@@ -152,6 +153,30 @@ wd fill 'textarea[data-composer]' -- "And the next one?" || true
 wd click button.send || true
 if wd wait .msg.user "And the next one?" 15000; then echo "BUTTON_MESSAGE_SHOWN=yes" >>"$EV/result.txt"; else echo "BUTTON_MESSAGE_SHOWN=no" >>"$EV/result.txt"; fi
 evidence 09-after-button-send
+# A page in the Preview can't call the app's commands (#466, ADR 0138). WebView2 gives every frame Tauri's IPC, so the
+# probe page tries, moves its frame to the app's own host on its port, and tries again with its own scripts there.
+PROBE_PORT=47992
+node "$HERE/ipc-probe-server.mjs" $PROBE_PORT "$EV/probe.log" >"$EV/probe-server.log" 2>&1 &
+PROBE_PID=$!
+trap 'kill $PROBE_PID 2>/dev/null; cleanup' EXIT
+tray() { wd eval 'return window.__TAURI_INTERNALS__.invoke("tray_status").then((s) => "closeToTray=" + s.closeToTray)' | tail -1; }
+echo "TRAY_BEFORE $(tray)" >>"$EV/probe.log"
+wd click button "Open the side panel" || true
+for mode in fetch pm; do
+  wd fill input Address -- "http://localhost:$PROBE_PORT/p?mode=$mode&hop=tauri.localhost"
+  wd press Enter
+  # A localhost address opens on the Hermes server; the stand-in has no SSH target, so open it here.
+  wd click button "Open on this computer instead" || true
+  for i in $(seq 1 60); do grep -q "mode=$mode .*where=before-hop .*tray_" "$EV/probe.log" 2>/dev/null && break; sleep 0.5; done
+  sleep 12
+  evidence "10-preview-$mode"
+done
+echo "TRAY_AFTER $(tray)" >>"$EV/probe.log"
+echo "=== probe.log"; cat "$EV/probe.log"
+if ! grep -q "where=before-hop .* env: internals=" "$EV/probe.log"; then echo "PREVIEW_PROBE_RAN=no" >>"$EV/result.txt"
+elif grep -qE ": OK|data not found|closeToTray=true" "$EV/probe.log"; then echo "PREVIEW_PAGE_REFUSED=no" >>"$EV/result.txt"
+else echo "PREVIEW_PAGE_REFUSED=yes" >>"$EV/result.txt"; fi
+
 echo "=== result"; cat "$EV/result.txt"
 echo "=== errors after send"; cat "$EV/07-after-send-errors.json"
 echo "=== app stderr"; cat "$EV/app-stderr.log"
