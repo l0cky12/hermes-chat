@@ -407,6 +407,7 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 
 .transcript { flex: 1; overflow-y: auto; }
 .transcript-inner { max-width: var(--chat-width); margin: 0 auto; padding: 28px 32px 56px; display: flex; flex-direction: column; gap: 22px; }
+.transcript-chunk { display: flex; flex-direction: column; gap: 22px; }
 .imported-note {
   display: flex; align-items: center; gap: 6px; font-size: calc(12rem / 14); color: var(--faint); justify-content: center; padding-bottom: 6px;
 }

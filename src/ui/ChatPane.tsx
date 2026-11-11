@@ -20,6 +20,7 @@ import type { SubagentId } from "../hermes/subagents";
 import { SideQuestionPair } from "./SideQuestions";
 import { Markdown } from "./Markdown";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { chunkBlocks } from "./transcriptChunks";
 import { SourceIcon, Spinner, StoredTime, composing, escapeRe, highlight } from "./bits";
 import { caretAfter, editStep, inputKind, type EditStep } from "./editKeys";
 import type { EditKind } from "../hermes/editHistory";
@@ -103,6 +104,32 @@ function mayMatch(block: Block, finds: RegExp) {
 // A group is rebuilt on every render, so it counts as unchanged when it holds the same tool calls.
 const sameBlock = (a: Block, b: Block) =>
   a === b || (a.kind === "tools" && b.kind === "tools" && a.tools.length === b.tools.length && a.tools.every((t, i) => t === b.tools[i]));
+// A side question's block is rebuilt too, so it counts as unchanged when it holds the same question.
+const sameChunkBlock = (a: Block | SideBlock, b: Block | SideBlock) =>
+  a.kind === "side" ? b.kind === "side" && a.question === b.question : b.kind !== "side" && sameBlock(a, b);
+
+/** Each turn's owner's message (`ofUser`), the replies Regenerate is offered on, and where each turn's versions show. */
+type Turns = { ofUser: Map<string, number>; regenerable: Set<string>; anchor: Map<string, number> };
+
+/** `next`, or the value returned before when `same` says it holds the same. */
+function useStable<T>(next: T, same: (a: T, b: T) => boolean): T {
+  const kept = useRef(next);
+  if (kept.current !== next && !same(kept.current, next)) kept.current = next;
+  return kept.current;
+}
+
+const sameMap = <K, V>(a: Map<K, V>, b: Map<K, V>, same: (x: V, y: V) => boolean = Object.is) =>
+  a.size === b.size && [...a].every(([k, v]) => b.has(k) && same(v, b.get(k)!));
+
+const sameTurns = (a: Turns, b: Turns) =>
+  sameMap(a.ofUser, b.ofUser) && sameMap(a.anchor, b.anchor) && a.regenerable.size === b.regenerable.size && [...a.regenerable].every((id) => b.regenerable.has(id));
+
+const sameVersions = (a?: Map<number, Variant[]>, b?: Map<number, Variant[]>) =>
+  !!a &&
+  !!b &&
+  sameMap(a, b, (x, y) =>
+    x.length === y.length && x.every((v, i) => v.chatId === y[i].chatId && v.kind === y[i].kind && v.model === y[i].model && v.at === y[i].at),
+  );
 
 /**
  * Where the find bar opens when a chat is opened from a search: on `query`, at the first match in the message
@@ -469,8 +496,13 @@ export function ChatPane({
   const pickRef = useRef(variants?.onPick);
   pickRef.current = variants?.onPick;
   const onPickVariant = useCallback((chatId: string, turn: number) => pickRef.current?.(chatId, turn), []);
+  // And dismissing a side question.
+  const dismissSideRef = useRef(onDismissSideQuestion);
+  dismissSideRef.current = onDismissSideQuestion;
+  const dismissSide = useCallback((id: string) => dismissSideRef.current?.(id), []);
   // Each turn's owner's message, and its last reply with text: where Regenerate and the versions of the turn go.
-  const turns = useMemo(() => {
+  // The same object while its content is, so a streamed delta doesn't re-render every chunk of the transcript.
+  const turns = useStable(useMemo((): Turns => {
     const ofUser = turnsOf(chat.items);
     const lastReply = new Map<number, string>();
     let turn = -1;
@@ -481,7 +513,9 @@ export function ChatPane({
     const anchor = new Map<string, number>();
     for (const [id, t] of ofUser) anchor.set(lastReply.get(t) ?? id, t);
     return { ofUser, regenerable: new Set(lastReply.values()), anchor };
-  }, [chat.items]);
+  }, [chat.items]), sameTurns);
+  // App builds the versions again on every streamed delta.
+  const byTurn = useStable(variants?.byTurn, sameVersions);
   // A failed message can be sent again once Hermes is connected and the chat has no reply running.
   const canRetry = status === "connected" && !chat.loading && !chat.running;
   const findRef = useRef<HTMLInputElement>(null);
@@ -635,10 +669,15 @@ export function ChatPane({
 
   // Rebuilt only when the chat changes, so a reply streaming in the other pane costs this one little.
   const blocks = useMemo(() => toBlocks(chat.items, chat.sideQuestions), [chat.items, chat.sideQuestions]);
+  const chunks = useMemo(() => chunkBlocks(blocks), [blocks]);
   // Cards ignore clicks for a moment after the transcript changes, since it may have moved them under the pointer.
   const movedAt = useMemo(() => performance.now(), [chat.items, chat.sideQuestions]);
   const last = chat.items[chat.items.length - 1];
   const waiting = chat.items.some(isWaiting);
+  // The streaming block is the chat's last item, so it is in the last chunk that holds more than side questions.
+  let liveChunk = chunks.length - 1;
+  while (liveChunk > 0 && chunks[liveChunk].every((b) => b.kind === "side")) liveChunk--;
+  const live = chat.running && chunks[liveChunk]?.some((b) => b === last) ? last.id : undefined;
   // Enter queues while a reply runs, while Hermes isn't connected, and while messages are queued already, so a new one
   // never jumps the queue. The composer's hint says which Enter does.
   const queueing = !compare && !!queueApi && (!!chat.running || status !== "connected" || !!queue?.items.length);
@@ -782,32 +821,29 @@ export function ChatPane({
               </ul>
             </div>
           )}
-          {blocks.map((b) => (
-            <ErrorBoundary key={b.id} fallback={(error) => <UndrawnMessage id={b.id} error={error} />}>
-              {b.kind === "side" ? (
-                <SideQuestionPair question={b.question} onDismiss={onDismissSideQuestion} />
-              ) : (
-                <BlockView
-                  block={b}
-                  live={!!chat.running && b === last}
-                  query={finds && mayMatch(b, finds) ? q : ""}
-                  offline={status !== "connected" || !!chat.loading}
-                  movedAt={b.kind === "approval" ? movedAt : 0}
-                  onAnswer={answer}
-                  listen={b.kind === "assistant" ? listen : undefined}
-                  canRetry={b.kind === "user" && !!b.outgoing && canRetry}
-                  onOutgoing={onOutgoing}
-                  onBranch={branch && (b.kind === "user" || b.kind === "assistant") ? onBranch : undefined}
-                  branchBlocked={branch && (b.kind === "user" || b.kind === "assistant") ? branch.blocked : undefined}
-                  onReplay={replay && ((b.kind === "user" && turns.ofUser.has(b.id)) || (b.kind === "assistant" && turns.regenerable.has(b.id))) ? onReplay : undefined}
-                  replayBlocked={replay && (b.kind === "user" || b.kind === "assistant") ? replay.blocked : undefined}
-                  versions={turns.anchor.has(b.id) ? variants?.byTurn.get(turns.anchor.get(b.id)!) : undefined}
-                  chatId={chat.id}
-                  turn={turns.anchor.get(b.id)}
-                  onPickVariant={onPickVariant}
-                />
-              )}
-            </ErrorBoundary>
+          {chunks.map((c, i) => (
+            <TranscriptChunk
+              key={c[0].id}
+              blocks={c}
+              live={i === liveChunk ? live : undefined}
+              q={q}
+              finds={finds}
+              offline={status !== "connected" || !!chat.loading}
+              movedAt={waiting && c.some((b) => b.kind === "approval" && isWaiting(b)) ? movedAt : 0}
+              onAnswer={answer}
+              listen={listen}
+              canRetry={canRetry}
+              onOutgoing={onOutgoing}
+              onBranch={branch && onBranch}
+              branchBlocked={branch?.blocked}
+              onReplay={replay && onReplay}
+              replayBlocked={replay?.blocked}
+              turns={turns}
+              byTurn={byTurn}
+              chatId={chat.id}
+              onPickVariant={onPickVariant}
+              onDismissSideQuestion={onDismissSideQuestion && dismissSide}
+            />
           ))}
           {/* A reply waiting on the owner isn't thinking, and streamed thinking shows its own row. */}
           {chat.running && last?.kind !== "assistant" && last?.kind !== "thinking" && !(last && isWaiting(last)) && (
@@ -1026,6 +1062,112 @@ const BlockView = memo(
     a.chatId === b.chatId &&
     a.turn === b.turn &&
     a.onPickVariant === b.onPickVariant,
+);
+
+/**
+ * A run of the transcript's blocks (`chunkBlocks`). Memoized, so a streamed delta re-renders only the chunk that holds
+ * the block it changes. `live`: the id of the block still streaming, for the chunk that holds it. `movedAt` is for a
+ * waiting Approval card, and 0 for a chunk without one.
+ */
+const TranscriptChunk = memo(
+  function TranscriptChunk({
+    blocks,
+    live,
+    q,
+    finds,
+    offline,
+    movedAt,
+    onAnswer,
+    listen,
+    canRetry,
+    onOutgoing,
+    onBranch,
+    branchBlocked,
+    onReplay,
+    replayBlocked,
+    turns,
+    byTurn,
+    chatId,
+    onPickVariant,
+    onDismissSideQuestion,
+  }: {
+    blocks: (Block | SideBlock)[];
+    live?: string;
+    q: string;
+    finds?: RegExp;
+    offline: boolean;
+    movedAt: number;
+    onAnswer: (approvalId: string, choice: ApprovalChoice, confirmed?: boolean) => void;
+    listen?: Listen;
+    canRetry: boolean;
+    onOutgoing: (itemId: string, action: OutgoingAction) => void;
+    onBranch?: (itemId: string) => void;
+    branchBlocked?: string;
+    onReplay?: (itemId: string, kind: ReplayKind) => void;
+    replayBlocked?: string;
+    turns: Turns;
+    byTurn?: Map<number, Variant[]>;
+    chatId: string;
+    onPickVariant: (chatId: string, turn: number) => void;
+    onDismissSideQuestion?: (id: string) => void;
+  }) {
+    return (
+      <div className="transcript-chunk">
+        {blocks.map((b) => {
+          const message = b.kind === "user" || b.kind === "assistant";
+          return (
+            <ErrorBoundary key={b.id} fallback={(error) => <UndrawnMessage id={b.id} error={error} />}>
+              {b.kind === "side" ? (
+                <SideQuestionPair question={b.question} onDismiss={onDismissSideQuestion} />
+              ) : (
+                <BlockView
+                  block={b}
+                  live={b.id === live}
+                  query={finds && mayMatch(b, finds) ? q : ""}
+                  offline={offline}
+                  movedAt={b.kind === "approval" && isWaiting(b) ? movedAt : 0}
+                  onAnswer={onAnswer}
+                  listen={b.kind === "assistant" ? listen : undefined}
+                  canRetry={b.kind === "user" && !!b.outgoing && canRetry}
+                  onOutgoing={onOutgoing}
+                  onBranch={message ? onBranch : undefined}
+                  branchBlocked={onBranch && message ? branchBlocked : undefined}
+                  onReplay={(b.kind === "user" && turns.ofUser.has(b.id)) || (b.kind === "assistant" && turns.regenerable.has(b.id)) ? onReplay : undefined}
+                  replayBlocked={onReplay && message ? replayBlocked : undefined}
+                  versions={turns.anchor.has(b.id) ? byTurn?.get(turns.anchor.get(b.id)!) : undefined}
+                  chatId={chatId}
+                  turn={turns.anchor.get(b.id)}
+                  onPickVariant={onPickVariant}
+                />
+              )}
+            </ErrorBoundary>
+          );
+        })}
+      </div>
+    );
+  },
+  (a, b) =>
+    a.blocks.length === b.blocks.length &&
+    a.blocks.every((x, i) => sameChunkBlock(x, b.blocks[i])) &&
+    a.live === b.live &&
+    a.q === b.q &&
+    a.finds === b.finds &&
+    a.offline === b.offline &&
+    a.movedAt === b.movedAt &&
+    a.onAnswer === b.onAnswer &&
+    a.listen?.speaker === b.listen?.speaker &&
+    a.listen?.blocked === b.listen?.blocked &&
+    a.canRetry === b.canRetry &&
+    a.onOutgoing === b.onOutgoing &&
+    a.onBranch === b.onBranch &&
+    a.branchBlocked === b.branchBlocked &&
+    a.onReplay === b.onReplay &&
+    a.replayBlocked === b.replayBlocked &&
+    a.turns === b.turns &&
+    a.byTurn === b.byTurn &&
+    a.chatId === b.chatId &&
+    a.onPickVariant === b.onPickVariant &&
+    a.onDismissSideQuestion === b.onDismissSideQuestion,
 );
 
 /** A block that threw while it was drawn, in its place, so the rest of the chat keeps working (ADR 0137). */
