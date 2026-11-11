@@ -1666,7 +1666,7 @@ function Composer({
   const attachCopied = () => busy(async () => {
     try {
       const paths = await invoke<string[]>("attach_copied_files");
-      if (paths.length) await add(paths, () => open.current);
+      if (paths.length) await add(paths);
       else setRefused(["Only files on this computer can be attached."]);
     } catch (e) {
       setRefused([`Couldn't attach the files: ${errorText(e)}`]);
