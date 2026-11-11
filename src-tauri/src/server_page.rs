@@ -1454,7 +1454,8 @@ while True:
     #[tokio::test]
     async fn a_port_nothing_listens_on_says_so_and_leaves_nothing_running() {
         let fake = Fake::new("closed-port", "ok");
-        let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        let closed = crate::test_common::refusing();
+        let port = closed.addr.port();
         let pages = Arc::new(ServerPages::default());
         let e = open_page(&pages, &fake.program, "hermes", &format!("http://127.0.0.1:{port}/"), |_| {}).await.unwrap_err();
         match &e {
@@ -1754,8 +1755,8 @@ while True:
         let e = open_page(&pages, &fake.program, "hermes", &format!("http://localhost:{port}/"), |_| {}).await.unwrap_err();
         assert!(matches!(e, ServerPageError::PortClosed { .. }), "{e:?}");
         // A closed https port is still found out.
-        let closed = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
-        let e = open_page(&pages, &fake.program, "hermes", &format!("https://localhost:{closed}/"), |_| {}).await.unwrap_err();
+        let closed = crate::test_common::refusing();
+        let e = open_page(&pages, &fake.program, "hermes", &format!("https://localhost:{}/", closed.addr.port()), |_| {}).await.unwrap_err();
         assert!(matches!(e, ServerPageError::PortClosed { .. }), "{e:?}");
     }
 
