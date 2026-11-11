@@ -30,7 +30,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
@@ -1103,27 +1103,112 @@ pub enum PipeEvent {
     Closed { reason: String },
 }
 
+/// A frame for the pipe task to write, and who hears once it has been written.
+struct Outgoing {
+    text: String,
+    written: Option<oneshot::Sender<Result<(), String>>>,
+}
+
 /// An open `/api/ws` connection. Dropping it closes the socket.
 pub struct Pipe {
-    outgoing: mpsc::UnboundedSender<String>,
+    outgoing: mpsc::UnboundedSender<Outgoing>,
     task: JoinHandle<()>,
 }
 
 impl Pipe {
     pub fn send(&self, text: String) -> Result<(), TransportError> {
-        self.outgoing.send(text).map_err(|_| TransportError::Closed)
+        self.outgoing.send(Outgoing { text, written: None }).map_err(|_| TransportError::Closed)
     }
 
     /// Send one frame: `head`, the file at `path` as base64, then `tail`. Refuses a file over
-    /// `max_bytes` without sending anything; the size is checked again after reading, in case it grew.
+    /// `max_bytes` without sending anything; the size is checked again after reading, in case it grew. Resolves once
+    /// the frame has been written to the socket, not when it is queued, so the webview can tell a long upload from a
+    /// silent Hermes (#469).
     pub async fn send_file(&self, head: &str, path: &str, tail: &str, max_bytes: u64) -> Result<(), TransportError> {
         let bytes = read_capped(path, max_bytes).await?;
-        let mut frame = String::with_capacity(head.len() + bytes.len().div_ceil(3) * 4 + tail.len());
-        frame.push_str(head);
-        base64::engine::general_purpose::STANDARD.encode_string(&bytes, &mut frame);
-        frame.push_str(tail);
-        self.send(frame)
+        let mut text = String::with_capacity(head.len() + bytes.len().div_ceil(3) * 4 + tail.len());
+        text.push_str(head);
+        base64::engine::general_purpose::STANDARD.encode_string(&bytes, &mut text);
+        drop(bytes);
+        text.push_str(tail);
+        let (written, sent) = oneshot::channel();
+        self.outgoing.send(Outgoing { text, written: Some(written) }).map_err(|_| TransportError::Closed)?;
+        match sent.await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(TransportError::WebSocket(e)),
+            Err(_) => Err(TransportError::Closed),
+        }
     }
+}
+
+/// What the pipe does with one thing read from the socket: frames go to `on_event`. `Some(reason)`: the socket is done.
+fn heard(msg: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>, on_event: &impl Fn(PipeEvent), hide: &HeaderMap) -> Option<String> {
+    match msg {
+        // The server writes newline-delimited JSON-RPC; one WS message may carry several.
+        Some(Ok(Message::Text(text))) => {
+            for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                on_event(PipeEvent::Frame { text: line.to_owned() });
+            }
+            None
+        }
+        Some(Ok(Message::Close(frame))) => Some(frame.map_or("closed by the server".into(), |f| {
+            // A gateway in front of the dashboard may close with the header values it turned down.
+            let why = if repeats_header(&f.reason, hide) { HIDDEN } else { f.reason.as_str() };
+            format!("closed by the server ({} {why})", f.code)
+        })),
+        Some(Ok(_)) => None,
+        Some(Err(e)) => Some(e.to_string()),
+        None => Some("closed by the server".into()),
+    }
+}
+
+/// Runs an open `/api/ws` socket: writes what `Pipe` queues, one frame at a time, and hands every frame Hermes sends
+/// to `on_event`, also while a big frame is still being written (an attachment can take minutes on a slow uplink,
+/// #469). `hide`: what a close reason mustn't repeat.
+fn run_pipe<S>(ws: tokio_tungstenite::WebSocketStream<S>, on_event: impl Fn(PipeEvent) + Send + 'static, hide: HeaderMap) -> Pipe
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (outgoing, mut to_server) = mpsc::unbounded_channel::<Outgoing>();
+    let task = tokio::spawn(async move {
+        let (mut sink, mut stream) = ws.split();
+        let reason = 'socket: loop {
+            tokio::select! {
+                out = to_server.recv() => match out {
+                    Some(Outgoing { text, written }) => {
+                        let mut write = std::pin::pin!(sink.send(Message::text(text)));
+                        let wrote = loop {
+                            tokio::select! {
+                                wrote = &mut write => break wrote.map_err(|e| e.to_string()),
+                                msg = stream.next() => if let Some(reason) = heard(msg, &on_event, &hide) {
+                                    if let Some(written) = written {
+                                        let _ = written.send(Err(reason.clone()));
+                                    }
+                                    break 'socket reason;
+                                },
+                            }
+                        };
+                        let failed = wrote.as_ref().err().cloned();
+                        if let Some(written) = written {
+                            let _ = written.send(wrote);
+                        }
+                        if let Some(e) = failed {
+                            break e;
+                        }
+                    }
+                    None => {
+                        let _ = sink.close().await;
+                        break "closed by the app".into();
+                    }
+                },
+                msg = stream.next() => if let Some(reason) = heard(msg, &on_event, &hide) {
+                    break reason;
+                },
+            }
+        };
+        on_event(PipeEvent::Closed { reason });
+    });
+    Pipe { outgoing, task }
 }
 
 impl Drop for Pipe {
@@ -1255,47 +1340,7 @@ impl Dashboard {
             .run(Step::WebSocket, within(limits.map(|l| l.socket), connecting, |s| TransportError::WebSocket(format!("it didn't open within {s}s."))))
             .await?;
 
-        let (outgoing, mut to_server) = mpsc::unbounded_channel::<String>();
-        let headers = self.hide.clone();
-        let task = tokio::spawn(async move {
-            let (mut sink, mut stream) = ws.split();
-            let reason = loop {
-                tokio::select! {
-                    out = to_server.recv() => match out {
-                        Some(text) => {
-                            if let Err(e) = sink.send(Message::text(text)).await {
-                                break e.to_string();
-                            }
-                        }
-                        None => {
-                            let _ = sink.close().await;
-                            break "closed by the app".into();
-                        }
-                    },
-                    msg = stream.next() => match msg {
-                        // The server writes newline-delimited JSON-RPC; one WS message may carry several.
-                        Some(Ok(Message::Text(text))) => {
-                            for line in text.lines().filter(|l| !l.trim().is_empty()) {
-                                on_event(PipeEvent::Frame { text: line.to_owned() });
-                            }
-                        }
-                        Some(Ok(Message::Close(frame))) => {
-                            break frame.map_or("closed by the server".into(), |f| {
-                                // A gateway in front of the dashboard may close with the header values it turned down.
-                                let why = if repeats_header(&f.reason, &headers) { HIDDEN } else { f.reason.as_str() };
-                                format!("closed by the server ({} {why})", f.code)
-                            });
-                        }
-                        Some(Ok(_)) => {}
-                        Some(Err(e)) => break e.to_string(),
-                        None => break "closed by the server".into(),
-                    },
-                }
-            };
-            on_event(PipeEvent::Closed { reason });
-        });
-
-        Ok(Pipe { outgoing, task })
+        Ok(run_pipe(ws, on_event, self.hide.clone()))
     }
 
     /// A single-use ticket for `/api/ws`.
@@ -3197,5 +3242,60 @@ mod tests {
         let err = text_unless_stalled(resp, limit).await.unwrap_err();
         assert!(matches!(err, TransportError::Stalled(_)), "{err:?}");
         assert!(started.elapsed() >= limit + Duration::from_millis(50), "{:?}", started.elapsed());
+    }
+
+    /// #469: a file frame big enough to fill the socket's buffers is still being written when Hermes speaks. The pipe
+    /// hands that frame to the webview at once, and `send_file` resolves only once the whole file has gone.
+    #[tokio::test]
+    async fn the_pipe_keeps_hearing_hermes_while_a_big_file_is_still_being_written() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (speak, spoken) = tokio::sync::oneshot::channel::<()>();
+        let (read, reading) = tokio::sync::oneshot::channel::<()>();
+        let (got, received) = tokio::sync::oneshot::channel::<usize>();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            // Hermes takes frames this big; tungstenite's own default stops at 16 MiB.
+            let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default().max_frame_size(None).max_message_size(None);
+            let (mut sink, mut stream) = tokio_tungstenite::accept_async_with_config(sock, Some(config)).await.unwrap().split();
+            // Nothing is read until the test says so, so the client's write backs up.
+            spoken.await.unwrap();
+            sink.send(Message::text("{\"jsonrpc\":\"2.0\",\"method\":\"event\"}")).await.unwrap();
+            reading.await.unwrap();
+            while let Some(Ok(msg)) = stream.next().await {
+                if let Message::Text(text) = msg {
+                    let _ = got.send(text.len());
+                    break;
+                }
+            }
+            std::future::pending::<()>().await;
+        });
+
+        let path = std::env::temp_dir().join(format!("hermes-pipe-469-{}.bin", std::process::id()));
+        let size = 24 * 1024 * 1024;
+        std::fs::write(&path, vec![7u8; size]).unwrap();
+        let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let (ws, _) = tokio_tungstenite::client_async(format!("ws://{addr}/api/ws"), tcp).await.unwrap();
+        let (events, mut heard) = tokio::sync::mpsc::unbounded_channel();
+        let pipe = std::sync::Arc::new(super::run_pipe(ws, move |e| drop(events.send(e)), super::HeaderMap::new()));
+
+        let sending = {
+            let (pipe, path) = (pipe.clone(), path.to_string_lossy().into_owned());
+            tokio::spawn(async move { pipe.send_file("{\"f\":\"", &path, "\"}", 64 * 1024 * 1024).await })
+        };
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!sending.is_finished(), "send_file resolved before Hermes read the file");
+        speak.send(()).unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(5), heard.recv()).await.expect("nothing heard while the file was being written");
+        assert!(matches!(event, Some(super::PipeEvent::Frame { .. })), "{event:?}");
+        assert!(!sending.is_finished(), "send_file resolved before Hermes read the file");
+
+        read.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(20), sending).await.unwrap().unwrap().unwrap();
+        assert_eq!(received.await.unwrap(), "{\"f\":\"".len() + size.div_ceil(3) * 4 + "\"}".len());
+        let _ = std::fs::remove_file(&path);
     }
 }

@@ -610,6 +610,9 @@ export class Hermes {
   private retryTimer?: ReturnType<typeof setTimeout>;
   private heartbeat?: ReturnType<typeof setInterval>;
   private lastHeard = 0;
+  /** File frames on this connection that Rust hasn't finished writing. While one is, Hermes's answers to the pings
+   * queued behind it can't come, so silence doesn't count against it (#469). A new connection starts a new set. */
+  private uploads = new Set<object>();
   private connectedAt = 0;
   private closing = false;
   /** Chats resumed on a connection that has since dropped: how many of their items the next resume replaces with the
@@ -1205,6 +1208,7 @@ export class Hermes {
     this.pipe = pipe;
     this.pipeProfile = profile;
     this.lastHeard = this.connectedAt = Date.now();
+    this.uploads = new Set();
     this.heartbeat = setInterval(() => this.beat(), PING_EVERY_MS);
     this.update({ status: "connected", closedReason: undefined, route: pipe.route, unsecure: isUnsecure(pipe.route) });
     this.kanbanWatch.start();
@@ -4016,6 +4020,8 @@ export class Hermes {
 
   /** Pings Hermes, or drops the connection if it has gone quiet; any frame counts as an answer. */
   private beat() {
+    // A ping would only wait behind the file, and the wait is the upload, not Hermes going quiet.
+    if (this.uploads.size > 0) return;
     if (Date.now() - this.lastHeard > SILENCE_LIMIT_MS) return this.dropped("Hermes stopped answering.");
     this.request("gateway.ping", {}).catch(() => {});
   }
@@ -4769,13 +4775,26 @@ export class Hermes {
     const sent = !file
       ? pipe.send(frame)
       : rest.length === 0 && tail !== undefined
-        ? pipe.sendFile(head, file.path, tail, file.maxBytes)
+        ? this.upload(() => pipe.sendFile(head, file.path, tail, file.maxBytes))
         : Promise.reject(new Error("the request has no single place for the file"));
     sent.catch((err) => {
       this.pending.get(id)?.reject(err instanceof Error ? err : new Error(String(err)));
       this.pending.delete(id);
     });
     return done;
+  }
+
+  /** A file frame going out: the silence check waits while it is written, and starts over once it has gone. */
+  private async upload(write: () => Promise<void>) {
+    const uploads = this.uploads;
+    const upload = {};
+    uploads.add(upload);
+    try {
+      await write();
+    } finally {
+      uploads.delete(upload);
+      if (uploads === this.uploads) this.lastHeard = Date.now();
+    }
   }
 
   /**
