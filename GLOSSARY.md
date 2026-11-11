@@ -172,7 +172,7 @@ A local file the owner sends with a message: an image Hermes looks at, or any ot
 _Avoid_: upload, file (when the attachment is meant)
 
 **Screenshot**:
-An image of a region or window of the owner's screen, taken from the composer by a shortcut or the camera button, and staged as an Attachment. It stays on this computer until the message is sent. Composer captures are deleted when removed or left behind; a failed or uncertain message keeps its Screenshot for Retry until confirmed, reconciled or dismissed.
+An image of a region or window of the owner's screen, taken from the composer by a shortcut or the camera button, and staged as an Attachment. It stays on this computer until the message is sent. A capture staged in a composer is deleted when the owner removes it or its chat is deleted or archived, and is staged in one chat at a time; a failed or uncertain message keeps its Screenshot for Retry until confirmed, reconciled or dismissed.
 _Avoid_: screen capture, snapshot
 
 **Annotation** (proposed, not built):
