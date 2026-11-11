@@ -55,22 +55,23 @@ impl Steps {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lock::Locked;
     use std::sync::{Arc, Mutex};
 
     #[tokio::test]
     async fn run_reports_the_step_before_it_runs() {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let log = seen.clone();
-        let steps = Steps::reporting(move |s| log.lock().unwrap().push(format!("start {:?}", s.step)));
+        let steps = Steps::reporting(move |s| log.locked().push(format!("start {:?}", s.step)));
         let inner = seen.clone();
         let got = steps
             .run(Step::Status, async move {
-                inner.lock().unwrap().push("ran".into());
+                inner.locked().push("ran".into());
                 7
             })
             .await;
         assert_eq!(got, 7);
-        assert_eq!(*seen.lock().unwrap(), ["start Status", "ran"]);
+        assert_eq!(*seen.locked(), ["start Status", "ran"]);
         assert_eq!(Steps::default().run(Step::Ticket, async { 1 }).await, 1);
     }
 

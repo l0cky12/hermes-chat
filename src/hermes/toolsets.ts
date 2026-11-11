@@ -31,6 +31,7 @@
 // and reported as saved only once a read afterwards shows it.
 
 import { RestError, type ToolsetGuards } from "./pipe";
+import { errorText } from "./values";
 
 export type { ToolsetGuards };
 
@@ -144,7 +145,7 @@ export type Failure = { status?: number; reason: string; signedOut?: boolean; no
 
 /** Reads a failed call: a dashboard answer (`RestError`), a call the relay refused to send, or neither. */
 export function failureOf(e: unknown): Failure {
-  const message = e instanceof Error ? e.message : String(e);
+  const message = errorText(e);
   if (!(e instanceof RestError)) return /^Hermes Chat doesn't relay /.test(message) ? { reason: message, notRelayed: true } : { reason: message };
   if (e.status === 401) return { status: 401, reason: message, signedOut: true };
   let reason = e.detail;

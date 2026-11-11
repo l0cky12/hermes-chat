@@ -13,7 +13,6 @@ import { setWindowHidden } from "./windowState";
 import { FakeLocalStt } from "../hermes/fakeLocalStt";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 const RATE = 48_000;
 const BLOCK = 4096;

@@ -10,12 +10,12 @@ import { SourceIcon, Spinner, composing, highlight, useReturnFocus } from "./bit
 import { useLocale } from "../i18n/locale";
 import { isTextEdit } from "./editKeys";
 import { trapTab } from "./modal";
+import { errorText } from "../hermes/values";
 
 /** Typing this long without a pause sends the search. */
 const PAUSE_MS = 200;
 
 const SOURCE_NAME: Record<Source, string> = { ...SOURCE_LABEL, cli: "Command line", desktop: "Hermes desktop app", import: "Imported transcripts", other: "Other platforms" };
-const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** Each part of a filter but its words, as the owner reads it, with what clears it. */
 function filterParts(f: ChatFilter, tags: ScopeTags): { key: string; label: string; clear: ChatFilter }[] {
@@ -31,7 +31,7 @@ function filterParts(f: ChatFilter, tags: ScopeTags): { key: string; label: stri
 }
 
 /** Why the results may not be every chat that matches, or why none can. */
-function outcomeNotes(o: FilterOutcome, f: ChatFilter): string[] {
+function outcomeNotes(o: FilterOutcome): string[] {
   return [
     o.missingTags.length > 0 && "This filter names a tag that was deleted, so no chat can match it. Remove that tag to search again.",
     o.capped === "search" &&
@@ -114,6 +114,7 @@ export function SearchPalette({
       current = false;
       clearTimeout(timer);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [key, tagDep]);
   // A bulk edit is for the results it previewed: a new filter, or a change to the tags it filters by, ends it,
   // applying nothing. Either searches again, so a failed search has ended it too.
@@ -230,7 +231,7 @@ export function SearchPalette({
             {note}
           </div>
         )}
-        {shownOutcome && !error && outcomeNotes(shownOutcome, tidy).map((n) => (
+        {shownOutcome && !error && outcomeNotes(shownOutcome).map((n) => (
           <div key={n} className="palette-note" role="note">
             {n}
           </div>

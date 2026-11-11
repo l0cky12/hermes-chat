@@ -26,6 +26,7 @@
 // on disk) until sign-out or quit, so the owner can put it back (ADR 0040).
 import { answered } from "./persona";
 import { RestError } from "./pipe";
+import { errorText, isObj } from "./values";
 
 /** Which of the profile's memory files an entry is in, by the name `learning.*` gives it. */
 export type MemorySource = "memory" | "profile";
@@ -160,8 +161,6 @@ const READ_TRIES = 3;
 /** How many replaced texts are kept per profile and file. */
 const KEEP_REPLACED = 10;
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 /** A JSON-RPC error answer: Hermes got the request and answered it. Anything else may not have reached it. */
 const rpcCode = (e: unknown): number | undefined => (isObj(e) && typeof e.code === "number" ? e.code : undefined);
 
@@ -267,8 +266,8 @@ function classify(e: unknown): Error {
   if (code === NO_SUCH_METHOD)
     return new MemoryUnsupportedError("server", "This Hermes server has no memory editing calls (`learning.detail`, `learning.edit`). Updating Hermes adds them.");
   if (code === BAD_PARAMS)
-    return new MemoryUnsupportedError("server", `This Hermes server's memory calls changed shape, so this app won't use them: ${messageOf(e)}`);
-  const message = messageOf(e);
+    return new MemoryUnsupportedError("server", `This Hermes server's memory calls changed shape, so this app won't use them: ${errorText(e)}`);
+  const message = errorText(e);
   const rest = answered(e);
   if (rest?.status === 404 && /profile/i.test(rest.detail)) return new Error(`Hermes has no such profile: ${rest.detail}`);
   const signedOut = () => new MemoryPermissionError(`The dashboard no longer accepts this sign-in: ${message}`);
@@ -325,7 +324,7 @@ export function memoryApi(io: MemoryIO, now = () => Date.now()): MemoryApi {
       res = await io.rpc(method, params);
     } catch (e) {
       if (rpcCode(e) === undefined)
-        throw new MemoryUnsureError(`The connection dropped before Hermes answered, so it may or may not have saved the change. Reload once connected to see. (${messageOf(e)})`);
+        throw new MemoryUnsureError(`The connection dropped before Hermes answered, so it may or may not have saved the change. Reload once connected to see. (${errorText(e)})`);
       throw classify(e);
     }
     if (isObj(res) && res.ok === true) return { ok: true };
@@ -377,8 +376,8 @@ export function memoryApi(io: MemoryIO, now = () => Date.now()): MemoryApi {
         // `_learning_mutation` answers a refusal 400 with Hermes's reason; nothing was written.
         if (a?.status === 400) return { ok: false, message: a.detail };
         if (a && a.status < 500) throw classify(e);
-        if (/^Not connected to Hermes|^The chat connection is closed/.test(messageOf(e))) throw classify(e);
-        throw new MemoryUnsureError(`Hermes didn't answer clearly, so it may or may not have made the change. Reload once connected to see. (${messageOf(e)})`);
+        if (/^Not connected to Hermes|^The chat connection is closed/.test(errorText(e))) throw classify(e);
+        throw new MemoryUnsureError(`Hermes didn't answer clearly, so it may or may not have made the change. Reload once connected to see. (${errorText(e)})`);
       }
     },
   };
@@ -502,7 +501,7 @@ export function memoryApi(io: MemoryIO, now = () => Date.now()): MemoryApi {
           if (e instanceof MemoryUnsureError) {
             dropped = true;
             outcomes.push({ entry, kind: "unsure", problem: e.message });
-          } else outcomes.push({ entry, kind: "failed", problem: messageOf(classify(e)) });
+          } else outcomes.push({ entry, kind: "failed", problem: errorText(classify(e)) });
         }
       }
       let view: MemoryView | undefined;
@@ -510,7 +509,7 @@ export function memoryApi(io: MemoryIO, now = () => Date.now()): MemoryApi {
         view = await read(profile);
       } catch (e) {
         // Without a read-back, a removal Hermes said it made isn't confirmed.
-        return { outcomes: outcomes.map((o) => (o.kind === "removed" ? { ...o, kind: "unsure" as const, problem: `Reading memory back failed: ${messageOf(e)}` } : o)) };
+        return { outcomes: outcomes.map((o) => (o.kind === "removed" ? { ...o, kind: "unsure" as const, problem: `Reading memory back failed: ${errorText(e)}` } : o)) };
       }
       const after = view;
       return {

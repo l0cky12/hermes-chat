@@ -7,6 +7,7 @@
 // update key uses Tauri's updater, which verifies the download's signature. Drafts survive the restart (`restart`).
 
 import { restartHold, sending, unsaved } from "./unsaved";
+import { errorText } from "./values";
 
 export const REPO = "l0cky12/hermes-chat";
 
@@ -61,8 +62,6 @@ export const NOTES_SHOWN = 20;
  * no check runs after it, not even the quiet one that notices pacman's install when the window is focused.
  */
 export const CHECK_TIMEOUT_MS = 20_000;
-
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** A hermes-chat-git pkgver (`r312.ef433a2-1`, epoch allowed): its commit count and commit. Anything else: null. */
 export function parseGitPkgver(version: string): { count: number; commit: string } | null {
@@ -132,7 +131,7 @@ export async function checkPackage(
   try {
     res = await get(`https://api.github.com/repos/${REPO}/compare/${v.commit}...main`, { headers: { Accept: "application/vnd.github+json" }, signal });
   } catch (e) {
-    return late() || { state: "error", message: `Couldn't reach GitHub to check for updates: ${messageOf(e)}` };
+    return late() || { state: "error", message: `Couldn't reach GitHub to check for updates: ${errorText(e)}` };
   }
   if (!res.ok) return late() || { state: "error", message: await refusal(res, v.commit, now) };
   let c: Compare;
@@ -140,7 +139,7 @@ export async function checkPackage(
     c = await res.json();
     if (typeof c.status !== "string" || typeof c.ahead_by !== "number" || !Array.isArray(c.commits)) throw new Error("not a comparison");
   } catch (e) {
-    return late() || { state: "error", message: `GitHub's answer to the update check didn't make sense: ${messageOf(e)}` };
+    return late() || { state: "error", message: `GitHub's answer to the update check didn't make sense: ${errorText(e)}` };
   }
   if (c.ahead_by === 0)
     return {
@@ -233,7 +232,7 @@ export function readSnapshot(text: string): { drafts: Record<string, string> } |
   try {
     saved = JSON.parse(text);
   } catch (e) {
-    return { why: `it isn't complete JSON (${messageOf(e)})` };
+    return { why: `it isn't complete JSON (${errorText(e)})` };
   }
   if (typeof saved !== "object" || saved === null || Array.isArray(saved)) return { why: "it isn't a list of drafts" };
   return { drafts: Object.fromEntries(Object.entries(saved).filter((e): e is [string, string] => isDraftKey(e[0]) && typeof e[1] === "string")) };
@@ -322,7 +321,7 @@ export function updater(deps: UpdateDeps): Updater {
       settle({ state: "available", checkedAt: now(), found: { from: a.current, to: a.version, notes: notes.slice(0, NOTES_SHOWN), more: Math.max(0, notes.length - NOTES_SHOWN), via: "updater" } });
     } catch (e) {
       // A quiet look for pacman's install leaves things as they were.
-      if (!installedOnly) settle({ state: "error", message: `Couldn't check for updates: ${messageOf(e)}` });
+      if (!installedOnly) settle({ state: "error", message: `Couldn't check for updates: ${errorText(e)}` });
     }
   };
 
@@ -338,7 +337,7 @@ export function updater(deps: UpdateDeps): Updater {
       await deps.invoke("update_download_and_install", { onProgress });
       set({ state: "restart", from: found.from, to: found.to, found });
     } catch (e) {
-      set({ state: "error", message: `Couldn't install ${found.to}: ${messageOf(e)}. The version you have is unchanged.`, found });
+      set({ state: "error", message: `Couldn't install ${found.to}: ${errorText(e)}. The version you have is unchanged.`, found });
     }
   };
 
@@ -352,7 +351,7 @@ export function updater(deps: UpdateDeps): Updater {
     } catch (e) {
       // ponytail: queues go again at the transport's next change, not at once; add a wake-up if that's ever too late.
       restartHold.on = false;
-      set({ state: "error", message: messageOf(e), restart: { from, to, found } });
+      set({ state: "error", message: errorText(e), restart: { from, to, found } });
     }
   };
 

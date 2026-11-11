@@ -78,7 +78,6 @@ export interface ScreenApi {
 /** Hermes's close codes on `/api/display/ws`. */
 export const CLOSE_CONTROL_TAKEN = 4000;
 export const CLOSE_SCREEN_GONE = 4001;
-export const CLOSE_BAD_TICKET = 4401;
 
 /** JSON-RPC "method not found": this Hermes predates the Bot Desktop. */
 export function isUnavailable(e: unknown): boolean {

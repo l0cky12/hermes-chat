@@ -150,6 +150,13 @@ describe("previewing a server file", () => {
     expect(preview.kind === "image" && preview.dataUrl).toMatch(/^data:image\/png;base64,iVBORw0KGgo/);
   });
 
+  it("refuses an image whose data URL isn't an image's", async () => {
+    const { server, hermes } = await signedIn(homeDisk);
+    const photo = (await hermes.files.list()).entries.find((e) => e.name === "Photo.png")!;
+    server.managedFiles.nodes[photo.path] = { text: "<script>alert(1)</script>", mime: "text/html" };
+    await expect(hermes.files.preview(photo)).rejects.toThrow("The server's answer isn't an image.");
+  });
+
   it("doesn't read a file bigger than the preview takes", async () => {
     const { server, hermes } = await signedIn((s) => {
       s.managedFiles.nodes = { "/srv/huge.log": { size: 5 * MiB }, "/srv/huge.png": { size: 40 * MiB } };

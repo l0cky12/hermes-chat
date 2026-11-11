@@ -1,3 +1,4 @@
+import { isObj } from "./values";
 // Hermes's Bot Mode (ADR 0066, research doc "Bot Mode"). Each bot is a Hermes profile with a persistent identity, and
 // each has one Bot Chat: the profile's session titled exactly "Bot Chat". That title is the chat's only identity. It is
 // looked up by title on every open (`session.list {title, include_hidden: true}`), never by a session id kept here,
@@ -56,7 +57,6 @@ export class BotModeUnsupportedError extends Error {
   }
 }
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 const codeOf = (e: unknown) => (isObj(e) && typeof e.code === "number" ? e.code : undefined);

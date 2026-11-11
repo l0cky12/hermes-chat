@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { clean, type Entry, type Level, type LogBuffer, type Snapshot, note } from "./logs";
 import { KIND_LABEL, type RouteDetails, type RouteKind, routesOf } from "./routes";
 import type { SignInDetails } from "./tauriPipe";
+import { errorText } from "./values";
 
 /** The steps of opening a connection, in order (src-tauri/src/connect_steps.rs `Step`; a test holds the two together). */
 export const STEPS = ["keyring", "resolve", "tunnel", "status", "sign-in", "ticket", "websocket", "ready"] as const;
@@ -67,7 +68,6 @@ export interface RouteTrace {
 /** What routes.ts needs: one trace per opening of a connection. */
 export type AttemptRecorder = { begin(d: SignInDetails): AttemptTrace };
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // ---------- taking addresses out ----------
@@ -221,7 +221,7 @@ export class AttemptLog implements AttemptRecorder {
       this.attempts = [...merged.values()];
       this.problems = unreadable ? [`${unreadable} line${unreadable === 1 ? "" : "s"} of the file couldn't be read, and will be dropped at the next write.`] : [];
     } catch (e) {
-      this.problems = [`Couldn't read the record of connection attempts: ${messageOf(e)}`];
+      this.problems = [`Couldn't read the record of connection attempts: ${errorText(e)}`];
     }
     this.changed();
   }
@@ -281,7 +281,7 @@ export class AttemptLog implements AttemptRecorder {
           failed: (e) => {
             if (ended || l.end !== undefined || live.at(-1) !== l) return;
             l.end = this.tick();
-            l.r.error = scrub(messageOf(e));
+            l.r.error = scrub(errorText(e));
             times(l);
             keep();
           },
@@ -292,7 +292,7 @@ export class AttemptLog implements AttemptRecorder {
         if (l && !ended) startStep(l, "ready", this.tick());
       },
       connected: () => end("connected"),
-      failed: (e) => end("failed", e === undefined ? undefined : scrub(messageOf(e))),
+      failed: (e) => end("failed", e === undefined ? undefined : scrub(errorText(e))),
       stopped: () => end("stopped"),
     };
   }
@@ -311,8 +311,8 @@ export class AttemptLog implements AttemptRecorder {
       this.pending.delete(a.id);
       await this.store.put(next).catch(async (e: unknown) => {
         // A full disk, a lock, or a line Rust can't take as it is: the attempt keeps its texts, and the failure is noted.
-        if (!TEXT_REFUSED.test(messageOf(e))) {
-          if (!this.unwritten.has(next.id)) note("WARNING", `A connection attempt couldn't be kept on disk: ${messageOf(e)}`, this.opts.notes);
+        if (!TEXT_REFUSED.test(errorText(e))) {
+          if (!this.unwritten.has(next.id)) note("WARNING", `A connection attempt couldn't be kept on disk: ${errorText(e)}`, this.opts.notes);
           this.unwritten.add(next.id);
           return;
         }
@@ -324,7 +324,7 @@ export class AttemptLog implements AttemptRecorder {
           this.attempts[at] = withheld(this.attempts[at]);
           this.changed();
         }
-        await this.store.put(bare).catch(() => note("WARNING", `A connection attempt couldn't be kept on disk: ${messageOf(e)}`, this.opts.notes));
+        await this.store.put(bare).catch(() => note("WARNING", `A connection attempt couldn't be kept on disk: ${errorText(e)}`, this.opts.notes));
       });
     });
   }

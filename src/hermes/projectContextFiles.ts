@@ -28,6 +28,7 @@ import {
 import type { LocalFile as PickedFile } from "./pipe";
 import type { Project } from "./projects";
 import { RemoteFilesError, explain, newTransferId, parseListing, type RemoteEntry, type RemoteGet, type RemotePreview, type TransferProgress } from "./remoteFiles";
+import { errorText, isObj } from "./values";
 
 /** What Rust answers for a context folder's repository (src-tauri `context_git_exclude`). */
 export type GitExclude = "none" | "added" | "already";
@@ -123,8 +124,6 @@ export type ProjectContextFiles = {
 /** A context file as Server files' preview takes it. */
 export const asEntry = (f: ContextFile): RemoteEntry => ({ name: f.name, path: f.path, kind: "file", size: f.size, mime: f.mime });
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const NOT_CONNECTED = "Hermes isn't connected. Context files can be changed once it is.";
 const TEXTS_KEPT = 300;
 
@@ -185,7 +184,7 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
     try {
       top = await listing(main);
     } catch (e) {
-      throw new Error(`Couldn't open the project's main folder ${main}: ${messageOf(e)}`);
+      throw new Error(`Couldn't open the project's main folder ${main}: ${errorText(e)}`);
     }
     const dir = joinPath(top.path, CONTEXT_DIR);
     let inside;
@@ -193,7 +192,7 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
       inside = await listing(joinPath(main, CONTEXT_DIR));
     } catch (e) {
       if (e instanceof RemoteFilesError && e.status === 404) return { dir, exists: false, files: [], main: top.path };
-      throw new Error(`Couldn't list ${dir}: ${messageOf(e)}`);
+      throw new Error(`Couldn't list ${dir}: ${errorText(e)}`);
     }
     if (inside.path !== dir)
       throw new Error(`${dir} is a link to ${inside.path}, outside the project's main folder. Hermes Chat only uses a context folder that is inside it.`);
@@ -240,12 +239,12 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
     try {
       found = await listedNow(profile, dir, writes, name);
     } catch (e) {
-      throw new Error(`Hermes said it saved ${name}, but the folder couldn't be listed to check: ${messageOf(e)}`);
+      throw new Error(`Hermes said it saved ${name}, but the folder couldn't be listed to check: ${errorText(e)}`);
     }
     if (found?.size !== size) throw new Error(`Hermes said it saved ${name}, but ${dir} ${found ? "has it at another size" : "doesn't list it"}. It may not have been written whole.`);
   };
   const refusal = (e: unknown, name: string) => {
-    const message = messageOf(e);
+    const message = errorText(e);
     if (message === "exists") return new ContextExistsError(name);
     if (message.includes(SSH_REFUSED)) return new Error(`${name}: ${SSH_REFUSED}. Only text files up to 8 MB can go there.`);
     return new Error(`Couldn't add ${name}: ${message}`);
@@ -273,7 +272,7 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
         const excluded = git && found.exists ? await io.pipe()?.gitExclude(found.main, sshOf(profile, writes)).catch(() => undefined) : undefined;
         return { kind: "ready", dir: found.dir, exists: found.exists, files, gitNote: excluded === "added" || excluded === "already", capacity: capacityOf(files, window), writes };
       } catch (e) {
-        return { kind: "failed", message: messageOf(e) };
+        return { kind: "failed", message: errorText(e) };
       }
     },
     async texts(profile, state, files) {
@@ -325,7 +324,7 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
         .remove(file.path)
         .then(
           () => undefined,
-          (e: unknown) => messageOf(e),
+          (e: unknown) => errorText(e),
         );
       // Hermes answers 404 for a file something else removed meanwhile: gone is what was asked for.
       let still;
@@ -333,7 +332,7 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
         still = await listedNow(profile, dir, "all", file.name);
       } catch (e) {
         const why = failed ? `Couldn't remove ${file.name}: ${failed}` : `Hermes said it removed ${file.name}`;
-        throw new Error(`${why}, and the folder couldn't be listed to check: ${messageOf(e)}`);
+        throw new Error(`${why}, and the folder couldn't be listed to check: ${errorText(e)}`);
       }
       if (still) throw new Error(failed ? `Couldn't remove ${file.name}: ${failed}` : `Hermes said it removed ${file.name}, but ${dir} still lists it.`);
     },

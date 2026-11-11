@@ -19,6 +19,7 @@ import {
 import { useOpenPreview } from "./previewContext";
 import { useShowInChat } from "./showInChat";
 import { Spinner } from "./bits";
+import { errorText } from "../hermes/values";
 
 /** What the inspector asks Hermes, for the chat on screen. */
 export type ContextApi = {
@@ -34,7 +35,6 @@ export type ContextApi = {
 type Load<T> = { state: "loading" } | { state: "done"; value: T } | { state: "failed"; error: string };
 
 const n = (tokens: number) => tokens.toLocaleString();
-const why = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const when = (at: number) => new Date(at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 
@@ -52,7 +52,7 @@ function useLoad<T>(fetch: () => Promise<T>, again: unknown, enabled = true): [L
     setLoad((l) => (l?.state === "done" ? l : { state: "loading" }));
     fetchRef.current().then(
       (value) => mine === ask.current && setLoad({ state: "done", value }),
-      (e: unknown) => mine === ask.current && setLoad({ state: "failed", error: why(e) }),
+      (e: unknown) => mine === ask.current && setLoad({ state: "failed", error: errorText(e) }),
     );
   }, []);
   useEffect(() => {
@@ -508,7 +508,7 @@ function CompactAction({ chat, status, api, onCompacted }: { chat: Chat; status:
         onCompacted();
       },
       (e: unknown) => {
-        setResult({ error: why(e) });
+        setResult({ error: errorText(e) });
         setStep("idle");
       },
     );

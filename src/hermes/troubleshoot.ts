@@ -7,6 +7,7 @@ import { type CronApi, type CronJob, type DeliveryTarget, type JobRun, type Jobs
 import { redact } from "./logs";
 import { explainSchedule, isoIn } from "./schedule";
 import type { Delivery } from "./transport";
+import { errorText } from "./values";
 
 /** How many of the newest runs the message carries (and the run the owner picked, when it is older). */
 export const TROUBLESHOOT_RUNS = 5;
@@ -179,7 +180,7 @@ export async function gatherTroubleshoot(
     runs = await api.runs(profile, now, TROUBLESHOOT_RUNS);
     if (picked && !runs.some((r) => r.id === picked.id)) runs = [...runs, picked];
   } catch (e) {
-    runs = e instanceof Error ? e.message : String(e);
+    runs = errorText(e);
   }
   const results: Record<string, RunResult | string> = {};
   if (typeof runs !== "string")
@@ -189,7 +190,7 @@ export async function gatherTroubleshoot(
         .map((r) =>
           api.runResult(profile, r).then(
             (res) => void (results[r.id] = res),
-            (e: unknown) => void (results[r.id] = e instanceof Error ? e.message : String(e)),
+            (e: unknown) => void (results[r.id] = errorText(e)),
           ),
         ),
     );
@@ -381,7 +382,7 @@ export async function startTroubleshoot(
   try {
     chatId = await hermes.newChat();
   } catch (e) {
-    const reason = `Couldn't start a chat: ${e instanceof Error ? e.message : String(e)}`;
+    const reason = `Couldn't start a chat: ${errorText(e)}`;
     store.failed(t.id, reason);
     throw new Error(reason);
   }

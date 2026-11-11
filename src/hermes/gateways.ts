@@ -16,6 +16,7 @@
 import { redact as redactKnown } from "./logs";
 import { failureOf, type Failure } from "./toolsets";
 import type { RestMethod } from "./pipe";
+import { errorText } from "./values";
 
 export const PLATFORMS = ["telegram", "discord"] as const;
 export type PlatformId = (typeof PLATFORMS)[number];
@@ -291,7 +292,7 @@ export class GatewaysApi {
       before = await this.list(profile);
     } catch (e) {
       const kind = e instanceof GatewaysReadError ? e.kind : "other";
-      return { kind: "refused", problem: { kind, text: `Hermes couldn't be read before saving, so nothing was sent: ${e instanceof Error ? e.message : String(e)}` } };
+      return { kind: "refused", problem: { kind, text: `Hermes couldn't be read before saving, so nothing was sent: ${errorText(e)}` } };
     }
     const now = before.gateways.find((g) => g.id === shown.id);
     if (!now) return { kind: "refused", problem: { kind: "other", text: `This Hermes no longer lists ${shown.name}.` }, list: before };

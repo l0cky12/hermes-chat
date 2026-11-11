@@ -5,6 +5,7 @@
 //! Rust only picks out what could be a link: the right scheme and not too long. The window reads it fully
 //! (src/hermes/chatLinks.ts) and refuses anything else. A link only ever shows a chat.
 
+use crate::lock::Locked;
 use std::sync::Mutex;
 
 /// Tells the window a link is waiting (`chat_link_take`).
@@ -39,13 +40,13 @@ impl Links {
         if !candidate(&link) {
             return false;
         }
-        *self.pending.lock().unwrap() = Some(link);
+        *self.pending.locked() = Some(link);
         true
     }
 
     /// The link waiting, which the window now has; it isn't handed out twice.
     pub fn take(&self) -> Option<String> {
-        self.pending.lock().unwrap().take()
+        self.pending.locked().take()
     }
 }
 

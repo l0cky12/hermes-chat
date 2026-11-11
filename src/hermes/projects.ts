@@ -29,6 +29,7 @@ import {
 import type { ProjectLinks, ScopeLinks } from "./projectLinks";
 import { unscope } from "./templates";
 import { getUIPrefs, setUIPrefs } from "./uiPrefs";
+import { errorText, isObj } from "./values";
 
 /** One of a project's folders: a path on the server. `primary`: the folder Hermes names the project's main one. */
 export type ProjectFolder = { path: string; primary: boolean };
@@ -81,9 +82,7 @@ export class ProjectGoneError extends Error {
   }
 }
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const codeOf = (e: unknown) => (isObj(e) && typeof e.code === "number" ? e.code : undefined);
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const sentence = (s: string) => {
   const t = s.trim();
   return t ? `${t[0].toUpperCase()}${t.slice(1)}${/[.!?]$/.test(t) ? "" : "."}` : t;
@@ -439,7 +438,7 @@ export class ProjectsStore {
       const waiting = this.links.read(this.scope).pending?.length ?? 0;
       this.setSync({
         state: this.moved() ? "pending" : "local",
-        error: `Couldn't sync which chats are in each project${waiting ? `; ${waiting === 1 ? "1 change waits" : `${waiting} changes wait`} on this computer` : ""}: ${messageOf(e)}`,
+        error: `Couldn't sync which chats are in each project${waiting ? `; ${waiting === 1 ? "1 change waits" : `${waiting} changes wait`} on this computer` : ""}: ${errorText(e)}`,
       });
     }
   }

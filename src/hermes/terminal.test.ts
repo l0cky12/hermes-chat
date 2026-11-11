@@ -9,6 +9,8 @@ class FakeTerminals implements TerminalApi {
   resized: [number, number, number][] = [];
   closed: number[] = [];
   refuse?: string;
+  /** Why `write` is refused, while set. */
+  refuseWrite?: string;
   /** Holds `open`'s answer until `answer()`. */
   hold = false;
   private pending: (() => void)[] = [];
@@ -23,6 +25,7 @@ class FakeTerminals implements TerminalApi {
     this.pending.splice(0).forEach((f) => f());
   }
   write(id: number, data: string) {
+    if (this.refuseWrite) return Promise.reject(new Error(this.refuseWrite));
     this.written.push([id, data]);
     return Promise.resolve();
   }
@@ -135,6 +138,24 @@ describe("terminal session", () => {
     await s.start("a", 80, 24);
     await s.start("b", 80, 24);
     expect(api.opened).toHaveLength(1);
+  });
+
+  it("says once why typing wasn't sent while the program isn't taking input, and again after it took some", async () => {
+    const { api, out, s } = setup();
+    await s.start("hermes", 80, 24);
+    api.opened[0].emit({ kind: "output", data: bytes("$ ") });
+    api.refuseWrite = "The program in this terminal isn't taking input.";
+    s.input("a");
+    s.input("b");
+    await new Promise((r) => setTimeout(r));
+    expect(out).toEqual(["$ ", "\r\n\x1b[2m── The program in this terminal isn't taking input. ──\x1b[0m\r\n"]);
+    api.refuseWrite = undefined;
+    s.input("c");
+    await new Promise((r) => setTimeout(r));
+    api.refuseWrite = "Still not.";
+    s.input("d");
+    await new Promise((r) => setTimeout(r));
+    expect(out.slice(2)).toEqual(["\r\n\x1b[2m── Still not. ──\x1b[0m\r\n"]);
   });
 
   it("explains each kind of end", () => {

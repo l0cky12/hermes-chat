@@ -12,7 +12,6 @@ import { setUIPrefs } from "../hermes/uiPrefs";
 import { Main } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -141,7 +140,7 @@ describe("The inbox", () => {
   });
 
   it("closes when focus goes into a frame, such as a page in the Preview, but not when the window loses focus to another app", async () => {
-    const { user, openInbox } = await launch();
+    const { openInbox } = await launch();
     openInbox();
     // Another app: focus stays on the entry, and the inbox stays.
     act(() => void window.dispatchEvent(new FocusEvent("blur")));
@@ -271,7 +270,7 @@ describe("The inbox", () => {
   });
 
   it("dismisses finished entries older than the time picked in Settings, from then on, and nothing else", async () => {
-    const { server, hermes, user, openInbox } = await launch((server) => {
+    const { server, hermes, openInbox } = await launch((server) => {
       server.sessions.push(row("report", 3, { pinned: true, title: "Weekly report", last_read_at: 0 }));
       server.otherProfiles.work.push(row("brief", 3, { pinned: true, title: "Morning brief", last_read_at: 0 }));
       server.liveSessions.push({ id: "rt-old", session_key: "brief", status: "waiting", last_active: nowS() - 3 * 86_400 });
@@ -286,7 +285,7 @@ describe("The inbox", () => {
   });
 
   it("drops a completed entry once its chat is open in another pane, without the inbox closing", async () => {
-    const { hermes, user, openInbox } = await launch();
+    const { hermes, openInbox } = await launch();
     openInbox();
     expect(rowNames()).toContain("Completed, unread: Release notes");
     // The owner opens the chat in a second pane from its menu, with the inbox still open.
@@ -296,7 +295,7 @@ describe("The inbox", () => {
   });
 
   it("says when Hermes can't be reached, and shows what it last saw", async () => {
-    const { server, user, openInbox } = await launch();
+    const { server, openInbox } = await launch();
     server.refuse = "Connection refused";
     await act(async () => server.drop());
     openInbox();

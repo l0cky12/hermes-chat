@@ -17,7 +17,6 @@ import {
   dirtyText,
   inside,
   newWorktreeId,
-  plural,
   worktreeChats,
   type AttachedChat,
   type HermesChatIn,
@@ -35,6 +34,7 @@ import {
 import { Spinner } from "./bits";
 import { useModal } from "./modal";
 import { Failure } from "./Repository";
+import { errorText, plural } from "../hermes/values";
 
 type Load<T> = { state: "idle" } | { state: "loading"; last?: T } | { state: "ready"; data: T } | { state: "failed"; error: RepoFailure; last?: T };
 const lastOf = <T,>(l: Load<T>): T | undefined => (l.state === "ready" ? l.data : l.state === "idle" ? undefined : l.last);
@@ -913,7 +913,7 @@ function RemoveDialog({
     setHermes({ state: "reading", chats: [] });
     ask(record.path).then(
       (chats) => n === asked.current && alive.current && setHermes({ state: "ready", chats }),
-      (e: unknown) => n === asked.current && alive.current && setHermes({ state: "failed", chats: [], error: e instanceof Error ? e.message : String(e) }),
+      (e: unknown) => n === asked.current && alive.current && setHermes({ state: "failed", chats: [], error: errorText(e) }),
     );
   }, [record.path]);
   const load = useCallback(() => {

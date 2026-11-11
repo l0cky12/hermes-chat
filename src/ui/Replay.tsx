@@ -6,6 +6,7 @@ import { BranchUnconfirmed } from "../hermes/transport";
 import { modelLabel, type ReplayKind, type ReplayPreview, type Variant } from "../hermes/replay";
 import { Spinner } from "./bits";
 import { useModal } from "./modal";
+import { errorText, plural } from "../hermes/values";
 
 /** Under a message of the owner's: opens Edit. `blocked`: why it can't be used now, shown on hover. */
 export function EditButton({ onEdit, blocked }: { onEdit: () => void; blocked?: string }) {
@@ -58,7 +59,6 @@ type State =
   | { phase: "making"; preview: ReplayPreview }
   | { phase: "unconfirmed"; why: string };
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const TITLE: Record<ReplayKind, string> = { edit: "Edit message", regenerate: "Regenerate reply" };
 const SHOWN = 12;
 
@@ -98,7 +98,7 @@ export function ReplayDialog({
         setWords((w) => w ?? preview.words);
         setState({ phase: "ready", preview });
       },
-      (e) => open.current && setState({ phase: "refused", why: messageOf(e) }),
+      (e) => open.current && setState({ phase: "refused", why: errorText(e) }),
     );
     return () => void (open.current = false);
   }, []);
@@ -110,7 +110,7 @@ export function ReplayDialog({
       (e) => {
         if (!open.current) return;
         if (e instanceof BranchUnconfirmed) setState({ phase: "unconfirmed", why: e.message });
-        else setState({ phase: "ready", preview, error: messageOf(e) });
+        else setState({ phase: "ready", preview, error: errorText(e) });
       },
     );
   };
@@ -315,4 +315,3 @@ export function VariantNav({ versions, current, onPick }: { versions: Variant[];
   );
 }
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));

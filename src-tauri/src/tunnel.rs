@@ -160,6 +160,7 @@ fn background(program: &str) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lock::Locked;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -377,7 +378,7 @@ fn main() {
                 let kept = kept.clone();
                 tokio::spawn(async move {
                     let request = read_request(&mut s).await;
-                    kept.lock().unwrap().push(request);
+                    kept.locked().push(request);
                     let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await;
                 });
             }
@@ -415,7 +416,7 @@ except OSError:
 
         let other = tokio::process::Command::new("python3").args(["-c", OTHER_PROGRAM, &tunnel.local_port.to_string()]).output().await.expect("python3");
         assert_eq!(String::from_utf8_lossy(&other.stdout), "", "another program of the owner's got an answer");
-        let requests = || seen.lock().unwrap().iter().filter(|r| r.starts_with("GET /api/status")).count();
+        let requests = || seen.locked().iter().filter(|r| r.starts_with("GET /api/status")).count();
         assert_eq!(requests(), 0, "another program's request reached the dashboard");
 
         let mut s = TcpStream::connect(("127.0.0.1", tunnel.local_port)).await.unwrap();
@@ -456,8 +457,8 @@ except OSError:
         if let Ok(tunnel) = &opened {
             post_password(tunnel.local_port).await;
         }
-        let stolen = thief.map(|t| t.lock().unwrap().clone()).unwrap_or_default();
-        let dashboard = dashboard.lock().unwrap().clone();
+        let stolen = thief.map(|t| t.locked().clone()).unwrap_or_default();
+        let dashboard = dashboard.locked().clone();
         SignIn { opened, dashboard, stolen }
     }
 
@@ -544,7 +545,7 @@ except OSError:
 
         let tunnel = open_through(&ssh, &target, dashboard_port, None).await.expect("the tunnel opens");
         post_password(tunnel.local_port).await;
-        assert!(dashboard.lock().unwrap().iter().any(|r| r.contains(PASSWORD)), "the sign-in reached the dashboard through ssh");
+        assert!(dashboard.locked().iter().any(|r| r.contains(PASSWORD)), "the sign-in reached the dashboard through ssh");
 
         let forward = tunnel._end.listen();
         assert!(!running_with(&forward).is_empty(), "the tunnel's ssh is found by its forward");
