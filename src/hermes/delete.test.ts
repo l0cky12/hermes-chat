@@ -305,4 +305,20 @@ describe("A copied profile, whose chats keep the ids they had", () => {
     expect(hermes.getSnapshot().chats.find((c) => c.id === "c")).toMatchObject({ settled: false });
     expect(hermes.getSnapshot().chats.find((c) => c.id === "c")?.running).toBeFalsy();
   });
+
+  it("a chat still loading when the owner switches to the copy leaves no load error on the copy's chat", async () => {
+    const { server, hermes } = await listed(row("c", 1));
+    server.otherProfiles = { work: [row("c", 1)] };
+    // The copy's list is kept on this computer from a visit before.
+    await hermes.switchProfile("work");
+    await hermes.sync();
+    await hermes.switchProfile("default");
+    await hermes.sync();
+    server.handlers["session.resume"] = () => {};
+    const opening = hermes.open("c");
+    while (!server.requests.some((r) => r.method === "session.resume")) await tick();
+    await hermes.switchProfile("work");
+    await opening;
+    expect(hermes.getSnapshot().chats.find((c) => c.id === "c")?.items).toEqual([]);
+  });
 });

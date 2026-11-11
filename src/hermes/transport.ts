@@ -2106,10 +2106,13 @@ export class Hermes {
     this.seen(chatId);
     // A chat the list didn't bring totals for, such as an older one opened from a search, reads its own.
     if (!this.snapshot.chats.find((c) => c.id === chatId)?.usage) this.track(this.refreshUsage(chatId));
+    const profile = this.profile;
     try {
       await this.resume(chatId);
       if (this.isViewing(chatId)) this.tellShown(chatId);
     } catch (e) {
+      // Switching profile ends the load; another profile's chat with the same id isn't this one.
+      if (this.profile !== profile) return;
       // A reply sent meanwhile shares this resume and reports the failure itself.
       this.patchChat(chatId, (c) =>
         c.running ? c : { ...c, items: [...withoutLoadError(c.items), { kind: "error", id: LOAD_ERROR_ID, text: `Couldn't load this chat: ${(e as Error).message}` }] },
