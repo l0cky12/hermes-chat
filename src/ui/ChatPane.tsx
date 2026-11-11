@@ -8,7 +8,7 @@ import { decodeString } from "micromark-util-decode-string";
 import type { ApprovalChoice, AttachCheck, Attachment, Chat, ChatQueue, ConnectionStatus, Item, OutgoingItem, SideQuestion, Source } from "../hermes/model";
 import { SOURCE_LABEL, isOutgoing, isWaiting } from "../hermes/model";
 import type { SkillCall } from "../hermes/skillCommands";
-import type { DeskState, ScreenshotDesk } from "../hermes/screenshots";
+import type { ScreenshotDesk } from "../hermes/screenshots";
 import { ApprovalCard } from "./ApprovalCard";
 import { Menu, PinItem, type ChatPin } from "./ChatMenu";
 import { isBotChat } from "../hermes/bots";
@@ -128,9 +128,7 @@ const STATUS_NOTE: Record<ConnectionStatus, string | undefined> = {
   offline: "Offline. Click the status dot to reconnect.",
 };
 
-const NOT_CAPTURING: DeskState = { capturing: false };
 const noDesk = () => () => {};
-const NO_FILES: readonly Attachment[] = [];
 /**
  * The name a pasted file is saved under: its own, or for a screenshot (no name, or the webview's generic `image.png`)
  * a local timestamp like `clipboard-2026-11-02T153000.png`, its extension from the MIME type.
@@ -287,7 +285,7 @@ const savedWhen = (at: number) => new Date(at).toLocaleString(undefined, { dateS
  * Hermes is connected. `onRetry`, `onEdit` and `onDismiss` act on failed or unconfirmed messages. `modelControls`
  * contains the model picker; `footer` contains the status bar. Only the active pane answers Ctrl+F and takes focus as
  * it opens. Native drops attach to the pane under the pointer. Export, Copy chat link, Settle and Archive are in the header's More menu.
- * `screenshots` attaches captures; `screenshotKeys` names the shortcut.
+ * `screenshots` takes captures and keeps every chat's staged attachments; `screenshotKeys` names the shortcut.
  * `voice` supplies Dictation and Read aloud. `voiceSend` puts a Voice conversation's turn in the chat as the owner's
  * message; it is left out for a chat not started yet, where a conversation can't start (ADR 0111). `commands` runs the slash commands typed in the composer. `queue` is the
  * chat's queue of messages waiting to go after its reply, and `queueApi` changes it; it is left out for a chat not
@@ -390,7 +388,7 @@ export function ChatPane({
   split?: boolean;
   voice?: VoiceApi;
   voiceSend?: (text: string) => Promise<{ delivery: Delivery; itemId?: string }>;
-  screenshots?: ScreenshotDesk;
+  screenshots: ScreenshotDesk;
   screenshotKeys?: string;
   /** The names of the projects the chat is in, or a new chat will be put in. */
   projects?: string[];
@@ -1266,7 +1264,7 @@ function Composer({
   started?: boolean;
   status: ConnectionStatus;
   /** Screenshots come from here, and it keeps the chat's staged attachments. */
-  screenshots?: ScreenshotDesk;
+  screenshots: ScreenshotDesk;
   screenshotKeys?: string;
   commands?: CommandHost;
   /** While a reply runs, Enter queues or steers by its `mode`, and Ctrl+Enter does the other. */
@@ -1274,7 +1272,7 @@ function Composer({
   compare?: Comparing;
 }) {
   // The chat's staged attachments, kept by the desk under its Draft key so they outlive this composer (ADR 0139).
-  const attachments = useSyncExternalStore(screenshots?.subscribe ?? noDesk, () => screenshots?.stagedIn(draftKey) ?? NO_FILES);
+  const attachments = useSyncExternalStore(screenshots.subscribe, () => screenshots.stagedIn(draftKey));
   const focused = useRef(autoFocus);
   focused.current = autoFocus;
   // The transcript joins the text as it is when it arrives, typed meanwhile included.
@@ -1350,7 +1348,7 @@ function Composer({
   // Staged in this composer's chat even if it has closed meanwhile: the chat keeps what was added to it.
   const add = (paths: string[]) => busy(async () => {
     const got = await check(paths);
-    screenshots?.change({ kind: "added", key: draftKey, attachments: got });
+    screenshots.change({ kind: "added", key: draftKey, attachments: got });
     return got.map((a) => a.path);
   });
   const addRef = useRef(add);
@@ -1361,13 +1359,13 @@ function Composer({
   dropHereRef.current = dropHere;
 
   // Screenshots attach here while this composer is on screen.
-  const shot = useSyncExternalStore(screenshots?.subscribe ?? noDesk, screenshots?.getSnapshot ?? (() => NOT_CAPTURING));
+  const shot = useSyncExternalStore(screenshots.subscribe, screenshots.getSnapshot);
   // A new screenshot replaces the notes about the last thing attached.
   useEffect(() => {
     if (shot.capturing) setRefused([]);
   }, [shot.capturing]);
   useEffect(() => {
-    if (!screenshots || !autoFocus) return;
+    if (!autoFocus) return;
     let current = true;
     const stop = screenshots.attachTo({
       key: draftKey,
@@ -1411,14 +1409,14 @@ function Composer({
           ),
       );
       const paths = saved.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
-      screenshots?.own(paths);
+      screenshots.own(paths);
       const failed = saved.find((r): r is PromiseRejectedResult => r.status === "rejected");
       if (failed) {
-        screenshots?.release(paths);
+        screenshots.release(paths);
         throw failed.reason;
       }
       const kept = await add(paths);
-      screenshots?.release(paths.filter((p) => !kept.includes(p)));
+      screenshots.release(paths.filter((p) => !kept.includes(p)));
       const notes = tooBig.map((f) => overLimitNote(nameOf(f), f.size, LIMITS.file));
       if (notes.length) setRefused((cur) => (paths.length ? [...cur, ...notes] : notes));
     } catch (e) {
@@ -1557,7 +1555,7 @@ function Composer({
       if (offline || running) return;
       onSend(text.trim(), [...attachments]);
     }
-    screenshots?.change({ kind: "sent", key: draftKey, paths: attachments.map((a) => a.path) });
+    screenshots.change({ kind: "sent", key: draftKey, paths: attachments.map((a) => a.path) });
     setRefused(fellBack ? [fellBack] : []);
   };
   // What Enter, and the button beside the text, do now; Ctrl+Enter does the other while a reply runs.
@@ -1631,7 +1629,7 @@ function Composer({
                 key={f.path}
                 file={f}
                 preview={previews.current?.get(f.path)}
-                onRemove={() => screenshots?.change({ kind: "removed", key: draftKey, paths: [f.path] })}
+                onRemove={() => screenshots.change({ kind: "removed", key: draftKey, paths: [f.path] })}
               />
             ))}
           </div>
@@ -1686,17 +1684,15 @@ function Composer({
               }}
             />
           )}
-          {screenshots && (
-            <button
-              className="icon-btn"
-              title={screenshotKeys ? `Attach a screenshot (${screenshotKeys})` : "Attach a screenshot"}
-              aria-label="Attach a screenshot"
-              disabled={shot.capturing}
-              onClick={() => void screenshots.capture()}
-            >
-              <Camera size={16} />
-            </button>
-          )}
+          <button
+            className="icon-btn"
+            title={screenshotKeys ? `Attach a screenshot (${screenshotKeys})` : "Attach a screenshot"}
+            aria-label="Attach a screenshot"
+            disabled={shot.capturing}
+            onClick={() => void screenshots.capture()}
+          >
+            <Camera size={16} />
+          </button>
           {modelControls}
           {!dictation.active && (
             <span className="composer-keys" title={steerWhy && `Can't steer now: ${steerWhy}`}>

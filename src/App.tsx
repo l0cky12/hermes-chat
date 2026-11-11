@@ -1588,11 +1588,13 @@ export function Main({
     else splitWith(id);
   };
 
-  // Screenshots go to the composer on screen. The desk lives as long as this signed-in window: signing out deletes any
-  // capture not yet sent. Made in an effect, so StrictMode's second mount gets a desk of its own.
+  // Screenshots go to the composer on screen, and each chat's staged attachments are kept here. The desk lives as long
+  // as this signed-in window: signing out deletes any capture not yet sent. Made in a layout effect, so StrictMode's
+  // second mount gets a desk of its own before the first paint. No chat is drawn without it, as its composer keeps its
+  // files there.
   const [desk, setDesk] = useState<ScreenshotDesk>();
   const screenshotsRef = useRef(screenshots);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const d = new ScreenshotDesk(screenshotsRef.current.api, (remote) => remote && screenshotsRef.current.attached());
     setDesk(d);
     return () => d.dispose();
@@ -2450,7 +2452,7 @@ export function Main({
       title: chat.title,
       node: withTabs(
         p,
-        <ChatView
+        desk && <ChatView
           openGuide={openGuide}
           hermes={hermes}
           connection={connection}
@@ -3512,7 +3514,7 @@ function ChatView({
   /** Opens another version of a turn in this pane, at that turn (ADR 0035). */
   onOpenTurn: (chatId: string, turn: number) => void;
   previewControls: ReactNode;
-  screenshots?: ScreenshotDesk;
+  screenshots: ScreenshotDesk;
   screenshotWiring: Screenshots;
   screenshotKeys?: string;
   voice: VoiceApi;
@@ -3632,17 +3634,17 @@ function ChatView({
   // the second still uploads.
   const send = async (text: string, attachments: Attachment[], skill?: SkillCall) => {
     const paths = attachments.map((a) => a.path);
-    screenshots?.hold(paths);
+    screenshots.hold(paths);
     const partner = compare?.partner();
     const both = Promise.all([deliver(text, attachments, skill, false), partner?.(text, attachments, skill, true)]);
     const [own, mirrored] = await (compare ? compare.track(both) : both);
-    if (!own && !mirrored) return screenshots?.sent(shownDraft, attachments, false);
+    if (!own && !mirrored) return screenshots.sent(shownDraft, attachments, false);
     // The other chat's message holds the files now, and a screenshot goes once that message no longer needs it, so
     // none can come back to this composer with the words.
     if (!own) onToast("This pane's chat couldn't start, so your message went only to the other chat, with its files.");
     try {
       await screenshotWiring.syncOutbox?.();
-      screenshots?.finish(paths);
+      screenshots.finish(paths);
     } catch {
       // Retain ownership until Rust protects the outbox, as in the single-pane send path.
     }
@@ -3661,7 +3663,7 @@ function ChatView({
           const why = hermes.enqueue(chat.id, text, attachments);
           if (why) return why;
           // The queue keeps its screenshots now, until they go or the owner removes the message (chatCache.ts).
-          screenshots?.hold(attachments.map((a) => a.path));
+          screenshots.hold(attachments.map((a) => a.path));
           savedDrafts.take(shownDraft);
           return undefined;
         },
