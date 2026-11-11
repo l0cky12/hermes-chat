@@ -9,6 +9,7 @@ import { FakeHermes, row } from "../hermes/fakeHermes";
 import { connect, type Hermes } from "../hermes/transport";
 import { TAGS_KEY } from "../hermes/tags";
 import { Main } from "../App";
+import { RestError } from "../hermes/pipe";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
@@ -227,7 +228,7 @@ describe("Filtering in the search palette", () => {
     await waitFor(() => expect(within(palette()).getByRole("button", { name: /NAS disks/ }).getAttribute("aria-disabled")).toBeNull());
 
     s.rest["GET /api/sessions/search"] = () => {
-      throw new Error('The dashboard answered 500: {"detail":"Search failed"}');
+      throw new RestError(500, '{"detail":"Search failed"}');
     };
     await user.keyboard("!");
     await waitFor(() => expect(within(palette()).getByRole("alert").textContent).toContain("Search failed"));
@@ -276,7 +277,7 @@ describe("Filtering in the search palette", () => {
     await user.click(screen.getByRole("button", { name: "Preview" }));
     const before = localStorage.getItem(TAGS_KEY);
     s.rest["GET /api/sessions/search"] = () => {
-      throw new Error('The dashboard answered 500: {"detail":"Search failed"}');
+      throw new RestError(500, '{"detail":"Search failed"}');
     };
     await user.click(screen.getByRole("textbox", { name: "Words to search for" }));
     await user.keyboard(" disks");

@@ -3,7 +3,7 @@
 // webview.
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { CustomEndpoint, EndpointSave, ProviderSignIn } from "./accounts";
-import type { LocalFile, OpenPipe, Pipe, PipeEvent, Route, ToolsetGuards, Transcript, VoiceSetup } from "./pipe";
+import { RestError, type LocalFile, type OpenPipe, type Pipe, type PipeEvent, type Route, type ToolsetGuards, type Transcript, type VoiceSetup } from "./pipe";
 import type { GitExclude } from "./projectContextFiles";
 import type { Downloaded, PickedUpload, TransferProgress } from "./remoteFiles";
 import type { Probe, Probed, ProbeFailure, SavedKey } from "./setup";
@@ -11,8 +11,17 @@ import { routedPipe, type ReachRoute, type RouteDetails, type RoutedHooks } from
 import type { SignInWay } from "./connections";
 import type { Step } from "./attempts";
 
-// A failed command rejects with the Rust error's text, not an Error.
-export const asError = (e: unknown) => Promise.reject(new Error(String(e)));
+/**
+ * A failed command rejects with the Rust error's text, not an Error; one that calls the dashboard with a `RelayError`,
+ * whose status and body, when the dashboard answered, make a `RestError`.
+ */
+export const asError = (e: unknown) => {
+  if (e && typeof e === "object" && typeof (e as { message?: unknown }).message === "string") {
+    const { message, status, body } = e as { message: string; status?: unknown; body?: unknown };
+    return Promise.reject(typeof status === "number" ? new RestError(status, typeof body === "string" ? body : "", message) : new Error(message));
+  }
+  return Promise.reject(new Error(String(e)));
+};
 
 /** Base64 to bytes. */
 function fromBase64(b64: string): Uint8Array {

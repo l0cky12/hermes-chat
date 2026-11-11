@@ -21,7 +21,7 @@
 // Hermes has no conditional write, so a Save first reads SKILL.md again and writes only if it is still the file and text
 // the editor started from, then reads it back (as Persona does, ADR 0014). Skill text is instructions for the agent from
 // wherever it came from: it is only ever shown as plain text.
-import type { RestMethod } from "./pipe";
+import { RestError, type RestMethod } from "./pipe";
 import { answered, asReadBack, deadline } from "./persona";
 import { pyStrip } from "./memory";
 import { MINE_MARK, SPLIT_MARK, THEIRS_MARK } from "./textEdit";
@@ -268,9 +268,9 @@ export function skillsError(e: unknown, doing: "list" | "read" | "save" | "toggl
   }[doing];
   if (/^Not connected to Hermes|^The chat connection is closed/.test(message)) return new SkillsError("disconnected", "Not connected to Hermes.", undefined, true);
   if (/^Can't reach the Hermes dashboard/.test(message)) return new SkillsError("disconnected", message);
-  if (/^The dashboard sign-in has expired/.test(message)) return new SkillsError("signed-out", message);
+  if (e instanceof RestError && e.status === 401) return new SkillsError("signed-out", message);
   if (/^Hermes Chat doesn't relay/.test(message)) return new SkillsError("unsupported", message, undefined, true);
-  const a = answered(message);
+  const a = answered(e);
   if (!a) return new SkillsError("error", `Couldn't ${what}: ${message}`);
   const said = a.detail ? ` Hermes said: ${a.detail}${/[.!?]$/.test(a.detail) ? "" : "."}` : "";
   const route = {
@@ -436,7 +436,7 @@ export class SkillsApi {
           const entries = isObj(res) && Array.isArray(res.entries) ? res.entries : [];
           names = new Set(entries.flatMap((e) => (isObj(e) && typeof e.name === "string" && e.broken_link !== true ? [e.name] : [])));
         } catch (e) {
-          const a = answered(e instanceof Error ? e.message : String(e));
+          const a = answered(e);
           // A folder that isn't there: everything named in it is missing.
           if (a?.status === 404 && /^path not found$/i.test(a.detail)) names = new Set();
           else {

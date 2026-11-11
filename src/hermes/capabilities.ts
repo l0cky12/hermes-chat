@@ -19,6 +19,7 @@
 // a dropped connection or a 5xx, which may pass. Every capability starts `unknown`, and only `unsupported` holds a
 // screen back or refuses a write.
 import { redact as redactSecrets } from "./logs";
+import { RestError } from "./pipe";
 
 /** The features whose server support is tracked. */
 export type CapabilityId =
@@ -354,7 +355,7 @@ export type CapabilitySnapshot = {
   stale: boolean;
 };
 
-/** A failed request, read the way the Rust relay and FakeHermes word it. */
+/** A failed request: the HTTP status and Hermes's reason of a dashboard call, or a JSON-RPC code. */
 export type Failure = { status?: number; reason: string; rpcCode?: number };
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : isObj(e) && typeof e.message === "string" ? e.message : String(e));
@@ -362,18 +363,8 @@ const messageOf = (e: unknown) => (e instanceof Error ? e.message : isObj(e) && 
 /** Reads a REST or JSON-RPC failure: an HTTP status and Hermes's reason, a JSON-RPC code, or neither. */
 export function failureOf(e: unknown): Failure {
   if (isObj(e) && typeof e.code === "number") return { rpcCode: e.code, reason: messageOf(e) };
-  const message = messageOf(e);
-  if (/sign-in has expired/i.test(message)) return { status: 401, reason: message };
-  const m = /^The dashboard answered (\d{3}): ([\s\S]*)$/.exec(message);
-  if (!m) return { reason: message };
-  let reason = m[2].trim();
-  try {
-    const d = JSON.parse(reason).detail;
-    if (typeof d === "string" && d.trim()) reason = d.trim();
-  } catch {
-    // Not JSON, or cut short: the text as it came.
-  }
-  return { status: Number(m[1]), reason };
+  if (e instanceof RestError) return { status: e.status, reason: e.detail || e.message };
+  return { reason: messageOf(e) };
 }
 
 /** JSON-RPC "method not found": the server has no such method. */

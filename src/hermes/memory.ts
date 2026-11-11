@@ -24,6 +24,8 @@
 // Memory text comes from the agent and whatever it read, so it is shown as plain text, never rendered, and never kept
 // on this computer. The one exception to "never kept": what a save from here replaced, held in this app's memory (never
 // on disk) until sign-out or quit, so the owner can put it back (ADR 0040).
+import { answered } from "./persona";
+import { RestError } from "./pipe";
 
 /** Which of the profile's memory files an entry is in, by the name `learning.*` gives it. */
 export type MemorySource = "memory" | "profile";
@@ -234,20 +236,6 @@ function memoryNodes(answer: unknown): Node[] {
   return [...seen.values()].sort((a, b) => a.index - b.index);
 }
 
-/** The status and Hermes's reason of a dashboard REST answer that isn't 2xx, as the relay words it. */
-function restAnswer(e: unknown): { status: number; detail: string } | undefined {
-  const m = /^The dashboard answered (\d{3}): ?([\s\S]*)$/.exec(messageOf(e));
-  if (!m) return undefined;
-  let detail = m[2];
-  try {
-    const d = (JSON.parse(m[2]) as { detail?: unknown }).detail;
-    if (typeof d === "string") detail = d;
-  } catch {
-    // Not JSON, e.g. a proxy's error page: keep the text.
-  }
-  return { status: Number(m[1]), detail: detail.trim() };
-}
-
 /** A REST answer meaning the server has no such route: `bf0203a`'s `404 No such API endpoint`, FastAPI's `404 Not Found`, or 405. */
 const noRoute = (a: { status: number; detail: string } | undefined) => !!a && ((a.status === 404 && /^(not found$|no such api endpoint\b)/i.test(a.detail)) || a.status === 405);
 
@@ -281,9 +269,9 @@ function classify(e: unknown): Error {
   if (code === BAD_PARAMS)
     return new MemoryUnsupportedError("server", `This Hermes server's memory calls changed shape, so this app won't use them: ${messageOf(e)}`);
   const message = messageOf(e);
-  const rest = restAnswer(e);
+  const rest = answered(e);
   if (rest?.status === 404 && /profile/i.test(rest.detail)) return new Error(`Hermes has no such profile: ${rest.detail}`);
-  if (/signed out|401|unauthori[sz]ed/i.test(message)) return new MemoryPermissionError(`The dashboard no longer accepts this sign-in: ${message}`);
+  if (!(e instanceof RestError) && /signed out|401|unauthori[sz]ed/i.test(message)) return new MemoryPermissionError(`The dashboard no longer accepts this sign-in: ${message}`);
   if (isPermission(message)) return new MemoryPermissionError(`Hermes isn't allowed to do that on the server: ${message}`);
   return e instanceof Error ? e : new Error(message);
 }
@@ -358,7 +346,7 @@ export function memoryApi(io: MemoryIO, now = () => Date.now()): MemoryApi {
       try {
         graph = await io.get(learningPath("graph", profile));
       } catch (e) {
-        if (restRoutes === undefined && noRoute(restAnswer(e))) throw new NoRestRoutes();
+        if (restRoutes === undefined && noRoute(answered(e))) throw new NoRestRoutes();
         throw classify(e);
       }
       return memoryNodes(graph);
@@ -370,7 +358,7 @@ export function memoryApi(io: MemoryIO, now = () => Date.now()): MemoryApi {
         return { ok: false, message: "no content" };
       } catch (e) {
         // `get_learning_node` answers 404 with Hermes's reason, such as a stale id.
-        const a = restAnswer(e);
+        const a = answered(e);
         if (a?.status === 404 && !noRoute(a)) return { ok: false, message: a.detail };
         throw classify(e);
       }
@@ -381,7 +369,7 @@ export function memoryApi(io: MemoryIO, now = () => Date.now()): MemoryApi {
         if (isObj(res) && res.ok === true) return { ok: true };
         return { ok: false, message: isObj(res) && typeof res.message === "string" ? res.message : "Hermes didn't say why." };
       } catch (e) {
-        const a = restAnswer(e);
+        const a = answered(e);
         // `_learning_mutation` answers a refusal 400 with Hermes's reason; nothing was written.
         if (a?.status === 400) return { ok: false, message: a.detail };
         if (a && a.status < 500) throw classify(e);

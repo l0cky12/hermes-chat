@@ -1,7 +1,8 @@
 // The files on a fake Hermes server, for tests of the file browser: `GET /api/files`, `GET /api/files/read` and
 // `GET /api/files/download` as the deployed `bf0203a` answers them (`hermes_cli/web_routers/files.py`, `hermes_cli/web_server_files.py`). Listings
-// resolve symbolic links, skip credential files and sort folders first; refusals are FastAPI `{"detail"}` bodies,
-// worded as the Rust side reports them.
+// resolve symbolic links, skip credential files and sort folders first; refusals are FastAPI `{"detail"}` bodies in a
+// `RestError`, as the Rust side reports them.
+import { RestError } from "./pipe";
 
 /**
  * One node on the server's disk. A file has its text (sent as UTF-8), its raw `bytes` (one char per byte), or only a
@@ -38,12 +39,13 @@ const MIME: Record<string, string> = {
 };
 
 const fail = (status: number, detail: string): never => {
-  throw new Error(`The dashboard answered ${status}: ${JSON.stringify({ detail })}`);
+  throw new RestError(status, JSON.stringify({ detail }));
 };
 
 const dirname = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
 const basename = (p: string) => p.slice(p.lastIndexOf("/") + 1);
 const join = (dir: string, name: string) => (dir === "/" ? `/${name}` : `${dir}/${name}`);
+const thrown = (e: string | Error) => (typeof e === "string" ? new Error(e) : e);
 const isSensitive = (p: string) => {
   const name = basename(p).toLowerCase();
   return name === ".env" || name.startsWith(".env.") || name === ".envrc" || SENSITIVE.has(name) || p.split("/").some((s) => SENSITIVE_DIRS.has(s.toLowerCase()));
@@ -244,7 +246,7 @@ export class FakeServerFiles {
   }
 
   /** Set: a save's answer is lost this way, after (`landed`) or before Hermes wrote it. */
-  saveLost?: { message: string; landed: boolean };
+  saveLost?: { message: string | Error; landed: boolean };
   /** Set: a save waits here before Hermes takes it, as one that gets no answer would. */
   saveGate?: Promise<void>;
   /** Set: before a save writes, the file changes as another client would change it. */
@@ -258,7 +260,7 @@ export class FakeServerFiles {
     if (this.saveGate) await this.saveGate;
     this.beforeWrite?.(path);
     const lost = this.saveLost;
-    if (lost && !lost.landed) throw new Error(lost.message);
+    if (lost && !lost.landed) throw thrown(lost.message);
     const at = this.target(dirname(path)) === dirname(path) ? path : join(this.target(dirname(path)), basename(path));
     if (this.nodes[at] && !overwrite) fail(409, "File already exists");
     const node = this.nodes[at];
@@ -267,7 +269,7 @@ export class FakeServerFiles {
     const bytes = Array.from(new TextEncoder().encode(text), (b) => String.fromCharCode(b)).join("");
     this.nodes[at] = { bytes, mime: node && "mime" in node ? node.mime : undefined, mtime: 1_793_200_000 };
     this.afterWrite?.(at);
-    if (lost) throw new Error(lost.message);
+    if (lost) throw thrown(lost.message);
     return JSON.stringify({ ok: true, path: at });
   }
 

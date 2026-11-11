@@ -10,6 +10,44 @@ import type { SavedKey } from "./setup";
 import type { OpenScreenSocket } from "./screen";
 import type { RouteVia } from "./routes";
 
+/**
+ * A dashboard call that Hermes, or a gateway in front of it, answered with a failure: its HTTP `status` and the start of
+ * its `body` (src-tauri `RelayError`). Tell failures apart by these, never by `message`, which repeats the body, server
+ * text and all (#486).
+ */
+export class RestError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body = "",
+    message = `The dashboard answered ${status}: ${body}`,
+  ) {
+    super(message);
+  }
+
+  /** Hermes's reason: the body's `detail` when that is text, as FastAPI words a refusal, else the body as it came. */
+  get detail(): string {
+    try {
+      const d = (JSON.parse(this.body) as { detail?: unknown }).detail;
+      if (typeof d === "string" && d.trim()) return d.trim();
+    } catch {
+      // Not JSON, or cut short.
+    }
+    return this.body.trim();
+  }
+}
+
+/** The status of a failed dashboard call, when it got an answer. */
+export const statusOf = (e: unknown): number | undefined => (e instanceof RestError ? e.status : undefined);
+
+/** Whether `e` is Hermes's 409 with `detail` as its reason, such as `revision_conflict`. */
+export const conflictOf = (e: unknown, ...details: string[]) => e instanceof RestError && e.status === 409 && details.includes(e.detail);
+
+/**
+ * Whether `e` is Hermes saying it has no such session (`_NOT_FOUND` in hermes_cli/web_routers/sessions.py): not a 404
+ * for a route it lacks, nor one from a gateway in front of it.
+ */
+export const sessionNotFound = (e: unknown) => e instanceof RestError && e.status === 404 && e.detail === "Session not found";
+
 /** A local file as `statFiles` finds it: its size, or why it can't be attached (e.g. "it's a folder"). */
 export type LocalFile = { path: string; name: string; size?: number; error?: string };
 

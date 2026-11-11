@@ -25,8 +25,8 @@ import {
   SANDBOX_COPY_MISSING,
   SANDBOX_MISSING,
   SANDBOX_NOT_FOUND_PREFIX,
-  SESSION_GONE,
 } from "./remoteFiles";
+import { RestError, sessionNotFound } from "./pipe";
 import { EDIT_MAX_BYTES, MINE_MARK, merge3 } from "./textEdit";
 import {
   ASK_INSTRUCTIONS,
@@ -75,15 +75,13 @@ export type AgentFsPipe = {
 };
 
 /** Hermes's refusals from `fs_write_text` and its SSH workspace backend that come before anything is written. */
-function refusedBeforeWriting(message: string): boolean {
-  if (/^Hermes Chat doesn't relay|^Not connected|^The dashboard sign-in|^it's .* MB, over the .* MB limit/i.test(message)) return true;
-  const m = /^The dashboard answered (\d{3}): ([\s\S]*)$/.exec(message);
-  if (!m) return false;
-  const status = Number(m[1]);
-  if (status === 422) return true;
+function refusedBeforeWriting(e: unknown): boolean {
+  if (!(e instanceof RestError)) return /^Hermes Chat doesn't relay|^Not connected|^it's .* MB, over the .* MB limit/i.test(errorText(e));
+  const status = e.status;
+  if (status === 401 || status === 422) return true;
   let detail: unknown;
   try {
-    detail = (JSON.parse(m[2]) as { detail?: unknown }).detail;
+    detail = (JSON.parse(e.body) as { detail?: unknown }).detail;
   } catch {
     return false;
   }
@@ -104,7 +102,8 @@ function refusedBeforeWriting(message: string): boolean {
 }
 
 /** Why a read or write on the tools' machine failed, in the owner's words, with the status the save logic reads. */
-function explainFs(message: string, what: "read" | "write"): RemoteFilesError {
+function explainFs(e: unknown, what: "read" | "write"): RemoteFilesError {
+  const message = errorText(e);
   if (/^Not connected to Hermes|^The chat connection is closed|^Can't reach the Hermes dashboard/.test(message))
     return new RemoteFilesError("Hermes isn't connected. Your edit stays here until it is.", undefined, true);
   if (/^it's .* MB now, over the .* MB limit/.test(message)) return new RemoteFilesError(`It's grown past what the editor opens (${EDIT_MAX_BYTES / 1024 / 1024} MB).`, 413);
@@ -117,11 +116,10 @@ function explainFs(message: string, what: "read" | "write"): RemoteFilesError {
     "File is not writable": [403, "The server's user isn't allowed to write this file."],
     "Content too large": [413, "Hermes takes text files up to 8 MB."],
   };
-  const m = /^The dashboard answered (\d{3}): ([\s\S]*)$/.exec(message);
-  if (m) {
-    let detail = m[2];
+  if (e instanceof RestError) {
+    let detail = e.body;
     try {
-      const d = (JSON.parse(m[2]) as { detail?: unknown }).detail;
+      const d = (JSON.parse(e.body) as { detail?: unknown }).detail;
       if (typeof d === "string") detail = d;
     } catch {
       // As it came.
@@ -131,7 +129,7 @@ function explainFs(message: string, what: "read" | "write"): RemoteFilesError {
     if (detail.startsWith(SANDBOX_NOT_FOUND_PREFIX)) return new RemoteFilesError(SANDBOX_MISSING, 404);
     if (detail === "File not found") return new RemoteFilesError("That file isn't on the server, or is gone now.", 404);
   }
-  return explain(message, what);
+  return explain(e, what);
 }
 
 /**
@@ -152,14 +150,14 @@ export function agentFsEditIo(get: RemoteGet, pipe: AgentFsPipe, profile: string
       try {
         body = await deadline(
           read(path).catch((e) => {
-            if (!chat || !SESSION_GONE.test(errorText(e))) throw e;
+            if (!chat || !sessionNotFound(e)) throw e;
             chat = undefined;
             return read(path);
           }),
           EDIT_DEADLINES.readMs,
         );
       } catch (e) {
-        throw e instanceof TimedOut ? new RemoteFilesError(e.message) : explainFs(errorText(e), "read");
+        throw e instanceof TimedOut ? new RemoteFilesError(e.message) : explainFs(e, "read");
       }
       let dataUrl: unknown;
       try {
@@ -179,9 +177,8 @@ export function agentFsEditIo(get: RemoteGet, pipe: AgentFsPipe, profile: string
         await deadline(pipe.saveText(id, profile, path, text, chat), EDIT_DEADLINES.writeMs);
       } catch (e) {
         if (e instanceof TimedOut) void pipe.cancel(id).catch(() => {});
-        const message = errorText(e);
-        if (!(e instanceof TimedOut) && refusedBeforeWriting(message)) throw explainFs(message, "write");
-        throw { lost: e instanceof TimedOut ? `Hermes didn't answer within ${EDIT_DEADLINES.writeMs / 1000} s.` : explainFs(message, "write").message };
+        if (!(e instanceof TimedOut) && refusedBeforeWriting(e)) throw explainFs(e, "write");
+        throw { lost: e instanceof TimedOut ? `Hermes didn't answer within ${EDIT_DEADLINES.writeMs / 1000} s.` : explainFs(e, "write").message };
       }
     },
     async listNames(folder) {
@@ -189,7 +186,7 @@ export function agentFsEditIo(get: RemoteGet, pipe: AgentFsPipe, profile: string
       try {
         body = await deadline(get(`api/fs/list?${new URLSearchParams({ path: folder, profile })}`, 8 * 1024 * 1024), EDIT_DEADLINES.readMs);
       } catch (e) {
-        throw e instanceof TimedOut ? new RemoteFilesError(e.message) : explainFs(errorText(e), "read");
+        throw e instanceof TimedOut ? new RemoteFilesError(e.message) : explainFs(e, "read");
       }
       const res = JSON.parse(body) as { entries?: { name?: unknown }[]; error?: unknown };
       if (typeof res.error === "string") throw new RemoteFilesError(`Its folder can't be listed (${res.error}).`);

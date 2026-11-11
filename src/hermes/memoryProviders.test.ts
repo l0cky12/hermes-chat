@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { FakeHermes } from "./fakeHermes";
 import { BYTEROVER, HONCHO, RETAINDB } from "./fakeMemoryProviders";
 import { copiedValues, sameValue, storeOf, valueProblem, visible, type ProviderField } from "./memoryProviders";
+import { RestError } from "./pipe";
 import { connect } from "./transport";
 
 async function setUp() {
@@ -59,7 +60,7 @@ describe("memory providers", () => {
 
   it("keeps the other profiles when one can't be read", async () => {
     const { api, fake } = await setUp();
-    fake.readFailures.work = `The dashboard answered 500: {"detail":"boom"}`;
+    fake.readFailures.work = new RestError(500, `{"detail":"boom"}`);
     const rows = await api.overview(["default", "work"]);
     expect(rows[0].ok).toBe(true);
     expect(rows[1]).toEqual({ profile: "work", ok: false, reason: "boom" });

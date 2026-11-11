@@ -10,6 +10,7 @@ import { FakeHermes } from "../hermes/fakeHermes";
 import { memoryCache } from "../hermes/memoryCache";
 import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
+import { RestError } from "../hermes/pipe";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
@@ -47,7 +48,7 @@ function gate() {
         return {
           ...pipe,
           request: async (method, path, body) => {
-            if (method === "GET" && path.split("?")[0] === g.refuse) throw new Error(`The dashboard answered 500: {"detail":"Internal Server Error"}`);
+            if (method === "GET" && path.split("?")[0] === g.refuse) throw new RestError(500, `{"detail":"Internal Server Error"}`);
             if (g.on) {
               g.asked.push(path.split("?")[0]);
               await new Promise<void>((go) => waiting.push(go));
@@ -155,7 +156,7 @@ describe("Clone a profile", () => {
 
   it("shows Hermes's refusal, keeps the form, and creates nothing", async () => {
     const { server, user } = await launch();
-    server.profileCreateError = `The dashboard answered 400: {"detail":"Profile name 'default-copy' is reserved."}`;
+    server.profileCreateError = new RestError(400, `{"detail":"Profile name 'default-copy' is reserved."}`);
     const dialog = await openClone(user);
     await user.click(within(dialog).getByRole("button", { name: "Clone" }));
     expect((await within(dialog).findByRole("alert")).textContent).toBe(
@@ -167,7 +168,7 @@ describe("Clone a profile", () => {
 
   it("reads the list again after a refusal, but not the source it already read", async () => {
     const { server, hermes, user } = await launch();
-    server.profileCreateError = `The dashboard answered 400: {"detail":"Profile name 'default-copy' is reserved."}`;
+    server.profileCreateError = new RestError(400, `{"detail":"Profile name 'default-copy' is reserved."}`);
     const dialog = await openClone(user);
     await user.click(within(dialog).getByRole("button", { name: "Clone" }));
     await within(dialog).findByRole("alert");

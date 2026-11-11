@@ -8,6 +8,7 @@ import { FakeHermes, row } from "../hermes/fakeHermes";
 import { memoryCache } from "../hermes/memoryCache";
 import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
+import { RestError } from "../hermes/pipe";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
@@ -322,7 +323,7 @@ describe("Review regressions", () => {
   it("a delete Hermes refuses keeps the text in the chat", async () => {
     const { server, user } = await launch();
     server.rest["DELETE /api/sessions/backup"] = () => {
-      throw new Error(`The dashboard answered 403: {"detail":"Not allowed"}`);
+      throw new RestError(403, `{"detail":"Not allowed"}`);
     };
     await user.click(composer());
     await user.keyboard("/delete{Enter}{Enter}");

@@ -10,6 +10,7 @@ import { projectScope } from "../hermes/projectLinks";
 import { savedDefaults } from "../hermes/projectDefaults";
 import { DEFAULT_LIMIT_TOKENS } from "../hermes/projectContext";
 import { Main } from "../App";
+import { RestError } from "../hermes/pipe";
 
 type DropEvent = { payload: { type: "drop"; paths: string[]; position: { x: number; y: number } } };
 const dropListeners = vi.hoisted(() => new Set<(e: DropEvent) => void>());
@@ -204,7 +205,7 @@ describe("what Hermes is sent for a chat in a project with context files", () =>
     await app.pick("Budget Tracker");
     const list = s.rest["GET /api/files"];
     s.rest["GET /api/files"] = () => {
-      throw new Error(`The dashboard answered 500: {"detail":"disk on fire"}`);
+      throw new RestError(500, `{"detail":"disk on fire"}`);
     };
     expect(await app.send("Hello")).toBe("Hello");
     expect(app.seeded()[0]).toBeUndefined();

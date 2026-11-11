@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { editFlags, FakeHermes, row, type RestRequest } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
+import { RestError } from "./pipe";
 import { connect } from "./transport";
 
 async function listed(...rows: ReturnType<typeof row>[]) {
@@ -304,6 +305,29 @@ describe("Archiving when another edit lands first", () => {
     expect(await hermes.archive("a")).toBe(false);
     expect(chat("a")).toBeUndefined();
     expect(hermes.getSnapshot().syncError).toBe('"Chat a" is no longer in Hermes: another Hermes client deleted it.');
+  });
+});
+
+describe("Archiving when Hermes answers 404 (#486)", () => {
+  it("keeps the chat, and says nothing of a delete, when a gateway in front of Hermes answers 404", async () => {
+    const { server, hermes, chat } = await listed(row("a", 1), row("b", 2));
+    const gateway = () => {
+      throw new RestError(404, '{"detail":"Not Found"}');
+    };
+    server.rest["PATCH /api/sessions/a"] = gateway;
+    server.rest["GET /api/sessions/a"] = gateway;
+    expect(await hermes.archive("a")).toBe(false);
+    expect(chat("a")).toBeDefined();
+    expect(hermes.getSnapshot().syncError).not.toContain("deleted");
+  });
+
+  it("keeps a chat started here that Hermes hasn't stored yet", async () => {
+    const { server, hermes, chat } = await listed(row("b", 2));
+    const id = await hermes.newChat();
+    expect(server.sessions.some((s) => s.id === id)).toBe(false);
+    expect(await hermes.archive(id)).toBe(false);
+    expect(chat(id)).toBeDefined();
+    expect(hermes.getSnapshot().syncError).not.toContain("deleted");
   });
 });
 

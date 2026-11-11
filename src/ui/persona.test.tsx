@@ -11,6 +11,7 @@ import { PersonaStore, personaKey } from "../hermes/personaStore";
 import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
 import { queryWords, searchText, textMatches } from "./settingsSearch";
+import { RestError } from "../hermes/pipe";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
@@ -228,7 +229,7 @@ describe("Settings → Persona", () => {
     const { server, user, store, connection } = await launch();
     await openPersona(user);
     await edit(user, "# Mine\n");
-    server.soulWriteError = `The dashboard answered 500: {"detail":"Could not write SOUL.md: [Errno 13] Permission denied: '/home/liam/.hermes/SOUL.md'"}`;
+    server.soulWriteError = new RestError(500, `{"detail":"Could not write SOUL.md: [Errno 13] Permission denied: '/home/liam/.hermes/SOUL.md'"}`);
     await user.click(screen.getByRole("button", { name: /^Save$/ }));
     const alert = await screen.findByText(/isn't allowed to save SOUL.md.*Permission denied.*still here, and kept on this computer/);
     expect(alert).toBeTruthy();
@@ -251,7 +252,7 @@ describe("Settings → Persona", () => {
     server.soulRoutes = true;
     // Hermes is updated in place: diagnostics' Check again finds the routes, and the tab opens again.
     await act(() => hermes.capabilities.refresh());
-    server.soulReadError = `The dashboard answered 500: {"detail":"Could not read SOUL.md: [Errno 13] Permission denied"}`;
+    server.soulReadError = new RestError(500, `{"detail":"Could not read SOUL.md: [Errno 13] Permission denied"}`);
     await user.click(screen.getByRole("tab", { name: /Persona/ }));
     await screen.findByText("Not allowed");
     server.soulReadError = undefined;
@@ -305,7 +306,7 @@ describe("edge cases an independent review found", () => {
     const { server, user, store, connection } = await launch();
     await openPersona(user);
     await edit(user, "# Mine\n");
-    server.afterSoulWrite = () => (server.soulReadError = `The dashboard answered 500: Internal Server Error`);
+    server.afterSoulWrite = () => (server.soulReadError = new RestError(500, `Internal Server Error`));
     await user.click(screen.getByRole("button", { name: /^Save$/ }));
     await screen.findByText(/Hermes said it saved SOUL.md, but reading it back failed/);
     expect(screen.getByText("Unsaved")).toBeTruthy();
@@ -387,7 +388,7 @@ describe("edge cases the second review round found", () => {
     await user.click(screen.getByRole("button", { name: /^Save$/ }));
     await screen.findByText(/nothing was saved/);
     await edit(user, SOUL);
-    server.afterSoulWrite = () => (server.soulReadError = `The dashboard answered 500: Internal Server Error`);
+    server.afterSoulWrite = () => (server.soulReadError = new RestError(500, `Internal Server Error`));
     await user.click(screen.getByRole("button", { name: "Save mine over it…" }));
     await user.click(screen.getByRole("button", { name: "Save mine over it" }));
     await screen.findByText(/reading it back failed/);
@@ -436,7 +437,7 @@ describe("edge cases the third review round found", () => {
     const gate = deferred<void>();
     server.rest["PUT /api/profiles/default/soul"] = async () => {
       await gate.promise;
-      throw new Error(`The dashboard answered 500: {"detail":"Could not write SOUL.md: [Errno 28] No space left on device"}`);
+      throw new RestError(500, `{"detail":"Could not write SOUL.md: [Errno 28] No space left on device"}`);
     };
     await user.click(screen.getByRole("button", { name: "Save mine over it…" }));
     await user.click(screen.getByRole("button", { name: "Save mine over it" }));
@@ -454,7 +455,7 @@ describe("edge cases the third review round found", () => {
     delete server.souls.default;
     await user.click(screen.getByRole("button", { name: /^Save$/ }));
     await screen.findByText(/nothing was saved/);
-    server.afterSoulWrite = () => (server.soulReadError = `The dashboard answered 500: Internal Server Error`);
+    server.afterSoulWrite = () => (server.soulReadError = new RestError(500, `Internal Server Error`));
     await user.click(screen.getByRole("button", { name: "Save mine over it…" }));
     await user.click(screen.getByRole("button", { name: "Save mine over it" }));
     await screen.findByText(/reading it back failed/);
@@ -740,7 +741,7 @@ describe("editing another profile's persona (#190)", () => {
     const { server, user } = await launch();
     const list = server.rest["GET /api/profiles"];
     server.rest["GET /api/profiles"] = () => {
-      throw new Error("The dashboard answered 500: boom");
+      throw new RestError(500, "boom");
     };
     await openPersona(user);
     expect((await editor()).value).toBe(SOUL);
@@ -821,7 +822,7 @@ describe("the row layout (#174, ADR 0059)", () => {
   it("shows under the picker, unfolded, that the profiles couldn't be listed", async () => {
     const { server, user } = await launch();
     server.rest["GET /api/profiles"] = () => {
-      throw new Error("The dashboard answered 500: boom");
+      throw new RestError(500, "boom");
     };
     await openPersona(user);
     const problem = await screen.findByText(/Couldn't list the server's profiles/);

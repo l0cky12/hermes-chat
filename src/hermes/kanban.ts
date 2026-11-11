@@ -4,7 +4,7 @@
 // decides when, keeps what was read, and hands the transport each session's tasks. The task's status on the board
 // decides everything; a `status.update` only says which task to read.
 import { TASK_MEANS, isStale, parseTask, sameTask, type DispatchedTask } from "./dispatched";
-import type { RestMethod } from "./pipe";
+import { statusOf, type RestMethod } from "./pipe";
 
 export type RestFn = (method: RestMethod, pathAndQuery: string, body?: unknown) => Promise<unknown>;
 
@@ -16,7 +16,6 @@ export type SeenTask = { task: DispatchedTask; sessionId?: string };
 
 const BASE = "api/plugins/kanban";
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-const answered404 = (e: unknown) => e instanceof Error && /^The dashboard answered 404:/.test(e.message);
 
 export class KanbanApi {
   constructor(private rest: RestFn) {}
@@ -35,7 +34,7 @@ export class KanbanApi {
     try {
       res = await this.rest("GET", `${BASE}/board?${new URLSearchParams({ board: slug })}`);
     } catch (e) {
-      if (answered404(e)) return undefined;
+      if (statusOf(e) === 404) return undefined;
       throw e;
     }
     const columns = isObj(res) && Array.isArray(res.columns) ? res.columns : [];
@@ -48,7 +47,7 @@ export class KanbanApi {
     try {
       res = await this.rest("GET", `${BASE}/tasks/${encodeURIComponent(id)}?${new URLSearchParams({ board: slug })}`);
     } catch (e) {
-      if (answered404(e)) return undefined;
+      if (statusOf(e) === 404) return undefined;
       throw e;
     }
     // The detail carries the runs beside the task.

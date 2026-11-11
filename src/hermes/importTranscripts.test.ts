@@ -5,6 +5,7 @@ import { IMPORTS_KEY, IMPORT_LIMITS, ImportFileError, ImportRefusedError, import
 import { memoryCache } from "./memoryCache";
 import type { Chat } from "./model";
 import { connect } from "./transport";
+import { RestError } from "./pipe";
 
 const EXPORTED = new Date(Date.UTC(2026, 10, 2, 9, 30));
 
@@ -288,7 +289,7 @@ describe("sending an import", () => {
     const { server, hermes } = await connected();
     const p = await plan("jsonl", jsonl(exported()));
     server.rest["POST /api/sessions/import"] = () => {
-      throw new Error(`The dashboard answered 503: {"detail":"storage_unavailable"}`);
+      throw new RestError(503, `{"detail":"storage_unavailable"}`);
     };
     const out = await hermes.imports.send("default", p.chats);
     expect(out.imported).toEqual([]);
@@ -378,7 +379,7 @@ describe("sending an import", () => {
     const unmade = (req: { path: string; method: string }) => req.method === "GET" && /^\/api\/sessions\//.test(req.path) && !server.sessions.length;
     for (const id of ["20261020_101500_a1b2c3"])
       server.rest[`GET /api/sessions/${id}/mutation-snapshot`] = (req) => {
-        if (unmade(req)) throw new Error(`The dashboard answered 503: {"detail":"Session store is not initialized. Start this profile's gateway to initialize it."}`);
+        if (unmade(req)) throw new RestError(503, `{"detail":"Session store is not initialized. Start this profile's gateway to initialize it."}`);
         return { exists: true, runtime_revision: 1 };
       };
     const p = await plan("jsonl", jsonl(exported()));

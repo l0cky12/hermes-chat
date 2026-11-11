@@ -278,6 +278,41 @@ fn held<'a>(slot: &'a Option<Connection>, attempt: &str) -> Result<&'a Connectio
     slot.as_ref().filter(|c| !c.attempt.is_empty() && c.attempt == attempt).ok_or_else(|| transport::TransportError::Closed.to_string())
 }
 
+/// How a command that calls the dashboard fails, as the webview gets it: the text to show, and, when the dashboard
+/// answered, its HTTP status and the start of its body. The webview tells failures apart by those two, never by the
+/// text, which repeats the body, server text and all (#486).
+#[derive(Debug, Serialize)]
+struct RelayError {
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<String>,
+}
+
+impl From<transport::TransportError> for RelayError {
+    fn from(e: transport::TransportError) -> Self {
+        let (status, body) = match &e {
+            transport::TransportError::Unexpected { status, body } => (Some(*status), Some(body.clone())),
+            transport::TransportError::SignedOut => (Some(401), None),
+            _ => (None, None),
+        };
+        RelayError { message: e.to_string(), status, body }
+    }
+}
+
+impl From<String> for RelayError {
+    fn from(message: String) -> Self {
+        RelayError { message, status: None, body: None }
+    }
+}
+
+impl From<&str> for RelayError {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+
 /// How long a reopen's ticket and socket may each take: a closed socket usually means the rest of the connection still
 /// answers, and when it doesn't, opening it all again soon beats waiting.
 const REOPEN_LIMITS: transport::StepLimits = transport::StepLimits { ticket: QUICK_REACH, socket: QUICK_REACH, ..transport::StepLimits::ROUTES };
@@ -470,29 +505,29 @@ fn hermes_probe_cancel(state: State<'_, AppState>) {
 /// Gives the signed-in Hermes a model provider's API key for `profile` (`Dashboard::save_provider_key`). The key
 /// goes to the server and isn't kept on this computer.
 #[tauri::command]
-async fn hermes_save_provider_key(state: State<'_, AppState>, attempt: String, profile: String, key: String, value: String) -> Result<SavedKey, String> {
+async fn hermes_save_provider_key(state: State<'_, AppState>, attempt: String, profile: String, key: String, value: String) -> Result<SavedKey, RelayError> {
     let dashboard = dashboard(&state, &attempt).await?;
-    dashboard.save_provider_key(&profile, &key, &value).await.map_err(|e| e.to_string())
+    dashboard.save_provider_key(&profile, &key, &value).await.map_err(RelayError::from)
 }
 
 /// Takes a model provider's API key out of the signed-in Hermes for `profile` (`Dashboard::remove_provider_key`). The
 /// window's REST relay refuses `DELETE api/env`, so this is the only way (ADR 0095).
 #[tauri::command]
-async fn hermes_remove_provider_key(state: State<'_, AppState>, attempt: String, profile: String, key: String) -> Result<(), String> {
+async fn hermes_remove_provider_key(state: State<'_, AppState>, attempt: String, profile: String, key: String) -> Result<(), RelayError> {
     let dashboard = dashboard(&state, &attempt).await?;
-    dashboard.remove_provider_key(&profile, &key).await.map_err(|e| e.to_string())
+    dashboard.remove_provider_key(&profile, &key).await.map_err(RelayError::from)
 }
 
 /// `profile`'s subscription providers and whether each is signed in, without token previews (ADR 0133).
 #[tauri::command]
-async fn hermes_provider_sign_ins(state: State<'_, AppState>, attempt: String, profile: String) -> Result<Vec<transport::ProviderSignIn>, String> {
-    dashboard(&state, &attempt).await?.provider_sign_ins(&profile).await.map_err(|e| e.to_string())
+async fn hermes_provider_sign_ins(state: State<'_, AppState>, attempt: String, profile: String) -> Result<Vec<transport::ProviderSignIn>, RelayError> {
+    dashboard(&state, &attempt).await?.provider_sign_ins(&profile).await.map_err(RelayError::from)
 }
 
 /// `profile`'s OpenAI-compatible endpoints, without key previews (ADR 0133).
 #[tauri::command]
-async fn hermes_custom_endpoints(state: State<'_, AppState>, attempt: String, profile: String) -> Result<Vec<transport::CustomEndpoint>, String> {
-    dashboard(&state, &attempt).await?.custom_endpoints(&profile).await.map_err(|e| e.to_string())
+async fn hermes_custom_endpoints(state: State<'_, AppState>, attempt: String, profile: String) -> Result<Vec<transport::CustomEndpoint>, RelayError> {
+    dashboard(&state, &attempt).await?.custom_endpoints(&profile).await.map_err(RelayError::from)
 }
 
 /// Checks an OpenAI-compatible endpoint and adds it to `profile` (`Dashboard::save_endpoint`, ADR 0133). Its key goes
@@ -504,8 +539,8 @@ async fn hermes_save_endpoint(
     profile: String,
     form: transport::EndpointForm,
     anyway: bool,
-) -> Result<transport::EndpointSave, String> {
-    dashboard(&state, &attempt).await?.save_endpoint(&profile, &form, anyway).await.map_err(|e| e.to_string())
+) -> Result<transport::EndpointSave, RelayError> {
+    dashboard(&state, &attempt).await?.save_endpoint(&profile, &form, anyway).await.map_err(RelayError::from)
 }
 
 #[tauri::command]
@@ -642,9 +677,9 @@ async fn stage_clipboard_file(
 }
 
 #[tauri::command]
-async fn hermes_request(state: State<'_, AppState>, attempt: String, method: String, path: String, body: Option<String>) -> Result<String, String> {
+async fn hermes_request(state: State<'_, AppState>, attempt: String, method: String, path: String, body: Option<String>) -> Result<String, RelayError> {
     let dashboard = dashboard(&state, &attempt).await?;
-    dashboard.request(&method, &path, body).await.map_err(|e| e.to_string())
+    dashboard.request(&method, &path, body).await.map_err(RelayError::from)
 }
 
 /// The dashboard of the connection opened as `attempt` (`held`), without holding the lock across a request, so
@@ -695,40 +730,40 @@ struct SpeechOut {
 }
 
 #[tauri::command]
-async fn hermes_speak(state: State<'_, AppState>, attempt: String, profile: String, text: String) -> Result<SpeechOut, String> {
+async fn hermes_speak(state: State<'_, AppState>, attempt: String, profile: String, text: String) -> Result<SpeechOut, RelayError> {
     use base64::Engine;
     let dashboard = dashboard(&state, &attempt).await?;
-    let speech = dashboard.speak(&profile, &text).await.map_err(|e| e.to_string())?;
+    let speech = dashboard.speak(&profile, &text).await.map_err(RelayError::from)?;
     let audio = base64::engine::general_purpose::STANDARD.encode(&speech.audio);
     Ok(SpeechOut { mime: speech.mime, audio, provider: speech.provider })
 }
 
 #[tauri::command]
-async fn hermes_voice_setup(state: State<'_, AppState>, attempt: String, profile: String) -> Result<transport::VoiceSetup, String> {
+async fn hermes_voice_setup(state: State<'_, AppState>, attempt: String, profile: String) -> Result<transport::VoiceSetup, RelayError> {
     let dashboard = dashboard(&state, &attempt).await?;
-    dashboard.voice_setup(&profile).await.map_err(|e| e.to_string())
+    dashboard.voice_setup(&profile).await.map_err(RelayError::from)
 }
 
 /// A read-only dashboard GET whose answer may be big, e.g. a server file for the Server files screen's preview: refused
 /// once it passes `max_bytes`.
 #[tauri::command]
-async fn hermes_get_limited(state: State<'_, AppState>, attempt: String, path: String, max_bytes: u64) -> Result<String, String> {
+async fn hermes_get_limited(state: State<'_, AppState>, attempt: String, path: String, max_bytes: u64) -> Result<String, RelayError> {
     let dashboard = dashboard(&state, &attempt).await?;
-    dashboard.get_limited(&path, max_bytes).await.map_err(|e| e.to_string())
+    dashboard.get_limited(&path, max_bytes).await.map_err(RelayError::from)
 }
 
 #[tauri::command]
-async fn hermes_toolset_guards(state: State<'_, AppState>, attempt: String, profile: String) -> Result<transport::ToolsetGuards, String> {
+async fn hermes_toolset_guards(state: State<'_, AppState>, attempt: String, profile: String) -> Result<transport::ToolsetGuards, RelayError> {
     let dashboard = dashboard(&state, &attempt).await?;
-    dashboard.toolset_guards(&profile).await.map_err(|e| e.to_string())
+    dashboard.toolset_guards(&profile).await.map_err(RelayError::from)
 }
 
 /// Settings → MCP servers' edit of one server for `profile` (`Dashboard::mcp_edit`, ADR 0121). The webview sends
 /// only that server's fields, secrets it didn't retype left out; Rust reads and writes Hermes's whole map.
 #[tauri::command]
-async fn hermes_mcp_edit(state: State<'_, AppState>, attempt: String, profile: String, edit: mcp::Edit) -> Result<(), String> {
+async fn hermes_mcp_edit(state: State<'_, AppState>, attempt: String, profile: String, edit: mcp::Edit) -> Result<(), RelayError> {
     let dashboard = dashboard(&state, &attempt).await?;
-    dashboard.mcp_edit(&profile, &edit).await.map_err(|e| e.to_string())
+    dashboard.mcp_edit(&profile, &edit).await.map_err(RelayError::from)
 }
 
 #[tauri::command]
@@ -837,17 +872,17 @@ impl Transfers {
     /// Runs `work` as transfer `id` until it ends or `files_cancel` or `stop_all` stops it, if no stop came since
     /// `epoch` (checked under the same lock `stop_all` takes, so a stop either reaches the work or keeps it from
     /// starting). Given an `id` still running, the older transfer is stopped; each run removes only its own entry.
-    async fn run<T: Send + 'static>(
+    async fn run<T: Send + 'static, E: From<String> + Send + 'static>(
         &self,
         id: u64,
         epoch: u64,
-        work: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
-    ) -> Result<T, String> {
+        work: impl std::future::Future<Output = Result<T, E>> + Send + 'static,
+    ) -> Result<T, E> {
         let run = self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let task = {
             let mut tasks = self.tasks.lock().unwrap();
             if self.epoch() != epoch {
-                return Err(TRANSFER_STOPPED.into());
+                return Err(TRANSFER_STOPPED.to_owned().into());
             }
             let task = tokio::spawn(work);
             if let Some((_, old)) = tasks.insert(id, (run, task.abort_handle())) {
@@ -863,8 +898,8 @@ impl Transfers {
         drop(tasks);
         match ended {
             Ok(result) => result,
-            Err(e) if e.is_cancelled() => Err(TRANSFER_STOPPED.into()),
-            Err(e) => Err(e.to_string()),
+            Err(e) if e.is_cancelled() => Err(TRANSFER_STOPPED.to_owned().into()),
+            Err(e) => Err(e.to_string().into()),
         }
     }
 }
@@ -911,7 +946,7 @@ async fn files_download(
     path: String,
     name: String,
     on_progress: Channel<TransferProgress>,
-) -> Result<Option<Downloaded>, String> {
+) -> Result<Option<Downloaded>, RelayError> {
     let epoch = transfers.epoch();
     let (tx, rx) = tokio::sync::oneshot::channel();
     let mut dialog = app.dialog().file().set_title("Download from the Hermes server").set_file_name(name);
@@ -931,7 +966,7 @@ async fn files_download(
         let report = |done, total| {
             let _ = on_progress.send(TransferProgress { done, total, dest: shown.clone() });
         };
-        let bytes = dashboard.download(&path, &dest, report).await.map_err(|e| e.to_string())?;
+        let bytes = dashboard.download(&path, &dest, report).await.map_err(RelayError::from)?;
         Ok(Some(Downloaded { dest: shown, bytes }))
     };
     transfers.run(id, epoch, work).await
@@ -1004,7 +1039,7 @@ async fn files_upload(
     path: String,
     overwrite: bool,
     on_progress: Channel<TransferProgress>,
-) -> Result<String, String> {
+) -> Result<String, RelayError> {
     // Taken, not looked up: a pick is good for one upload.
     let (local, epoch) = picks.0.lock().unwrap().1.remove(&token).ok_or("That file wasn't picked in the Open dialog, or was already sent.")?;
     let dest = path.clone();
@@ -1015,7 +1050,7 @@ async fn files_upload(
         let report = move |done, total| {
             let _ = on_progress.send(TransferProgress { done, total, dest: dest.clone() });
         };
-        dashboard.upload(&path, transport::UploadSource::File(local), overwrite, report).await.map_err(|e| e.to_string())
+        dashboard.upload(&path, transport::UploadSource::File(local), overwrite, report).await.map_err(RelayError::from)
     };
     transfers.run(id, epoch, work).await
 }
@@ -1032,11 +1067,11 @@ async fn files_save_text(
     path: String,
     text: String,
     overwrite: bool,
-) -> Result<String, String> {
+) -> Result<String, RelayError> {
     let epoch = transfers.epoch();
     let work = async move {
         let dashboard = dashboard_since(&app, &attempt, epoch).await?;
-        dashboard.upload(&path, transport::UploadSource::Bytes(text.into_bytes()), overwrite, |_, _| {}).await.map_err(|e| e.to_string())
+        dashboard.upload(&path, transport::UploadSource::Bytes(text.into_bytes()), overwrite, |_, _| {}).await.map_err(RelayError::from)
     };
     transfers.run(id, epoch, work).await
 }
@@ -1056,11 +1091,11 @@ async fn fs_save_text(
     path: String,
     text: String,
     session: Option<String>,
-) -> Result<String, String> {
+) -> Result<String, RelayError> {
     let epoch = transfers.epoch();
     let work = async move {
         let dashboard = dashboard_since(&app, &attempt, epoch).await?;
-        dashboard.write_agent_text(&profile, &path, &text, session.as_deref()).await.map_err(|e| e.to_string())
+        dashboard.write_agent_text(&profile, &path, &text, session.as_deref()).await.map_err(RelayError::from)
     };
     transfers.run(id, epoch, work).await
 }

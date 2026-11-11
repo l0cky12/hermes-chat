@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { FakeHermes, row, type RestRequest } from "./fakeHermes";
 import { CapabilityUnsupportedError } from "./capabilities";
 import { ProtocolMismatchError, connect, type Hermes } from "./transport";
-import type { OpenPipe } from "./pipe";
+import { RestError, type OpenPipe } from "./pipe";
 
 /** The server's pipe, with the toolsets write check (a PUT to `PROBE_NAME`) held back while `held` is set. */
 function holdingWriteChecks(server: FakeHermes) {
@@ -177,7 +177,7 @@ describe("capabilities over the transport", () => {
     server.souls = { default: "# Fixture\n" };
     // This Hermes reads SOUL.md but has no route to write it.
     server.rest["PUT /api/profiles/default/soul"] = () => {
-      throw new Error(`The dashboard answered 404: {"detail":"Not Found"}`);
+      throw new RestError(404, `{"detail":"Not Found"}`);
     };
     const hermes = await signedIn(server);
     await checked(hermes);
@@ -206,7 +206,7 @@ describe("capabilities over the transport", () => {
     server.rest["GET /api/files"] = (req) => {
       if (!first) return files(req);
       first = false;
-      return new Promise((_, reject) => (release = () => reject(new Error(`The dashboard answered 404: {"detail":"Not Found"}`))));
+      return new Promise((_, reject) => (release = () => reject(new RestError(404, `{"detail":"Not Found"}`))));
     };
     const hermes = await signedIn(server);
     await expectSoon(() => !first, 6000);

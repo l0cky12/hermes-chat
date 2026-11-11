@@ -6,6 +6,7 @@ import { FakeHermes, row } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
 import { connect, type Hermes } from "./transport";
 import { ArtifactStore, artifactIo, artifactKey, isDirty, type ArtifactRef } from "./artifacts";
+import { RestError } from "./pipe";
 
 const running: Hermes[] = [];
 afterEach(async () => {
@@ -134,13 +135,13 @@ describe("artifacts", () => {
     store.type(key, "lost but landed\n", { start: 0, end: 0 });
     server.afterFsWrite = () => {
       server.afterFsWrite = undefined;
-      throw new Error("The dashboard answered 504: Gateway Timeout");
+      throw new RestError(504, "Gateway Timeout");
     };
     await store.save(key);
     expect(store.get(key)!.error).toBeUndefined();
     expect(isDirty(store.get(key))).toBe(false);
     store.type(key, "refused\n", { start: 0, end: 0 });
-    server.fsWriteFailure = `The dashboard answered 403: {"detail":"File is not writable"}`;
+    server.fsWriteFailure = new RestError(403, `{"detail":"File is not writable"}`);
     await store.save(key);
     const s = store.get(key)!;
     expect(s.error).toBe("The server's user isn't allowed to write this file.");
@@ -156,7 +157,7 @@ describe("artifacts", () => {
     server.serverFiles["/srv/out/notes.md"] = utf8("theirs\n");
     await store.save(key);
     let failReads = 1;
-    server.fsReadFailure = (path) => (path === "/srv/out/notes (2).md" && failReads-- > 0 ? "The dashboard answered 502: Bad Gateway" : undefined);
+    server.fsReadFailure = (path) => (path === "/srv/out/notes (2).md" && failReads-- > 0 ? new RestError(502, "Bad Gateway") : undefined);
     await store.saveCopy(key);
     expect(store.get(key)!.error).toMatch(/couldn't be read back to check/);
     await store.saveCopy(key);

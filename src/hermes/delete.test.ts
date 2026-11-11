@@ -9,6 +9,7 @@ import { DeleteChatDialog } from "../ui/DeleteChat";
 import { FakeHermes, row, type RestRequest } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
 import { connect } from "./transport";
+import { RestError } from "./pipe";
 
 async function listed(...rows: ReturnType<typeof row>[]) {
   const server = new FakeHermes();
@@ -128,7 +129,7 @@ describe("Deleting a chat", () => {
   it("puts the chat back and says why when the server refuses", async () => {
     const { server, hermes, ids, cache } = await listed(row("a", 1, { title: "Nightly backup" }), row("b", 2));
     server.rest["DELETE /api/sessions/a"] = () => {
-      throw new Error("The dashboard answered 409: session_busy");
+      throw new RestError(409, "session_busy");
     };
     expect(await hermes.delete("a")).toBe(false);
     expect(ids().sort()).toEqual(["a", "b"]);
