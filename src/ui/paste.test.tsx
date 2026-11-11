@@ -2,6 +2,7 @@
 // Pasting a screenshot or files into the composer, or dropping files on the pane on Windows, attaches them like picked files. Rust
 // saves the bytes to a temp file (`stage_clipboard_file`, faked here onto the fake Hermes's disk); checking, previews
 // and sending are the real path against a fake Hermes.
+import type { ComponentProps } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -88,6 +89,14 @@ const overlay = () => screen.queryByText("Drop files to attach");
 /** A drag carrying `files` from outside the app, as the webview reports it; false when the pane took it over. */
 const fileDrag = (type: "dragEnter" | "dragOver" | "drop", files: File[]) =>
   fireEvent[type](pane(), { dataTransfer: { types: ["Files"], files, dropEffect: "none" } });
+
+describe("A composer's staged files", () => {
+  it("can't be drawn without the desk that keeps them", () => {
+    // tsc checks this (npm run build): a composer with no desk would check the files the owner adds and keep none.
+    const needsDesk: undefined extends ComponentProps<typeof ChatPane>["screenshots"] ? false : true = true;
+    expect(needsDesk).toBe(true);
+  });
+});
 
 describe("Pasting into the composer", () => {
   it("attaches a pasted screenshot like a dropped image, previews it and sends it to Hermes", async () => {
