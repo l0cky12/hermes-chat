@@ -11,7 +11,6 @@ import { rememberOpenChat } from "../hermes/uiPrefs";
 import { linkInbox } from "../hermes/tauriLinks";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 const keyring = new Map<string, string>();
 const fake = new FakeHermes();

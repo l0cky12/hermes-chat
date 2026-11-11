@@ -145,7 +145,6 @@ const LOOKUPS_PER_CHECK = 3;
 const LOOKUP_AT_ONCE = 4;
 /** The most chats one search lists; dashboard REST caps it at 100. */
 const SEARCH_LIMIT = 50;
-export const SEARCH_MAX = 100;
 /** How long the skills the composer offers are used before they are read again (`skillCommands`). */
 export const SKILL_COMMANDS_FRESH_MS = 60_000;
 /** The most side questions a chat shows; a newer one takes the oldest one's place (ADR 0070). */

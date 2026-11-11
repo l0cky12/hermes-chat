@@ -42,9 +42,6 @@ export type FileView =
  */
 export type Framing = { kind: "refused"; by: string } | { kind: "unreachable"; message: string } | { kind: "notRefused" };
 
-/** The most text Hermes's `read-text` returns, and the most Rust reads of a Local file (`_FS_TEXT_PREVIEW_MAX_BYTES`). */
-export const TEXT_PREVIEW_BYTES = 512 * 1024;
-
 const IMAGE_NAME = /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i;
 /** The images a local preview reads: the ones Rust's `read_preview` takes. */
 const LOCAL_IMAGE_NAME = /\.(png|jpe?g|gif|webp|bmp)$/i;

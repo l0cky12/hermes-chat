@@ -101,7 +101,6 @@ export const envKeyFor = (name: string) => `MCP_${name.toUpperCase().replace(/[^
 
 /** Rust's `mcp::server_name`: what this app names in a path. */
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
-export const serverNameOk = (n: string) => NAME.test(n);
 /** An environment variable's name, as Rust checks it. */
 export const envNameOk = (k: string) => /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(k);
 

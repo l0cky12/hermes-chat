@@ -58,8 +58,6 @@ export type Target = Conn & { parts?: string[] };
 const addressOf = (s: ScopeSource): Conn => ({ mode: s.mode, target: s.mode === "ssh" ? s.sshTarget : s.url, username: s.username });
 export const connOf = (s: ScopeSource): Target => ({ ...addressOf(s), parts: scopeParts(s) });
 const sameConn = (a: Conn, b: Conn) => a.mode === b.mode && a.target === b.target && a.username === b.username;
-/** An address-keyed place's scope: how the stores keyed it before saved connections, and still do without an id. */
-export const scopeOf = (p: Place) => JSON.stringify([p.mode, p.target, p.username, p.profile]);
 /** Where `target`'s `profile` is kept: projectLinks.ts `projectScope`, drafts.ts `draftKey` and chatCache.ts all agree. */
 const scopeAt = (target: Target, profile: string) => JSON.stringify([...(target.parts ?? [target.mode, target.target, target.username]), profile]);
 
@@ -317,7 +315,7 @@ const grouping = (part: unknown): ScopeLinks | undefined => {
 };
 
 /** The display and startup settings a backup holds. Each profile's chat to reopen isn't: it's a copy of the server's list. */
-const SETTINGS_FIELDS = ["theme", "reopenLastChat", "checkUpdatesOnLaunch", "reasoningBlocks", "modelPicker", "modelFavorites", "statusBar", "screenshotShortcut", "previewWidth", "terminalKind"];
+const SETTINGS_FIELDS = ["theme", "reopenLastChat", "checkUpdatesOnLaunch", "modelPicker", "modelFavorites", "statusBar", "screenshotShortcut", "previewWidth", "terminalKind"];
 const prefsDoc = (s: BackupStorage): Record<string, unknown> => {
   try {
     const d: unknown = JSON.parse(s.getItem(UI_PREFS_KEY) ?? "{}");

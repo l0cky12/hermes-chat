@@ -533,12 +533,6 @@ export function asCommitted(v: unknown): Committed {
   return c;
 }
 
-export function asStamps(v: unknown): { head: string | null; index: string } {
-  const s = v as { head: string | null; index: string };
-  if (!s || typeof s.index !== "string") throw new RepoFailure("bad-reply", "The server's answer didn't say how the index is now.");
-  return s;
-}
-
 export function asDiff(v: unknown): DiffReply {
   const d = v as DiffReply;
   if (!d || typeof d.diff !== "string") throw new RepoFailure("bad-reply", "The server's answer wasn't a diff.");

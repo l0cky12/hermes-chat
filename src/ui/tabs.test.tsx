@@ -13,7 +13,6 @@ const drops = vi.hoisted(() => new Set<(e: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({
   onDragDropEvent: async (cb: (e: { payload: unknown }) => void) => { drops.add(cb); return () => drops.delete(cb); },
 }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   // As WebView2 answers (a Promise that settles when the scroll ends), so an effect that leaks it fails here too (#308).

@@ -160,9 +160,6 @@ export function exportFile(list: readonly Template[]): string {
   return JSON.stringify({ format: EXPORT_FORMAT, version: EXPORT_VERSION, templates }, null, 2) + "\n";
 }
 
-/** The largest file Import reads. */
-export const IMPORT_MAX_BYTES = 2 * 1024 * 1024;
-
 export type Imported = { added: Template[]; skipped: number; renamed: { from: string; to: string }[]; overLimit: number };
 
 /**
