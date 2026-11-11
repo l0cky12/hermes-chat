@@ -576,7 +576,8 @@ async fn read_status(http: &reqwest::Client, base: &Url, headers: &HeaderMap) ->
     let resp = http.get(endpoint(base, "api/status")).send().await.map_err(unreachable)?;
     let status = resp.status();
     if status.is_success() {
-        return small_answer(resp).await;
+        // A dashboard's status is a KB or two, so an answer past the cap isn't one.
+        return small_answer(resp).await.map_err(|e| if matches!(e, TransportError::AnswerTooLarge { .. }) { TransportError::NotHermes } else { e });
     }
     let kept = matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) || status.is_server_error();
     Err(match unexpected(resp, headers).await {
@@ -3767,19 +3768,13 @@ mod tests {
     }
 
     /// `/api/status` is read before anything is known about the server, so whatever answers at a mistyped address
-    /// mustn't fill memory: a real status is a KB or two, and past 64 KiB it is given up.
+    /// mustn't fill memory: a real status is a KB or two, and past 64 KiB it is given up as not a Hermes dashboard.
     #[tokio::test]
     async fn a_status_that_never_ends_is_given_up_past_64_kib() {
         let base = url::Url::parse(&endless().await).unwrap();
         let headers = super::HeaderMap::new();
         let read = super::read_server(&super::client(&headers).unwrap(), &base, &headers, None, Duration::from_secs(5)).await;
-        match read {
-            Err(TransportError::AnswerTooLarge { size, max }) => {
-                assert_eq!(max, 64 * 1024);
-                assert!(size > max && size < max + 1024 * 1024, "{size}");
-            }
-            other => panic!("{other:?}"),
-        }
+        assert!(matches!(read, Err(TransportError::NotHermes)), "{read:?}");
     }
 
     /// The socket ticket's answer is a few words of JSON; one that never ends is given up past 64 KiB.
