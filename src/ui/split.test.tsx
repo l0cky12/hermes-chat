@@ -625,4 +625,31 @@ describe("A chat that leaves the list under a pane (#467)", () => {
     expect(prompts(server)).toHaveLength(0);
     expect(pane(0).textContent).toContain("no longer on Hermes");
   });
+
+  it("a chat in a tab, older than the list reaches, keeps its tab and Draft when a list read leaves it out", async () => {
+    const { server, hermes, user } = await signedIn();
+    await user.clear(composerIn(0));
+    await user.click(rowButton("Nightly backup"));
+    await settle(hermes);
+    await user.clear(composerIn(0));
+    await user.type(composerIn(0), "Unlock the restic repo");
+    await user.click(within(pane(0)).getByRole("button", { name: "New tab" }));
+    const tabs = () => Array.from(pane(0).querySelectorAll(".tab-open")).map((t) => t.textContent);
+    expect(tabs()).toEqual(["Nightly backup", "New chat"]);
+
+    // Quiet for six weeks and no longer pinned: the list read on reconnecting leaves it out, but Hermes still has it.
+    server.sessions = server.sessions.map((s) => (s.id === "backup" ? row("backup", 42, { title: "Nightly backup" }) : s));
+    server.drop();
+    await waitFor(() => expect(hermes.getSnapshot().status).toBe("connected"), { timeout: 5_000 });
+    await settle(hermes);
+    await waitFor(() => expect(server.restRequests.some((r) => r.path === "/api/sessions/backup")).toBe(true));
+    await settle(hermes);
+    expect(tabs()).toEqual(["Nightly backup", "New chat"]);
+    expect(composerIn(0).value).toBe("");
+
+    await user.click(within(pane(0)).getByText("Nightly backup", { selector: ".tab-open *, .tab-open" }));
+    await settle(hermes);
+    expect(titleIn(0)).toBe("Nightly backup");
+    expect(composerIn(0).value).toBe("Unlock the restic repo");
+  });
 });

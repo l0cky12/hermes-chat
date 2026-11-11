@@ -1120,11 +1120,11 @@ impl Pipe {
         self.outgoing.send(Outgoing { text, written: None }).map_err(|_| TransportError::Closed)
     }
 
-    /// Send one frame: `head`, the file at `path` as base64, then `tail`. Refuses a file over
-    /// `max_bytes` without sending anything; the size is checked again after reading, in case it grew. Resolves once
-    /// the frame has been written to the socket, not when it is queued, so the webview can tell a long upload from a
-    /// silent Hermes (#469).
-    pub async fn send_file(&self, head: &str, path: &str, tail: &str, max_bytes: u64) -> Result<(), TransportError> {
+    /// Queue one frame: `head`, the file at `path` as base64, then `tail`. Refuses a file over `max_bytes` without
+    /// sending anything; the size is checked again after reading, in case it grew. The frame may take minutes to write
+    /// on a slow uplink, so `Written` says when it has gone, and the webview can tell a long upload from a silent
+    /// Hermes (#469). Wait on it without holding the `Pipe`: dropping the pipe must still stop the write.
+    pub async fn send_file(&self, head: &str, path: &str, tail: &str, max_bytes: u64) -> Result<Written, TransportError> {
         let bytes = read_capped(path, max_bytes).await?;
         let mut text = String::with_capacity(head.len() + bytes.len().div_ceil(3) * 4 + tail.len());
         text.push_str(head);
@@ -1133,7 +1133,17 @@ impl Pipe {
         text.push_str(tail);
         let (written, sent) = oneshot::channel();
         self.outgoing.send(Outgoing { text, written: Some(written) }).map_err(|_| TransportError::Closed)?;
-        match sent.await {
+        Ok(Written(sent))
+    }
+}
+
+/// A frame `Pipe::send_file` queued, until it has been written to the socket.
+pub struct Written(oneshot::Receiver<Result<(), String>>);
+
+impl Written {
+    /// Resolves once the frame has been written. `Closed` when the pipe was dropped or its socket ended first.
+    pub async fn wait(self) -> Result<(), TransportError> {
+        match self.0.await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(TransportError::WebSocket(e)),
             Err(_) => Err(TransportError::Closed),
@@ -3284,7 +3294,7 @@ mod tests {
 
         let sending = {
             let (pipe, path) = (pipe.clone(), path.to_string_lossy().into_owned());
-            tokio::spawn(async move { pipe.send_file("{\"f\":\"", &path, "\"}", 64 * 1024 * 1024).await })
+            tokio::spawn(async move { pipe.send_file("{\"f\":\"", &path, "\"}", 64 * 1024 * 1024).await?.wait().await })
         };
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(!sending.is_finished(), "send_file resolved before Hermes read the file");
@@ -3296,6 +3306,32 @@ mod tests {
         read.send(()).unwrap();
         tokio::time::timeout(Duration::from_secs(20), sending).await.unwrap().unwrap().unwrap();
         assert_eq!(received.await.unwrap(), "{\"f\":\"".len() + size.div_ceil(3) * 4 + "\"}".len());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Replacing the connection drops its pipe, and that stops a file frame still being written: the wait ends with
+    /// `Closed` instead of the old socket writing on (#469).
+    #[tokio::test]
+    async fn dropping_the_pipe_stops_a_file_frame_still_being_written() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            // Accepted and never read, so the client's write backs up.
+            let _ws = tokio_tungstenite::accept_async(sock).await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let path = std::env::temp_dir().join(format!("hermes-pipe-469-drop-{}.bin", std::process::id()));
+        std::fs::write(&path, vec![7u8; 24 * 1024 * 1024]).unwrap();
+        let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let (ws, _) = tokio_tungstenite::client_async(format!("ws://{addr}/api/ws"), tcp).await.unwrap();
+        let pipe = super::run_pipe(ws, |_| {}, super::HeaderMap::new());
+
+        let written = pipe.send_file("{\"f\":\"", &path.to_string_lossy(), "\"}", 64 * 1024 * 1024).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        drop(pipe);
+        let ended = tokio::time::timeout(Duration::from_secs(5), written.wait()).await.expect("the write went on after the pipe was dropped");
+        assert!(matches!(ended, Err(TransportError::Closed)), "{ended:?}");
         let _ = std::fs::remove_file(&path);
     }
 }

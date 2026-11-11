@@ -20,8 +20,11 @@ beforeAll(() => {
   globalThis.CSS ??= { escape: (s: string) => s } as typeof CSS;
 });
 const stopOutboxes: (() => void)[] = [];
-afterEach(() => {
+// Each test's Hermes is closed, so none writes to the next test's storage: the fake mints the same chat ids each time.
+const running: Hermes[] = [];
+afterEach(async () => {
   cleanup();
+  await Promise.all(running.splice(0).map((h) => h.close()));
   for (const stop of stopOutboxes.splice(0)) stop();
   localStorage.clear();
   vi.unstubAllGlobals();
@@ -93,6 +96,7 @@ async function signedIn() {
   server.sessions = [row("backup", 1, { pinned: true, title: "Nightly backup" })];
   server.transcripts = { backup: [{ role: "user", text: "Why did the backup fail?" }] };
   const hermes = await connect(server.openPipe, undefined, localChatCache({ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }));
+  running.push(hermes);
   const rust = fakeRust(server);
   const user = userEvent.setup();
   const view = render(
