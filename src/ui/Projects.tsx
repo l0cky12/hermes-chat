@@ -10,8 +10,8 @@ import { DefaultsConflict, NewerDefaultsError, cleanDraft, draftProblem, sameDra
 import type { Project, ProjectFolder, Worktree } from "../hermes/projects";
 import { Age, Spinner, composing, menuArrows, useDismiss, useReturnFocus } from "./bits";
 import { ModelControls } from "./ModelPicker";
+import { errorText } from "../hermes/values";
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const baseName = (path: string) => path.split("/").filter(Boolean).pop() ?? path;
 const chatsText = (n: number) => `${n} ${n === 1 ? "chat" : "chats"}`;
 
@@ -173,7 +173,7 @@ function ProjectMenu({
     setSaving(true);
     setCreateError(undefined);
     onCreate(name).catch((e) => {
-      setCreateError(`Couldn't make the project: ${messageOf(e)}`);
+      setCreateError(`Couldn't make the project: ${errorText(e)}`);
       setSaving(false);
     });
   };
@@ -383,7 +383,7 @@ export function ProjectScreen({
       await fn();
       return true;
     } catch (e) {
-      onError(messageOf(e));
+      onError(errorText(e));
       return false;
     } finally {
       setBusy(undefined);
@@ -786,7 +786,7 @@ function DefaultsSection({ saved, folders, profile, connection, catalog, profile
       setDone(true);
     } catch (e) {
       if (e instanceof DefaultsConflict) setConflict(e.saved ?? null);
-      else setError(messageOf(e));
+      else setError(errorText(e));
     } finally {
       setSaving(false);
     }

@@ -8,6 +8,7 @@ import { endpointFormProblem, type AccountsApi, type CustomEndpoint, type Endpoi
 import { withoutKey } from "../hermes/setup";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
 import { Spinner } from "./bits";
+import { errorText } from "../hermes/values";
 
 export type EndpointApi = Pick<AccountsApi, "endpoints" | "saveEndpoint" | "activateEndpoint" | "removeEndpoint">;
 
@@ -25,8 +26,6 @@ const EMPTY: EndpointForm = { name: "", baseUrl: "", model: "", key: "" };
 
 /** `where`: under an endpoint's row, under the form, or at the head of the list. */
 type Note = { where: "add" | "list" | `row:${string}`; ok: boolean; text: string };
-
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function EndpointSettings({ api, profile, connected }: { api: EndpointApi; profile: string; connected: boolean }) {
   const [list, setList] = useState<Listed<CustomEndpoint>>();
@@ -51,7 +50,7 @@ export function EndpointSettings({ api, profile, connected }: { api: EndpointApi
         return l;
       },
       (e) => {
-        if (live(scope) && read === reads.current) setLoadError(messageOf(e));
+        if (live(scope) && read === reads.current) setLoadError(errorText(e));
         return undefined;
       },
     );
@@ -92,7 +91,7 @@ export function EndpointSettings({ api, profile, connected }: { api: EndpointApi
     } catch (e) {
       if (!live(scope)) return;
       setUi(IDLE);
-      setNote({ where: "add", ok: false, text: `Not added: ${withoutKey(messageOf(e), typed.key ?? "")}` });
+      setNote({ where: "add", ok: false, text: `Not added: ${withoutKey(errorText(e), typed.key ?? "")}` });
       return;
     }
     if (!live(scope)) return;
@@ -119,7 +118,7 @@ export function EndpointSettings({ api, profile, connected }: { api: EndpointApi
     try {
       await (kind === "activating" ? api.activateEndpoint(profile, e.id) : api.removeEndpoint(profile, e.id));
     } catch (err) {
-      failed = messageOf(err);
+      failed = errorText(err);
     }
     if (!live(scope)) return;
     const after = await load(scope);

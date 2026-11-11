@@ -24,6 +24,7 @@ import {
   type TransferOutcome,
 } from "../hermes/skills";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { errorText } from "../hermes/values";
 
 /** The skill open in the editor: its row, SKILL.md as last read from Hermes, and the owner's text. */
 type Editing = { row: SkillRow; base: SkillFile; draft: string };
@@ -37,7 +38,6 @@ type BulkAsk = { op: Bulk; to?: string };
 /** The latest bulk change: what it was, where to, and what became of each skill. */
 type BulkDone = { op: Bulk; to?: string; outcomes: TransferOutcome[] };
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const SOURCE: Record<string, string> = { hub: "Skills Hub", bundled: "Built in", external: "External folder", agent: "Local" };
 const sourceLabel = (s: string) => SOURCE[s] ?? s;
 const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -157,8 +157,8 @@ export function SkillSettings({
       if (!alive.current || n !== reads.current) return;
       const kind = e instanceof SkillsError && (e.kind === "unsupported" || e.kind === "permission") ? e.kind : "error";
       // A read that fails while a list is on screen leaves it there, said to be as last read.
-      if (view && kind === "error") setRowNote({ name: "", kind: "failed", text: `Couldn't read skills from Hermes again: ${messageOf(e)}` });
-      else setProblem({ kind, text: kind === "error" ? `Couldn't read skills from Hermes: ${messageOf(e)}` : messageOf(e) });
+      if (view && kind === "error") setRowNote({ name: "", kind: "failed", text: `Couldn't read skills from Hermes again: ${errorText(e)}` });
+      else setProblem({ kind, text: kind === "error" ? `Couldn't read skills from Hermes: ${errorText(e)}` : errorText(e) });
     } finally {
       if (alive.current && n === reads.current) setLoading(false);
     }
@@ -194,7 +194,7 @@ export function SkillSettings({
       setRefs(undefined);
       setNotice(undefined);
     } catch (e) {
-      if (alive.current && n === opens.current) setRowNote({ name: row.name, kind: "failed", text: `Couldn't open ${row.name}: ${messageOf(e)}` });
+      if (alive.current && n === opens.current) setRowNote({ name: row.name, kind: "failed", text: `Couldn't open ${row.name}: ${errorText(e)}` });
     } finally {
       if (alive.current && n === opens.current) setOpening(undefined);
     }
@@ -225,7 +225,7 @@ export function SkillSettings({
             },
       );
     } catch (e) {
-      if (alive.current) setRowNote({ name: row.name, kind: "failed", text: messageOf(e) });
+      if (alive.current) setRowNote({ name: row.name, kind: "failed", text: errorText(e) });
     } finally {
       if (alive.current) setToggling(undefined);
     }
@@ -261,7 +261,7 @@ export function SkillSettings({
         setNotice({ kind: "conflict", text: "Hermes saved your edit, but reading it back found other text: another client wrote SKILL.md too. Your edit and the server's version are both kept." });
       } else setNotice({ kind: "unsure", text: `Hermes may have saved it, but reading it back failed: ${r.problem.message} Your edit is still here; Save again once connected, and it's checked first.` });
     } catch (e) {
-      if (alive.current) setNotice({ kind: "error", text: `${messageOf(e)} Your edit is still here.` });
+      if (alive.current) setNotice({ kind: "error", text: `${errorText(e)} Your edit is still here.` });
     } finally {
       if (alive.current) setBusy(undefined);
     }
@@ -287,7 +287,7 @@ export function SkillSettings({
       }
       void load();
     } catch (e) {
-      if (alive.current) setNotice({ kind: "error", text: `Couldn't read ${at.base.name} again: ${messageOf(e)} Your edit is still here.` });
+      if (alive.current) setNotice({ kind: "error", text: `Couldn't read ${at.base.name} again: ${errorText(e)} Your edit is still here.` });
     } finally {
       if (alive.current) setBusy(undefined);
     }
@@ -335,10 +335,10 @@ export function SkillSettings({
           await api.archive(profile, row.name);
           outcomes.push({ name: row.name, kind: "done", file });
         } catch (e) {
-          outcomes.push({ name: row.name, kind: "copied-only", problem: messageOf(e) });
+          outcomes.push({ name: row.name, kind: "copied-only", problem: errorText(e) });
         }
       } catch (e) {
-        outcomes.push({ name: row.name, kind: "failed", problem: messageOf(e) });
+        outcomes.push({ name: row.name, kind: "failed", problem: errorText(e) });
       }
     }
     if (!alive.current) return;

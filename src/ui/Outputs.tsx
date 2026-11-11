@@ -19,6 +19,7 @@ import {
   type OutputsSnapshot,
 } from "../hermes/outputs";
 import { STATUS_LABEL, Spinner, fmtSize, storedTime } from "./bits";
+import { errorText } from "../hermes/values";
 
 export type OutputsScope = "chat" | "project" | "profile";
 
@@ -138,7 +139,7 @@ export function OutputsScreen({
       setAdding("");
       setAddState({ done: `Added ${shownName(path)}.` });
     } catch (e) {
-      setAddState({ error: e instanceof Error ? e.message : String(e) });
+      setAddState({ error: errorText(e) });
     }
   };
 

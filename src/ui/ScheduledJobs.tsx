@@ -26,8 +26,8 @@ import {
 import { type Schedule, ScheduleError, clockChangeNote, explainSchedule, formatInstant, isoIn, offsetAt, parseSchedule, upcomingRuns } from "../hermes/schedule";
 import { type Troubleshoot, type TroubleshootMessage, type TroubleshootStore, type TroubleshootInput, gatherTroubleshoot, jobChanges, troubleshootMessage } from "../hermes/troubleshoot";
 import { Spinner } from "./bits";
+import { errorText } from "../hermes/values";
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const HERE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 /** A scheduler that hasn't checked the jobs for this long is likely not running (it checks about every minute). */
 const STALE_SCHEDULER_S = 300;
@@ -357,7 +357,7 @@ export function ScheduledJobs({
             )}
             {error && (
               <div className="job-error" role="alert">
-                <p>{messageOf(error)}</p>
+                <p>{errorText(error)}</p>
                 {!unsupported && connected && (
                   <button className="btn" onClick={() => void load()}>
                     Try again
@@ -427,7 +427,7 @@ export function ScheduledJobs({
             troubleshoot={troubleshoot}
             trouble={troubleOf(shown.id)}
             ask={view.ask}
-            reading={{ at: readAt, loading, error: error && messageOf(error), reload: () => void load() }}
+            reading={{ at: readAt, loading, error: error && errorText(error), reload: () => void load() }}
             onChanged={apply}
             onEdit={() => go({ kind: "edit", id: shown.id })}
             onDeleted={() => go({ kind: "list" })}
@@ -608,7 +608,7 @@ function JobDetail({
         setPrep({ ...m, input });
         setMessage(m.text);
       },
-      (e) => prepReads.current(n) && setPrep({ failed: messageOf(e) }),
+      (e) => prepReads.current(n) && setPrep({ failed: errorText(e) }),
     );
   };
   const closePrep = () => {
@@ -625,7 +625,7 @@ function JobDetail({
       await troubleshoot.start(prep.input.job, message);
       if (life.live()) setPrep(undefined);
     } catch (e) {
-      if (life.live()) setPrep({ failed: messageOf(e) });
+      if (life.live()) setPrep({ failed: errorText(e) });
     } finally {
       if (life.live()) setStarting(false);
     }
@@ -649,7 +649,7 @@ function JobDetail({
     setReadingRuns(true);
     void api.runs(profile, job, limit).then(
       (rows) => historyReads.current(n) && setRuns({ rows, limit }),
-      (e) => historyReads.current(n) && setRuns(messageOf(e)),
+      (e) => historyReads.current(n) && setRuns(errorText(e)),
     ).finally(() => historyReads.current(n) && setReadingRuns(false));
   };
   useEffect(() => {
@@ -665,7 +665,7 @@ function JobDetail({
     setResults((r) => ({ ...r, [run.id]: "loading" }));
     void api.runResult(profile, run).then(
       (res) => mine() && setResults((r) => ({ ...r, [run.id]: res })),
-      (e) => mine() && setResults((r) => ({ ...r, [run.id]: messageOf(e) })),
+      (e) => mine() && setResults((r) => ({ ...r, [run.id]: errorText(e) })),
     );
   };
   const showResult = (run: JobRun) => {
@@ -699,7 +699,7 @@ function JobDetail({
     } catch (e) {
       // What Hermes's list now says goes to the list even if the owner has left this job meanwhile.
       if (e instanceof CronError && e.kind === "gone") onChanged(job.id, null);
-      if (life.live()) setError(messageOf(e));
+      if (life.live()) setError(errorText(e));
     } finally {
       if (life.live()) setBusy(undefined);
     }
@@ -1297,7 +1297,7 @@ function JobEditor({
     setContext(undefined);
     void readProfile(api, p).then(
       (got) => contextReads.current(n) && use(got),
-      (e) => contextReads.current(n) && setContext(`Hermes Chat couldn't read the ${p} profile's jobs: ${messageOf(e)}`),
+      (e) => contextReads.current(n) && setContext(`Hermes Chat couldn't read the ${p} profile's jobs: ${errorText(e)}`),
     );
   };
 
@@ -1307,7 +1307,7 @@ function JobEditor({
     try {
       return parseSchedule(form.schedule, zone.zone, Date.now());
     } catch (e) {
-      return e instanceof ScheduleError ? e : new ScheduleError(messageOf(e));
+      return e instanceof ScheduleError ? e : new ScheduleError(errorText(e));
     }
   }, [form.schedule, zone.zone, touched]);
   // A schedule left as it was keeps its kind even when it no longer reads (a one-shot that is due by now).
@@ -1344,7 +1344,7 @@ function JobEditor({
       if (e instanceof CronConflict) {
         setConflict(e);
         setBase(e.job);
-      } else setError(messageOf(e));
+      } else setError(errorText(e));
     } finally {
       if (contextReads.live()) setSaving(false);
     }

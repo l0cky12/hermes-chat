@@ -7,7 +7,7 @@ import { FakeHermes, row } from "../hermes/fakeHermes";
 import { connect, type Hermes } from "../hermes/transport";
 import { UI_PREFS_KEY } from "../hermes/uiPrefs";
 import { Main } from "../App";
-import { CHAT_DRAG, closeTabIn, navigateTabs } from "./Tabs";
+import { closeTabIn, navigateTabs } from "./Tabs";
 
 const drops = vi.hoisted(() => new Set<(e: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({
@@ -31,7 +31,6 @@ afterEach(async () => {
 
 const settle = (hermes: Hermes) => act(async () => void (await hermes.idle()));
 const prompts = (server: FakeHermes) => server.requests.filter((r) => r.method === "prompt.submit");
-const interrupts = (server: FakeHermes) => server.requests.filter((r) => r.method === "session.interrupt");
 
 const panes = () => Array.from(document.querySelectorAll<HTMLElement>(".pane"));
 const pane = (i: number) => panes()[i];

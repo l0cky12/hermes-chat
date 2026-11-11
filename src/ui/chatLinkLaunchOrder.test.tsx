@@ -3,7 +3,6 @@
 // an in-memory keyring behind `invoke`. Here the password is saved, so signing in is quick, and reading the link the
 // app was started with is slow: the last open chat must not be reopened in the meantime.
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import type { Pipe, PipeEvent } from "../hermes/pipe";

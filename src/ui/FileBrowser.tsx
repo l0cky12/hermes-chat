@@ -25,6 +25,7 @@ import { STATUS_LABEL, Spinner, composing, fmtSize, routeLabel, storedTime } fro
 import { useModal } from "./modal";
 import { FileEditor } from "./FileEditor";
 import { EDIT_MAX_BYTES } from "../hermes/textEdit";
+import { errorText } from "../hermes/values";
 
 /** A file's preview, from the click until its contents are read. `ask`: its type is unknown, and it may be text. */
 export type Preview =
@@ -33,7 +34,7 @@ export type Preview =
   | { entry: RemoteEntry; state: "ask" }
   | { entry: RemoteEntry; state: "failed"; error: string };
 
-const errorOf = (e: unknown) => (e instanceof RemoteFilesError ? e : new RemoteFilesError(e instanceof Error ? e.message : String(e)));
+const errorOf = (e: unknown) => (e instanceof RemoteFilesError ? e : new RemoteFilesError(errorText(e)));
 
 function EntryIcon({ entry }: { entry: RemoteEntry }) {
   if (entry.kind === "broken-link") return <Link2Off size={15} className="files-icon broken" aria-hidden />;

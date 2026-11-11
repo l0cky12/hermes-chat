@@ -43,7 +43,6 @@ export type Snoozes = ChatTimes;
 export type Cleared = ChatTimes;
 export type SnoozeStorage = Pick<Storage, "getItem" | "setItem">;
 
-const EMPTY: ChatTimes = Object.freeze({});
 const isDoc = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const id = (v: unknown, max = 400) => (typeof v === "string" && v.length > 0 && v.length <= max ? v : undefined);
 

@@ -17,6 +17,7 @@
 
 import { failureOf, type Failure } from "./toolsets";
 import { RestError, type RestMethod } from "./pipe";
+import { errorText } from "./values";
 
 export type Transport = "stdio" | "http";
 export type Auth = "none" | "header" | "oauth";
@@ -310,7 +311,7 @@ export class McpApi {
         this.editInRust(profile, editOf(name, form)).catch((e: unknown) => {
           // A failed request: Hermes's refusal (4xx, nothing written), or a lost answer.
           if (e instanceof RestError) throw e;
-          const m = e instanceof Error ? e.message : String(e);
+          const m = errorText(e);
           // Something may have been written (the token, or the map) that Rust couldn't confirm.
           if (/^Not confirmed: /.test(m)) throw new NotConfirmed(m.replace(/^Not confirmed: /, ""));
           if (/^Can't reach/i.test(m)) throw e;

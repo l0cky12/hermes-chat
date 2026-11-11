@@ -4,7 +4,6 @@
 // check is under way can't let an older connection's answers through.
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeHermes, row, type RestRequest } from "./fakeHermes";
-import { CapabilityUnsupportedError } from "./capabilities";
 import { ProtocolMismatchError, connect, type Hermes } from "./transport";
 import { RestError, type OpenPipe } from "./pipe";
 

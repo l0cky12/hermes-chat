@@ -43,6 +43,7 @@ import { usePlacement } from "./pagePlacement";
 import { canGoBack, canGoForward, type HistoryStep, type PreviewHistory } from "./previewHistory";
 import type { ArtifactStore } from "../hermes/artifacts";
 import { ArtifactEditor } from "./ArtifactEditor";
+import { errorText } from "../hermes/values";
 
 /** When a web page that hasn't loaded gets a note that it may never show. */
 const SLOW_PAGE_MS = 15_000;
@@ -70,8 +71,6 @@ const WEB_PERMISSIONS = [
 ]
   .map((f) => `${f} 'none'`)
   .join("; ");
-
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function PreviewPane({
   history,
@@ -114,7 +113,7 @@ export function PreviewPane({
       const file = await local.pick();
       if (file) open({ kind: "local", ...file });
     } catch (e) {
-      setNote({ text: `Couldn't open the file picker: ${messageOf(e)}`, failed: true });
+      setNote({ text: `Couldn't open the file picker: ${errorText(e)}`, failed: true });
     } finally {
       setPicking(false);
     }
@@ -123,14 +122,14 @@ export function PreviewPane({
     setNote(undefined);
     web.openInBrowser(url).then(
       (browser) => setNote({ text: `Opened in ${browser ?? "your browser"}.`, failed: false }),
-      (e) => setNote({ text: `Couldn't open it in your browser: ${messageOf(e)}`, failed: true }),
+      (e) => setNote({ text: `Couldn't open it in your browser: ${errorText(e)}`, failed: true }),
     );
   };
   const copy = (address: string) => {
     if (!navigator.clipboard?.writeText) return setNote({ text: "Couldn't copy the address.", failed: true });
     navigator.clipboard.writeText(address).then(
       () => setNote({ text: "Address copied.", failed: false }),
-      (e) => setNote({ text: `Couldn't copy the address: ${messageOf(e)}`, failed: true }),
+      (e) => setNote({ text: `Couldn't copy the address: ${errorText(e)}`, failed: true }),
     );
   };
 
@@ -420,7 +419,7 @@ function EmptyState({
     setFound(undefined);
     web.devServers().then(
       (d) => live && setFound(d),
-      (e) => live && setFound({ error: messageOf(e) }),
+      (e) => live && setFound({ error: errorText(e) }),
     );
     return () => {
       live = false;
@@ -490,7 +489,7 @@ function FileBody({ name, load }: { name: string; load: () => Promise<FileView> 
         made = blob;
         setState({ view });
       },
-      (e) => live && setState({ error: messageOf(e) }),
+      (e) => live && setState({ error: errorText(e) }),
     );
     return () => {
       live = false;
@@ -717,7 +716,7 @@ function useStickyTunnel(need: string | undefined, pages: ServerPages): [TunnelS
       },
       (e) => {
         if (!live || ended) return;
-        const error = e instanceof ServerPageError ? e : new ServerPageError("io", messageOf(e));
+        const error = e instanceof ServerPageError ? e : new ServerPageError("io", errorText(e));
         setState(error.kind === "closed" ? { kind: "closed", remote, message: error.message } : { kind: "failed", remote, error });
       },
     );

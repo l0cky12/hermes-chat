@@ -12,7 +12,7 @@ import type { Route } from "../hermes/pipe";
 import { RenameConflict, TitleModelUnavailable, type Snapshot } from "../hermes/transport";
 import { SECTION_LABEL, chatSections, inboxSettle, settleByDrop, wakeFull, wakeLabel, type InboxSettle, type Pins, type SectionKey, type Snoozes } from "../hermes/snooze";
 import { getUIPrefs, setUIPrefs, subscribe as subscribeUIPrefs } from "../hermes/uiPrefs";
-import { ChatMenu, type ChatPin, type ChatProjects, type ChatSnooze, type ChatStopWaiting, type ChatTags } from "./ChatMenu";
+import { ChatMenu, type ChatPin, type ChatProjects, type ChatSnooze, type ChatTags } from "./ChatMenu";
 import { SnoozeDialog, useSnoozeClock } from "./Snooze";
 import { DeleteChatDialog } from "./DeleteChat";
 import { SettleAllDialog } from "./SettleAll";
@@ -22,6 +22,7 @@ import { Age, ArchiveButton, STATUS_LABEL, SettleButton, SourceIcon, Spinner, ag
 import { useLocale, type Locale } from "../i18n/locale";
 import { viaLabel } from "../hermes/routes";
 import { dragChat, dragChatEnd, rowDragged } from "./Tabs";
+import { errorText } from "../hermes/values";
 
 
 
@@ -313,7 +314,7 @@ function RenameRow({
     setError(undefined);
     onRename(draft, from).then(onDone, (e) => {
       if (e instanceof RenameConflict) setFrom(e.title);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
       setSaving(false);
     });
   };
@@ -432,7 +433,7 @@ const ChatRow = memo(function ChatRow({
             ? { text: `This chat was renamed in another Hermes client meanwhile, to "${e.title}". Regenerate again to replace it.` }
             : e instanceof TitleModelUnavailable
               ? { text: `Couldn't regenerate the title: ${e.message}`, detail: e.detail, settings: true }
-              : { text: `Couldn't regenerate the title: ${e instanceof Error ? e.message : String(e)}` },
+              : { text: `Couldn't regenerate the title: ${errorText(e)}` },
         ),
       )
       .finally(() => setRetitling(false));
@@ -694,7 +695,7 @@ function ProfileSwitcher({
     onCheckOthers();
     onListProfiles().then(
       (names) => current && setProfiles(names),
-      (e) => current && setError(`Couldn't list profiles: ${e instanceof Error ? e.message : String(e)}`),
+      (e) => current && setError(`Couldn't list profiles: ${errorText(e)}`),
     );
     const onDown = (e: MouseEvent) => box.current?.contains(e.target as Node) || close();
     window.addEventListener("mousedown", onDown);

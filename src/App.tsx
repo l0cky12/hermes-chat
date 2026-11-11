@@ -35,7 +35,7 @@ import { reachRoute, tauriPipe, tauriProbe, tauriReach, type SignInDetails } fro
 import { AttemptLog, tauriAttemptStore } from "./hermes/attempts";
 import { readMethods } from "./hermes/signInMethods";
 import { PreferredRoutes, type RouteHealth, routesOf, sshAddressOf } from "./hermes/routes";
-import { isSetUp, testSignIn, type TestOutcome } from "./hermes/setup";
+import { testSignIn, type TestOutcome } from "./hermes/setup";
 import { isOutgoing, isWaiting, type Attachment, type Chat, type ConnectionStatus, type Found } from "./hermes/model";
 import { shortName, type ModelCatalog, type ModelPick } from "./hermes/models";
 import { ChatList, Rail, leavingNote } from "./ui/Sidebar";
@@ -120,6 +120,7 @@ import type { Route } from "./hermes/pipe";
 import { tauriTray, type TrayWiring } from "./hermes/tauriTray";
 import { usePageHidden, useWindowHidden } from "./ui/windowState";
 import { getUIPrefs, setUIPrefs, subscribe as subscribeUIPrefs, toggleModelFavorite, type StickyModelPick } from "./hermes/uiPrefs";
+import { errorText } from "./hermes/values";
 
 /** Keeps the repository folder opened last, and the recent ones, on this computer (Repository screen, ADR 0110). */
 function rememberRepo(top: string) {
@@ -152,8 +153,6 @@ const ACTION_TOAST_MS = 15_000;
 
 /** A short notice above the composer; `undo` puts back what it reports. `at` restarts the timer for a repeat. */
 type Toast = { text: string; undo?: () => void; action?: { label: string; run: () => void }; at: number };
-
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 const withoutProfile = ({ profile: _profile, ...pick }: StickyModelPick): ModelPick => pick;
 
@@ -288,7 +287,7 @@ function launch(): Promise<Launch> {
     try {
       return { ...(await launchOpen(c, saved, account)), connection: c, details: saved };
     } catch (e) {
-      return { connection: c, initial: saved, error: messageOf(e) };
+      return { connection: c, initial: saved, error: errorText(e) };
     }
   })());
 }
@@ -463,7 +462,7 @@ function Screens({ links }: { links: LinkInbox }) {
           setColdStart(true);
           use(h);
         } catch (e) {
-          if (!stale()) showSignIn(target, d, messageOf(e));
+          if (!stale()) showSignIn(target, d, errorText(e));
         }
       } finally {
         if (!stale()) setSwitchingTo(undefined);
@@ -547,7 +546,7 @@ function Screens({ links }: { links: LinkInbox }) {
           use(null);
         } : undefined);
       } catch (e) {
-        if (closed) showSignIn(c, await signInForm(c, account), `Couldn't finish removing this connection: ${messageOf(e)}. Its remaining local data is still saved. Try removing it again, or sign in.`);
+        if (closed) showSignIn(c, await signInForm(c, account), `Couldn't finish removing this connection: ${errorText(e)}. Its remaining local data is still saved. Try removing it again, or sign in.`);
         throw e;
       } finally {
         setRemovingActive(undefined);
@@ -701,7 +700,7 @@ function Screens({ links }: { links: LinkInbox }) {
           try {
             await connectWith(connection, d);
           } catch (e) {
-            setError(messageOf(e));
+            setError(errorText(e));
           }
         }}
       />
@@ -1325,7 +1324,7 @@ export function Main({
   };
   /** Opens a page of the compatibility guide in the owner's browser. */
   const openGuide = (url: string) =>
-    void webPages.openInBrowser(url).catch((e: unknown) => setToast({ text: `Couldn't open the compatibility guide: ${messageOf(e)}`, at: Date.now() }));
+    void webPages.openInBrowser(url).catch((e: unknown) => setToast({ text: `Couldn't open the compatibility guide: ${errorText(e)}`, at: Date.now() }));
   const listable = proj.projects.filter((p) => !p.archived);
   const shownProject = listable.find((p) => p.id === proj.selectedId);
   const projectScreenOpen = projectOpen && !!shownProject;
@@ -2287,7 +2286,7 @@ export function Main({
       located = await locateChat<Found>(job.link, hermes);
     } catch (e) {
       if (!isCurrent(job) || movedOn()) return;
-      return failLink(`Hermes Chat couldn't look the linked chat up: ${messageOf(e)}`, [{ label: "Try again", onClick: () => retryLink(job) }]);
+      return failLink(`Hermes Chat couldn't look the linked chat up: ${errorText(e)}`, [{ label: "Try again", onClick: () => retryLink(job) }]);
     }
     if (!isCurrent(job) || movedOn()) return;
     if (located.kind === "no-profile")
@@ -2353,7 +2352,7 @@ export function Main({
   const copyChatLink = (chat: Chat) => {
     const url = formatChatLink({ connection: refs.refFor(connection), profile, chatId: chat.id });
     const done = () => setToast({ text: "Chat link copied. It opens this chat in Hermes Chat on this computer.", at: Date.now() });
-    const failed = (e?: unknown) => setToast({ text: `Couldn't copy the chat link${e ? `: ${messageOf(e)}` : "."}`, at: Date.now() });
+    const failed = (e?: unknown) => setToast({ text: `Couldn't copy the chat link${e ? `: ${errorText(e)}` : "."}`, at: Date.now() });
     if (!navigator.clipboard?.writeText) return failed();
     navigator.clipboard.writeText(url).then(done, failed);
   };
@@ -2981,7 +2980,7 @@ export function Main({
                   const [problem, worktrees] = await Promise.all([
                     hermes.projects.checkFolder(profile, path).then(
                       () => undefined,
-                      (e) => messageOf(e),
+                      (e) => errorText(e),
                     ),
                     hermes.projects.worktrees(path).catch(() => []),
                   ]);
@@ -3594,7 +3593,7 @@ function ChatView({
   const pickModel = (pick: ModelPick) => {
     setUIPrefs({ modelPicker: { ...pick, profile: prefScope(connection, profile) } });
     if (!started) return setChosen(pick);
-    hermes.setModel(chat.id, pick).catch((e) => stillIn() && onToast(`Couldn't switch this chat's model: ${messageOf(e)}`));
+    hermes.setModel(chat.id, pick).catch((e) => stillIn() && onToast(`Couldn't switch this chat's model: ${errorText(e)}`));
   };
 
   const findTarget =
@@ -3608,7 +3607,7 @@ function ChatView({
     const into = projects.getSnapshot().selectedId;
     try {
       const shown = projects.getSnapshot().projects.find((p) => p.id === into);
-      const defaults = shown && (await projects.freshDefaults().catch((e) => Promise.reject(new Error(`Couldn't read the project's defaults on this computer: ${messageOf(e)}`))));
+      const defaults = shown && (await projects.freshDefaults().catch((e) => Promise.reject(new Error(`Couldn't read the project's defaults on this computer: ${errorText(e)}`))));
       const s = settingsFor(shown && { name: shown.name, defaults: defaults?.[shown.id] });
       const problem = modelProblem(s, catalog);
       if (problem) throw new Error(problem);
@@ -3645,7 +3644,7 @@ function ChatView({
       if (stillIn()) onStarted(id);
       return { id };
     } catch (e) {
-      const reason = `Couldn't start a chat: ${e instanceof Error ? e.message : String(e)}`;
+      const reason = `Couldn't start a chat: ${errorText(e)}`;
       if (stillIn()) onDraftError(reason);
       return { delivery: { delivery: "unsent", reason } };
     }
@@ -4144,7 +4143,7 @@ function useServerCommands(hermes: Hermes, connected: boolean, profile: string):
     let live = true;
     hermes.serverCommands().then(
       (list) => live && setRead({ profile, value: { state: "ready", list } }),
-      (e) => live && setRead({ profile, value: { state: "failed", reason: messageOf(e) } }),
+      (e) => live && setRead({ profile, value: { state: "failed", reason: errorText(e) } }),
     );
     return () => void (live = false);
   }, [hermes, connected, profile]);

@@ -71,6 +71,7 @@ import { ProviderSettings, type ProviderKeysApi } from "./ProviderSettings";
 import { SignInSettings, type SignInApi } from "./SignInSettings";
 import { EndpointSettings, type EndpointApi } from "./EndpointSettings";
 import { useLocale } from "../i18n/locale";
+import { errorText } from "../hermes/values";
 
 type Tab = "general" | "appearance" | "model" | "providers" | "voice" | "toolsets" | "mcp" | "gateways" | "persona" | "memory" | "skills" | "diagnostics";
 /**
@@ -431,7 +432,7 @@ export function SettingsScreen({
     try {
       setPulled(pulledText(await onPullOlder()));
     } catch (e) {
-      setPullError(`Couldn't pull older history: ${e instanceof Error ? e.message : String(e)}`);
+      setPullError(`Couldn't pull older history: ${errorText(e)}`);
     } finally {
       setPulling(false);
     }

@@ -46,11 +46,11 @@ import {
 } from "../hermes/usageAnalytics";
 import { Spinner } from "./bits";
 import { useLocale, type Formats } from "../i18n/locale";
+import { errorText } from "../hermes/values";
 
 const HERE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const ROLLING = [1, 7, 30, 90, 365] as const;
 const rollingLabel = (d: number) => (d === 1 ? "Last 24 hours" : `Last ${d} days`);
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
 /** Every time zone this computer knows, its own and UTC first. */
@@ -124,7 +124,7 @@ export function UsageAnalytics({ io, profile, listProfiles, projects, projectCha
     let live = true;
     listProfiles().then(
       (names) => live && (setAllProfiles(names.includes(profile) ? names : [profile, ...names]), setProfilesError(undefined)),
-      (e) => live && setProfilesError(messageOf(e)),
+      (e) => live && setProfilesError(errorText(e)),
     );
     return () => void (live = false);
   }, [listProfiles, profile, connected]);
@@ -156,7 +156,7 @@ export function UsageAnalytics({ io, profile, listProfiles, projects, projectCha
     setExportNote(undefined);
     collectUsage(io, profiles, period, { signal: ac.signal, onProgress: (progress) => !ac.signal.aborted && setRead({ state: "loading", progress }), now }).then(
       (data) => !ac.signal.aborted && setRead({ state: "done", data }),
-      (e) => !ac.signal.aborted && !(e instanceof StaleRead) && setRead({ state: "error", error: messageOf(e) }),
+      (e) => !ac.signal.aborted && !(e instanceof StaleRead) && setRead({ state: "error", error: errorText(e) }),
     );
     return () => ac.abort();
     // `profiles` is keyed by its names; `range` and `zone` by `periodKey`.
@@ -212,7 +212,7 @@ export function UsageAnalytics({ io, profile, listProfiles, projects, projectCha
       const path = await saveCsv(usageCsv(sortChats(shownChats, { key: "started", dir: "asc" }), zone, names), csvFileName(data.period.from, data.period.to, zone));
       if (path) setExportNote(`Saved ${fmt.number(shownChats.length)} chats to ${path}.`);
     } catch (e) {
-      setExportNote(`Couldn't export: ${messageOf(e)}`);
+      setExportNote(`Couldn't export: ${errorText(e)}`);
     } finally {
       exporting.current = false;
     }

@@ -8,6 +8,7 @@ import type { Hermes } from "../hermes/transport";
 import { savedKeyText, withoutKey, type ProviderKey, type ProviderSetup } from "../hermes/setup";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
 import { Spinner } from "./bits";
+import { errorText } from "../hermes/values";
 
 /** What Settings → Providers needs of the connection: the key calls, and the profile they write for. */
 export type ProviderKeysApi = Pick<Hermes, "providerSetup" | "saveProviderKey" | "removeProviderKey" | "keyChangesSettled" | "profile">;
@@ -24,8 +25,6 @@ const IDLE: Ui = { kind: "idle" };
 
 /** `where`: under a saved key's row, in the Add a key section, or at the head of the saved keys. */
 type Note = { where: "add" | "list" | `row:${string}`; ok: boolean; text: string };
-
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function ProviderSettings({ hermes, profile, connected, openModel }: { hermes: ProviderKeysApi; profile: string; connected: boolean; openModel?: () => void }) {
   const [setup, setSetup] = useState<ProviderSetup>();
@@ -63,7 +62,7 @@ export function ProviderSettings({ hermes, profile, connected, openModel }: { he
         return s;
       },
       (e) => {
-        if (live(scope) && read === reads.current) setLoadError(messageOf(e));
+        if (live(scope) && read === reads.current) setLoadError(errorText(e));
         return undefined;
       },
     );
@@ -94,7 +93,7 @@ export function ProviderSettings({ hermes, profile, connected, openModel }: { he
       setNote({ where, ok: true, text: savedKeyText(saved, k.label) });
     } catch (e) {
       if (!live(scope)) return;
-      setNote({ where, ok: false, text: `Not saved: ${withoutKey(messageOf(e), value)}` });
+      setNote({ where, ok: false, text: `Not saved: ${withoutKey(errorText(e), value)}` });
       // A failed replacement keeps its input, with what was typed, to fix and send again.
       setUi(where === "add" ? IDLE : { kind: "replacing", provider: k.provider });
       return;
@@ -112,7 +111,7 @@ export function ProviderSettings({ hermes, profile, connected, openModel }: { he
     try {
       await hermes.removeProviderKey(k.envVar);
     } catch (e) {
-      failed = messageOf(e);
+      failed = errorText(e);
     }
     if (!live(scope)) return;
     // Whatever the removal answered, the list decides: one that timed out after the delete may have removed the key.

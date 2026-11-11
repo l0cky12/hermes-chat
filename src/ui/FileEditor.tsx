@@ -9,6 +9,7 @@ import { MINE_MARK, diffLines, hunks, merge3 } from "../hermes/textEdit";
 import { useCloseGuard } from "./LeaveMemoryEdit";
 import { useModal } from "./modal";
 import { Spinner, fmtSize } from "./bits";
+import { errorText } from "../hermes/values";
 
 type Conflict = Extract<SaveOutcome, { kind: "conflict" }>;
 
@@ -22,7 +23,6 @@ type Mode =
   /** Asking before the edit is dropped; `back` is what it asked over, and goes on showing (a save under way too). */
   | { kind: "discard"; then: () => void; back: Mode };
 
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const eolLabel = (b: EditBase) => `UTF-8${b.bom ? " with BOM" : ""}, ${b.eol === "\r\n" ? "CRLF (Windows)" : "LF"} line ends`;
 
 /** The changes from `from` to `to`, as unified hunks with line numbers. */
@@ -111,7 +111,7 @@ export function FileEditor({
         setDraft(b.text);
         setMode({ kind: "edit" });
       },
-      (e) => current && setMode({ kind: "refused", why: message(e) }),
+      (e) => current && setMode({ kind: "refused", why: errorText(e) }),
     );
     return () => void (current = false);
   }, [entry.path]);
@@ -141,7 +141,7 @@ export function FileEditor({
       settle({ kind: "conflict", conflict: got });
     } catch (e) {
       if (!live.current) return;
-      setError(message(e));
+      setError(errorText(e));
       settle({ kind: "review" });
     } finally {
       inFlight.current = false;
@@ -158,7 +158,7 @@ export function FileEditor({
       if (live.current) onSaved(`Your edit was saved as a copy, ${path}. ${entry.name} on the server is as Hermes has it.`);
     } catch (e) {
       if (!live.current) return;
-      setError(message(e));
+      setError(errorText(e));
       settle({ kind: "edit" });
     } finally {
       inFlight.current = false;

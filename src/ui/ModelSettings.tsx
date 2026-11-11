@@ -35,6 +35,7 @@ import { isEffort, type ModelCatalog, type ModelPick } from "../hermes/models";
 import { getUIPrefs, subscribe as subscribeUIPrefs, toggleModelFavorite } from "../hermes/uiPrefs";
 import { ModelControls } from "./ModelPicker";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { errorText } from "../hermes/values";
 
 const EFFORT_LABEL: Record<string, string> = {
   [EFFORT_OFF]: "Off",
@@ -62,7 +63,6 @@ type Ask =
   | { kind: "expensive"; part: "auxiliary"; message: string; task: string; confirmed: string[] };
 const askPart = (a: Ask): Part => (a.kind === "pinned" ? "main" : a.part);
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const list = (names: string[]) => (names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`);
 const providerName = (providers: CatalogProvider[], slug: string) => providers.find((p) => p.slug === slug)?.name ?? slug;
 
@@ -233,7 +233,7 @@ function TextGeneration({
       if (r.applied) onSaved(await api.load());
       else setAsk({ next, message: r.expensive });
     } catch (e) {
-      setError(messageOf(e));
+      setError(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -339,7 +339,7 @@ export function ModelSettings({
         setSaved(s);
         setDraft(draftFrom(s));
       },
-      (e) => live && setLoadError(messageOf(e)),
+      (e) => live && setLoadError(errorText(e)),
     );
     return () => void (live = false);
   }, [api, connected, loaded, attempt]);
@@ -397,7 +397,7 @@ export function ModelSettings({
       setDraft((d) => d && { ...d, [part]: draftFrom(fresh)[part] });
       setDone((x) => ({ ...x, [part]: true }));
     } catch (e) {
-      setErrors((x) => ({ ...x, [part]: messageOf(e) }));
+      setErrors((x) => ({ ...x, [part]: errorText(e) }));
     } finally {
       setBusy(undefined);
     }

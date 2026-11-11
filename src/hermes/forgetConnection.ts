@@ -16,6 +16,7 @@ import { terminalTargetKey } from "./terminal";
 import { sending, unsaved } from "./unsaved";
 import { getUIPrefs, setUIPrefs } from "./uiPrefs";
 import { WORKTREE_CHATS_KEY } from "./worktrees";
+import { isObj } from "./values";
 
 /** What removing a connection deletes on this computer, in the owner's words, for the question it asks first. */
 export const REMOVED_LOCALLY = [
@@ -31,8 +32,6 @@ export const REMOVED_LOCALLY = [
 
 /** What stays: everything on the server. */
 export const KEPT_ON_SERVER = "Nothing on the Hermes server is changed: its chats, projects, scheduled jobs, memory and settings stay there, and you can add the connection again to see them.";
-
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 type Store = Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length">;
 

@@ -24,11 +24,11 @@ import {
 import { linkTarget } from "../hermes/preview";
 import { SettingNote, SettingsSection } from "./SettingRows";
 import { PreviewLink } from "./previewContext";
+import { errorText } from "../hermes/values";
 
 type Notice = { tone: "ok" | "warn" | "error"; text: string };
 type Busy = "use" | "save" | "setup" | "copy";
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const BUILT_IN = "Built-in only";
 const providerName = (name: string) => name || BUILT_IN;
 
@@ -168,7 +168,7 @@ export function MemoryProviderSettings({
       const next = await api.overview(await api.profiles());
       if (alive.current && n === overviews.current) setRows(next);
     } catch (e) {
-      if (alive.current && n === overviews.current) setOverviewError(messageOf(e));
+      if (alive.current && n === overviews.current) setOverviewError(errorText(e));
     }
   };
 
@@ -185,7 +185,7 @@ export function MemoryProviderSettings({
     } catch (e) {
       if (!alive.current || n !== reads.current) return;
       if (e instanceof MemoryProvidersUnsupported) setUnsupported(e.message);
-      else setMemoryError(messageOf(e));
+      else setMemoryError(errorText(e));
     }
   };
 
@@ -195,7 +195,7 @@ export function MemoryProviderSettings({
       const f = await api.form(who, name);
       if (alive.current && n === reads.current) setForm(f);
     } catch (e) {
-      if (alive.current && n === reads.current) setFormError(`Couldn't read ${name}'s settings: ${messageOf(e)}`);
+      if (alive.current && n === reads.current) setFormError(`Couldn't read ${name}'s settings: ${errorText(e)}`);
     }
   };
 
@@ -280,7 +280,7 @@ export function MemoryProviderSettings({
       const change = await api.use(target, name, memory.active);
       if (alive.current) settle(change, name ? `${target} now uses ${name}` : `${target} now uses built-in memory only`);
     } catch (e) {
-      if (alive.current) setNotice({ tone: "error", text: messageOf(e) });
+      if (alive.current) setNotice({ tone: "error", text: errorText(e) });
     } finally {
       if (alive.current) setBusy(undefined);
     }
@@ -294,7 +294,7 @@ export function MemoryProviderSettings({
       const change = await api.save(form, edits, memory?.active ?? "");
       if (alive.current) settle(change, `Saved ${form.label} for ${target}`);
     } catch (e) {
-      if (alive.current) setNotice({ tone: "error", text: `${messageOf(e)} Your changes are still here.` });
+      if (alive.current) setNotice({ tone: "error", text: `${errorText(e)} Your changes are still here.` });
     } finally {
       if (alive.current) setBusy(undefined);
     }
@@ -326,7 +326,7 @@ export function MemoryProviderSettings({
           (missing.length ? ` ${missing.map((f) => f.label).join(", ")} isn't copied, as Hermes never sends it back: type it here.` : ""),
       });
     } catch (e) {
-      if (alive.current) setNotice({ tone: "error", text: `Couldn't read ${copyFrom}'s settings: ${messageOf(e)}` });
+      if (alive.current) setNotice({ tone: "error", text: `Couldn't read ${copyFrom}'s settings: ${errorText(e)}` });
     } finally {
       if (alive.current) setBusy(undefined);
     }
@@ -358,7 +358,7 @@ export function MemoryProviderSettings({
         setNotice({ tone: "warn", text: `Nothing was run: what ${name} needs installed changed on the server since you looked. Check it below and install again.` });
       } else setNotice({ tone: out.kind === "refused" ? "error" : "warn", text: out.kind === "refused" ? `Hermes refused: ${out.reason}` : `Hermes didn't confirm the setup (${out.reason}). Reload to see where it got to.` });
     } catch (e) {
-      if (alive.current) setNotice({ tone: "error", text: messageOf(e) });
+      if (alive.current) setNotice({ tone: "error", text: errorText(e) });
     } finally {
       if (alive.current) setBusy(undefined);
     }

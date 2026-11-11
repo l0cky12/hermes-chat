@@ -89,6 +89,7 @@ import {
   type StoredBranchRow,
 } from "./branch";
 import { cannotResend, laterOf, replayBlocked, resendText, replayTarget, splitRefs, turnAt, variantRoot, withRefs, withoutMarkers, type ReplayKind, type ReplayPreview } from "./replay";
+import { errorText } from "./values";
 
 /**
  * The `source` this app stamps on chats it starts. Legacy `session.create` stores any string as-is, but the gateway
@@ -455,9 +456,6 @@ export class BranchUnconfirmed extends Error {
     super("The connection dropped before Hermes answered, so it isn't known yet whether it made the branch. Hermes Chat checks the chat list once it's connected again.");
   }
 }
-
-/** Why a branch wasn't asked for after all; nothing went to Hermes. */
-class BranchNotSent extends Error {}
 
 /** Legacy `session.branch` result (`SessionBranchResult` at `bf0203a`): the branch's live and stored ids, its title,
  * its parent, the rows it copied, and its history as `session.resume` shows it. */
@@ -1476,7 +1474,7 @@ export class Hermes {
       this.patchSide(chatId, (qs) => qs.map((q) => (q.id !== id ? q : early === undefined || q.state !== "asking" ? { ...q, taskId } : answered({ ...q, taskId }, early))));
       return true;
     } catch (e) {
-      const error = e instanceof Error ? e.message : String(e);
+      const error = errorText(e);
       this.patchSide(chatId, (qs) => qs.map((q) => (q.id === id && q.state === "asking" ? { id, question, after, state: "failed", error } : q)));
       return false;
     } finally {
@@ -4704,7 +4702,7 @@ export class Hermes {
             (l) => ({ entries: l.entries.map((e) => ({ name: e.name, isDirectory: e.kind === "dir" })) }),
             (e: unknown) => {
               const status = e instanceof RemoteFilesError ? e.status : undefined;
-              const message = e instanceof Error ? e.message : String(e);
+              const message = errorText(e);
               if (status === 404 && /isn't on the server/.test(message)) return { entries: [], error: "ENOENT" };
               if (status === 400 && /not a folder/.test(message)) return { entries: [], error: "ENOTDIR" };
               if (status === 403) return { entries: [], error: "EACCES" };
@@ -5074,7 +5072,7 @@ const LIST_MAX_BYTES = 8 * 1024 * 1024;
  */
 export function outputFound(e: unknown): { state: "missing" | "folder" | "forbidden" | "available" | "unknown"; why?: string } | undefined {
   if (sessionNotFound(e)) return undefined;
-  if (!(e instanceof RestError)) return { state: "unknown", why: e instanceof Error ? e.message : String(e) };
+  if (!(e instanceof RestError)) return { state: "unknown", why: errorText(e) };
   const { status, detail } = e;
   if (status === 404 && detail.startsWith(SANDBOX_NOT_FOUND_PREFIX)) return { state: "missing", why: SANDBOX_MISSING };
   if (status === 404 && detail === "File not found") return { state: "missing", why: "It isn't at this path where its chat's tools ran: it was deleted, moved or renamed." };

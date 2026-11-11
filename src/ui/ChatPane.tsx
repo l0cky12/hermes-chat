@@ -1,6 +1,6 @@
 // Transcript, thinking, tool-call groups, Approval cards, find bar, composer and the Settle button, ported from the prototype.
 // Dictation and Read aloud come from Voice.tsx.
-import { createContext, memo, type ReactNode, type RefObject, useCallback, useContext, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, memo, type ReactNode, type RefObject, useCallback, useContext, useDeferredValue, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, Columns2, CornerDownRight, EyeOff, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Square, Trash2, Wrench, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -48,6 +48,7 @@ import { CopyButton, replyMarkdown } from "./CopyMessage";
 import { turnsOf, type ReplayKind, type Variant } from "../hermes/replay";
 import type { FollowUp } from "../hermes/uiPrefs";
 import { sttRoute } from "../hermes/sttRoute";
+import { errorText } from "../hermes/values";
 
 /**
  * What a message sent while the chat's reply runs does (ADR 0057). `mode`: what Enter does, the Follow-up behavior
@@ -1528,7 +1529,7 @@ function Composer({
       return got.attachments.map((a) => a.path);
     } catch (e) {
       if (!stillHere()) return [];
-      setRefused([`Couldn't attach files: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't attach files: ${errorText(e)}`]);
       return [];
     }
   });
@@ -1610,7 +1611,7 @@ function Composer({
       const notes = tooBig.map((f) => overLimitNote(nameOf(f), f.size, LIMITS.file));
       if (notes.length) setRefused((cur) => (paths.length ? [...cur, ...notes] : notes));
     } catch (e) {
-      setRefused([`Couldn't attach the files: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't attach the files: ${errorText(e)}`]);
     }
   });
   const stageRef = useRef(stageFiles);
@@ -1653,7 +1654,7 @@ function Composer({
     try {
       await add(await invoke<string[]>("attach_picked_files"));
     } catch (e) {
-      setRefused([`Couldn't open the file picker: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't open the file picker: ${errorText(e)}`]);
     }
   };
 
@@ -1706,7 +1707,7 @@ function Composer({
       const out = await followUp!.steer(words);
       if (out) setRefused([out]);
     } catch (e) {
-      setRefused([`Couldn't steer the reply, so nothing was sent: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't steer the reply, so nothing was sent: ${errorText(e)}`]);
     } finally {
       setSteering(false);
     }

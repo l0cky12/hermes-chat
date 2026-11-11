@@ -29,6 +29,7 @@ import {
   type RemoveOutcome,
 } from "../hermes/memory";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { errorText } from "../hermes/values";
 
 /**
  * The entry open in the editor: as last read from Hermes, and the owner's text for it. `fromKept`: the kept edit the
@@ -39,7 +40,6 @@ type Notice = { kind: "ok" | "error" | "conflict" | "unsure"; text: string };
 /** Why memory couldn't be read: the server or the profile is unsupported here, a permission refusal, or another failure. */
 type LoadProblem = { kind: "server" | "profile" | "permission" | "error"; text: string };
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const entriesText = (n: number) => `${n} ${n === 1 ? "entry" : "entries"}`;
 /** An entry's first line, for the list; the editor shows all of it. */
 const firstLine = (text: string) => text.split("\n").find((l) => l.trim()) ?? text;
@@ -168,7 +168,7 @@ export function MemorySettings({
   const failLoad = (e: unknown) => {
     if (e instanceof MemoryUnsupportedError) setProblem({ kind: e.reason, text: e.message });
     else if (e instanceof MemoryPermissionError) setProblem({ kind: "permission", text: e.message });
-    else setProblem({ kind: "error", text: `Couldn't read memory from Hermes: ${messageOf(e)}` });
+    else setProblem({ kind: "error", text: `Couldn't read memory from Hermes: ${errorText(e)}` });
   };
 
   const load = async (why: "first" | "reload") => {
@@ -307,7 +307,7 @@ export function MemorySettings({
         keep(at.draft);
         setEditing(undefined);
         failLoad(e);
-      } else setNotice({ kind: "error", text: `${messageOf(e)} Your edit is still here.` });
+      } else setNotice({ kind: "error", text: `${errorText(e)} Your edit is still here.` });
     } finally {
       if (alive.current) setBusy(undefined);
     }
@@ -336,7 +336,7 @@ export function MemorySettings({
         setNotice({ kind: "conflict", text: e instanceof MemoryConflictError ? "This entry changed on the server, or was removed, since you opened it. Nothing was removed." : e.message });
       } else if (e instanceof MemoryUnsureError) setNotice({ kind: "unsure", text: e.message });
       else if (e instanceof MemoryUnsupportedError) failLoad(e);
-      else setNotice({ kind: "error", text: messageOf(e) });
+      else setNotice({ kind: "error", text: errorText(e) });
     } finally {
       if (alive.current) setBusy(undefined);
     }
@@ -362,7 +362,7 @@ export function MemorySettings({
     } catch (e) {
       if (!alive.current) return;
       if (e instanceof MemoryUnsupportedError) failLoad(e);
-      else setNotice({ kind: "error", text: `Nothing was removed: ${messageOf(e)}` });
+      else setNotice({ kind: "error", text: `Nothing was removed: ${errorText(e)}` });
     } finally {
       if (alive.current) setBusy(undefined);
     }

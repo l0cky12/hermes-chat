@@ -38,6 +38,7 @@ import {
 import { fmtSize } from "./bits";
 import { useModal } from "./modal";
 import { SettingRow, SettingsSection } from "./SettingRows";
+import { errorText, plural } from "../hermes/values";
 
 /** What Backup needs from the app. */
 export type BackupWiring = {
@@ -59,9 +60,7 @@ export type BackupWiring = {
   };
 };
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const placeLabel = (p: Conn) => `${p.mode === "ssh" ? `ssh ${p.target}` : p.target} as ${p.username}`;
-const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function BackupSection({ wiring }: { wiring: BackupWiring }) {
   const [open, setOpen] = useState<"export" | "restore">();

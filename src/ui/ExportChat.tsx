@@ -20,6 +20,7 @@ import {
 import { chatImage, type ImagePage } from "../hermes/exportImage";
 import { composing } from "./bits";
 import { useModal } from "./modal";
+import { errorText } from "../hermes/values";
 
 const WHO: Record<string, string> = { user: "You", assistant: "Hermes", thinking: "Hermes, thinking" };
 
@@ -95,7 +96,7 @@ export function ExportChatDialog({
     const of = preview.text;
     draw(JSON.parse(of) as ImagePage).then(
       (png) => live && setDrawn({ of, png }),
-      (e: unknown) => live && setDrawn({ of, problem: e instanceof Error ? e.message : String(e) }),
+      (e: unknown) => live && setDrawn({ of, problem: errorText(e) }),
     );
     return () => {
       live = false;
@@ -141,7 +142,7 @@ export function ExportChatDialog({
         onClose();
       }
     } catch (e) {
-      setNote(`Couldn't save: ${e instanceof Error ? e.message : String(e)}`);
+      setNote(`Couldn't save: ${errorText(e)}`);
     } finally {
       setSaving(false);
     }

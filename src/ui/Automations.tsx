@@ -36,8 +36,8 @@ import {
 } from "../hermes/automations";
 import { appPatterns } from "../hermes/patternRunner";
 import { Spinner } from "./bits";
+import { errorText } from "../hermes/values";
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const when = (at: number) => new Date(at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
 
 type View = { kind: "list" } | { kind: "detail"; name: string } | { kind: "edit"; name?: string };
@@ -205,7 +205,7 @@ export function Automations({
             )}
             {error && (
               <div className="job-error" role="alert">
-                <p>{messageOf(error)}</p>
+                <p>{errorText(error)}</p>
                 {!unsupported && connected && (
                   <button className="btn" onClick={() => void load()}>
                     Try again
@@ -381,7 +381,7 @@ function Detail({
     try {
       await fn();
     } catch (e) {
-      setError(messageOf(e));
+      setError(errorText(e));
       if (e instanceof AutomationError && e.secret) onSecret(e.secret);
       if (e instanceof AutomationError && e.kind === "gone") onChanged(a.name, null);
     } finally {
@@ -590,7 +590,7 @@ function Deliveries({
     const mine = ++seq.current;
     void api.history(profile, a, contract).then(
       (h) => mine === seq.current && (setHistory(h), setOlder([])),
-      (e) => mine === seq.current && setHistory(messageOf(e)),
+      (e) => mine === seq.current && setHistory(errorText(e)),
     );
   };
   useEffect(() => {
@@ -617,7 +617,7 @@ function Deliveries({
       read();
     } catch (e) {
       if (e instanceof AutomationError && e.kind === "confirm") setAsking(d);
-      else setSaid({ id: d.deliveryId, text: messageOf(e), bad: true });
+      else setSaid({ id: d.deliveryId, text: errorText(e), bad: true });
     } finally {
       setRetrying(undefined);
     }
@@ -867,7 +867,7 @@ function Editor({
     try {
       return sanitizeEvent(JSON.parse(pasted));
     } catch (e) {
-      return new Error(`That isn't JSON: ${messageOf(e)}`);
+      return new Error(`That isn't JSON: ${errorText(e)}`);
     }
   }, [pasting, pasted]);
   const example = pasting ? (pastedParse && !(pastedParse instanceof Error) ? { event: pastedEvent.trim() || "unknown", payload: pastedParse.payload, notes: pastedParse.notes } : undefined) : { event: sample, payload: SAMPLE_EVENTS[sample].payload, notes: [] as string[] };
@@ -1204,7 +1204,7 @@ function Editor({
         )}
         {error && (
           <div className="job-error" role="alert">
-            <p>{messageOf(error)}</p>
+            <p>{errorText(error)}</p>
             {error instanceof AutomationError && error.kind === "conflict" && error.current && (
               <button type="button" className="btn" onClick={onReload}>
                 Reload

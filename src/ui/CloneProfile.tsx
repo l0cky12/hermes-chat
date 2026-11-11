@@ -21,6 +21,7 @@ import {
 } from "../hermes/profileClone";
 import { Spinner, composing } from "./bits";
 import { useModal } from "./modal";
+import { errorText } from "../hermes/values";
 
 const PARTS: Part[] = ["persona", "model", "description", "skills"];
 const STAGES: Stage[] = ["name", "create", "skills", "check"];
@@ -36,7 +37,7 @@ function suggestName(source: string, profiles: readonly ProfileRow[]): string {
   }
 }
 
-const listProblem = (e: unknown) => `Couldn't list profiles: ${e instanceof Error ? e.message : String(e)}`;
+const listProblem = (e: unknown) => `Couldn't list profiles: ${errorText(e)}`;
 
 const STATE_ICON: Record<Result["state"], ReactElement> = {
   copied: <Check size={13} aria-label="Copied" className="clone-ok" />,
@@ -106,7 +107,7 @@ export function CloneProfileDialog({
     );
     api.source(sourceName, list).then(
       (s) => current && setSource(s),
-      (e: unknown) => current && setSourceError(`Couldn't read ${sourceName}: ${e instanceof Error ? e.message : String(e)}`),
+      (e: unknown) => current && setSourceError(`Couldn't read ${sourceName}: ${errorText(e)}`),
     );
     return () => void (current = false);
   }, [api, sourceName, reads]);
@@ -123,7 +124,7 @@ export function CloneProfileDialog({
     try {
       out = await work();
     } catch (e) {
-      out = { kind: "unsure", problem: e instanceof Error ? e.message : String(e) };
+      out = { kind: "unsure", problem: errorText(e) };
     }
     if (!live.current) return;
     setRunning(false);
@@ -151,7 +152,7 @@ export function CloneProfileDialog({
       await api.remove(target);
       if (live.current) setDeleted(true);
     } catch (e) {
-      if (live.current) setDeleteError(e instanceof Error ? e.message : String(e));
+      if (live.current) setDeleteError(errorText(e));
     }
     if (!live.current) return;
     setRunning(false);

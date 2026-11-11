@@ -10,12 +10,12 @@ import { SourceIcon, Spinner, composing, highlight, useReturnFocus } from "./bit
 import { useLocale } from "../i18n/locale";
 import { isTextEdit } from "./editKeys";
 import { trapTab } from "./modal";
+import { errorText } from "../hermes/values";
 
 /** Typing this long without a pause sends the search. */
 const PAUSE_MS = 200;
 
 const SOURCE_NAME: Record<Source, string> = { ...SOURCE_LABEL, cli: "Command line", desktop: "Hermes desktop app", import: "Imported transcripts", other: "Other platforms" };
-const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** Each part of a filter but its words, as the owner reads it, with what clears it. */
 function filterParts(f: ChatFilter, tags: ScopeTags): { key: string; label: string; clear: ChatFilter }[] {

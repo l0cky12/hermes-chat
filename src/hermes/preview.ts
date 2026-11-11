@@ -7,6 +7,7 @@ import type { Item } from "./model";
 import { RestError, sessionNotFound } from "./pipe";
 import { SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, type RemotePreview } from "./remoteFiles";
 import type { ArtifactRef } from "./artifacts";
+import { errorText } from "./values";
 
 export type PreviewTarget =
   /**
@@ -306,7 +307,7 @@ type ReadText = { binary?: boolean; byteSize?: number; language?: string; mimeTy
 
 /** A failed dashboard request in the owner's words. */
 function serverFileError(e: unknown): Error {
-  const message = e instanceof Error ? e.message : String(e);
+  const message = errorText(e);
   if (message === "Not connected to Hermes.") return new Error("Files on the server can't be read while Hermes Chat isn't connected.");
   if (!(e instanceof RestError)) return new Error(message);
   let detail = e.body.trim();

@@ -79,7 +79,7 @@ describe("Branch from here", () => {
   });
 
   it("keeps separate Drafts for the original and the branch", async () => {
-    const { s, user } = await launch();
+    const { user } = await launch();
     const composer = () => screen.getByPlaceholderText("Message Hermes") as HTMLTextAreaElement;
     await user.type(composer(), "draft in the original");
     await user.click(branchButtons()[0]);

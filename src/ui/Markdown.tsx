@@ -10,6 +10,7 @@ import { PreviewLink } from "./previewContext";
 import { splitBlocks, type Blocks } from "./markdownBlocks";
 import { rehypePlugins, remarkPlugins } from "./markdownPipeline";
 import { drawDiagram, drawnAlready, subscribeTheme, themeNow, type Drawing } from "./mermaid";
+import { errorText } from "../hermes/values";
 
 /** Rendered Markdown's text: code as it reads, whatever highlighting and find marks it is wrapped in. */
 function textOf(node: ReactNode): string {
@@ -120,7 +121,7 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
         // `//host/p.png` has no scheme for Rust to read; the app's own page is `tauri:` on Linux, so it can't lend one.
         invoke<string>("markdown_image_load", { url: src.startsWith("//") ? `https:${src}` : src }).then(
           (dataUrl) => setLoad({ dataUrl }),
-          (error: unknown) => setLoad({ failed: error instanceof Error ? error.message : String(error) }),
+          (error: unknown) => setLoad({ failed: errorText(error) }),
         );
       }}
     >

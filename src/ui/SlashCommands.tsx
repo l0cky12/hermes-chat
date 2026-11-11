@@ -6,6 +6,7 @@ import { X } from "lucide-react";
 import { COMMANDS, argProblem, completion, matchCommands, menuQuery, typedCommand, type CommandDef } from "../hermes/commands";
 import { dollarQuery, matchSkills, skillRun, type SkillCommand, type SkillCommands, type SkillRun } from "../hermes/skillCommands";
 import { Spinner, composing } from "./bits";
+import { errorText } from "../hermes/values";
 
 /**
  * What runs the commands for one composer. `why`: why a command can't run now, or undefined when it can. `run` resolves
@@ -139,7 +140,7 @@ export function useSlashCommands(host: CommandHost | undefined, text: string, on
       const out = await host!.run(def, arg, () => mounted.current);
       if (mounted.current && out) setNote({ title: `/${def.name}`, text: out });
     } catch (e) {
-      if (mounted.current) setNote({ text: `/${def.name} didn't run: ${e instanceof Error ? e.message : String(e)}`, error: true });
+      if (mounted.current) setNote({ text: `/${def.name} didn't run: ${errorText(e)}`, error: true });
     } finally {
       if (mounted.current) setPending(undefined);
     }

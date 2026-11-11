@@ -8,6 +8,7 @@
 // docs/research/hermes-gateway-api.md, "Server files".
 import { RestError, statusOf } from "./pipe";
 import { EDIT_MAX_BYTES, decodeForEdit, encodeEdit, revisionOf, type EditableText } from "./textEdit";
+import { errorText } from "./values";
 
 /** A directory entry as `GET /api/files` lists it (`_managed_file_entry`, `hermes_cli/web_server_files.py` at `bf0203a`). */
 type WireEntry = {
@@ -616,7 +617,6 @@ export function textEditing(io: EditIo) {
   };
 }
 
-export const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const fmtBytes = (n?: number) => (n === undefined ? "an unknown size" : `${n.toLocaleString("en-US")} bytes`);
 
 /** `name (2).ext`, `name (3).ext`, … : the first that `taken` doesn't have. A leading dot isn't an extension's. */

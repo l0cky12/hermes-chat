@@ -21,6 +21,7 @@ import {
 import { fmtSize } from "./bits";
 import { useModal } from "./modal";
 import { SettingRow, SettingsSection } from "./SettingRows";
+import { plural } from "../hermes/values";
 
 /** What the import needs from the app: Hermes, the profile shown, and where its chats can go. */
 export type ImportWiring = {
@@ -41,7 +42,6 @@ export type ImportWiring = {
   ledger?: ImportLedger;
 };
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const day = (ms: number) => new Date(ms).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 
 export function ImportSection({ wiring, connected }: { wiring: ImportWiring; connected: boolean }) {

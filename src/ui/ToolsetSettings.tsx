@@ -18,8 +18,8 @@ import {
   type ToolsetsApi,
   type WriteSupport,
 } from "../hermes/toolsets";
+import { errorText } from "../hermes/values";
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const onOff = (on: boolean) => (on ? "on" : "off");
 const timeOf = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
@@ -287,7 +287,7 @@ export function ToolsetSettings({
     setChatRead((c) => (c?.runtimeId === runtimeId ? c : { runtimeId }));
     const out = await api.chatTools(profile, runtimeId).then(
       (read) => ({ runtimeId, read }),
-      (e) => ({ runtimeId, error: messageOf(e) }),
+      (e) => ({ runtimeId, error: errorText(e) }),
     );
     if (live.current && mine === chatSeq.current) setChatRead(out);
   }, [api, profile, runtimeId]);
@@ -318,7 +318,7 @@ export function ToolsetSettings({
       try {
         const [fresh, support, g] = await Promise.all([
           api.list(profile),
-          full ? api.writeSupport(profile).catch((e): WriteSupport => ({ ok: false, reason: `Couldn't check whether Hermes takes changes: ${messageOf(e)}` })) : undefined,
+          full ? api.writeSupport(profile).catch((e): WriteSupport => ({ ok: false, reason: `Couldn't check whether Hermes takes changes: ${errorText(e)}` })) : undefined,
           full ? api.guards(profile) : undefined,
         ]);
         if (!live.current) return;
@@ -358,7 +358,7 @@ export function ToolsetSettings({
       } catch (e) {
         if (!live.current || stamp.current !== started) return;
         if (e instanceof UnsupportedServerError) setUnsupported(e.message);
-        else setLoadError(messageOf(e));
+        else setLoadError(errorText(e));
       } finally {
         readingNow.current = false;
         if (live.current) setReading(false);
@@ -426,7 +426,7 @@ export function ToolsetSettings({
     } catch (e) {
       if (!live.current) return;
       // The read before the change failed: nothing was sent.
-      note = { tone: "error", text: `Nothing changed: couldn't read ${t.label} from Hermes first: ${messageOf(e)}` };
+      note = { tone: "error", text: `Nothing changed: couldn't read ${t.label} from Hermes first: ${errorText(e)}` };
     }
     setNotes((n) => ({ ...n, [t.name]: note }));
     // Whether the change reached the open chat is read, not assumed; so is whether the profile now has its own list.

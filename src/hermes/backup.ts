@@ -24,6 +24,7 @@ import { readUIPrefs, UI_PREFS_KEY } from "./uiPrefs";
 import { TERMINAL_TARGET_KEY } from "./terminal";
 import { QUEUE_LIMIT, type ChatQueue } from "./model";
 import { APPEARANCE_KEY, loadAppearance } from "../ui/appearance";
+import { errorText, isObj } from "./values";
 
 export const BACKUP_FORMAT = "hermes-chat-backup";
 /** The schema this version writes and reads. A backup of a newer schema is refused, never half-read. */
@@ -103,7 +104,6 @@ const placeIn = (env: BackupEnv, scope: string) => env.place?.(scope) ?? placeOf
 export function stable(v: unknown): string {
   return JSON.stringify(v, (_, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : 1))) : x));
 }
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 // --- Where things are kept, and what one category is ---
 
@@ -191,7 +191,7 @@ function writeAll(s: BackupStorage, changes: Map<string, string | null>) {
       } catch {
         lost++;
       }
-    const why = e instanceof Error ? e.message : String(e);
+    const why = errorText(e);
     throw new WriteError(
       lost > 0,
       lost
@@ -839,7 +839,7 @@ export async function applyRestore(env: BackupEnv, plan: RestorePlan, saveRecove
   try {
     recovery = await saveRecovery(await makeBackup(env, CATEGORY_IDS, new Date(), { raw: true }));
   } catch (e) {
-    const why = e instanceof Error ? e.message : String(e);
+    const why = errorText(e);
     return { recoveryError: `Couldn't save a recovery backup first (${why}), so nothing was restored.`, outcomes: plan.categories.map((p) => ({ id: p.id, state: "skipped", plan: p })) };
   }
   const outcomes: CategoryOutcome[] = [];
@@ -853,7 +853,7 @@ export async function applyRestore(env: BackupEnv, plan: RestorePlan, saveRecove
         await cat(p.id).save(env, before, p.result);
         outcomes.push({ id: p.id, state: "restored", plan: p });
       } catch (e) {
-        outcomes.push({ id: p.id, state: "failed", plan: p, reason: e instanceof Error ? e.message : String(e), ...(e instanceof WriteError && e.changed && { changed: true }) });
+        outcomes.push({ id: p.id, state: "failed", plan: p, reason: errorText(e), ...(e instanceof WriteError && e.changed && { changed: true }) });
       }
   }
   return { recovery, outcomes };
