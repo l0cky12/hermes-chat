@@ -35,7 +35,7 @@ A URL sign-in (ADR 0004) has no SSH target. The page then says so, offers **Open
 
 ## Consequences
 
-- Any program on this computer can connect to a tunnel's port while it is open, as with any `ssh -L`. On Linux, since ADR 0105, the relay closes a connection from a program run by another account unanswered. On Windows and macOS such a program can reach that one port on the server's loopback (#378). The port is ephemeral and the tunnel lasts only while the page shows.
+- Any program on this computer can connect to a tunnel's port while it is open, as with any `ssh -L`. On Linux and Windows, since ADR 0105, the relay closes a connection from a program run by another account unanswered. On Windows such a program can still connect to ssh's own `-L` port and reach that one port on the server's loopback (#506). The port is ephemeral and the tunnel lasts only while the page shows.
 - A page that links or redirects to `http://localhost:3000/…` by its full address sends the frame to this computer's port 3000, since the frame can't be followed. Relative links stay in the tunnel.
 - The server's page sees requests for `Host: 127.0.0.1:<port>`. Dev servers allow loopback addresses by default (Vite, webpack, Django in debug).
 - The `HEAD /` that checks a new http tunnel reaches the page's server.
