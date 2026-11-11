@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handoffs } from "./dispatched";
-import { FakeHermes, row } from "./fakeHermes";
+import { FakeHermes, readRow, row } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
 import { INBOX_PREFIX, blocksRestore, inboxAcks, inboxEntries, needsOwner, type InboxEntry, type InboxKind } from "./inbox";
 import type { OutgoingItem } from "./model";
 import { connect, type Hermes } from "./transport";
+import { RestError } from "./pipe";
 
 const nowS = () => Date.now() / 1000;
 const unreadRow = (id: string, minutesAgo = 1, over = {}) => row(id, minutesAgo / 1440, { last_read_at: 0, ...over });
@@ -19,10 +20,10 @@ const brief = (e: InboxEntry) => `${e.kind}${e.ended ? " (ended)" : ""} ${e.prof
 /** Signed in to `default`, on a server that also has the `work` and `ops` profiles. */
 async function signedIn(cache = memoryCache()) {
   const server = new FakeHermes();
-  server.sessions = [row("home-1", 1, { last_read_at: nowS() })];
+  server.sessions = [readRow("home-1", 1)];
   server.otherProfiles = {
-    work: [unreadRow("work-done"), row("work-busy", 0, { last_read_at: nowS() }), row("work-asks", 0, { last_read_at: nowS() })],
-    ops: [row("ops-1", 1, { last_read_at: nowS() })],
+    work: [unreadRow("work-done"), readRow("work-busy", 0), readRow("work-asks", 0)],
+    ops: [readRow("ops-1", 1)],
   };
   const hermes = await connect(server.openPipe, undefined, cache);
   await hermes.sync();
@@ -82,8 +83,8 @@ describe("The inbox", () => {
     expect(entries[0]).toMatchObject({ title: "Chat work-asks", at: busyAt * 1000, summary: expect.stringContaining("waiting for your answer") });
     expect(entries[1]).toMatchObject({ title: "Chat work-done", at: expect.any(Number) });
     expect(entries.filter(needsOwner).length).toBe(2);
-    // Reading the server for the inbox resumed, answered or marked nothing.
-    expect(server.requests.map((r) => r.method).filter((m) => m !== "client.capabilities")).toEqual(["subagent.roster", "session.active_list"]);
+    // Reading the server for the inbox resumed, answered or marked nothing. Connecting reads the bots (ADR 0066).
+    expect(server.requests.map((r) => r.method).filter((m) => m !== "client.capabilities" && m !== "profiles.list")).toEqual(["subagent.roster", "session.active_list"]);
     expect(server.restRequests.filter((r) => r.method !== "GET")).toEqual([]);
     expect(server.approvalAnswers).toEqual([]);
   });
@@ -222,7 +223,7 @@ describe("The inbox", () => {
     await hermes.checkOtherProfiles();
     const list = server.rest["GET /api/sessions"];
     server.rest["GET /api/sessions"] = (req) => {
-      if (req.query.get("profile") === "work") throw new Error("The dashboard answered 503: busy");
+      if (req.query.get("profile") === "work") throw new RestError(503, "busy");
       return list(req);
     };
     vi.useFakeTimers({ now: Date.now() + 20_000 });
@@ -235,7 +236,7 @@ describe("The inbox", () => {
   it("finds the profile of a live session by its id, even one past the chats a check reads", async () => {
     const { server, hermes } = await signedIn();
     for (let i = 0; i < 60; i++) server.otherProfiles.work.push(row(`filler-${i}`, 0));
-    server.otherProfiles.work.push(row("old-job", 20, { title: "Old job", last_read_at: nowS() }));
+    server.otherProfiles.work.push(readRow("old-job", 20, { title: "Old job" }));
     server.liveSessions = [{ id: "rt-o", session_key: "old-job", status: "waiting", last_active: nowS() }];
     await hermes.checkOtherProfiles();
 
@@ -260,9 +261,9 @@ describe("The inbox", () => {
     server.liveSessions = [{ id: "rt-z", session_key: "work-busy", status: "working", last_active: nowS() }];
     server.rest["GET /api/sessions/work-busy"] = (req) => {
       const profile = req.query.get("profile");
-      if (profile === "ops") throw new Error("The dashboard answered 503: busy");
+      if (profile === "ops") throw new RestError(503, "busy");
       if (profile === "work") return server.otherProfiles.work.find((r) => r.id === "work-busy");
-      throw new Error(`The dashboard answered 404: {"detail":"Session not found"}`);
+      throw new RestError(404, `{"detail":"Session not found"}`);
     };
     await vi.advanceTimersByTimeAsync(20_000);
     await hermes.checkOtherProfiles();

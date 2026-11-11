@@ -20,10 +20,11 @@ import {
   type CapabilityIO,
 } from "./capabilities";
 import { RpcError } from "./transport";
+import { RestError } from "./pipe";
 
 afterEach(() => vi.useRealTimers());
 
-const answered = (status: number, detail: string) => new Error(`The dashboard answered ${status}: ${JSON.stringify({ detail })}`);
+const answered = (status: number, detail: string) => new RestError(status, JSON.stringify({ detail }));
 
 /** A Hermes as upstream `74b2ed6` answers each read the store makes. */
 const NEW: Record<string, unknown> = {
@@ -38,6 +39,7 @@ const NEW: Record<string, unknown> = {
   "RPC profiles.list": { profiles: [{ name: "default", is_default: true, canonical_session: null }], bot_mode_protocol: true },
   "GET api/tools/toolsets": [],
   "GET api/profiles/default/soul": { content: "", exists: false },
+  "GET api/profiles": { profiles: [{ name: "default", is_default: true }] },
   "GET api/skills": [],
   "GET api/files": { path: "/", entries: [] },
   "GET api/cron/jobs": [],
@@ -141,6 +143,7 @@ describe("a check of a new Hermes (upstream 74b2ed6)", () => {
       // Only Settings → Toolsets can learn this, with its own check.
       toolsetSwitches: "unknown",
       persona: "supported",
+      profiles: "supported",
       skills: "supported",
       serverFiles: "supported",
       scheduledJobs: "supported",
@@ -291,7 +294,7 @@ describe("partial and malformed answers", () => {
     // The route is there and names its own reason.
     expect(of(answered(404, "Profile 'x' does not exist"))).toBe("supported");
     expect(of(answered(400, "Unknown toolset"))).toBe("supported");
-    expect(of(new Error("The dashboard sign-in has expired. Sign in again."))).toBe("unknown");
+    expect(of(new RestError(401, "", "The dashboard sign-in has expired. Sign in again."))).toBe("unknown");
     expect(of(answered(403, "Forbidden"))).toBe("unknown");
     expect(of(answered(502, "Bad Gateway"))).toBe("unreachable");
     expect(of(new Error("Can't reach the Hermes dashboard: connection reset"))).toBe("unreachable");

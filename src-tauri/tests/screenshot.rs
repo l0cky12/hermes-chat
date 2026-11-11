@@ -183,6 +183,29 @@ fn stages_captures_privately_and_deletes_the_portals_scratch_copy() {
 }
 
 #[test]
+fn writes_an_image_the_app_made_into_a_private_slot_of_its_own() {
+    let (_root, captures) = fresh_root("write");
+    let a = captures.write("annotation-1", PNG).unwrap();
+    assert_eq!(a.file_name().unwrap(), "annotation-1.png");
+    assert_eq!(std::fs::read(&a).unwrap(), PNG);
+    #[cfg(unix)]
+    {
+        assert_eq!(mode(&a), 0o600);
+        assert_eq!(mode(a.parent().unwrap()), 0o700);
+    }
+    assert!(captures.owns(&a));
+    let b = captures.write("annotation-1", PNG).unwrap();
+    assert_ne!(a.parent(), b.parent(), "each write has a fresh slot");
+    assert_eq!(captures.write("../../evil", PNG).unwrap().file_name().unwrap(), "screenshot.png", "an odd name is replaced");
+
+    assert!(matches!(captures.write("x", b"<html>"), Err(CaptureError::Failed(_))), "not an image");
+    assert_eq!(std::fs::read_dir(captures.mine()).unwrap().count(), 3, "and nothing is left of it");
+
+    assert!(captures.discard(&a));
+    assert!(!a.exists() && !a.parent().unwrap().exists());
+}
+
+#[test]
 fn discards_only_its_own_captures() {
     let (root, captures) = fresh_root("discard");
     let source = root.0.join("s.png");

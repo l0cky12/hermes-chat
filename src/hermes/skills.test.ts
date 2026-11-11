@@ -7,6 +7,7 @@ import { FakeHermes } from "./fakeHermes";
 import { connect, type Hermes } from "./transport";
 import { merge3 } from "./textEdit";
 import { SkillsApi, SkillsError, declaredName, frontmatterName, referencedPaths, safeSkillName, skillProblems, type SkillFile } from "./skills";
+import { RestError } from "./pipe";
 
 const running: Hermes[] = [];
 afterEach(async () => {
@@ -201,7 +202,7 @@ describe("Codex review round 2 regressions", () => {
     server.skills.add("default", { dir: `${HOME}/skills/writing/one`, source: "agent" }, skill("example", "Writing one."));
     server.skills.add("default", { dir: `${HOME}/skills/notes/two`, source: "agent" }, skill("example", "Notes one."));
     server.skills.platformDisabled.default = { tui: ["example"] };
-    server.skills.readGate = Promise.reject(new Error("The dashboard answered 500: {\"detail\":\"boom\"}"));
+    server.skills.readGate = Promise.reject(new RestError(500, "{\"detail\":\"boom\"}"));
     server.skills.readGate.catch(() => {});
     const view = await api.list("default");
     expect(view.platformsRead).toBe(false);

@@ -14,9 +14,9 @@ import { SettingsScreen } from "./Settings";
 import { appearanceStore } from "./appearance";
 import type { CapabilityId, CapabilityStore } from "../hermes/capabilities";
 import { useState } from "react";
+import { RestError } from "../hermes/pipe";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -97,7 +97,7 @@ describe("Logs screen", () => {
 
   it("says when this Hermes can't give a log, and stops asking", async () => {
     const l = logs();
-    l.read.mockRejectedValue(new Error(`The dashboard answered 404: {"detail":"Not Found"}`));
+    l.read.mockRejectedValue(new RestError(404, `{"detail":"Not Found"}`));
     screenWith(l);
     await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/This Hermes has no \/api\/logs route/));
     const calls = l.read.mock.calls.length;
@@ -118,7 +118,7 @@ describe("Logs screen", () => {
     expect(rows()[1]).toMatch(/^Not read from .*: the connection to Hermes was lost$/);
     expect(rows()[2]).toBe("2026-11-04 10:00:05,000 INFO agent: during");
 
-    l.read.mockRejectedValue(new Error(`The dashboard answered 500: {"detail":"[Errno 13] Permission denied: 'agent.log'"}`));
+    l.read.mockRejectedValue(new RestError(500, `{"detail":"[Errno 13] Permission denied: 'agent.log'"}`));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/Couldn't read the Hermes agent log: \[Errno 13\] Permission denied/));
   });
 

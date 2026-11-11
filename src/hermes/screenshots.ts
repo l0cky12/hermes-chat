@@ -1,11 +1,12 @@
 // Screenshots and the files staged in each chat's composer. Rust takes the capture (src-tauri/src/screenshot.rs) and
 // stages it in a private folder; the desk hands it to the composer on screen. Files pasted into the composer are staged
 // the same way. The desk keeps every chat's staged attachments, keyed as its Draft is, so they wait there across chat
-// switches until the owner sends or removes them (ADR 0139). It remembers which staged files are its own, so each one
+// switches until the owner sends or removes them (ADR 0145). It remembers which staged files are its own, so each one
 // is deleted once nothing needs it any more. Nothing here sends anything to Hermes.
 
 import type { Attachment } from "./model";
 import { stagedFiles } from "./unsaved";
+import { errorText } from "./values";
 
 /** Why a capture produced no image, as Rust reports it. */
 export type CaptureFailure = { kind: "cancelled" | "denied" | "unsupported" | "busy" | "failed"; message?: string };
@@ -55,7 +56,7 @@ const isFailure = (e: unknown): e is CaptureFailure => typeof e === "object" && 
 
 /** What the composer says when a capture didn't attach. Nothing for a cancelled one, or a second press while picking. */
 export function failureText(e: unknown): string | undefined {
-  if (!isFailure(e)) return `Couldn't take a screenshot: ${e instanceof Error ? e.message : String(e)}`;
+  if (!isFailure(e)) return `Couldn't take a screenshot: ${errorText(e)}`;
   switch (e.kind) {
     case "cancelled":
     case "busy":

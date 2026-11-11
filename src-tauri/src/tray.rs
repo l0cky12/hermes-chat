@@ -14,6 +14,7 @@
 //! The setting lives in `window.json` in the app's config folder, for this computer, not per connection or profile.
 //! Nothing here keeps running after Quit: it is the same process as the window.
 
+use crate::lock::Locked;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -106,17 +107,17 @@ impl Default for Tray {
 
 impl Tray {
     pub fn status(&self) -> TrayStatus {
-        let (tray, why) = self.state.lock().unwrap().clone();
+        let (tray, why) = self.state.locked().clone();
         TrayStatus { close_to_tray: self.close_to_tray.load(Ordering::SeqCst), tray, why }
     }
 
     fn parts(&self) -> Option<Parts> {
-        self.parts.lock().unwrap().clone()
+        self.parts.locked().clone()
     }
 
     /// Closing the window hides it now.
     fn close_hides(&self) -> bool {
-        closing_hides(self.close_to_tray.load(Ordering::SeqCst), self.state.lock().unwrap().0)
+        closing_hides(self.close_to_tray.load(Ordering::SeqCst), self.state.locked().0)
     }
 }
 
@@ -188,7 +189,7 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) {
     seen(app, true);
     // The tray may have gone between deciding to hide and hiding: the watcher, which saw the window still showing,
     // won't bring it back, so this does.
-    if must_reappear(true, tray.state.lock().unwrap().0) {
+    if must_reappear(true, tray.state.locked().0) {
         show(app);
     }
 }
@@ -261,22 +262,22 @@ pub fn start(app: &AppHandle) {
         Ok(dir) => {
             let path = dir.join(SETTINGS_FILE);
             tray.close_to_tray.store(read_settings(&path).close_to_tray, Ordering::SeqCst);
-            *tray.settings.lock().unwrap() = Some(path);
+            *tray.settings.locked() = Some(path);
         }
         Err(e) => eprintln!("hermes-chat: no config folder, so Close to tray can't be kept: {e}"),
     }
     if let Some(why) = host::missing() {
-        *tray.state.lock().unwrap() = (TrayState::Unavailable, Some(why));
+        *tray.state.locked() = (TrayState::Unavailable, Some(why));
         return;
     }
     match make(app) {
         Ok(parts) => {
-            *tray.parts.lock().unwrap() = Some(parts);
-            *tray.state.lock().unwrap() = (TrayState::NoTray, None);
+            *tray.parts.locked() = Some(parts);
+            *tray.state.locked() = (TrayState::NoTray, None);
             host::watch(app.clone());
         }
         Err(e) => {
-            *tray.state.lock().unwrap() = (TrayState::Unavailable, Some(format!("The tray icon couldn't be made: {e}")));
+            *tray.state.locked() = (TrayState::Unavailable, Some(format!("The tray icon couldn't be made: {e}")));
         }
     }
 }
@@ -358,7 +359,7 @@ pub fn next_state(now: TrayState, reading: Option<bool>, misses: &mut u32) -> Tr
 fn changed<R: Runtime>(app: &AppHandle<R>, now: TrayState) {
     let tray = app.state::<Tray>();
     {
-        let mut state = tray.state.lock().unwrap();
+        let mut state = tray.state.locked();
         if state.0 == now {
             return;
         }
@@ -376,6 +377,7 @@ fn changed<R: Runtime>(app: &AppHandle<R>, now: TrayState) {
 #[cfg(target_os = "linux")]
 mod host {
     use super::{changed, either, next_state, Tray};
+    use crate::lock::Locked;
     use std::time::Duration;
     use tauri::{AppHandle, Manager};
 
@@ -413,7 +415,7 @@ mod host {
             loop {
                 let sni = sni_host(&mut bus);
                 let reading = if sni == Some(true) { Some(true) } else { either(sni, xembed_tray(&app)) };
-                let now = app.state::<Tray>().state.lock().unwrap().0;
+                let now = app.state::<Tray>().state.locked().0;
                 changed(&app, next_state(now, reading, &mut misses));
                 std::thread::sleep(POLL);
             }
@@ -502,12 +504,19 @@ pub fn tray_status(tray: tauri::State<'_, Tray>) -> TrayStatus {
     tray.status()
 }
 
-/// Turns Close to tray on or off, and answers what the file holds once written.
+/// Turns Close to tray on or off, and answers what the file holds once written. The file is written off the main
+/// thread.
 #[tauri::command]
-pub fn tray_set_close_to_tray(tray: tauri::State<'_, Tray>, on: bool) -> Result<TrayStatus, String> {
-    let path = tray.settings.lock().unwrap().clone().ok_or("There's no config folder to keep the setting in.")?;
-    write_settings(&path, &Settings { close_to_tray: on })?;
-    let kept = read_settings(&path).close_to_tray;
+pub async fn tray_set_close_to_tray(app: AppHandle, on: bool) -> Result<TrayStatus, String> {
+    tokio::task::spawn_blocking(move || set_close_to_tray(&app.state::<Tray>(), on)).await.map_err(|e| e.to_string())?
+}
+
+fn set_close_to_tray(tray: &Tray, on: bool) -> Result<TrayStatus, String> {
+    // Held until the file is read back, so a second switch can't write between this one's write and read.
+    let settings = tray.settings.locked();
+    let path = settings.as_ref().ok_or("There's no config folder to keep the setting in.")?;
+    write_settings(path, &Settings { close_to_tray: on })?;
+    let kept = read_settings(path).close_to_tray;
     tray.close_to_tray.store(kept, Ordering::SeqCst);
     if kept != on {
         return Err(format!("{} didn't keep the setting.", path.display()));

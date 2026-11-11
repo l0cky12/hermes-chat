@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FakeHermes, row } from "./fakeHermes";
 import { connect } from "./transport";
+import { RestError } from "./pipe";
 
 /** Signed in with one Active chat, one Settled chat and one chat settled two months ago, below the list. */
 async function signedIn(server = new FakeHermes()) {
@@ -65,7 +66,7 @@ describe("Searching all chats", () => {
   it("fails with the server's reason", async () => {
     const { server, hermes } = await signedIn();
     server.rest["GET /api/sessions/search"] = () => {
-      throw new Error('The dashboard answered 500: {"detail":"Search failed"}');
+      throw new RestError(500, '{"detail":"Search failed"}');
     };
     await expect(hermes.search("backup")).rejects.toThrow("Search failed");
   });

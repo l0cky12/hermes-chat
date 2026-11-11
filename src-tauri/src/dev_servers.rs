@@ -22,7 +22,7 @@ pub struct DevServers {
     pub local: Vec<Listening>,
 }
 
-const NOT_WEB: &[u16] = &[5432, 3306, 6379, 11211, 27017, 5672, 9092, 2181];
+pub(crate) const NOT_WEB: &[u16] = &[5432, 3306, 6379, 11211, 27017, 5672, 9092, 2181];
 const NOT_DEV: &[&str] = &["ssh", "sshd"];
 /// Where Linux hands out a port to a program that asks for any free one (`ip_local_port_range`): a listener from here
 /// up is a tool's, such as a test driver or a tunnel's end, not a dev server someone started on its port.
@@ -103,15 +103,7 @@ pub fn local() -> Vec<Listening> {
     use std::collections::HashMap;
     let listeners: Vec<Socket> =
         ["/proc/net/tcp", "/proc/net/tcp6"].iter().filter_map(|p| std::fs::read_to_string(p).ok()).flat_map(|t| parse_proc_net_tcp(&t)).collect();
-    let socket_inodes = |fd_dir: &std::path::Path| -> Vec<u64> {
-        std::fs::read_dir(fd_dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|fd| std::fs::read_link(fd.path()).ok())
-            .filter_map(|link| link.to_str()?.strip_prefix("socket:[")?.strip_suffix(']')?.parse().ok())
-            .collect()
-    };
+    use crate::loopback_peer::socket_inodes;
     let own = socket_inodes(std::path::Path::new("/proc/self/fd"));
     let me = std::process::id().to_string();
     let mut owners: HashMap<u64, String> = HashMap::new();
@@ -204,18 +196,18 @@ LISTEN 0      511 [fe80::1%eth0]:4001          [::]:*
     fn finds_another_programs_server_here_but_not_its_own() {
         let own = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let own_port = own.local_addr().unwrap().port();
-        let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let mut server = std::process::Command::new("python3")
-            .args(["-c", &format!("import socket,time; s=socket.socket(); s.bind(('127.0.0.1',{free})); s.listen(); print(flush=True); time.sleep(30)")])
+            .args(["-c", "import socket,time; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); print(s.getsockname()[1], flush=True); time.sleep(30)"])
             .stdout(std::process::Stdio::piped())
             .spawn()
             .expect("python3");
         let mut ready = String::new();
         std::io::BufRead::read_line(&mut std::io::BufReader::new(server.stdout.as_mut().unwrap()), &mut ready).unwrap();
+        let theirs: u16 = ready.trim().parse().unwrap();
         let found = local();
         let _ = server.kill();
         let _ = server.wait();
         assert!(!found.iter().any(|l| l.port == own_port), "this process's own socket is left out: {found:?}");
-        assert!(found.contains(&at(free, Some("python3"))), "the other program's server is named: {found:?}");
+        assert!(found.contains(&at(theirs, Some("python3"))), "the other program's server is named: {found:?}");
     }
 }

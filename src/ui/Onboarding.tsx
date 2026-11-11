@@ -13,6 +13,7 @@ import { RouteTests, RoutesEditor, finishRoutes, routesReady, type Reach } from 
 import { routesOf } from "../hermes/routes";
 import { isPicked, methodsNote, offered, withMethod } from "../hermes/signInMethods";
 import { MethodPicker, TokenField } from "./SignInMethods";
+import { errorText } from "../hermes/values";
 
 /**
  * `first-run`: nothing is set up on this computer, so there is nowhere to cancel to; Cancel starts over.
@@ -29,8 +30,6 @@ const STEP_LABEL: Record<Step, string> = { welcome: "Welcome", server: "Server",
 
 /** A connection test. With several routes, `routes` holds each one's part, filled in as they finish. */
 type Test = { state: "idle" } | { state: "testing"; routes?: RouteTest[] } | { state: "done"; outcome: TestOutcome; routes?: RouteTest[] };
-
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function Onboarding({
   mode,
@@ -95,6 +94,7 @@ export function Onboarding({
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
       run.current++;
       if (testing.current) probe.cancel();
       dialing.current?.abort();
@@ -187,7 +187,7 @@ export function Onboarding({
     } catch (e) {
       // Stopped: the owner knows why; say what became of the connection, not a failure.
       if (stop.signal.aborted) setStopped(true);
-      else setConnectError(messageOf(e));
+      else setConnectError(errorText(e));
     } finally {
       if (dialing.current === stop) dialing.current = undefined;
       setConnecting(false);
@@ -756,7 +756,7 @@ function ProviderKeys({
         setLoadError(undefined);
         setChosen((c) => (c && s.keys.some((k) => k.provider === c) ? c : (s.keys.find((k) => !k.isSet) ?? s.keys[0])?.provider));
       },
-      (e) => live(scope) && read === reads.current && setLoadError(messageOf(e)),
+      (e) => live(scope) && read === reads.current && setLoadError(errorText(e)),
     );
   };
   useEffect(() => {
@@ -770,6 +770,7 @@ function ProviderKeys({
     setKeySaved(false);
     setSaving(false);
     void load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [hermes, profile]);
 
   const pick: ProviderKey | undefined = setup?.keys.find((k) => k.provider === chosen);
@@ -790,7 +791,7 @@ function ProviderKeys({
         text: savedKeyText(r, pick.label),
       });
     } catch (e) {
-      if (live(scope)) setResult({ ok: false, text: `Not saved: ${withoutKey(messageOf(e), key)}` });
+      if (live(scope)) setResult({ ok: false, text: `Not saved: ${withoutKey(errorText(e), key)}` });
       return;
     } finally {
       if (live(scope)) setSaving(false);

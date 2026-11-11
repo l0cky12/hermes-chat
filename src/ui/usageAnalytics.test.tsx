@@ -9,9 +9,9 @@ import { connect, type Hermes } from "../hermes/transport";
 import type { UsageIo } from "../hermes/usageAnalytics";
 import { Main } from "../App";
 import { UsageAnalytics, type UsageAnalyticsProps } from "./UsageAnalytics";
+import { RestError } from "../hermes/pipe";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -110,7 +110,7 @@ describe("Usage in the app", () => {
     s.otherProfiles.ops = [];
     const original = s.rest["GET /api/sessions"];
     s.rest["GET /api/sessions"] = (req) => {
-      if (req.query.get("profile") === "work") throw new Error('The dashboard answered 503: {"detail":"Session store is busy"}');
+      if (req.query.get("profile") === "work") throw new RestError(503, '{"detail":"Session store is busy"}');
       return original(req);
     };
     await user.selectOptions(screen.getByRole("combobox", { name: "Profile" }), "All profiles");
@@ -236,7 +236,7 @@ describe("The Usage screen", () => {
   it("doesn't call a cost Included when a profile couldn't be read", async () => {
     const io: UsageIo = {
       page: async (profile) => {
-        if (profile === "work") throw new Error('The dashboard answered 503: {"detail":"busy"}');
+        if (profile === "work") throw new RestError(503, '{"detail":"busy"}');
         return { rows: [fixtureRow("a", 1, 1000, { cost_status: "included", estimated_cost_usd: 0 })], total: 1 };
       },
       session: vi.fn(),
@@ -279,7 +279,7 @@ describe("The Usage screen", () => {
   it("marks every count of a chat with an unread segment, and doesn't compare it with Hermes's sums", async () => {
     const io: UsageIo = {
       page: async () => ({ rows: [{ ...fixtureRow("tip", 1, 1000), _lineage_root_id: "root", _lineage_ids: ["root", "tip"] }], total: 1 }),
-      session: () => Promise.reject(new Error("The dashboard answered 500: x")),
+      session: () => Promise.reject(new RestError(500, "x")),
       hermesTotals: async () => ({ totals: { total_sessions: 2, total_input: 3000, total_output: 30, total_cache_read: 0, total_api_calls: 4 } }),
     };
     const user = userEvent.setup();
@@ -322,7 +322,7 @@ describe("The Usage screen", () => {
 
   it("counts what a profile gave before its read failed, and says so", async () => {
     const page = async (_p: string, offset: number) => {
-      if (offset) throw new Error('The dashboard answered 503: {"detail":"busy"}');
+      if (offset) throw new RestError(503, '{"detail":"busy"}');
       return { rows: Array.from({ length: 100 }, (_, i) => fixtureRow(`c${i}`, 0.01 * i, 10)), total: 300 };
     };
     render(<UsageAnalytics {...props({ page, session: vi.fn(), hermesTotals: async () => ({ totals: {} }) })} />);

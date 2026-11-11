@@ -1,7 +1,7 @@
 // The composer's model picker and reasoning pill. The picker lists the models Hermes offers, starred ones first under
 // Favorites; hovering a row (or moving to it with the arrow keys) shows its options beside the list: reasoning effort
 // and fast mode. The pill shows the effort in use and changes it directly; it hides for a model without reasoning.
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Brain, Check, ChevronDown, Columns2, Search, Star, Zap } from "lucide-react";
 import {
   EFFORT_LABEL,

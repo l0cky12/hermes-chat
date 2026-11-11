@@ -1,6 +1,6 @@
 # An extension runs in a worker behind a sandboxed frame, and reaches the app only through calls the owner granted
 
-> **Proposed** (#100). Nothing here is built. The owner settles the open questions at the end before the first implementation PR.
+> **Proposed** (#100). Nothing here is built. The owner settles the open questions at the end. Each Delivery step waits only for the open questions it depends on, and step 3's manifest parser needs only questions 1 and 7.
 
 Issue #100 asks for a way to add optional integrations without adding privileged code to the app each time. Today every feature is app code, and app code has every power the app has. The app's webview can call all 101 Rust commands in `invoke_handler` (`src-tauri/src/lib.rs`), and no capability limits which ones. Among them, `password_load` returns the saved password, `hermes_send_file` reads any local path the webview names, and `terminal_open_local` starts a shell. So the question this ADR answers is where an extension's code runs so that it has none of these powers, and what it gets instead.
 
@@ -26,6 +26,8 @@ T1 and the last row decide where the code goes. Code in a frame's realm can free
 
 The probe puts each worker's source inside the frame's `srcdoc`. The design must not, as review round 1 showed on the same WebKitGTK. A source that contains `</script><meta http-equiv=refresh content=0;url=…>` closes the shim's script element, and the refresh navigates the frame to that address. T4's CSP doesn't stop it, because a refresh isn't a fetch or a script. So no byte of a package may reach an HTML parser (section 1).
 
+The probe's frames also showed that WebKitGTK 2.54.2 shares Cache Storage across opaque-origin frames. A frame that wrote to `caches` could be read from another frame, even after the first was removed. PR #327's review round 3 reproduced this. So the prelude must close `caches` as well (section 1).
+
 ## Decisions
 
 ### 1. The extension's code runs in a worker behind a sandboxed frame
@@ -33,7 +35,7 @@ The probe puts each worker's source inside the frame's `srcdoc`. The design must
 - Each running extension has one host frame: an `<iframe sandbox="allow-scripts">` whose `srcdoc` the app writes. The sandbox has no `allow-same-origin`, so the frame's origin is opaque. ADR 0007's argument then holds for it: the frame can't read the parent's globals, so it can't learn the invoke key.
 - The `srcdoc` is the same for every extension. It is T4's CSP, with the shim's SHA-256 hash in place of `'unsafe-inline'`, and a shim of a few lines. No part of a package is ever in it.
 - **The app makes the channel.** Once the frame has loaded, the app creates a `MessageChannel` and posts one port to the frame's window, with the extension's source as a string. The shim takes only the first message whose `source` is `parent`, so another frame in the app's page can't hand it a port first. It makes a `blob:` of a fixed prelude followed by the source, starts one dedicated worker from it, and passes the worker the port. Then it ignores every other message. The prelude replaces `Worker` and `SharedWorker` on the worker's global before the extension's code runs, so the extension can't start a nested worker. T4 shows a nested worker starts under the CSP, and review round 2 showed that the replacement stops it on WebKitGTK 2.54.2. The shim never runs extension code, so nothing in the frame's realm can navigate the frame or hold the main thread.
-- The extension's code runs only in that worker: off the main thread (T2), with no network or `eval` (T4) and no origin storage. The port is its only channel to the app.
+- The extension's code runs only in that worker: off the main thread (T2), with no network or `eval` (T4) and no origin storage and no Cache Storage. The prelude replaces `caches` with a non-configurable getter that throws, on the prototype that defines it, so the extension can't reach it. The port is its only channel to the app.
 - The app takes calls only from its end of the port. It never takes a port or a call from a `message` event on `window`. On Windows, web pages in the Preview are frames that can post such events (ADR 0007). On Linux they are in a separate view with no channel to the app (ADR 0081), but the rule is the same on both.
 
 ### 2. The contract is a manifest and JSON-RPC over the port
@@ -55,7 +57,7 @@ A package has a `manifest.json` and one script:
 }
 ```
 
-- The app parses the manifest once, at install, into an `ExtensionManifest`. An `id` that isn't dot-separated parts of lower-case letters, digits and hyphens, at most 64 characters, refuses the install. So does an id with a part that Windows reserves for a device (`con`, `prn`, `aux`, `nul`, `com1` to `com9`, `lpt1` to `lpt9`), since the app ships for Windows too (ADR 0069). So an id is always one safe folder name. A `main` that isn't one relative path to a regular file in the package refuses the install. So does an unknown key, a permission that isn't in section 3's table, a command name with anything but lower-case letters, digits and hyphens, or a version that isn't semver refuses the install with the reason.
+- The app parses the manifest once, at install, into an `ExtensionManifest`. An `id` that isn't dot-separated parts of lower-case letters, digits and hyphens, at most 64 characters, refuses the install. So does an id with a part that Windows reserves for a device (`con`, `prn`, `aux`, `nul`, `com1` to `com9`, `lpt1` to `lpt9`), since the app ships for Windows too (ADR 0069). The app compares the stem of each part, the text before its first dot, so `nul.txt` is refused too. So an id is always one safe folder name. A `main` that isn't one relative path to a regular file in the package refuses the install. The device-name rule applies to each path part of `main`, again by the stem before the first dot, and a part that ends in a dot is refused. So does an unknown key, a permission that isn't in section 3's table, a command name with anything but lower-case letters, digits and hyphens, or a version that isn't semver refuses the install with the reason. A `version` with build metadata (`+build`) or an upper-case letter is refused too, because precedence ignores build metadata and the version becomes a folder name (section 7). A `needs` id that isn't a `CapabilityId`, and a `manifest` value the app doesn't read, are refused. Field lengths and counts have caps, and open question 7 lists them.
 - Calls are JSON-RPC 2.0 messages of plain JSON. The app checks each message against its method's shape, as `capabilities.ts` checks Hermes's answers.
 - The app calls `activate {api, previousVersion}`, `command.run {call, name, arg}`, `view.render {call, id}` and `deactivate`.
 - The extension calls one method for each permission (section 3), `view.update {id, tree}` and `log {level, text}`.
@@ -70,14 +72,14 @@ A package has a `manifest.json` and one script:
 | --- | --- | --- |
 | `chat.read` | The messages of the call's chat as the transcript shows them: role, text and time. No attachments and no tool output. | While its call is open |
 | `chat.draft` | Text added to the call's chat's Draft. The owner sends it, or doesn't. | While its call is open |
-| `project.read` | The name and folders of the call's chat's project (ADR 0131, projects). | While its call is open |
-| `storage` | Up to 1 MB of its own JSON, kept separately for each connection and profile (section 8). | Any time. The one exception to the open-call rule. |
+| `project.read` | The name and folders of every project the call's chat is in (ADR 0131, projects). A chat can be in several, because the app keys chats by project (`src/hermes/projectLinks.ts`). | While its call is open |
+| `storage` | Up to 1 MB of its own JSON, kept separately for each connection, profile and chat (section 8). | Any time. The one exception to the open-call rule. |
 
 With no permission, an extension has its command's argument and nothing else.
 
 - v1 has no permission to send a message, reach the network, call Hermes's JSON-RPC or REST, read files, read credentials, or read any chat but the call's. The app's broker has no method that returns a password, a header value or a token. Credentials stay where ADR 0058 keeps them.
 - The install dialog lists each permission with one line on what it means, and the owner grants all of them or doesn't install. In Settings → Extensions the owner can withdraw any grant later. A call that needs a withdrawn grant gets `permission_denied`, and the app logs it.
-- An update that asks for a permission without a grant waits as the extension's `pendingUpdate` (section 4), shown as **Needs your OK**, and the old version keeps running until the owner says yes. An update that asks for fewer permissions drops the grants it no longer names.
+- An update that asks for a permission without a grant waits as the extension's `pendingUpdate` (section 4), shown as **Needs your OK**, and the old version keeps running until the owner says yes. The app compares an update's permissions with the owner's current grants, which can be fewer than the old manifest asked for. An update that asks for fewer permissions drops the grants it no longer names. An update that drops `chat.read` or `project.read` deletes the extension's storage, as withdrawing does (next point).
 - Any grant change restarts the extension (removes its frame), so nothing it read under the old grant stays in its memory. An extension with `chat.read` and `storage` can copy what it read into its storage, and the app can't tell which stored data came from a read. So withdrawing `chat.read` or `project.read` also deletes the extension's storage for every connection and profile, and the dialog says so first.
 - The permission table is one typed registry, as `CAPABILITIES` is in ADR 0044. Each entry names its methods and the call state it needs, so the broker is one pure check of the table against the call.
 
@@ -106,21 +108,22 @@ With no permission, an extension has its command's argument and nothing else.
 
 ### 7. Install, update and compatibility
 
-- **Source.** In stage 1, the only extension is the bundled sample (section 9), loaded from the app's resources. Install from a file comes in stage 3. The owner picks a `.zip` in the native Open dialog, which Rust runs, as for `preview_pick_local` (ADR 0007). Rust checks the limits, at most 200 files and 5 MB uncompressed, both from the zip's index and again while it reads each file, so a small zip can't expand past them. It refuses any entry that isn't a regular file or a folder, symbolic links included, and any path that leads outside the package. It also checks the manifest. Only then does it copy the package to `<app data>/extensions/<id>/<version>/`. The webview gets an extension's code through one Rust command that takes the extension's id, never a path.
+- **Source.** Until Delivery step 4, the only extension is the bundled sample (section 9), loaded from the app's resources. Install from a file comes in Delivery step 4. The owner picks a `.zip` in the native Open dialog, which Rust runs, as for `preview_pick_local` (ADR 0007). Rust checks the limits, at most 200 files and 5 MB uncompressed, both from the zip's index and again while it reads each file, so a small zip can't expand past them. It refuses any entry that isn't a regular file or a folder, symbolic links included, and any path that leads outside the package. Each entry's path parts get the same device-name and trailing-dot rules as `main` (section 2). It refuses duplicate JSON keys in the manifest, which `JSON.parse` would resolve by keeping the last. It also checks the manifest. Only then does it copy the package to `<app data>/extensions/<id>/<version>/`. The webview gets an extension's code through one Rust command that takes the extension's id, never a path.
 - **Provenance.** The install dialog shows the id, the version, the file the package came from, its SHA-256 and the permissions. v1 checks no publisher signature (open question 3). The app never downloads an extension or updates one by itself.
-- **Updates.** The owner picks a newer file with the same id. A lower version asks first.
-- **`api`.** The major version of this contract. The app supports one major version at a time. A manifest for another major version installs as `Incompatible`. It is listed but never started, and it says which major version it needs. Additions that don't break an extension, such as a new optional method or node kind, keep the major version. A call to a method the app doesn't have gets `method_not_found`.
-- **`needs`.** `CapabilityId`s from `src/hermes/capabilities.ts`. While one of them is *Not supported* on the connection, the extension's commands and view show that capability's `CapabilityGate` note instead. *Unknown* still runs, because ADR 0044 holds a feature back only when Hermes lacks it.
+- **Updates.** The owner picks a newer file with the same id. A lower version asks first. The same version is refused. An update the app can't run is refused.
+- **`api`.** The major version of this contract. The app supports one major version at a time. A manifest for another major version installs as `Incompatible`. It is listed but never started, and it says which major version it needs. The app computes this at each launch and doesn't store it. Raising `api` is a MAJOR app release under `docs/releases.md` (MINOR below 1.0, and the app is at 0.1.4). The same PR moves the bundled sample, and `docs/compatibility.md` gains a row for each `api`. Additions that don't break an extension, such as a new optional method or node kind, keep the major version. A call to a method the app doesn't have gets `method_not_found`.
+- **`manifest`.** The version of the manifest format. It rises with any new key, and the app reads every older format.
+- **`needs`.** `CapabilityId`s from `src/hermes/capabilities.ts`. They are part of the extension contract, so renaming one raises `api`. While one of them is *Not supported* on the connection, the extension's commands and view show that capability's `CapabilityGate` note instead. *Unknown* still runs, because ADR 0044 holds a feature back only when Hermes lacks it.
 - **Migration.** Moving an extension's own stored data to a new version is the extension's job. `activate` passes the `previousVersion` after an update.
 
-### 8. Storage is per extension, connection and profile
+### 8. Storage is per extension, connection, profile and chat
 
-`storage` is one JSON document for each extension, connection and profile. It isn't in `localStorage`, because WebKitGTK gives the app about 5 MB there, and the chat lists, the Saved copies and sign-in share it (`TRANSCRIPT_LIMIT_BYTES` in `src/hermes/chatCache.ts`). Rust keeps one file for each extension, `<app data>/extensions/<id>/storage.json`. It holds the documents keyed by `connectionScope(connection, profile)` (`src/hermes/connections.ts`), each capped at 1 MB. Rust writes the file the way `defaults_file.rs` writes `project-defaults.json`. `forgetConnectionData` (`src/hermes/forgetConnection.ts`) drops that connection's scopes from each extension's file, as it does for the shared defaults and tags files, and leaves every other connection's documents in place. With the binding in section 2, an extension can't carry data from one server, profile or chat into a Draft on another.
+`storage` is one JSON document for each extension, connection, profile and chat. It isn't in `localStorage`, because WebKitGTK gives the app about 5 MB there, and the chat lists, the Saved copies and sign-in share it (`TRANSCRIPT_LIMIT_BYTES` in `src/hermes/chatCache.ts`). Rust keeps one file for each extension, `<app data>/extensions/<id>/storage.json`. It holds the documents keyed by `connectionScope(connection, profile, chat)` (`src/hermes/connections.ts`), each capped at 1 MB, and the file has a total cap too. Without a total cap, 1 MB for each chat would have no bound. `connectionScope` takes the extra parts, and `inScope` matches by prefix, so `forgetConnectionData` still drops every one of a connection's scopes. Rust writes the file the way `defaults_file.rs` writes `project-defaults.json`. `forgetConnectionData` (`src/hermes/forgetConnection.ts`) drops that connection's scopes from each extension's file, as it does for the shared defaults and tags files, and leaves every other connection's documents in place. With the binding in section 2, an extension can't carry data from one server, profile or chat into a Draft on another.
 
 ### 9. A bundled sample, and an adversarial extension for tests
 
 - **Chat stats.** `/stats` counts the call's chat's messages and words by role and shows them in its view, with `chat.read` only. It is bundled and runs in the sandbox as a third-party extension would, so it tests the sandbox.
-- **An adversarial extension for tests only.** It never ships. It tries `chat.read` without a grant and outside an open call, then `fetch`, XHR, `WebSocket`, `importScripts`, `eval` and `indexedDB.open`. It posts to `parent` and `top`, calls a method that doesn't exist, and sends a 10 MB message. It also runs a busy loop and throws.
+- **An adversarial extension for tests only.** It never ships. It tries `chat.read` without a grant and outside an open call, then `fetch`, XHR, `WebSocket`, `importScripts`, `eval` and `indexedDB.open`. It posts to `parent` and `top`, calls a method that doesn't exist, and sends a 10 MB message. It also tries `caches`, runs a busy loop and throws.
 
 ## Verification plan for the implementation
 
@@ -135,8 +138,8 @@ With no permission, an extension has its command's argument and nothing else.
 ## Delivery
 
 1. This ADR, docs only.
-2. Run the probe again in the app's own `tauri://localhost` page, and in WebView2 on Windows, with two added cases: a source delivered over the port, and the prelude's ban on nested workers. If any result differs, this ADR changes before any code.
-3. The broker, the host frame, the manifest parser, the bundled sample, and Settings → Extensions (enable, disable, grants, diagnostics). No install from a file.
+2. Run the probe again in the app's own `tauri://localhost` page, and in WebView2 on Windows, with three added cases: a source delivered over the port, the prelude's ban on nested workers, and a Cache Storage write in frame A with a read in frame B after A is removed. If any result differs, this ADR changes before any code.
+3. The broker, the host frame, the manifest parser, the bundled sample, and Settings → Extensions (enable, disable, grants, diagnostics). No install from a file. The manifest parser and the permission table can land before step 2, because nothing in them depends on the frame.
 4. Install from a file, update and uninstall, once the owner settles open questions 3 and 6.
 
 ## Considered options
@@ -167,8 +170,8 @@ With no permission, an extension has its command's argument and nothing else.
 3. **Third-party install.** Local files only, as proposed. Should the app also require a publisher signature, with the key pinned for each id at first install and an update signed by another key refused?
 4. **HTML views.** Are they ever wanted? If so, they need the separate-process option, which works only on Linux.
 5. **Extension secrets.** An extension for an outside service needs an API key and the network. Should Rust keep the key in the keyring and add it to requests for the hosts the manifest names, so the extension never reads it?
-6. **Memory.** Accept the shared web process for stages 3 and 4, as proposed, or require the separate process before install from a file opens?
-7. **Numbers.** The deadlines (5 s and 10 s), the idle stop (5 minutes), the ping (every 10 s, 5 s to answer), the message cap (256 KB, 50 a second), the storage cap (1 MB), the package caps (200 files, 5 MB uncompressed) and the failure limit (3 in 10 minutes) are first guesses.
+6. **Memory.** Accept the shared web process for Delivery steps 3 and 4, as proposed, or require the separate process before install from a file opens?
+7. **Numbers.** The deadlines (5 s and 10 s), the idle stop (5 minutes), the ping (every 10 s, 5 s to answer), the message cap (256 KB, 50 a second), the storage cap (1 MB), the package caps (200 files, 5 MB uncompressed), the failure limit (3 in 10 minutes) and the manifest caps (16 KiB file, 64 characters for an id, name, version or title, 128 for `main` in at most 8 parts, 32 for a command name or view id, 200 for a description, 20 commands, 5 views) are first guesses.
 8. **Where views show.** In the Preview, as proposed, or in a fifth side-panel tab? A fifth tab reopens ADR 0116 and ADR 0066, which keep the panel to Preview, Terminal, Files and Screen.
-9. **The first real extension.** Which integration does the owner want first? The contract should fit it before stage 3.
+9. **The first real extension.** Which integration does the owner want first? The contract should fit it before Delivery step 3, because step 3 builds the contract.
 10. **Windows.** The probe ran only on WebKitGTK. WebView2 is untested (Delivery, step 2).

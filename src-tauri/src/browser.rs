@@ -3,6 +3,7 @@
 //! Sway and every other desktop without its own opener, `xdg-open` runs the browser and then reports success whatever
 //! the browser did.
 
+use crate::lock::Locked;
 use gio::prelude::*;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
@@ -130,7 +131,7 @@ impl Launched {
             return Ok(name);
         }
         let _ = tokio::time::timeout(SAID_WAIT, said_end).await;
-        let said = String::from_utf8_lossy(&kept.lock().unwrap_or_else(|e| e.into_inner())).into_owned();
+        let said = String::from_utf8_lossy(&kept.locked()).into_owned();
         Err(failure(&name, status, last_line(&said)))
     }
 }
@@ -153,7 +154,7 @@ fn wait(pid: libc::pid_t) -> std::io::Result<libc::c_int> {
 fn keep_tail(mut from: impl Read, kept: &Mutex<Vec<u8>>) {
     let mut buf = [0; 1024];
     while let Ok(n @ 1..) = from.read(&mut buf) {
-        let mut kept = kept.lock().unwrap_or_else(|e| e.into_inner());
+        let mut kept = kept.locked();
         kept.extend_from_slice(&buf[..n]);
         let over = kept.len().saturating_sub(MAX_SAID);
         kept.drain(..over);

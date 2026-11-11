@@ -20,6 +20,7 @@ import {
   type ScreenApi,
 } from "../hermes/screen";
 import { CopyCommand, Spinner } from "./bits";
+import { errorText } from "../hermes/values";
 
 /** What the Screen needs of noVNC's RFB client. */
 export type RfbClient = {
@@ -57,8 +58,6 @@ const EVICTION_WINDOW_MS = 5_000;
 const MAX_EVICTIONS = 3;
 
 type Conn = { kind: "idle" } | { kind: "attaching" } | { kind: "live" } | { kind: "lost"; why: string };
-
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function ScreenTab({
   api,
@@ -122,7 +121,7 @@ export function ScreenTab({
       return s;
     } catch (e) {
       if (isUnavailable(e)) setUnavailable(true);
-      else setError(messageOf(e));
+      else setError(errorText(e));
     }
   }, [api, noteStatus]);
 
@@ -186,7 +185,7 @@ export function ScreenTab({
       });
       rfb.current = client;
     } catch (e) {
-      if (gen === generation.current) setConn({ kind: "lost", why: messageOf(e) });
+      if (gen === generation.current) setConn({ kind: "lost", why: errorText(e) });
     }
   }, [api, detach, loadRfb, noteStatus, refresh]);
 
@@ -224,7 +223,7 @@ export function ScreenTab({
     try {
       await work();
     } catch (e) {
-      setError(messageOf(e));
+      setError(errorText(e));
     } finally {
       setBusy(false);
     }

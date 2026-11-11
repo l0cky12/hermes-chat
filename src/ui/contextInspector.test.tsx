@@ -12,6 +12,7 @@ import { connect, type Hermes } from "../hermes/transport";
 import { LinksProvider } from "./previewContext";
 import { ShowInChatContext } from "./showInChat";
 import { StatusBar } from "./StatusBar";
+import { RestError } from "../hermes/pipe";
 
 afterEach(() => {
   cleanup();
@@ -247,7 +248,7 @@ describe("Compactions", () => {
     await settle(hermes);
     expect(dialog().textContent).toContain("Hermes has stored no compactions for this chat.");
 
-    server.messagesFailure = `The dashboard answered 500: {"detail":"database is locked"}`;
+    server.messagesFailure = new RestError(500, `{"detail":"database is locked"}`);
     await userEvent.click(screen.getByRole("button", { name: "Ask Hermes again" }));
     await settle(hermes);
     expect(screen.getByRole("alert").textContent).toContain(`Couldn't read the compactions Hermes stored: The dashboard answered 500`);

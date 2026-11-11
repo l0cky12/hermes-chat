@@ -128,11 +128,11 @@ describe("Setup's Sign in step", () => {
 describe("The real pipe", () => {
   it("hands Rust a typed token, or the saved one's connection, and never asks for a token back", async () => {
     const { tauriPipe, tauriProbe } = await import("../hermes/tauriPipe");
-    await tauriPipe({ ...blank, method: "token", token: " tok-123 " })(() => {}, "default");
+    await tauriPipe({ ...blank, method: "token", token: " tok-123 " }, connection.id)(() => {}, "default");
     expect(invoke).toHaveBeenLastCalledWith("hermes_connect", expect.objectContaining({ credential: { method: "token", token: "tok-123", connection: null } }));
-    await tauriPipe({ ...blank, method: "token", savedToken: connection.id })(() => {}, "default");
+    await tauriPipe({ ...blank, method: "token", savedToken: connection.id }, connection.id)(() => {}, "default");
     expect(invoke).toHaveBeenLastCalledWith("hermes_connect", expect.objectContaining({ credential: { method: "token", token: null, connection: connection.id } }));
-    await tauriPipe({ ...blank, password: "hunter2", provider: "ldap" })(() => {}, "default");
+    await tauriPipe({ ...blank, password: "hunter2", provider: "ldap" }, connection.id)(() => {}, "default");
     expect(invoke).toHaveBeenLastCalledWith(
       "hermes_connect",
       expect.objectContaining({ credential: { method: "password", username: "liam", password: "hunter2", provider: "ldap" } }),

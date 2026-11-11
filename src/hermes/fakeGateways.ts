@@ -3,8 +3,9 @@
 // the state ladder of `_messaging_platform_payload`, the write that checks the whole request before touching `.env` or
 // config.yaml, and the status check that sends no message. Each profile keeps its own `.env`, switches and gateway.
 import type { RestRequest } from "./fakeHermes";
+import { RestError } from "./pipe";
 
-const answered = (status: number, detail: string) => new Error(`The dashboard answered ${status}: ${JSON.stringify({ detail })}`);
+const answered = (status: number, detail: string) => new RestError(status, JSON.stringify({ detail }));
 
 type FieldSpec = { key: string; prompt: string; description: string; required?: boolean; password?: boolean; list?: boolean };
 type PlatformSpec = { id: string; name: string; description: string; fields: FieldSpec[]; rules?: Record<string, [RegExp, string]> };

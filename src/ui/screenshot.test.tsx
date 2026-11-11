@@ -15,7 +15,6 @@ import { stagedFiles } from "../hermes/unsaved";
 import { Main, type Screenshots } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 const dialog = vi.hoisted(() => ({ picked: [] as string[] }));
 vi.mock("@tauri-apps/api/core", async (actual) => {
   const core = await actual<typeof import("@tauri-apps/api/core")>();
@@ -27,8 +26,11 @@ beforeAll(() => {
   globalThis.CSS ??= { escape: (s: string) => s } as typeof CSS;
 });
 const stopOutboxes: (() => void)[] = [];
-afterEach(() => {
+// Each test's Hermes is closed, so none writes to the next test's storage: the fake mints the same chat ids each time.
+const running: Hermes[] = [];
+afterEach(async () => {
   cleanup();
+  await Promise.all(running.splice(0).map((h) => h.close()));
   for (const stop of stopOutboxes.splice(0)) stop();
   localStorage.clear();
   vi.unstubAllGlobals();
@@ -101,6 +103,7 @@ async function signedIn({ strict = false } = {}) {
   server.sessions = [row("backup", 1, { pinned: true, title: "Nightly backup" }), row("nas", 2, { pinned: true, title: "NAS disks" })];
   server.transcripts = { backup: [{ role: "user", text: "Why did the backup fail?" }], nas: [{ role: "user", text: "Which disk is failing?" }] };
   const hermes = await connect(server.openPipe, undefined, localChatCache({ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }));
+  running.push(hermes);
   const rust = fakeRust(server);
   const user = userEvent.setup();
   const main = <Main hermes={hermes} connection={{ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }} onSignOut={async () => {}} screenshots={rust.wiring} />;

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { FakeHermes, row } from "./fakeHermes";
 import { connect } from "./transport";
 import { PROBE_NAME, UnsupportedServerError, failureOf } from "./toolsets";
+import { RestError } from "./pipe";
 
 async function connected(server = new FakeHermes()) {
   const hermes = await connect(server.openPipe, "default");
@@ -65,7 +66,7 @@ describe("toolset discovery", () => {
     const { server, api } = await connected();
     // A gateway or plugin in front of the route refusing the caller.
     server.rest[`PUT /api/tools/toolsets/${PROBE_NAME}`] = () => {
-      throw new Error(`The dashboard answered 403: {"detail":"Read-only dashboard session"}`);
+      throw new RestError(403, `{"detail":"Read-only dashboard session"}`);
     };
     expect(await api.writeSupport("default")).toEqual({ ok: false, reason: "Hermes doesn't let this sign-in change toolsets: Read-only dashboard session" });
   });
@@ -84,10 +85,10 @@ describe("toolset discovery", () => {
     const { server, api } = await connected();
     const list = await api.list("default");
     const t = (name: string) => list.toolsets.find((x) => x.name === name)!;
-    server.toolsetConfigFailure = "The dashboard answered 500: {}";
+    server.toolsetConfigFailure = new RestError(500, "{}");
     expect(await api.cautions("default", t("computer_use"), true)).toEqual([{ kind: "unchecked", what: expect.stringContaining("starts an install") }]);
     server.toolsetConfigFailure = undefined;
-    server.toolsetGuardsFailure = "The dashboard answered 500: {}";
+    server.toolsetGuardsFailure = new RestError(500, "{}");
     expect(await api.cautions("default", t("web"), false)).toEqual([{ kind: "unchecked", what: expect.stringContaining("no_mcp") }]);
     // Speech-to-text has its own section: neither applies.
     expect(await api.cautions("default", t("stt"), false)).toEqual([]);
@@ -179,7 +180,7 @@ describe("toolset discovery", () => {
   it("says it couldn't check agent.disabled_toolsets when the config can't be read, before turning one on", async () => {
     const { server, api } = await connected();
     const web = (await api.list("default")).toolsets.find((x) => x.name === "web")!;
-    server.toolsetGuardsFailure = "The dashboard answered 500: {}";
+    server.toolsetGuardsFailure = new RestError(500, "{}");
     expect(await api.cautions("default", { ...web, enabled: false }, true)).toEqual([{ kind: "unchecked", what: expect.stringContaining("agent.disabled_toolsets") }]);
     expect(await api.cautions("default", web, false)).toEqual([{ kind: "unchecked", what: expect.not.stringContaining("agent.disabled_toolsets") }]);
   });
@@ -424,12 +425,12 @@ describe("speech-to-text", () => {
 
 describe("failureOf", () => {
   it("reads the relay's wording", () => {
-    expect(failureOf(new Error(`The dashboard answered 400: {"detail":"Unknown toolset: x"}`))).toEqual({ status: 400, reason: "Unknown toolset: x" });
-    expect(failureOf(new Error(`The dashboard answered 422: {"detail":[{"msg":"Input should be a valid boolean"}]}`))).toEqual({
+    expect(failureOf(new RestError(400, `{"detail":"Unknown toolset: x"}`))).toEqual({ status: 400, reason: "Unknown toolset: x" });
+    expect(failureOf(new RestError(422, `{"detail":[{"msg":"Input should be a valid boolean"}]}`))).toEqual({
       status: 422,
       reason: "Input should be a valid boolean",
     });
-    expect(failureOf(new Error("The dashboard sign-in has expired. Sign in again."))).toMatchObject({ status: 401, signedOut: true });
+    expect(failureOf(new RestError(401, "", "The dashboard sign-in has expired. Sign in again."))).toMatchObject({ status: 401, signedOut: true });
     expect(failureOf(new Error("Hermes Chat doesn't relay PUT api/x."))).toMatchObject({ notRelayed: true });
     expect(failureOf(new Error("Can't reach the Hermes dashboard: reset"))).toEqual({ reason: "Can't reach the Hermes dashboard: reset" });
   });

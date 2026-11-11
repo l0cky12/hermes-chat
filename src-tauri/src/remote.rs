@@ -13,7 +13,8 @@
 //! goes to it and its window comes forward; with none running, the app starts and keeps the link for its window.
 //!
 //! The requests travel over the session bus on Linux (remote/bus.rs) and over a named pipe of this user's on Windows
-//! (remote/pipe.rs); either way only this user's own programs can send one. A screenshot request only opens the
+//! (remote/pipe.rs); either way only this user's own programs can send one, and a launch hands its request only to
+//! this user's own Hermes Chat. A screenshot request only opens the
 //! picker: nothing is captured until the owner picks, and nothing is sent until they send the message. A link only
 //! shows a chat, once the window has checked it. On Wayland `Show`, `Toggle` and `OpenLink` take the activation token
 //! the desktop gave the command, if any, so the compositor lets the window take focus.
@@ -33,6 +34,7 @@ mod desktop {
     }
 }
 
+use crate::lock::Locked;
 use serde::{Deserialize, Serialize};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -53,7 +55,7 @@ pub struct Requests {
 
 impl Requests {
     pub fn ask(&self) {
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = self.pending.locked();
         *pending = Some((self.next.fetch_add(1, Ordering::Relaxed), Instant::now()));
     }
 
@@ -62,7 +64,7 @@ impl Requests {
     }
 
     fn pending_at(&self, now: Instant) -> Option<u64> {
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = self.pending.locked();
         if pending.is_some_and(|(_, at)| now.duration_since(at) >= Duration::from_secs(120)) {
             *pending = None;
         }
@@ -70,7 +72,7 @@ impl Requests {
     }
 
     pub fn acknowledge(&self, id: u64) {
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = self.pending.locked();
         if pending.is_some_and(|(current, _)| current == id) {
             *pending = None;
         }
@@ -184,16 +186,16 @@ pub struct Inbox {
 
 impl Inbox {
     fn dispatch(&self, r: Request) {
-        let handler = self.handler.lock().unwrap();
+        let handler = self.handler.locked();
         match &*handler {
             Some(f) => f(r),
-            None => self.early.lock().unwrap().push(r),
+            None => self.early.locked().push(r),
         }
     }
 
     pub fn set_handler(&self, f: impl Fn(Request) + Send + 'static) {
-        let mut handler = self.handler.lock().unwrap();
-        for r in self.early.lock().unwrap().drain(..) {
+        let mut handler = self.handler.locked();
+        for r in self.early.locked().drain(..) {
             f(r);
         }
         *handler = Some(Box::new(f));

@@ -6,11 +6,12 @@
 import type { FakeServerFiles } from "./fakeServerFiles";
 import type { RestRequest } from "./fakeHermes";
 import { skillSlug } from "./skillCommands";
+import { RestError } from "./pipe";
 
 /** One skill folder: where it is on the server and what `provenance` Hermes gives it. */
 export type FakeSkill = { dir: string; source: "hub" | "bundled" | "external" | "agent"; category?: string };
 
-const answered = (status: number, detail: string) => new Error(`The dashboard answered ${status}: ${JSON.stringify({ detail })}`);
+const answered = (status: number, detail: string) => new RestError(status, JSON.stringify({ detail }));
 
 /** The front matter fields Hermes's YAML parse would find, read only as far as these tests need. */
 function frontmatter(content: string): Record<string, string> | undefined {

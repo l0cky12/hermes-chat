@@ -1,6 +1,6 @@
 // Transcript, thinking, tool-call groups, Approval cards, find bar, composer and the Settle button, ported from the prototype.
 // Dictation and Read aloud come from Voice.tsx.
-import { createContext, memo, type ReactNode, type RefObject, useCallback, useContext, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, memo, type ReactNode, type RefObject, useCallback, startTransition, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, Columns2, CornerDownRight, EyeOff, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Square, Trash2, Wrench, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -20,6 +20,8 @@ import type { SubagentId } from "../hermes/subagents";
 import { SideQuestionPair } from "./SideQuestions";
 import { Markdown } from "./Markdown";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { chunkBlocks } from "./transcriptChunks";
+import { useTranscriptWindow } from "./transcriptWindow";
 import { SourceIcon, Spinner, StoredTime, composing, escapeRe, highlight } from "./bits";
 import { caretAfter, editStep, inputKind, type EditStep } from "./editKeys";
 import type { EditKind } from "../hermes/editHistory";
@@ -45,6 +47,7 @@ import { CopyButton, replyMarkdown } from "./CopyMessage";
 import { turnsOf, type ReplayKind, type Variant } from "../hermes/replay";
 import type { FollowUp } from "../hermes/uiPrefs";
 import { sttRoute } from "../hermes/sttRoute";
+import { errorText } from "../hermes/values";
 
 /**
  * What a message sent while the chat's reply runs does (ADR 0057). `mode`: what Enter does, the Follow-up behavior
@@ -102,12 +105,41 @@ function mayMatch(block: Block, finds: RegExp) {
 // A group is rebuilt on every render, so it counts as unchanged when it holds the same tool calls.
 const sameBlock = (a: Block, b: Block) =>
   a === b || (a.kind === "tools" && b.kind === "tools" && a.tools.length === b.tools.length && a.tools.every((t, i) => t === b.tools[i]));
+// A side question's block is rebuilt too, so it counts as unchanged when it holds the same question.
+const sameChunkBlock = (a: Block | SideBlock, b: Block | SideBlock) =>
+  a.kind === "side" ? b.kind === "side" && a.question === b.question : b.kind !== "side" && sameBlock(a, b);
+
+/** Each turn's owner's message (`ofUser`), the replies Regenerate is offered on, and where each turn's versions show. */
+type Turns = { ofUser: Map<string, number>; regenerable: Set<string>; anchor: Map<string, number> };
+
+/** `next`, or the value returned before when `same` says it holds the same. */
+function useStable<T>(next: T, same: (a: T, b: T) => boolean): T {
+  const kept = useRef(next);
+  if (kept.current !== next && !same(kept.current, next)) kept.current = next;
+  return kept.current;
+}
+
+const sameMap = <K, V>(a: Map<K, V>, b: Map<K, V>, same: (x: V, y: V) => boolean = Object.is) =>
+  a.size === b.size && [...a].every(([k, v]) => b.has(k) && same(v, b.get(k)!));
+
+const sameTurns = (a: Turns, b: Turns) =>
+  sameMap(a.ofUser, b.ofUser) && sameMap(a.anchor, b.anchor) && a.regenerable.size === b.regenerable.size && [...a.regenerable].every((id) => b.regenerable.has(id));
+
+const sameVersions = (a?: Map<number, Variant[]>, b?: Map<number, Variant[]>) =>
+  !!a &&
+  !!b &&
+  sameMap(a, b, (x, y) =>
+    x.length === y.length && x.every((v, i) => v.chatId === y[i].chatId && v.kind === y[i].kind && v.model === y[i].model && v.at === y[i].at),
+  );
 
 /**
  * Where the find bar opens when a chat is opened from a search: on `query`, at the first match in the message
  * `itemId`, or at the first match anywhere when the matched message isn't known. `at` tells one pick from the next.
  */
 export type FindTarget = { query: string; itemId?: string; at: number };
+
+/** How long a new find query may wait for the transcript to mark it in the background before a streamed delta marks it. */
+const FIND_WAITS_MS = 200;
 
 /**
  * What to go to: a tool call, opened, by its call id (`Item.callId`), or a message by its stored row (`rowId`), as a
@@ -151,6 +183,28 @@ export function refuseStrayFileDrops(target: Window = window) {
   };
   target.addEventListener("dragover", refuse);
   target.addEventListener("drop", refuse);
+}
+
+/**
+ * What a paste into the composer attaches. The webview pastes the text itself, except for a file copy, whose text is
+ * only the files' paths.
+ */
+export type PasteAttaches =
+  /** Files copied in a file manager: a `text/uri-list` of `file://` URIs, which WebKitGTK names but hides. Rust reads it. */
+  | { kind: "copied files" }
+  /** Files the paste event carries as bytes: a screenshot, or files copied in Explorer (Chromium). */
+  | { kind: "files"; files: File[]; keepText: boolean }
+  /** No text the page can see: WebKitGTK hides a clipboard image, and the text beside it, from the paste event. */
+  | { kind: "clipboard images" }
+  | { kind: "nothing" };
+
+export function pasteAttaches(data: { types: readonly string[]; files: ArrayLike<File>; getData(type: string): string }): PasteAttaches {
+  const files = Array.from(data.files);
+  const text = data.getData("text/plain");
+  if (files.length) return { kind: "files", files, keepText: !!text };
+  const uris = data.getData("text/uri-list").split(/\r?\n/).filter((l) => l && !l.startsWith("#"));
+  if (data.types.includes("text/uri-list") && uris.every((u) => u.startsWith("file:"))) return { kind: "copied files" };
+  return text ? { kind: "nothing" } : { kind: "clipboard images" };
 }
 
 /**
@@ -201,6 +255,7 @@ function MoreMenu({
   const [exporting, setExporting] = useState(false);
   useEffect(() => {
     if (!onDelete) setAskDelete(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [!onDelete]);
   const item = (label: string, icon: ReactNode, run: () => void, title?: string, danger?: boolean) => (
     <button
@@ -301,6 +356,7 @@ export function ChatPane({
   notLoaded,
   findTarget,
   jumpTo,
+  reveal,
   onJumpMissed,
   status,
   alsoPostsIn,
@@ -356,6 +412,11 @@ export function ChatPane({
   jumpTo?: JumpTarget;
   /** The history loaded without the tool call `jumpTo` names. */
   onJumpMissed?: () => void;
+  /**
+   * A message, or the waiting Approval, that the app scrolls to and focuses in the DOM (an Inbox entry). Its chunk
+   * stays rendered while this is set.
+   */
+  reveal?: { itemId?: string; approval: boolean };
   status: ConnectionStatus;
   alsoPostsIn?: Source;
   draft: string;
@@ -432,6 +493,7 @@ export function ChatPane({
     const s = new Speaker((text) => voiceRef.current!.speak(text));
     setSpeaker(s);
     return () => s.dispose();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [!voice]);
   const listen = speaker && { speaker, blocked: listenBlocked(status, voiceSetup) };
   useEffect(() => { if (!active) speaker?.stop(); }, [active, speaker]);
@@ -470,8 +532,13 @@ export function ChatPane({
   const pickRef = useRef(variants?.onPick);
   pickRef.current = variants?.onPick;
   const onPickVariant = useCallback((chatId: string, turn: number) => pickRef.current?.(chatId, turn), []);
+  // And dismissing a side question.
+  const dismissSideRef = useRef(onDismissSideQuestion);
+  dismissSideRef.current = onDismissSideQuestion;
+  const dismissSide = useCallback((id: string) => dismissSideRef.current?.(id), []);
   // Each turn's owner's message, and its last reply with text: where Regenerate and the versions of the turn go.
-  const turns = useMemo(() => {
+  // Kept as the same object while its content is unchanged, so a streamed delta doesn't re-render every chunk.
+  const turns = useStable(useMemo((): Turns => {
     const ofUser = turnsOf(chat.items);
     const lastReply = new Map<number, string>();
     let turn = -1;
@@ -482,13 +549,23 @@ export function ChatPane({
     const anchor = new Map<string, number>();
     for (const [id, t] of ofUser) anchor.set(lastReply.get(t) ?? id, t);
     return { ofUser, regenerable: new Set(lastReply.values()), anchor };
-  }, [chat.items]);
+  }, [chat.items]), sameTurns);
+  // App builds the versions again on every streamed delta.
+  const byTurn = useStable(variants?.byTurn, sameVersions);
   // A failed message can be sent again once Hermes is connected and the chat has no reply running.
   const canRetry = status === "connected" && !chat.loading && !chat.running;
   const findRef = useRef<HTMLInputElement>(null);
   const stickToBottom = useRef(true);
+  const itemsRef = useRef(chat.items);
+  itemsRef.current = chat.items;
+  /** Renders the chunk of the first block `has` picks, when it is far from the view, so a lookup in the DOM finds it. */
+  const revealRef = useRef<(has: (b: Block | SideBlock) => boolean) => void>(() => {});
   // For the status bar's context inspector: a stored time to the message there, marked as a jump to a tool call is.
   const showInChat = useCallback<ShowInChat>((at) => {
+    const first = itemsRef.current.find((i) =>
+      at === undefined ? i.kind === "user" || i.kind === "assistant" || i.kind === "error" : (i.kind === "user" || i.kind === "assistant") && i.at !== undefined && i.at >= at,
+    );
+    if (first) revealRef.current((b) => b.id === first.id);
     const msgs = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>(".msg[data-item]") ?? []);
     const el = at === undefined ? msgs[0] : msgs.find((m) => m.dataset.at !== undefined && Number(m.dataset.at) >= at);
     if (!el) return false;
@@ -516,6 +593,7 @@ export function ChatPane({
     setQuery(findTarget.query);
     setLanding(true);
     stickToBottom.current = false;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [findTarget?.at]);
 
   const openFind = () => {
@@ -534,11 +612,26 @@ export function ChatPane({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // The transcript catches up with the find bar in the background, so re-marking a long chat doesn't hold up typing.
+  // The query the transcript marks. A new one is marked in the background, so re-marking a long chat doesn't hold up
+  // typing. A streamed delta renders the pane at once and starts that work again, so once a query has waited a moment
+  // the next delta marks it with it; useDeferredValue would wait for the reply to end (#435). Closing clears at once.
   const typed = findOpen ? query : "";
-  const q = useDeferredValue(typed);
+  const [q, setQ] = useState("");
+  /** The query being marked in the background, and since when; "" when none is. */
+  const asked = useRef({ query: "", at: 0 });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- every render on purpose, so each streamed delta checks the query
+  useLayoutEffect(() => {
+    if (q === typed) asked.current.query = "";
+    else if (!typed) setQ("");
+    else if (asked.current.query !== typed) {
+      asked.current = { query: typed, at: performance.now() };
+      startTransition(() => setQ(typed));
+    } else if (performance.now() - asked.current.at > FIND_WAITS_MS) setQ(typed);
+  });
+  const finding = q !== typed;
   const finds = useMemo(() => (q ? new RegExp(escapeRe(q), "i") : undefined), [q]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useLayoutEffect(() => {
     if (q !== typed) return;
     const marks = q ? Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("mark.hit") ?? []) : [];
@@ -566,7 +659,9 @@ export function ChatPane({
     if (!jumpTo) return;
     stickToBottom.current = false;
     setJumping(jumpTo);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [jumpTo?.at]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useLayoutEffect(() => {
     if (!jumping) return;
     let el: HTMLElement | null | undefined;
@@ -624,7 +719,7 @@ export function ChatPane({
   }, []);
 
   const step = (d: number) => {
-    if (!count) return;
+    if (!count || finding) return;
     setMatchIndex((i) => (Math.min(i, count - 1) + d + count) % count);
     scrollToMatch.current = true;
     stickToBottom.current = false;
@@ -636,10 +731,43 @@ export function ChatPane({
 
   // Rebuilt only when the chat changes, so a reply streaming in the other pane costs this one little.
   const blocks = useMemo(() => toBlocks(chat.items, chat.sideQuestions), [chat.items, chat.sideQuestions]);
+  const chunks = useMemo(() => chunkBlocks(blocks), [blocks]);
+  // The message or tool call being gone to is found in the chat, not the DOM: its chunk may be far from the view.
+  const jumpChunk = useMemo(() => {
+    if (!jumping) return undefined;
+    let has: (b: Block | SideBlock) => boolean;
+    if (jumping.callId !== undefined) {
+      const callId = jumping.callId;
+      has = (b) => b.kind === "tools" && b.tools.some((t) => t.callId === callId);
+    } else {
+      const { rowId, turn } = jumping;
+      const id =
+        rowId !== undefined
+          ? chat.items.find((i) => (i.kind === "user" || i.kind === "assistant") && i.rowId === rowId)?.id
+          : [...turns.anchor].find(([, t]) => t === turn)?.[0];
+      has = (b) => b.id === id;
+    }
+    const at = chunks.findIndex((c) => c.some(has));
+    return at < 0 ? undefined : at;
+  }, [jumping, chunks, chat.items, turns]);
+  const revealChunk = useMemo(() => {
+    if (!reveal?.itemId && !reveal?.approval) return undefined;
+    const id = reveal.itemId ?? chat.items.find(isWaiting)?.id;
+    const at = chunks.findIndex((c) => c.some((b) => b.id === id || (b.kind === "tools" && b.tools.some((t) => t.id === id))));
+    return at < 0 ? undefined : at;
+  }, [reveal, chunks, chat.items]);
+  // Find marks and counts its matches in the DOM, so it renders the whole chat.
+  const shown = useTranscriptWindow({ scroller: scrollRef, chunks, all: !!q, stuck: stickToBottom, target: jumpChunk ?? revealChunk });
+  revealRef.current = (has) => shown.reveal(chunks.findIndex((c) => c.some(has)));
   // Cards ignore clicks for a moment after the transcript changes, since it may have moved them under the pointer.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const movedAt = useMemo(() => performance.now(), [chat.items, chat.sideQuestions]);
   const last = chat.items[chat.items.length - 1];
   const waiting = chat.items.some(isWaiting);
+  // The streaming block is the chat's last item, so it is in the last chunk that holds more than side questions.
+  let liveChunk = chunks.length - 1;
+  while (liveChunk > 0 && chunks[liveChunk].every((b) => b.kind === "side")) liveChunk--;
+  const live = chat.running && chunks[liveChunk]?.some((b) => b === last) ? last.id : undefined;
   // Enter queues while a reply runs, while Hermes isn't connected, and while messages are queued already, so a new one
   // never jumps the queue. The composer's hint says which Enter does.
   const queueing = !compare && !!queueApi && (!!chat.running || status !== "connected" || !!queue?.items.length);
@@ -711,12 +839,12 @@ export function ChatPane({
               }}
             />
             <span className="find-count" aria-live="polite">
-              {query ? `${count ? Math.min(matchIndex, count - 1) + 1 : 0} of ${count}` : ""}
+              {!query ? "" : finding ? "Finding…" : `${count ? Math.min(matchIndex, count - 1) + 1 : 0} of ${count}`}
             </span>
-            <button className="icon-btn" title="Previous (↑ or Shift+Enter)" disabled={!count} onClick={() => step(-1)}>
+            <button className="icon-btn" title="Previous (↑ or Shift+Enter)" disabled={!count || finding} onClick={() => step(-1)}>
               <ChevronUp size={16} />
             </button>
-            <button className="icon-btn" title="Next (↓ or Enter)" disabled={!count} onClick={() => step(1)}>
+            <button className="icon-btn" title="Next (↓ or Enter)" disabled={!count || finding} onClick={() => step(1)}>
               <ChevronDown size={16} />
             </button>
             <button className="icon-btn" title="Close (Esc)" onClick={closeFind}>
@@ -783,33 +911,32 @@ export function ChatPane({
               </ul>
             </div>
           )}
-          {blocks.map((b) => (
-            <ErrorBoundary key={b.id} fallback={(error) => <UndrawnMessage id={b.id} error={error} />}>
-              {b.kind === "side" ? (
-                <SideQuestionPair question={b.question} onDismiss={onDismissSideQuestion} />
-              ) : (
-                <BlockView
-                  block={b}
-                  live={!!chat.running && b === last}
-                  query={finds && mayMatch(b, finds) ? q : ""}
-                  offline={status !== "connected" || !!chat.loading}
-                  movedAt={b.kind === "approval" ? movedAt : 0}
-                  onAnswer={answer}
-                  listen={b.kind === "assistant" ? listen : undefined}
-                  canRetry={b.kind === "user" && !!b.outgoing && canRetry}
-                  onOutgoing={onOutgoing}
-                  onBranch={branch && (b.kind === "user" || b.kind === "assistant") ? onBranch : undefined}
-                  branchBlocked={branch && (b.kind === "user" || b.kind === "assistant") ? branch.blocked : undefined}
-                  onReplay={replay && ((b.kind === "user" && turns.ofUser.has(b.id)) || (b.kind === "assistant" && turns.regenerable.has(b.id))) ? onReplay : undefined}
-                  replayBlocked={replay && (b.kind === "user" || b.kind === "assistant") ? replay.blocked : undefined}
-                  versions={turns.anchor.has(b.id) ? variants?.byTurn.get(turns.anchor.get(b.id)!) : undefined}
-                  chatId={chat.id}
-                  turn={turns.anchor.get(b.id)}
-                  onPickVariant={onPickVariant}
-                />
-              )}
-            </ErrorBoundary>
+          {shown.from > 0 && <div className="transcript-gap" aria-hidden style={{ height: shown.before }} />}
+          {chunks.slice(shown.from, shown.to + 1).map((c, i) => (
+            <TranscriptChunk
+              key={c[0].id}
+              blocks={c}
+              live={shown.from + i === liveChunk ? live : undefined}
+              q={q}
+              finds={finds}
+              offline={status !== "connected" || !!chat.loading}
+              movedAt={waiting && c.some((b) => b.kind === "approval" && isWaiting(b)) ? movedAt : 0}
+              onAnswer={answer}
+              listen={listen}
+              canRetry={canRetry}
+              onOutgoing={onOutgoing}
+              onBranch={branch && onBranch}
+              branchBlocked={branch?.blocked}
+              onReplay={replay && onReplay}
+              replayBlocked={replay?.blocked}
+              turns={turns}
+              byTurn={byTurn}
+              chatId={chat.id}
+              onPickVariant={onPickVariant}
+              onDismissSideQuestion={onDismissSideQuestion && dismissSide}
+            />
           ))}
+          {shown.to < chunks.length - 1 && <div className="transcript-gap" aria-hidden style={{ height: shown.after }} />}
           {/* A reply waiting on the owner isn't thinking, and streamed thinking shows its own row. */}
           {chat.running && last?.kind !== "assistant" && last?.kind !== "thinking" && !(last && isWaiting(last)) && (
             <div className="msg assistant thinking">
@@ -829,6 +956,7 @@ export function ChatPane({
         show={showSubagent}
         onGoToApproval={() => {
           const id = chat.items.find(isWaiting)?.id;
+          shown.reveal(chunks.findIndex((c) => c.some((b) => b.id === id)));
           const card = id && rootRef.current?.querySelector<HTMLElement>(`.approval[data-item="${CSS.escape(id)}"]`);
           if (!card) return;
           card.scrollIntoView({ block: "center" });
@@ -1030,6 +1158,112 @@ const BlockView = memo(
     a.onPickVariant === b.onPickVariant,
 );
 
+/**
+ * A run of the transcript's blocks (`chunkBlocks`). Memoized, so a streamed delta re-renders only the chunk that holds
+ * the block it changes. `live`: the id of the block still streaming, for the chunk that holds it. `movedAt` is for a
+ * waiting Approval card, and 0 for a chunk without one.
+ */
+const TranscriptChunk = memo(
+  function TranscriptChunk({
+    blocks,
+    live,
+    q,
+    finds,
+    offline,
+    movedAt,
+    onAnswer,
+    listen,
+    canRetry,
+    onOutgoing,
+    onBranch,
+    branchBlocked,
+    onReplay,
+    replayBlocked,
+    turns,
+    byTurn,
+    chatId,
+    onPickVariant,
+    onDismissSideQuestion,
+  }: {
+    blocks: (Block | SideBlock)[];
+    live?: string;
+    q: string;
+    finds?: RegExp;
+    offline: boolean;
+    movedAt: number;
+    onAnswer: (approvalId: string, choice: ApprovalChoice, confirmed?: boolean) => void;
+    listen?: Listen;
+    canRetry: boolean;
+    onOutgoing: (itemId: string, action: OutgoingAction) => void;
+    onBranch?: (itemId: string) => void;
+    branchBlocked?: string;
+    onReplay?: (itemId: string, kind: ReplayKind) => void;
+    replayBlocked?: string;
+    turns: Turns;
+    byTurn?: Map<number, Variant[]>;
+    chatId: string;
+    onPickVariant: (chatId: string, turn: number) => void;
+    onDismissSideQuestion?: (id: string) => void;
+  }) {
+    return (
+      <div className="transcript-chunk" data-chunk={blocks[0].id}>
+        {blocks.map((b) => {
+          const message = b.kind === "user" || b.kind === "assistant";
+          return (
+            <ErrorBoundary key={b.id} fallback={(error) => <UndrawnMessage id={b.id} error={error} />}>
+              {b.kind === "side" ? (
+                <SideQuestionPair question={b.question} onDismiss={onDismissSideQuestion} />
+              ) : (
+                <BlockView
+                  block={b}
+                  live={b.id === live}
+                  query={finds && mayMatch(b, finds) ? q : ""}
+                  offline={offline}
+                  movedAt={b.kind === "approval" && isWaiting(b) ? movedAt : 0}
+                  onAnswer={onAnswer}
+                  listen={b.kind === "assistant" ? listen : undefined}
+                  canRetry={b.kind === "user" && !!b.outgoing && canRetry}
+                  onOutgoing={onOutgoing}
+                  onBranch={message ? onBranch : undefined}
+                  branchBlocked={onBranch && message ? branchBlocked : undefined}
+                  onReplay={(b.kind === "user" && turns.ofUser.has(b.id)) || (b.kind === "assistant" && turns.regenerable.has(b.id)) ? onReplay : undefined}
+                  replayBlocked={onReplay && message ? replayBlocked : undefined}
+                  versions={turns.anchor.has(b.id) ? byTurn?.get(turns.anchor.get(b.id)!) : undefined}
+                  chatId={chatId}
+                  turn={turns.anchor.get(b.id)}
+                  onPickVariant={onPickVariant}
+                />
+              )}
+            </ErrorBoundary>
+          );
+        })}
+      </div>
+    );
+  },
+  (a, b) =>
+    a.blocks.length === b.blocks.length &&
+    a.blocks.every((x, i) => sameChunkBlock(x, b.blocks[i])) &&
+    a.live === b.live &&
+    a.q === b.q &&
+    a.finds === b.finds &&
+    a.offline === b.offline &&
+    a.movedAt === b.movedAt &&
+    a.onAnswer === b.onAnswer &&
+    a.listen?.speaker === b.listen?.speaker &&
+    a.listen?.blocked === b.listen?.blocked &&
+    a.canRetry === b.canRetry &&
+    a.onOutgoing === b.onOutgoing &&
+    a.onBranch === b.onBranch &&
+    a.branchBlocked === b.branchBlocked &&
+    a.onReplay === b.onReplay &&
+    a.replayBlocked === b.replayBlocked &&
+    a.turns === b.turns &&
+    a.byTurn === b.byTurn &&
+    a.chatId === b.chatId &&
+    a.onPickVariant === b.onPickVariant &&
+    a.onDismissSideQuestion === b.onDismissSideQuestion,
+);
+
 /** A block that threw while it was drawn, in its place, so the rest of the chat keeps working (ADR 0137). */
 function UndrawnMessage({ id, error }: { id: string; error: Error }) {
   return (
@@ -1101,6 +1335,7 @@ function ToolRow({ t }: { t: ToolItem }) {
   const jump = useContext(JumpContext);
   useEffect(() => {
     if (jump?.callId && t.callId === jump.callId) setOpen(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [jump?.at]);
   const summary = t.status === "stopped" ? "stopped" : t.summary;
   return (
@@ -1174,6 +1409,7 @@ function ToolGroup({ tools }: { tools: ToolItem[] }) {
   const jump = useContext(JumpContext);
   useEffect(() => {
     if (jump?.callId && tools.some((t) => t.callId === jump.callId)) setOpen(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [jump?.at]);
   if (tools.length === 1)
     return (
@@ -1271,7 +1507,7 @@ function Composer({
   followUp?: FollowUpHost;
   compare?: Comparing;
 }) {
-  // The chat's staged attachments, kept by the desk under its Draft key so they outlive this composer (ADR 0139).
+  // The chat's staged attachments, kept by the desk under its Draft key so they outlive this composer (ADR 0145).
   const attachments = useSyncExternalStore(screenshots.subscribe, () => screenshots.stagedIn(draftKey));
   const focused = useRef(autoFocus);
   focused.current = autoFocus;
@@ -1314,12 +1550,15 @@ function Composer({
   useEffect(() => {
     if (wasDictating.current && !dictation.active && autoFocus) taRef.current?.focus();
     wasDictating.current = dictation.active;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [dictation.active]);
   // Leaving a pane (including Settings or the narrow switcher) releases its microphone and drops late transcripts.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => { if (!autoFocus) dictation.cancel(); }, [autoFocus]);
   // So does hiding the window to the tray: the microphone never stays open behind a hidden window (ADR 0034). The
   // recording is dropped, as Cancel drops it; nothing is sent to Hermes to transcribe.
   const windowHidden = useWindowHidden();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => { if (windowHidden) dictation.cancel(); }, [windowHidden]);
 
   // Files still being read, saved or checked: sending waits for them, so none misses the message it was added for.
@@ -1341,7 +1580,7 @@ function Composer({
       setRefused(got.refused);
       return got.attachments;
     } catch (e) {
-      if (stillHere()) setRefused([`Couldn't attach files: ${e instanceof Error ? e.message : String(e)}`]);
+      if (stillHere()) setRefused([`Couldn't attach files: ${errorText(e)}`]);
       return [];
     }
   };
@@ -1420,7 +1659,17 @@ function Composer({
       const notes = tooBig.map((f) => overLimitNote(nameOf(f), f.size, LIMITS.file));
       if (notes.length) setRefused((cur) => (paths.length ? [...cur, ...notes] : notes));
     } catch (e) {
-      setRefused([`Couldn't attach the files: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't attach the files: ${errorText(e)}`]);
+    }
+  });
+  // Files copied in a file manager attach by path, as a drop does. Rust reads them, since WebKitGTK hides them.
+  const attachCopied = () => busy(async () => {
+    try {
+      const paths = await invoke<string[]>("attach_copied_files");
+      if (paths.length) await add(paths, () => open.current);
+      else setRefused(["Only files on this computer can be attached."]);
+    } catch (e) {
+      setRefused([`Couldn't attach the files: ${errorText(e)}`]);
     }
   });
   const stageRef = useRef(stageFiles);
@@ -1463,7 +1712,7 @@ function Composer({
     try {
       await add(await invoke<string[]>("attach_picked_files"));
     } catch (e) {
-      setRefused([`Couldn't open the file picker: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't open the file picker: ${errorText(e)}`]);
     }
   };
 
@@ -1516,7 +1765,7 @@ function Composer({
       const out = await followUp!.steer(words);
       if (out) setRefused([out]);
     } catch (e) {
-      setRefused([`Couldn't steer the reply, so nothing was sent: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't steer the reply, so nothing was sent: ${errorText(e)}`]);
     } finally {
       setSteering(false);
     }
@@ -1644,13 +1893,12 @@ function Composer({
           {...slash.inputProps}
           onChange={(e) => onText(e.target.value, inputKind(e.nativeEvent))}
           onPaste={(e) => {
-            // Only files are taken over; text pastes as it always has.
             if (dragging) return;
-            const files = Array.from(e.clipboardData.files);
-            if (files.length) {
-              e.preventDefault();
-              void stageFiles(files);
-            } else if (!e.clipboardData.getData("text/plain")) void stageFiles(clipboardImages());
+            const paste = pasteAttaches(e.clipboardData);
+            if (paste.kind === "copied files" || (paste.kind === "files" && !paste.keepText)) e.preventDefault();
+            if (paste.kind === "copied files") void attachCopied();
+            else if (paste.kind === "files") void stageFiles(paste.files);
+            else if (paste.kind === "clipboard images") void stageFiles(clipboardImages());
           }}
           onKeyDown={(e) => {
             if (slash.onKeyDown(e)) return;

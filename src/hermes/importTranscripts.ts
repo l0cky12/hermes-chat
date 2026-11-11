@@ -7,6 +7,8 @@
 // Nothing a file names is opened: attachment names, paths and tool arguments come in as text. No tool call is run.
 import { invoke } from "@tauri-apps/api/core";
 import { asError } from "./tauriPipe";
+import { RestError, conflictOf } from "./pipe";
+import { errorText, isObj, plural } from "./values";
 
 export type ImportFormat = "markdown" | "jsonl";
 
@@ -65,8 +67,6 @@ export type ImportPlan = {
 /** The file isn't one this format can import; nothing was sent. */
 export class ImportFileError extends Error {}
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
 
 export async function sha256(text: string): Promise<string> {
@@ -503,7 +503,7 @@ async function snapshot(rest: ImportRest, profile: string, id: string): Promise<
   try {
     return (await rest("GET", sessionPath(id, profile, "/mutation-snapshot"))) as { exists?: boolean; runtime_revision?: number };
   } catch (e) {
-    if (e instanceof Error && e.message.includes("Session store is not initialized")) return { exists: false, runtime_revision: 0 };
+    if (e instanceof RestError && e.body.includes("Session store is not initialized")) return { exists: false, runtime_revision: 0 };
     throw e;
   }
 }
@@ -551,10 +551,10 @@ export async function sendImport(rest: ImportRest, profile: string, chats: Plann
       answer = await post();
       break;
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      const message = errorText(e);
       // Another write to the first chat landed between reading its revision and importing: read it again, once.
-      if (message.includes("revision_conflict") && attempt === 0) continue;
-      if (/answered (4\d\d)/.test(message)) throw new ImportRefusedError(refusal(message));
+      if (conflictOf(e, "revision_conflict") && attempt === 0) continue;
+      if (e instanceof RestError && e.status >= 400 && e.status < 500) throw new ImportRefusedError(refusal(e));
       // The same request again: Hermes answers with the receipt of the first if that one was written, which says
       // what it made and what it skipped; otherwise this one is the import.
       try {
@@ -570,7 +570,7 @@ export async function sendImport(rest: ImportRest, profile: string, chats: Plann
     back = await readBack(rest, profile, ids);
   } catch (e) {
     // Hermes may have written them; it's the reading back that failed, so this isn't a refusal.
-    const why = e instanceof Error ? e.message : String(e);
+    const why = errorText(e);
     const said = Array.isArray(answer?.imported_ids) ? answer.imported_ids.filter((x): x is string => typeof x === "string") : [];
     return {
       imported: [],
@@ -602,8 +602,8 @@ export async function sendImport(rest: ImportRest, profile: string, chats: Plann
 }
 
 /** A 4xx from the import route in the owner's words. */
-function refusal(message: string): string {
-  const errors = /"errors":\s*(\[[\s\S]*\])/.exec(message);
+function refusal(e: RestError): string {
+  const errors = /"errors":\s*(\[[\s\S]*\])/.exec(e.body);
   if (errors) {
     try {
       const list = JSON.parse(errors[1]) as { error?: string; session_id?: string }[];
@@ -612,14 +612,14 @@ function refusal(message: string): string {
       // The plain message below.
     }
   }
-  if (message.includes("invalid_params"))
+  if (e.body.includes("invalid_params"))
     return "Hermes refused the file and imported nothing: something in it isn't what Hermes can import, and Hermes didn't say what (invalid_params).";
-  if (message.includes("was deleted here")) return "Hermes refused the file and imported nothing: a chat in it was deleted from this Hermes, and Hermes won't bring a deleted chat back.";
-  if (message.includes("answered 413")) return "Hermes refused the file and imported nothing: it's larger than Hermes takes at once.";
-  if (message.includes("answered 404") && message.includes("Profile")) return "Hermes refused the file and imported nothing: the profile isn't on the server any more.";
-  if (/answered 40[45]/.test(message) && !message.includes("Profile"))
+  if (e.body.includes("was deleted here")) return "Hermes refused the file and imported nothing: a chat in it was deleted from this Hermes, and Hermes won't bring a deleted chat back.";
+  if (e.status === 413) return "Hermes refused the file and imported nothing: it's larger than Hermes takes at once.";
+  if (e.status === 404 && e.body.includes("Profile")) return "Hermes refused the file and imported nothing: the profile isn't on the server any more.";
+  if ((e.status === 404 || e.status === 405) && !e.body.includes("Profile"))
     return "This Hermes can't import transcripts: its dashboard has no session import (Hermes Chat was built against bf0203a).";
-  return `Hermes refused the file and imported nothing: ${message}`;
+  return `Hermes refused the file and imported nothing: ${e.message}`;
 }
 
 // ---- What this computer remembers of imports ----

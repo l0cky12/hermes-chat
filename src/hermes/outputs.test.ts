@@ -26,6 +26,7 @@ import {
   type OutputsSnapshot,
   type StoredRow,
 } from "./outputs";
+import { RestError } from "./pipe";
 
 const running: Hermes[] = [];
 afterEach(async () => {
@@ -273,7 +274,7 @@ describe("indexing chats on a fake Hermes", () => {
     const { server, hermes } = await signedIn(() => {});
     server.transcripts = {};
     const io = hermes.outputsIo("default");
-    const index = new OutputsIndex({ ...io, rows: () => Promise.reject(new Error('The dashboard answered 404: {"detail":"Not Found"}')) }, memory(), "s");
+    const index = new OutputsIndex({ ...io, rows: () => Promise.reject(new RestError(404, '{"detail":"Not Found"}')) }, memory(), "s");
     await index.index([{ id: "c", updatedAt: 1 }]);
     expect(index.getSnapshot().unsupported).toMatch(/can't list a chat's stored messages/);
   });
@@ -328,7 +329,7 @@ describe("checking where files are", () => {
 
   it("keeps a failed read's error on screen and doesn't check after it (#223)", async () => {
     const listed: string[] = [];
-    const io: OutputsIo = { rows: () => Promise.reject(new Error('The dashboard answered 500: {"detail":"boom"}')), listDir: async (p) => (listed.push(p), { entries: [] }) };
+    const io: OutputsIo = { rows: () => Promise.reject(new RestError(500, '{"detail":"boom"}')), listDir: async (p) => (listed.push(p), { entries: [] }) };
     const index = new OutputsIndex(io, memory(), "s");
     await index.refresh([{ id: "c", updatedAt: 1 }], false, (s) => outputsIn(s));
     expect(index.getSnapshot().error).toMatch(/Couldn't read a chat's messages.*500/);
@@ -336,9 +337,9 @@ describe("checking where files are", () => {
   });
 
   it("reports a refused listing as forbidden and another failure as unknown", async () => {
-    const io = (err: string): OutputsIo => ({ rows: async () => page([]), listDir: () => Promise.reject(new Error(err)) });
-    expect((await checkPaths(io('The dashboard answered 403: {"detail":"Access denied"}'), [{ path: "/a/b" }])).get("tools:/a/b")?.state).toBe("forbidden");
-    expect((await checkPaths(io("Can't reach the Hermes dashboard"), [{ path: "/a/b" }])).get("tools:/a/b")).toMatchObject({ state: "unknown", why: "Can't reach the Hermes dashboard" });
+    const io = (err: Error): OutputsIo => ({ rows: async () => page([]), listDir: () => Promise.reject(err) });
+    expect((await checkPaths(io(new RestError(403, '{"detail":"Access denied"}')), [{ path: "/a/b" }])).get("tools:/a/b")?.state).toBe("forbidden");
+    expect((await checkPaths(io(new Error("Can't reach the Hermes dashboard")), [{ path: "/a/b" }])).get("tools:/a/b")).toMatchObject({ state: "unknown", why: "Can't reach the Hermes dashboard" });
   });
 
   it("adds a Server file the owner names only once it is there", async () => {

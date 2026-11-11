@@ -5,6 +5,7 @@ import { FakeHermes, row } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
 import type { Item } from "./model";
 import { connect, type Hermes } from "./transport";
+import { RestError } from "./pipe";
 
 /** `_get_usage` as `message.complete` carries it: running totals since the session's agent was built. */
 const counters = (input: number, cached: number, output: number, calls: number, model = "z-ai/glm-5.3-flash", reasoning = 0) => ({
@@ -413,7 +414,7 @@ describe("Usage per chat", () => {
     const hermes = await connect(server.openPipe);
     await hermes.sync();
     server.rest["GET /api/sessions/a"] = () => {
-      throw new Error("The dashboard answered 500: boom");
+      throw new RestError(500, "boom");
     };
     await hermes.refreshUsage("a");
     let chat = hermes.getSnapshot().chats[0];

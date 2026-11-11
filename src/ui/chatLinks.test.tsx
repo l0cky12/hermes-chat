@@ -13,9 +13,9 @@ import type { SavedSignIn } from "../hermes/account";
 import { connectionRefs, formatChatLink, parseChatLink, type ConnectionRefs } from "../hermes/chatLinks";
 import { linkInbox, type LinkInbox } from "../hermes/tauriLinks";
 import { Main } from "../App";
+import { RestError } from "../hermes/pipe";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -183,7 +183,7 @@ describe("Opening a chat link", () => {
     const { server, linkTo, open, user } = await launch();
     const profiles = server.rest["GET /api/profiles"];
     server.rest["GET /api/profiles"] = () => {
-      throw new Error("The dashboard answered 502: Bad Gateway");
+      throw new RestError(502, "Bad Gateway");
     };
     await open(linkTo("default", "nas"));
     expect((await screen.findByRole("alert")).textContent).toMatch(/couldn't look the linked chat up: The dashboard answered 502/);
@@ -283,7 +283,10 @@ describe("A chat link and what the owner does meanwhile", () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const list = server.rest["GET /api/sessions"];
-    server.rest["GET /api/sessions"] = async (req) => (req.query.get("profile") === "work" && (await gate), list(req));
+    server.rest["GET /api/sessions"] = async (req) => {
+      if (req.query.get("profile") === "work") await gate;
+      return list(req);
+    };
     // Not `open`, which waits for Hermes to be idle: the held list keeps it busy.
     await act(async () => inbox.arrive(linkTo("work", "old")));
     await waitFor(() => expect(hermes.getSnapshot().profile).toBe("work"));

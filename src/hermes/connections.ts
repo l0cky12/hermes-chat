@@ -12,6 +12,7 @@
 // stay where they are and nothing has to move.
 import type { ExtraHeader, SignInDetails } from "./tauriPipe";
 import { ROUTES_MAX, ROUTE_KINDS, RouteHealth, isRouteId, routeAddress, routesOf, type RouteKind, type SavedRoute } from "./routes";
+import { isObj } from "./values";
 
 export const CONNECTIONS_KEY = "hermes-chat.connections";
 /** Where the one sign-in was kept before there were saved connections. Read once, for the migration. */
@@ -70,7 +71,6 @@ export type Storage_ = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 const ID = /^[a-z0-9-]{8,64}$/;
 export const isConnectionId = (v: unknown): v is string => typeof v === "string" && ID.test(v);
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown, max = 2000) => (typeof v === "string" && v.length <= max ? v : undefined);
 const time = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined);
 

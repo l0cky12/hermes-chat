@@ -87,6 +87,21 @@ describe("Reconnecting", () => {
     }
   });
 
+  it("goes Offline at once when the dashboard turns the password down or refuses sign-ins for now, without retrying (#472)", async () => {
+    for (const refusal of ["Wrong username or password.", "Too many sign-in attempts. Wait a minute and try again."]) {
+      const server = new FakeHermes();
+      let tries = 0;
+      const hermes = await connect((onEvent, profile, signal) => (tries++, server.openPipe(onEvent, profile, signal)));
+      server.refuse = refusal;
+      server.drop();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(hermes.getSnapshot()).toMatchObject({ status: "offline", closedReason: refusal });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(tries).toBe(2);
+      await hermes.close();
+    }
+  });
+
   it("goes Offline at once if the server now speaks the canonical protocol", async () => {
     const { server, hermes } = await signedIn();
     server.readyPayload = { ...server.readyPayload, session_authority: true };
@@ -164,6 +179,53 @@ describe("Reconnecting", () => {
     expect(chat("tg").items.map((i) => ("text" in i ? i.text : i.kind))).toEqual(["How full is the NAS?", "82% used."]);
   });
 
+  it("shows the whole reply, once, when the connection drops while it streams (#433)", async () => {
+    const { server, hermes, chat } = await signedIn();
+    server.reattachTurns = true;
+    const id = await hermes.newChat();
+    await hermes.send(id, "slow 12");
+    const words = Array.from({ length: 12 }, (_, n) => `w${n + 1}`);
+    const say = (from: number, to: number) => words.slice(from, to).forEach((w) => server.event(server.runtimeIdOf(id)!, "message.delta", { text: `${w} ` }));
+    server.event(server.runtimeIdOf(id)!, "message.start");
+    say(0, 4);
+    server.drop();
+    // Streamed while the app reconnects: only the resume's in-flight reply carries it.
+    say(4, 6);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hermes.idle();
+    expect(chat(id)).toMatchObject({ running: true });
+    say(6, 12);
+    server.event(server.runtimeIdOf(id)!, "message.complete", { text: words.join(" "), status: "complete" });
+
+    expect(chat(id).items.map((i) => [i.kind, "text" in i ? i.text.trim() : i.id])).toEqual([
+      ["user", "slow 12"],
+      ["assistant", words.join(" ")],
+    ]);
+  });
+
+  it("gives up a request Hermes never answers, so the chat it was loading can load again (#473)", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("tg", 2, { source: "telegram" })];
+    server.transcripts = { tg: [{ role: "user", text: "How full is the NAS?" }, { role: "assistant", text: "82% used." }] };
+    const { hermes, chat, status } = await signedIn(server);
+    await hermes.sync();
+    const resume = server.handlers["session.resume"];
+    server.handlers["session.resume"] = () => {};
+    const opening = hermes.open("tg");
+    expect(chat("tg").loading).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    await opening;
+    expect(status()).toBe("connected");
+    expect(chat("tg").loading).toBe(false);
+    expect(chat("tg").items.at(-1)).toMatchObject({ kind: "error", text: expect.stringContaining("didn't answer session.resume") });
+
+    server.handlers["session.resume"] = resume;
+    await hermes.open("tg");
+    expect(resumes(server)).toHaveLength(2);
+    expect(chat("tg").items.map((i) => ("text" in i ? i.text : i.kind))).toEqual(["How full is the NAS?", "82% used."]);
+  });
+
   it("keeps a reply sent after reconnecting below the reloaded history", async () => {
     const server = new FakeHermes();
     server.sessions = [row("a", 1, { pinned: true })];
@@ -191,6 +253,47 @@ describe("Reconnecting", () => {
     server.handlers["gateway.ping"] = ping;
     await vi.advanceTimersByTimeAsync(1_000);
     expect(status()).toBe("connected");
+  });
+
+  it("keeps the connection while an attachment takes a minute and a half to upload and Hermes can't answer meanwhile (#469)", async () => {
+    const server = new FakeHermes();
+    server.sessions = [row("a", 0)];
+    server.files["/home/me/big.log"] = "x".repeat(1024);
+    // Like the real pipe: the file's frame takes 90 s to write, and every frame sent meanwhile waits behind it, so
+    // nothing comes back from Hermes until it has gone.
+    const slow: OpenPipe = async (...args) => {
+      const pipe = await server.openPipe(...args);
+      let behind: string[] | undefined;
+      return {
+        ...pipe,
+        send: async (frame) => void (behind ? behind.push(frame) : await pipe.send(frame)),
+        sendFile: async (...file) => {
+          behind = [];
+          await new Promise((r) => setTimeout(r, 90_000));
+          await pipe.sendFile(...file);
+          const waiting = behind;
+          behind = undefined;
+          for (const frame of waiting) await pipe.send(frame);
+        },
+      };
+    };
+    const hermes = await connect(slow);
+    await hermes.sync();
+    await hermes.open("a");
+    const { attachments } = await hermes.checkAttachments(["/home/me/big.log"]);
+
+    const sent = hermes.send("a", "Look at this log", attachments);
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(server.opened).toBe(1);
+    expect(hermes.getSnapshot()).toMatchObject({ status: "connected", closedReason: undefined });
+    expect(await sent).toEqual({ delivery: "accepted" });
+    expect(server.last("prompt.submit")!.params.text).toBe("@file:attachments/big.log\n\nLook at this log");
+
+    // Once the file has gone, the pings, and the silence check, start again.
+    const pings = () => server.requests.filter((r) => r.method === "gateway.ping").length;
+    const before = pings();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(pings()).toBeGreaterThan(before);
   });
 
   it("refreshes the chat list after reconnecting while a list read on the dropped connection never answers", async () => {
@@ -460,6 +563,56 @@ describe("Reopening the socket", () => {
     await hermes.close();
     expect(seen.closes).toBe(1);
   });
+
+  // A list sync the drop ended hands over to the reopen's own (#401), as on a full reconnect.
+  for (const wait of [0, 5_000]) {
+    it(`lists the chats on the reopened socket while a list read on the dropped one never answers (drop ${wait} ms in)`, async () => {
+      const server = new FakeHermes();
+      server.sessions = [row("old", 1)];
+      const { seen, open } = reopening(server);
+      const hermes = await connect(open);
+      await hermes.sync();
+      await vi.advanceTimersByTimeAsync(wait);
+      const listRead = server.rest["GET /api/sessions"];
+      server.rest["GET /api/sessions"] = () => new Promise(() => {});
+      void hermes.sync();
+      await vi.advanceTimersByTimeAsync(0);
+
+      server.drop();
+      server.rest["GET /api/sessions"] = listRead;
+      server.sessions = [row("new", 0)];
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(hermes.getSnapshot().status).toBe("connected");
+      expect(seen).toMatchObject({ opens: 1, reopens: 1 });
+      expect(hermes.getSnapshot().chats.map((c) => c.id)).toEqual(["new"]);
+    });
+
+    it(`counts the older chats the reopened socket lists when the read on the dropped one fails first (drop ${wait} ms in)`, async () => {
+      const server = new FakeHermes();
+      server.sessions = [row("recent", 1), row("ancient", 90)];
+      const { seen, open } = reopening(server);
+      const hermes = await connect(open);
+      await hermes.sync();
+      await vi.advanceTimersByTimeAsync(wait);
+      const listRead = server.rest["GET /api/sessions"];
+      let fail!: () => void;
+      server.rest["GET /api/sessions"] = () => new Promise((_, reject) => (fail = () => reject(new Error("Hermes stopped answering: nothing came back for 60 s."))));
+      let pulled: string[] | string = "pending";
+      hermes.pullOlderHistory().then(
+        (chats) => (pulled = chats.map((c) => c.id)),
+        (e: Error) => (pulled = e.message),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      server.drop();
+      server.rest["GET /api/sessions"] = listRead;
+      fail();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(seen).toMatchObject({ opens: 1, reopens: 1 });
+      expect(pulled).toEqual(["ancient"]);
+      expect(hermes.getSnapshot()).toMatchObject({ olderPulled: true, syncError: undefined });
+    });
+  }
 });
 
 describe("Unsecure", () => {

@@ -4,6 +4,8 @@
 // Each profile keeps its own raw `mcp_servers`, `.env` and OAuth tokens; plugin servers are listed but can't be changed.
 import type { RestRequest } from "./fakeHermes";
 import { envKeyFor, type McpEdit } from "./mcp";
+import { RestError } from "./pipe";
+import { errorText } from "./values";
 
 type Cfg = Record<string, unknown>;
 type Flow = { flow_id: string; server_name: string; profile: string; status: string; authorization_url: string | null; error: string | null; tools: { name: string; description: string }[] };
@@ -21,7 +23,7 @@ export type FakeCatalogEntry = {
   install?: { url: string; bootstrap: string[] };
 };
 
-const answered = (status: number, detail: string) => new Error(`The dashboard answered ${status}: ${JSON.stringify({ detail })}`);
+const answered = (status: number, detail: string) => new RestError(status, JSON.stringify({ detail }));
 
 
 /** `agent.redact.redact_key`, near enough: a short value is all stars, a longer one keeps its ends. */
@@ -382,7 +384,7 @@ export class FakeMcp {
         servers[name] = cfg;
       });
     } catch (err) {
-      if (token) throw new Error(`Not confirmed: Hermes saved the new bearer token, but not the rest of the change: ${err instanceof Error ? err.message : String(err)}`);
+      if (token) throw new Error(`Not confirmed: Hermes saved the new bearer token, but not the rest of the change: ${errorText(err)}`);
       throw err;
     }
   }
