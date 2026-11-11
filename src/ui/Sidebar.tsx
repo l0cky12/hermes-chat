@@ -960,9 +960,12 @@ function moveBetweenChats(e: KeyboardEvent<HTMLElement>) {
  * Archived chats are in `chats` only while the Archived section is shown (App.tsx lists them then).
  * `projectSwitcher` sits under the profile's name; `chats` are only the shown project's when one is picked there.
  * `projectsOf`: the projects a chat's menu offers to put it in or take it out of.
+ * `bots`: bot mode, while a Bot Chat is open (ADR 0066): the bots (Bots.tsx `BotList`) under the profile's name, New
+ * chat and Search, in place of the project switcher and the chats.
  */
 export function ChatList({
   profile,
+  bots,
   projectSwitcher,
   savedFilters,
   projectsOf,
@@ -1004,6 +1007,7 @@ export function ChatList({
   onSearch,
 }: {
   profile: string;
+  bots?: ReactNode;
   projectSwitcher?: ReactNode;
   /** The profile's Saved filters (Tags.tsx), under the project switcher. */
   savedFilters?: ReactNode;
@@ -1245,18 +1249,23 @@ export function ChatList({
           )}
         </div>
       )}
-      {projectSwitcher && <div className="sb-project">{projectSwitcher}</div>}
-      <div className="sb-scroll" data-drop={dropOn === "inbox" ? "inbox" : undefined} {...dropHandlers("inbox", overInbox)}>
+      {!bots && projectSwitcher && <div className="sb-project">{projectSwitcher}</div>}
+      <div className={`sb-scroll${bots ? " sb-bots" : ""}`} data-drop={dropOn === "inbox" ? "inbox" : undefined} {...(bots ? {} : dropHandlers("inbox", overInbox))}>
         {switching && (
           <SwitchStatus profile={profile} switching={switching} status={status} onRetry={onRetrySwitch} onBack={() => onSwitchProfile(switching.from)} />
         )}
-        {savedFilters}
+        {!bots && savedFilters}
         {syncError && !switching?.error && (
           <div className="sync-error" role="status">
             {syncError}
           </div>
         )}
-        {
+        {bots ? (
+          <>
+            <h2 className="section-label sb-bots-head">Bots</h2>
+            {bots}
+          </>
+        ) : (
           // One keyed array, so React keeps a row that moves from one section to another.
           shown.flatMap((k) => {
             if (k === "settled") return [];
@@ -1273,9 +1282,9 @@ export function ChatList({
               ),
             ];
           })
-        }
+        )}
       </div>
-      {shown.includes("settled") && (
+      {!bots && shown.includes("settled") && (
         // The drawer at the list's foot (ADR 0090): its header stays at the bottom however long the scroll above is.
         <div className={`settled-drawer ${settledOpen ? "open" : ""} ${dropOn === "settled" ? "drop" : ""}`} {...dropHandlers("settled")}>
           {header("settled", sections.settled, settledOpen)}

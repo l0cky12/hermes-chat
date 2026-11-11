@@ -2443,6 +2443,13 @@ label.memory-pick { cursor: pointer; }
 .bots-hidden { padding: 4px 8px; }
 .bots-hidden-toggle { display: inline-flex; align-items: center; gap: 4px; color: var(--faint); font-size: calc(11.5rem / 14); }
 .bots-hidden-toggle:hover { color: var(--text); }
+/* Bot mode: the Bots view's rows on the list panel's background, the open bot marked as .row.sel marks the open chat. */
+.sb-bots-head { margin: 0; padding-top: 6px; }
+.sb-bots .inbox-list { padding: 0; overflow: visible; }
+.sb-bots .inbox-leave { margin: 0 0 8px; }
+.sb-bots .inbox-row:hover { background: var(--hover); }
+.sb-bots .bots-row.is-current { background: var(--hover-2); box-shadow: inset 0 0 0 1px var(--line); }
+.sb-bots .bots-hidden { padding: 4px 6px; }
 @media (max-width: 520px) {
   .inbox { width: calc(100vw - 60px); }
 }

@@ -43,7 +43,7 @@ import { type ChatLink, type ConnectionRefs, checkConnection, connectionKey, con
 import { desktopLinks, type LinkInbox } from "./hermes/tauriLinks";
 import { ChatLinkNotice, type LinkNoticeView } from "./ui/ChatLinkNotice";
 import { Inbox } from "./ui/Inbox";
-import { Bots } from "./ui/Bots";
+import { BotList, Bots, BOTS_REFRESH_MS } from "./ui/Bots";
 import { Office } from "./ui/Office";
 import { EMPTY_OFFICE_MEMORY } from "./ui/OfficeBuilding";
 import { officeRooms, type Desk, type Room } from "./hermes/office";
@@ -1119,9 +1119,12 @@ export function Main({
   // computer for the connection, and change nothing else. `goTo`: an entry's chat to open once its profile's list
   // has it. `focusItem`: the card or message in a pane to show once it is on screen.
   const [inboxOpen, setInboxOpen] = useState(false);
-  /** The Bots view (Bots.tsx, ADR 0066), and a bot's chat to open once its profile is shown. */
+  /**
+   * The Bots view (Bots.tsx, ADR 0066), and a bot's chat to open once its profile is shown: `stay`, asked for in bot
+   * mode, which holds it until the Bot Chat opens; `opening`, looked up and on its way.
+   */
   const [botsOpen, setBotsOpen] = useState(false);
-  const [botGo, setBotGo] = useState<{ bot: Bot; then: "open" | "new"; nav: number }>();
+  const [botGo, setBotGo] = useState<{ bot: Bot; then: "open" | "new"; nav: number; stay: boolean; opening?: boolean }>();
   /** The agent office (Office.tsx, ADR 0077), unless Settings turns it off. */
   const [officeOpen, setOfficeOpen] = useState(false);
   const ackScope = inboxScope(connection);
@@ -1865,29 +1868,48 @@ export function Main({
   const botsNeedYou =
     chats.some((c) => isBotChat(c) && c.items.some(isWaiting)) ||
     (live?.sessions ?? []).some((s) => s.status === "waiting" && (isBotChatTitle(s.title) || hermes.isKnownBotChat(s.chatId, s.profile)));
+  // Bot mode (ADR 0066): while the active pane shows a Bot Chat, the list panel shows the bots in its place. It follows
+  // the open chat, so New chat or any other chat opened leaves it, and a launch, which never reopens a Bot Chat, starts
+  // without it. A bot opened from bot mode holds it until its Bot Chat opens, so the next profile's chats don't flash.
+  const shownChat = chats.find((c) => c.id === active.chatId);
+  const botsInList =
+    caps.caps.botMode.state !== "unsupported" &&
+    ((!!shownChat && isBotChat(shownChat)) || (botGo?.stay === true && botGo.then === "open" && botGo.nav === navGen.current));
+  const connected = status === "connected";
+  useEffect(() => {
+    if (!botsInList || !connected) return;
+    // The Bots view reports a failed read; the panel keeps the roster read last.
+    const read = () => void hermes.bots().catch(() => {});
+    read();
+    const every = setInterval(read, BOTS_REFRESH_MS);
+    return () => clearInterval(every);
+  }, [hermes, botsInList, connected]);
   const openBot = (b: Bot, then: "open" | "new") => {
     setBotsOpen(false);
     guard(() => {
       if (b.profile !== profile) switchProfileNow(b.profile);
       // Anything the owner opens or switches to after this, before the Bot Chat opens, wins over it (`navGen`).
-      setBotGo({ bot: b, then, nav: navGen.current });
+      setBotGo({ bot: b, then, nav: navGen.current, stay: botsInList });
     }, b.profile !== profile ? "profile" : "leave");
   };
   useEffect(() => {
     const go = botGo;
     if (!go) return;
     if (navGen.current !== go.nav) return setBotGo(undefined);
-    if (go.bot.profile !== profile || switching || !hermes.hasListed()) return;
-    setBotGo(undefined);
+    if (go.opening || go.bot.profile !== profile || switching || !hermes.hasListed()) return;
     if (go.then === "new") {
+      setBotGo(undefined);
       newChat();
       return;
     }
+    const opening = { ...go, opening: true };
+    setBotGo(opening);
     const still = () => navGen.current === go.nav && hermes.profile === go.bot.profile;
     hermes
       .openBotChat(go.bot)
       .then((id) => still() && openChat(id, { remember: false }))
-      .catch((e: unknown) => still() && setToast({ text: (e as Error).message, at: Date.now() }));
+      .catch((e: unknown) => still() && setToast({ text: (e as Error).message, at: Date.now() }))
+      .finally(() => setBotGo((g) => (g === opening ? undefined : g)));
   }, [botGo, profile, switching, chats]);
 
   // The Approval card or message an entry is about is scrolled to and focused once its chat shows it. Focus goes to
@@ -2135,8 +2157,9 @@ export function Main({
   // The office is drawn, and its rooms worked out, only while it can be seen: hidden to the tray or minimized, it isn't.
   const officeVisible = officeShown && !windowHidden && !pageHidden;
 
-  // The inbox and the Bots view ask for fresh checks as they open, and keep asking while open: they show what is live.
-  const liveWatched = inboxOpen || botsOpen;
+  // The inbox and the bots, in their view or the list panel, ask for fresh checks as they open, and keep asking while
+  // open: they show what is live.
+  const liveWatched = inboxOpen || botsOpen || botsInList;
   useEffect(() => {
     if (!liveWatched) return;
     void hermes.checkOtherProfiles();
@@ -2529,6 +2552,11 @@ export function Main({
           worktree={p.worktree?.scope === scope ? p.worktree : undefined}
           onDropWorktree={() => patchPane(p.key, { worktree: undefined })}
           onOpenWorktree={(w) => openRepository({ target: w.target, path: w.path, view: "worktrees" })}
+          onStarting={() => {
+            // A chat the owner starts here is one they opened, so it wins over an open still on its way (`navGen`),
+            // from the moment they send, before Hermes has made it.
+            if (activeKeyRef.current === p.key) navGen.current++;
+          }}
           onStarted={(id) => {
             // The chat started from this pane's New chat pane replaces it here, without taking the owner from the
             // other pane if they went there meanwhile.
@@ -2732,6 +2760,23 @@ export function Main({
       {listOpen && (
         <ChatList
           profile={profile}
+          bots={
+            botsInList &&
+            (bots ? (
+              <BotList
+                bots={bots.roster}
+                pictures={botPictures}
+                activity={activityOf}
+                profile={profile}
+                current={profile}
+                leaving={leavingNote(profile, chats)}
+                onOpen={(b) => openBot(b, "open")}
+                onNewChat={(b) => openBot(b, "new")}
+              />
+            ) : (
+              <div className="empty-hint">Reading the bots…</div>
+            ))
+          }
             projectSwitcher={
               <ProjectSwitcher
                 projects={listable}
@@ -3468,6 +3513,7 @@ function ChatView({
   worktree,
   onDropWorktree,
   onOpenWorktree,
+  onStarting,
   onStarted,
   onDraftError,
   onChatGone,
@@ -3533,6 +3579,8 @@ function ChatView({
   onDropWorktree: () => void;
   /** Opens the Repository screen's Worktrees view on the worktree a chat works in. */
   onOpenWorktree: (w: WorktreeChat) => void;
+  /** A send from the New chat pane is starting a chat, before Hermes has made it. */
+  onStarting: () => void;
   onStarted: (id: string) => void;
   onDraftError: (reason: string) => void;
   /** A send found its chat out of the list: puts `typed` back where the owner will see it, and asks Hermes whether
@@ -3603,6 +3651,7 @@ function ChatView({
   /** The chat to send in: the one in this pane, or a new one started now for the New chat pane. */
   const chatToSendIn = async (): Promise<{ id: string } | { delivery: Delivery }> => {
     if (chatId) return { id: chatId };
+    onStarting();
     // The project and its defaults as they are now, not as they were when the pane drew.
     projects.reread();
     const into = projects.getSnapshot().selectedId;

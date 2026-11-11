@@ -26,6 +26,11 @@ Issue #222 asked for Hermes's Bot Mode, as the official Hermes desktop app has i
   - any search hit with that title, or whose id or lineage root the roster named.
 
   A Bot Chat this app opens is in the chats it holds, for its pane, but is marked `bot` and never listed. Its bot's row is the way back to it.
+- **Bot mode: the chat list panel shows the bots while a Bot Chat is open** (#445; `bots` on `ChatList`, `BotList` in `src/ui/Bots.tsx`). The panel keeps its profile switcher, New chat and Search at the top. Below them, a "Bots" heading sits over the Bots view's own rows, with the open bot marked as current. They replace the project switcher, the chat sections and the Settled drawer. A row there opens its bot's Bot Chat as the view's rows do, and asks first in the same cases. The panel stays in bot mode until that chat opens. While shown, it reads the roster again every 15 seconds and asks for the live check, as the view does.
+
+  Bot mode isn't stored. It follows the chat in the active pane. So New chat or Ctrl+N leaves it, and so does any ordinary chat opened from search, the Inbox, the tray or a tab. Issue #445 left two questions open:
+  - The profile switcher and Search stay. The switcher is the panel's header (ADR 0001), and New chat beside Search is the way back to the chats.
+  - Bot mode doesn't survive a restart. A launch never reopens a Bot Chat, so the panel starts on the chat list.
 - **"New chat with this bot"** is the pen on each row. It switches to the bot's profile and opens the New chat pane, and the chat it starts is an ordinary chat in that profile's list.
 - **`/new` in a Bot Chat compacts it** (Hermes's `/new` → `/compact` guard). A Bot Chat is one continuous conversation. So `/new` there asks Hermes to compact it, and says so.
 - **Bot Mode is a capability** (`botMode` in `src/hermes/capabilities.ts`, docs/compatibility.md "Bot Mode"). It is checked with `profiles.list`, and only an answer whose rows report `canonical_session` counts. A Hermes without the method, or whose rows don't report Bot Chats, shows no Bots button, and Connection diagnostics says why. If the view finds out on opening, it says so and the button goes once the view closes.
