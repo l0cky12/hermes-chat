@@ -24,6 +24,7 @@ A probe on a windows-latest runner (the Windows smoke test, `.github/windows-smo
 
 ## Consequences
 
-- **A framed page has no storage of its own.** `localStorage` throws `SecurityError` in the frame, as the probe saw. Sites that rely on it may break. The Preview's ⋯ menu says so, and Open in your browser is beside it. This is Windows only: on Linux web pages are the top level of their own WebKitGTK view (ADR 0081).
+- **A framed page has no storage of its own.** `localStorage` throws `SecurityError` in the frame, as the probe saw. Sites that rely on it may break. The Preview's ⋯ menu says so, and Open in your browser is beside it. This holds wherever the Preview uses the frame, which is everywhere but Linux (Windows, and macOS in a build for it). On Linux web pages are the top level of their own WebKitGTK view (ADR 0081).
 - **The bootstrap still loads in frames on Windows.** Tauri refuses a framed page because of its origin, not because the page lacks `__TAURI_INTERNALS__`. A frame given `allow-same-origin` again would reopen #466. The Preview tests pin the sandbox, and the Windows smoke test fails when its probe page reaches a command.
+- **The postMessage path is shut by wry, not by this fix.** wry's IPC handler takes the URL of the message's sender as the request's URL, and an opaque frame's URL can still be `http://tauri.localhost:<port>`. Today wry listens only on the top frame, so a frame's message never reaches Rust. A wry that also listened on frames would reopen #466 for that path.
 - **The extension host frame (ADR 0126) and the HTML-file frame were already opaque** (`sandbox="allow-scripts"` and `sandbox=""`).

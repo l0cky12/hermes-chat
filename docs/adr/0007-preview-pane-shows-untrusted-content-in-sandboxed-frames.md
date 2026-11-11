@@ -9,13 +9,13 @@ The preview pane beside the chat shows web pages, Server files, Local files and 
 
 ## Why this keeps framed content away from the app
 
-ADR 0138 found this premise false on Windows, where WebView2 gets the bootstrap in every frame. Tauri 2.12 injects its IPC bootstrap (`__TAURI_INTERNALS__`) and the per-launch `__TAURI_INVOKE_KEY__` into the main frame only (`manager/webview.rs`, `for_main_frame_only: true`). `Webview::on_message` drops every call whose key doesn't match (`webview/mod.rs`). A frame that is cross-origin with the app, or has an opaque origin, can't read the parent's globals, so it can't learn the key. On Linux the postMessage handler reports the main frame's URL, not the frame's, so the key is the barrier rather than the origin check. That is why same-origin framing, the one way to read the parent's globals, is shut three ways: the address check, the frame-src policy, and the load check.
+**Superseded by ADR 0138.** This section held until #466 and no longer does. It argued that Tauri 2.12 injects its IPC bootstrap (`__TAURI_INTERNALS__`) and the per-launch `__TAURI_INVOKE_KEY__` into the main frame only, so a frame that can't read the parent's globals can't learn the key. On Windows, wry adds the bootstrap, key included, to every frame, so the key keeps no frame out. What keeps a framed page from the app's commands now is its opaque origin: its IPC requests carry `Origin: null`, which Tauri refuses. The load check is gone, since an opaque frame can never become same-origin with the app.
 
 ## Considered options
 
 - **A separate native child webview for web pages.** It would be the strongest isolation, and sites that refuse framing would still load. Rejected for now: it needs Tauri's `unstable` multi-webview feature, has to be kept positioned over the React layout by hand, and would draw over the app's menus and toasts. The pane is behind one component (`WebView` in `PreviewPane.tsx`), so it can be swapped later.
 - **Turning on Tauri's CSP for the whole app.** Rejected here: it rewrites the app's scripts with nonces and would affect every screen. The one directive the pane needs, `frame-src`, is set in `index.html`. ADR 0129 adds the app's other directives to the same tag.
-- **No `allow-same-origin` for web pages.** That would give each page an opaque origin, where `localStorage` throws and many sites break. Since a page's real origin is never the app's, keeping it gives the page nothing of the app's. (In the running app, a framed page's `localStorage` works. WebKitGTK keeps no third-party cookies for it either way.)
+- **No `allow-same-origin` for web pages.** Rejected at first, because an opaque origin makes `localStorage` throw and some sites break. ADR 0138 adopted it: on Windows a page that keeps its own origin can move its frame to an origin Tauri counts as the app's.
 - **Letting the webview read any local path, as `hermes_send_file` did until ADR 0129.** Rejected: a preview only needs files the owner chose, and the Open dialog in Rust gives that without widening what the webview can ask Rust to read.
 
 ## Consequences

@@ -168,13 +168,16 @@ for mode in fetch pm; do
   # A localhost address opens on the Hermes server; the stand-in has no SSH target, so open it here.
   wd click button "Open on this computer instead" || true
   for i in $(seq 1 60); do grep -q "mode=$mode .*where=before-hop .*tray_" "$EV/probe.log" 2>/dev/null && break; sleep 0.5; done
-  sleep 12
+  # The page hops after 9 s, and a call there answers or reports PENDING within 8 s more. With the fix none of its
+  # scripts run there, so this waits out the full 30 s.
+  for i in $(seq 1 60); do grep -q "mode=$mode .*where=at-hop .*tray_" "$EV/probe.log" 2>/dev/null && break; sleep 0.5; done
   evidence "10-preview-$mode"
 done
 echo "TRAY_AFTER $(tray)" >>"$EV/probe.log"
 echo "=== probe.log"; cat "$EV/probe.log"
 if ! grep -q "where=before-hop .* env: internals=" "$EV/probe.log"; then echo "PREVIEW_PROBE_RAN=no" >>"$EV/result.txt"
-elif grep -qE ": OK|data not found|closeToTray=true" "$EV/probe.log"; then echo "PREVIEW_PAGE_REFUSED=no" >>"$EV/result.txt"
+elif grep -E "^REPORT " "$EV/probe.log" | grep -qE ": OK|data not found" || [ "$(grep -h '^TRAY_BEFORE' "$EV/probe.log" | cut -d' ' -f2-)" != "$(grep -h '^TRAY_AFTER' "$EV/probe.log" | cut -d' ' -f2-)" ]; then
+  echo "PREVIEW_PAGE_REFUSED=no" >>"$EV/result.txt"
 else echo "PREVIEW_PAGE_REFUSED=yes" >>"$EV/result.txt"; fi
 
 echo "=== result"; cat "$EV/result.txt"
