@@ -4,6 +4,7 @@
 import type { SavedConnection } from "./connections";
 import type { PersonaStore } from "./personaStore";
 import { forgetConnectionLocally } from "./profileLocalData";
+import type { Drafts } from "./drafts";
 import type { DefaultsDoc } from "./projectDefaults";
 import type { TagsFile } from "./tags";
 import { terminalTargetKey } from "./terminal";
@@ -32,10 +33,17 @@ type Store = Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "lengt
  */
 export async function forgetConnectionData(
   c: SavedConnection,
-  { storage = localStorage as Store, defaults, tags, persona, afterwards }: { storage?: Store; defaults?: DefaultsDoc; tags?: TagsFile; persona?: PersonaStore; afterwards?: () => Promise<void> } = {},
+  {
+    storage = localStorage as Store,
+    defaults,
+    tags,
+    persona,
+    drafts,
+    afterwards,
+  }: { storage?: Store; defaults?: DefaultsDoc; tags?: TagsFile; persona?: PersonaStore; drafts?: Pick<Drafts, "move">; afterwards?: () => Promise<void> } = {},
 ): Promise<void> {
   // Every profile's data, through the one list a profile's rename and delete walk too (profileLocalData.ts).
-  await forgetConnectionLocally(c, { storage, defaults, tags, persona });
+  await forgetConnectionLocally(c, { storage, defaults, tags, persona, drafts });
   storage.removeItem(terminalTargetKey(c));
   await afterwards?.().catch(() => {});
 }

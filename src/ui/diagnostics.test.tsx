@@ -137,6 +137,16 @@ describe("Connection diagnostics", () => {
     expect(within(row$("Skills")).getByText("Couldn't check")).toBeTruthy();
   });
 
+  it("names a change Hermes was found to lack in its row, while the rest of the feature stays supported", async () => {
+    const store = scriptedStore(NEW);
+    diagnostics(store);
+    act(() => store.connected(1, "default", {}, Promise.resolve({ server_requests: ["approval"] })));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toMatch(/Checked/));
+    act(() => store.observeWrite(1, { route: "api/profiles/work", verb: "PATCH" }, new RestError(405, `{"detail":"Method Not Allowed"}`)));
+    expect(within(row$("Profiles")).getByText(/Hermes has no route for PATCH \/api\/profiles\/\{name\}, so that change is disabled/)).toBeTruthy();
+    expect(within(row$("Profiles")).getByText("Supported")).toBeTruthy();
+  });
+
   it("copies a report without secrets, and says so", async () => {
     const store = scriptedStore({
       ...NEW,

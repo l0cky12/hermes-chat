@@ -193,6 +193,8 @@ export const en = {
     move: "Move them",
     leave: "Leave them",
     moved: (to: string) => `Moved this computer's data to ${to}.`,
+    movePartly: (from: string, to: string) =>
+      `Hermes renamed ${from} to ${to}, but some of this computer's data for it couldn't move, so it stays under ${from} for now. Hermes Chat offers to move it again.`,
     created: (name: string) => `Created ${name}.`,
     createdUnanswered: (name: string) => `Hermes's answer was lost, but it lists ${name} now.`,
     openNow: (name: string) => `Open ${name} now`,
@@ -203,6 +205,9 @@ export const en = {
       title: (name: string) => `Switch to ${name}?`,
       stay: "Stay",
       go: "Switch anyway",
+      /** What switching away from the profile in use leaves behind, asked about first (the switcher's own question). */
+      approval: (profile: string) => `An approval is waiting in ${profile}. Hermes waits for your answer only until it times out: switch back and open the chat to answer it.`,
+      reply: (profile: string) => `A reply is still running in ${profile}. Hermes keeps it going, and it shows here when you switch back.`,
     },
     form: {
       newTitle: "New profile",
@@ -292,6 +297,7 @@ export const en = {
       stayed: "Nothing was deleted: Hermes Chat stayed on this profile.",
       stillInUse: (name: string) => `Nothing was deleted: Hermes Chat couldn't switch away from ${name}.`,
       failed: (why: string) => `The profile wasn't deleted: ${why}`,
+      forgetPartly: (name: string) => `Deleted ${name} on Hermes, but some of this computer's data for it couldn't be removed.`,
     },
   },
 };

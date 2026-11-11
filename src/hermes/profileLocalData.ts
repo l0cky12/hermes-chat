@@ -14,7 +14,7 @@
 // here or in `NOT_PER_PROFILE`.
 import { BRANCH_PREFIX, HELD_PREFIX, LIST_PREFIX, OUTBOX_PREFIX, PROFILE_PREFIX, PULLED_PREFIX, QUEUE_PREFIX, TRANSCRIPT_PREFIX, moveLiveChatData } from "./chatCache";
 import { type ScopeSource, connectionScope, inScope, isPrefOf, prefScope, scopeParts } from "./connections";
-import { DRAFT_PREFIX } from "./drafts";
+import { DRAFT_PREFIX, type Drafts } from "./drafts";
 import { IMPORTS_KEY } from "./importTranscripts";
 import { INBOX_PREFIX } from "./inbox";
 import { OUTPUTS_KEY } from "./outputs";
@@ -140,7 +140,18 @@ function moveDoc(storage: Store, key: string, move: ScopeMove) {
   const doc = readJson(storage, key);
   if (!isObj(doc) || !isObj(doc.scopes)) return;
   const scopes = moveScopeKeys(doc.scopes, move);
+  // One write: the document holds the old scope until it holds the new one.
   if (scopes) storage.setItem(key, JSON.stringify({ ...doc, scopes }));
+}
+
+/**
+ * Some of a walk's moves failed (this computer's storage refused a write, say). What failed stays where it was, under
+ * the old name, so nothing is lost; the rename's note stays too, so Settings → Profiles offers the move again.
+ */
+export class LocalMoveError extends Error {
+  constructor(readonly failed: number) {
+    super(`${failed} ${failed === 1 ? "item" : "items"} of this computer's data couldn't be moved.`);
+  }
 }
 
 /** An inbox dismissal's key with its profile moved (`<kind> <profile> …`, or `resumed <kind> <profile> …`). */
@@ -216,23 +227,37 @@ function movePrefs(c: ScopeSource, walk: Walk) {
 }
 
 /** The stores a walk moves besides this webview's storage: the swapped files every window shares, and in-memory copies. */
-export type LocalStores = { storage?: Store; defaults?: DefaultsDoc; tags?: TagsFile; persona?: PersonaStore };
+export type LocalStores = { storage?: Store; defaults?: DefaultsDoc; tags?: TagsFile; persona?: PersonaStore; drafts?: Pick<Drafts, "move"> };
 
-/** One walk over every kind of per-profile data, in storage, in memory and in the shared files. */
-async function walkAll(c: ScopeSource, walk: Walk, { storage = localStorage as Store, defaults, tags, persona }: LocalStores) {
+/**
+ * One walk over every kind of per-profile data, in storage, in memory and in the shared files. Each move writes the
+ * new copy before it removes the old one, and a failed one is left where it was: the walk goes on, then throws
+ * `LocalMoveError` saying how many failed.
+ */
+async function walkAll(c: ScopeSource, walk: Walk, { storage = localStorage as Store, defaults, tags, persona, drafts }: LocalStores) {
+  let failed = 0;
+  const attempt = async (step: () => unknown) => {
+    try {
+      await step();
+    } catch {
+      failed++;
+    }
+  };
   const keyMove = (k: string) => movedKey(k, walk);
-  await persona?.move(keyMove);
+  await attempt(() => persona?.move(keyMove));
   const keys: string[] = [];
   for (let i = 0; i < storage.length; i++) {
     const k = storage.key(i);
     if (k && keyMove(k) !== undefined) keys.push(k);
   }
-  for (const k of keys) {
-    const to = keyMove(k)!;
-    const value = storage.getItem(k);
-    storage.removeItem(k);
-    if (to !== null && value !== null) storage.setItem(to, value);
-  }
+  for (const k of keys)
+    await attempt(() => {
+      const to = keyMove(k)!;
+      const value = storage.getItem(k);
+      if (to !== null && value !== null) storage.setItem(to, value);
+      storage.removeItem(k);
+    });
+  drafts?.move(keyMove);
   for (const [k, v] of [...unsaved]) {
     const to = keyMove(k);
     if (to === undefined) continue;
@@ -248,12 +273,13 @@ async function walkAll(c: ScopeSource, walk: Walk, { storage = localStorage as S
     } else item.key = to;
   }
   moveLiveChatData(keyMove);
-  for (const key of SCOPED_DOCS) moveDoc(storage, key, walk.move);
-  if (walk.profile) moveConnectionValues(storage, walk.parts, walk.profile.from, walk.profile.to);
-  else for (const { prefix } of CONNECTION_KEYS) storage.removeItem(prefix + JSON.stringify([...walk.parts]));
-  movePrefs(c, walk);
-  await defaults?.moveScopes(walk.move);
-  if (tags) await moveTagScopes(tags, walk.move);
+  for (const key of SCOPED_DOCS) await attempt(() => moveDoc(storage, key, walk.move));
+  if (walk.profile) await attempt(() => moveConnectionValues(storage, walk.parts, walk.profile!.from, walk.profile!.to));
+  else for (const { prefix } of CONNECTION_KEYS) await attempt(() => storage.removeItem(prefix + JSON.stringify([...walk.parts])));
+  await attempt(() => movePrefs(c, walk));
+  await attempt(() => defaults?.moveScopes(walk.move));
+  await attempt(() => tags && moveTagScopes(tags, walk.move));
+  if (failed) throw new LocalMoveError(failed);
 }
 
 /**
@@ -279,8 +305,11 @@ export async function forgetProfileLocally(c: ScopeSource, profile: string, stor
 export async function forgetConnectionLocally(c: ScopeSource, stores: LocalStores = {}): Promise<void> {
   const parts = scopeParts(c);
   const storage = stores.storage ?? (localStorage as Store);
-  await walkAll(c, { move: connectionMove(parts), parts }, { ...stores, storage });
-  dropRename(storage, c);
+  try {
+    await walkAll(c, { move: connectionMove(parts), parts }, { ...stores, storage });
+  } finally {
+    dropRename(storage, c);
+  }
 }
 
 /** A rename Hermes made whose move here may not have finished: the app closed between them. */

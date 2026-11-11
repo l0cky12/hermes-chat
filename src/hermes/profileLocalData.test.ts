@@ -6,9 +6,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { moveLiveChatData } from "./chatCache";
 import { connectionScope, prefScope, type ScopeSource } from "./connections";
 import { forgetConnectionData } from "./forgetConnection";
+import { drafts, draftKey } from "./drafts";
+import { inboxAcks, inboxScope, type InboxEntry } from "./inbox";
 import { PersonaStore, personaKey } from "./personaStore";
 import {
   CONNECTION_KEYS,
+  LocalMoveError,
   NOT_PER_PROFILE,
   PROFILE_KEYS,
   SCOPED_DOCS,
@@ -132,6 +135,51 @@ describe("renaming a profile on this computer", () => {
     expect(item.key).toBe(key("hermes-chat.draft.", home, "coder", "null"));
     // The live copies are moved by the same key rule.
     moveLiveChatData(() => undefined);
+  });
+
+  it("keeps the old copy when the new one can't be written, and says how many didn't move", async () => {
+    const kept = key("hermes-chat.draft.", home, "work", "chat-1");
+    localStorage.setItem(kept, "half a thought");
+    const refusing = {
+      get length() {
+        return localStorage.length;
+      },
+      key: (i: number) => localStorage.key(i),
+      getItem: (k: string) => localStorage.getItem(k),
+      removeItem: (k: string) => localStorage.removeItem(k),
+      setItem: (k: string, v: string) => {
+        if (k.includes('"coder"')) throw new DOMException("full", "QuotaExceededError");
+        localStorage.setItem(k, v);
+      },
+    };
+    await expect(renameProfileLocally(home, "work", "coder", { storage: refusing })).rejects.toBeInstanceOf(LocalMoveError);
+    expect(localStorage.getItem(kept)).toBe("half a thought");
+  });
+
+  it("moves the Drafts held in memory with their undo history, and forgets them with the profile", async () => {
+    const store = drafts(localStorage);
+    const from = draftKey(home, "work", "chat-1");
+    const to = draftKey(home, "coder", "chat-1");
+    store.set(from, "first");
+    store.set(from, "second");
+    await renameProfileLocally(home, "work", "coder", { drafts: store });
+    expect(store.get(to)).toBe("second");
+    expect(store.get(from)).toBe("");
+    expect(store.undo(to)).toBe("first");
+    await forgetProfileLocally(home, "coder", { drafts: store });
+    expect(store.get(to)).toBe("");
+  });
+
+  it("lets the inbox read its dismissals again under the new name", async () => {
+    const acks = inboxAcks(localStorage, inboxScope(home));
+    const entry = (profile: string): InboxEntry => ({ key: `completed ${profile} chat-1`, kind: "completed", profile, chatId: "chat-1", title: "t", at: 5, summary: "" }) as InboxEntry;
+    acks.dismiss(entry("work"));
+    await renameProfileLocally(home, "work", "coder");
+    acks.reload();
+    expect(acks.isDismissed(entry("coder"))).toBe(true);
+    // A later dismissal no longer writes the old name back.
+    acks.dismiss({ ...entry("research"), key: "completed research chat-2", chatId: "chat-2" } as InboxEntry);
+    expect(Object.keys(JSON.parse(localStorage.getItem(key("hermes-chat.inbox-dismissed.", home))!)).sort()).toEqual(["completed coder chat-1", "completed research chat-2"]);
   });
 
   it("notes a rename sent to Hermes until this computer's data has moved", () => {

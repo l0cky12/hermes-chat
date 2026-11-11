@@ -18,7 +18,7 @@
 // way (Hermes has no call that adds an entry, ADR 0118), so only the full copy has it.
 import type { RestMethod } from "./pipe";
 import { answered, deadline, sameSoul, type PersonaApi, type Soul } from "./persona";
-import { nameProblem, toProfileRows, type ProfileRow } from "./profiles";
+import { nameProblem, readProfileRows, type ProfileRow } from "./profiles";
 import type { SkillRow, SkillsApi } from "./skills";
 
 /** What the default (fresh) clone can carry over, each picked or not. */
@@ -163,7 +163,7 @@ export class ProfileCloneApi {
 
   /** Every profile Hermes has, in its order. */
   async profiles(): Promise<ProfileRow[]> {
-    return toProfileRows(await deadline(this.rest("GET", "api/profiles"), this.timeouts.readMs, "listing profiles"));
+    return readProfileRows(await deadline(this.rest("GET", "api/profiles"), this.timeouts.readMs, "listing profiles"));
   }
 
   /**

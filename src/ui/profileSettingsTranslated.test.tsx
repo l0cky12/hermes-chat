@@ -24,6 +24,43 @@ afterEach(async () => {
 
 const p = pseudoLocale();
 
+it("drops an older list answer that arrives after a newer one", async () => {
+  const answers: ((rows: { name: string; description: string }[]) => void)[] = [];
+  const api = {
+    list: () => new Promise((resolve) => answers.push(resolve)),
+    create: async () => ({ name: "notes", answered: true, modelSet: true }),
+  } as unknown as ProfilesWiring["api"];
+  const wiring = {
+    api,
+    inUse: "default",
+    connected: true,
+    unread: () => undefined,
+    catalog: async () => [],
+    busy: () => undefined,
+    lostMessages: () => 0,
+    jobCount: async () => 0,
+    switchTo: async () => true,
+    local: { pending: () => undefined, note: () => {}, clear: () => {}, renamed: async () => {}, deleted: async () => {} },
+    showTab: () => {},
+    copyText: async () => {},
+  } satisfies ProfilesWiring;
+  const user = userEvent.setup();
+  render(
+    <LocaleContext value={p}>
+      <ProfileSettings wiring={wiring} />
+    </LocaleContext>,
+  );
+  await waitFor(() => expect(answers).toHaveLength(1));
+  // The first read is still out when a profile is made, and the read after it answers first.
+  await user.click(screen.getByRole("button", { name: p.profiles.newProfile }));
+  await user.type(screen.getByLabelText(p.profiles.form.name), "notes");
+  await user.click(screen.getByRole("button", { name: p.profiles.form.create }));
+  await waitFor(() => expect(answers).toHaveLength(2));
+  await act(async () => answers[1]([{ name: "default", description: "" }, { name: "notes", description: "" }]));
+  await act(async () => answers[0]([{ name: "default", description: "" }]));
+  expect(within(screen.getByRole("listbox")).getAllByRole("option").map((o) => o.getAttribute("data-profile"))).toEqual(["default", "notes"]);
+});
+
 it("shows only catalogue words in the list, its menu, New, Edit and Delete", async () => {
   const server = new FakeHermes();
   server.otherProfiles = { work: [] };

@@ -117,6 +117,9 @@ describe("Settings → Profiles", { timeout: 30_000 }, () => {
     await waitFor(() => expect(server.profileMeta.default?.display_name).toBe("Main"));
     await waitFor(() => expect(option(screen.getByRole("listbox", { name: "Profiles" }), "default").textContent).toMatch(/Main \(default\)/));
     expect(document.querySelector(".profile-name")?.textContent).toBe("Main (default)");
+    // Persona's own picker names it the same way.
+    await user.click(screen.getByRole("tab", { name: "Persona" }));
+    await waitFor(() => expect([...document.querySelectorAll("option")].map((o) => o.textContent)).toContain("Main (default) (in use)"));
   });
 
   it("sets the model and has Hermes write the description, each through its own route", async () => {
@@ -241,6 +244,44 @@ describe("Settings → Profiles", { timeout: 30_000 }, () => {
     }
     await user.click(screen.getByRole("button", { name: "Open Profiles" }));
     expect(await screen.findByRole("listbox", { name: "Profiles" })).toBeTruthy();
+  });
+
+  it("saves nothing while Hermes writes a description, and closes only when nothing is under way", async () => {
+    const { server, user, list } = await launch();
+    let finish = () => {};
+    server.describeAutoGate = new Promise<void>((go) => (finish = go));
+    await user.click(within(option(list, "work")).getByRole("button", { name: "Edit work" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit profile: work" });
+    await user.clear(within(dialog).getByLabelText("Name"));
+    await user.type(within(dialog).getByLabelText("Name"), "coder");
+    await user.click(within(dialog).getByRole("button", { name: /Write for me/ }));
+    expect(within(dialog).getByRole("button", { name: /Save changes/ })).toHaveProperty("disabled", true);
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveProperty("disabled", true);
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "Edit profile: work" })).toBeTruthy();
+    finish();
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: /Save changes/ })).toHaveProperty("disabled", false));
+    expect(writes(server)).toEqual(["POST /api/profiles/work/describe-auto"]);
+  });
+
+  it("asks before the Persona link leaves unsaved fields", async () => {
+    const { user, list } = await launch();
+    await user.click(within(option(list, "work")).getByRole("button", { name: "Edit work" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit profile: work" });
+    await user.type(within(dialog).getByLabelText("Description"), " too");
+    await user.click(within(dialog).getByRole("button", { name: "Edit in Settings → Persona" }));
+    expect(within(dialog).getByText("The changes you made here aren't saved.")).toBeTruthy();
+    await user.click(within(dialog).getByRole("button", { name: "Close without saving" }));
+    expect(await screen.findByRole("tabpanel", { name: "Persona" })).toBeTruthy();
+  });
+
+  it("puts focus on the row selected after a delete, not on the row that went", async () => {
+    const { user, list } = await launch();
+    option(list, "research").focus();
+    await user.keyboard("{Delete}");
+    await user.type(within(screen.getByRole("alertdialog")).getByLabelText("Type research to confirm"), "research{Enter}");
+    await screen.findByText("Deleted research.");
+    await waitFor(() => expect(document.activeElement?.getAttribute("data-profile")).toBe("default"));
   });
 
   it("works by keyboard: arrows move, Enter edits, Shift+F10 opens the menu, Escape closes each", async () => {

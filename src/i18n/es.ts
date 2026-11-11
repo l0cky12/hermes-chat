@@ -183,6 +183,8 @@ export const es: Catalogue = {
     move: "Moverlos",
     leave: "Dejarlos",
     moved: (to) => `Se movieron los datos de este equipo a ${to}.`,
+    movePartly: (from, to) =>
+      `Hermes renombró ${from} a ${to}, pero parte de los datos de este equipo no se pudo mover y sigue bajo ${from} por ahora. Hermes Chat ofrece moverlos de nuevo.`,
     created: (name) => `Se creó ${name}.`,
     createdUnanswered: (name) => `Se perdió la respuesta de Hermes, pero ahora lista ${name}.`,
     openNow: (name) => `Abrir ${name} ahora`,
@@ -193,6 +195,8 @@ export const es: Catalogue = {
       title: (name) => `¿Cambiar a ${name}?`,
       stay: "Quedarse",
       go: "Cambiar de todos modos",
+      approval: (profile) => `Hay una aprobación esperando en ${profile}. Hermes espera tu respuesta solo hasta que se agote el tiempo: vuelve y abre el chat para responder.`,
+      reply: (profile) => `Todavía hay una respuesta en curso en ${profile}. Hermes la sigue, y se verá aquí cuando vuelvas.`,
     },
     form: {
       newTitle: "Nuevo perfil",
@@ -282,6 +286,7 @@ export const es: Catalogue = {
       stayed: "No se borró nada: Hermes Chat se quedó en este perfil.",
       stillInUse: (name) => `No se borró nada: Hermes Chat no pudo dejar ${name}.`,
       failed: (why) => `No se borró el perfil: ${why}`,
+      forgetPartly: (name) => `Se borró ${name} en Hermes, pero no se pudieron quitar todos los datos de este equipo.`,
     },
   },
 };

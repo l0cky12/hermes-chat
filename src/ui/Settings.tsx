@@ -768,6 +768,7 @@ export function SettingsScreen({
             <PersonaPage
               key={`${persona.keyOf(persona.where.profile)} ${personaStart?.of === profile ? personaStart.profile : ""}`}
               start={personaStart?.of === profile ? personaStart.profile : undefined}
+              defaultName={defaultName}
               api={persona.api}
               store={persona.store}
               keyOf={persona.keyOf}

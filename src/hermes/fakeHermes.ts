@@ -357,6 +357,8 @@ export class FakeHermes {
   profileGatewayStop?: Promise<void>;
   /** What `POST /api/profiles/{name}/describe-auto` answers: a description it writes, or a failure's reason. */
   describeAuto: { ok: true; description: string } | { ok: false; reason: string } = { ok: true, description: "Writes and reviews code." };
+  /** While set, `POST /api/profiles/{name}/describe-auto` waits for it before answering, as Hermes's LLM call does. */
+  describeAutoGate?: Promise<void>;
   /** While set, `PATCH /api/profiles/{name}` fails with this, as a 500 or a lost answer, renaming nothing. */
   profileRenameError?: string | Error;
   /** While set, `PATCH /api/profiles/{name}` renames, then fails with this message, as a connection lost before the answer. */
@@ -2145,10 +2147,15 @@ export class FakeHermes {
         this.profileModel[name] = { ...(this.profileModel[name] ?? { reasoning_effort: "medium", fast: false }), model, provider };
         return { ok: true, provider, model };
       }
-      const outcome = this.describeAuto;
-      if (outcome.ok) this.profileMeta[name] = { ...this.profileMeta[name], description: outcome.description, description_auto: true };
-      return { ok: outcome.ok, reason: outcome.ok ? "" : outcome.reason, description: outcome.ok ? outcome.description : "", description_auto: outcome.ok };
+      if (this.describeAutoGate) return this.describeAutoGate.then(() => this.describeAutoAnswer(name));
+      return this.describeAutoAnswer(name);
     };
+  }
+
+  private describeAutoAnswer(name: string): unknown {
+    const outcome = this.describeAuto;
+    if (outcome.ok) this.profileMeta[name] = { ...this.profileMeta[name], description: outcome.description, description_auto: true };
+    return { ok: outcome.ok, reason: outcome.ok ? "" : outcome.reason, description: outcome.ok ? outcome.description : "", description_auto: outcome.ok };
   }
 
   private async deleteProfile(name: string): Promise<unknown> {

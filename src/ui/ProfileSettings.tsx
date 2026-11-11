@@ -123,6 +123,8 @@ export function ProfileSettings({ wiring }: { wiring: ProfilesWiring }) {
   const [listError, setListError] = useState<string>();
   const [reading, setReading] = useState(false);
   const [selected, setSelected] = useState(inUse);
+  const selectedNow = useRef(selected);
+  selectedNow.current = selected;
   const [dialog, setDialog] = useState<Dialog>();
   const [notice, setNotice] = useState<Notice>();
   const [offer, setOffer] = useState<PendingRename>();
@@ -130,6 +132,10 @@ export function ProfileSettings({ wiring }: { wiring: ProfilesWiring }) {
   /** The switcher's question, while it's asked: on top of any dialog, which stays (a delete goes on after it). */
   const [ask, setAsk] = useState<{ to: string; answer: (go: boolean) => void }>();
   const listRef = useRef<HTMLDivElement>(null);
+  /** The selected row, where each dialog puts focus back. */
+  const selectedRow = useRef<HTMLDivElement>(null);
+  /** Counts list reads: only the latest one's answer is shown, so an older read can't put back a row since changed. */
+  const readGen = useRef(0);
   const live = useRef(true);
   useEffect(() => {
     live.current = true;
@@ -137,17 +143,20 @@ export function ProfileSettings({ wiring }: { wiring: ProfilesWiring }) {
   }, []);
   const lacking = (a: ProfileAction) => !!wiring.capabilities?.lacksAction("profiles", a);
 
-  const read = async (select?: string, edit?: string) => {
+  /** Reads the list. Resolves to the row selected after it, or undefined when a newer read or a failure took over. */
+  const read = async (select?: string, edit?: string): Promise<string | undefined> => {
+    const gen = ++readGen.current;
     setReading(true);
     try {
       const listed = await api.list();
-      if (!live.current) return;
+      if (!live.current || gen !== readGen.current) return undefined;
       setRows(listed);
       setListError(undefined);
-      if (select) setSelected(select);
+      const kept = (s: string) => (listed.some((p) => p.name === s) ? s : (listed.find((p) => p.name === inUse)?.name ?? listed[0]?.name ?? s));
+      const next = select && listed.some((p) => p.name === select) ? select : kept(selectedNow.current);
+      setSelected(next);
       const editing = edit && listed.find((p) => p.name === edit);
       if (editing) setDialog({ kind: "edit", row: editing });
-      else setSelected((s) => (listed.some((p) => p.name === s) ? s : (listed.find((p) => p.name === inUse)?.name ?? listed[0]?.name ?? s)));
       // A rename the app closed in the middle of: Hermes renamed it, but this computer's data may not have moved.
       const pending = wiring.local.pending();
       if (pending) {
@@ -159,10 +168,12 @@ export function ProfileSettings({ wiring }: { wiring: ProfilesWiring }) {
           setOffer(undefined);
         }
       }
+      return next;
     } catch (e) {
-      if (live.current) setListError(failureText(l, profileFailure(e, "create"), ""));
+      if (live.current && gen === readGen.current) setListError(failureText(l, profileFailure(e, "create"), ""));
+      return undefined;
     } finally {
-      if (live.current) setReading(false);
+      if (live.current && gen === readGen.current) setReading(false);
     }
   };
   useEffect(() => {
@@ -187,10 +198,14 @@ export function ProfileSettings({ wiring }: { wiring: ProfilesWiring }) {
     });
 
   const moveDone = async (p: PendingRename) => {
-    await wiring.local.renamed(p.from, p.to);
-    wiring.local.clear();
     setOffer(undefined);
-    setNotice({ tone: "muted", text: w.moved(p.to) });
+    try {
+      await wiring.local.renamed(p.from, p.to);
+      wiring.local.clear();
+      setNotice({ tone: "muted", text: w.moved(p.to) });
+    } catch {
+      setNotice({ tone: "warn", text: w.movePartly(p.from, p.to) });
+    }
   };
 
   const openMenu = (row: ProfileRow, x: number, y: number) => {
@@ -322,6 +337,7 @@ export function ProfileSettings({ wiring }: { wiring: ProfilesWiring }) {
                 key={row.name}
                 row={row}
                 selected={row.name === selected}
+                rowRef={row.name === selected ? selectedRow : undefined}
                 inUse={row.name === inUse}
                 unread={row.name === inUse ? undefined : wiring.unread(row.name)}
                 onSelect={() => setSelected(row.name)}
@@ -405,41 +421,36 @@ export function ProfileSettings({ wiring }: { wiring: ProfilesWiring }) {
           row={dialog.kind === "edit" ? dialog.row : undefined}
           rows={rows ?? []}
           lacking={lacking}
-          returnTo={listRef}
+          returnTo={selectedRow}
           onClone={wiring.clone && (() => setDialog({ kind: "clone", source: selected }))}
           onDone={(result) => {
             setDialog(undefined);
             setNotice(result.notice);
-            void read(result.select, result.edit).then(() => !result.edit && result.select && focusRow(result.select));
+            void read(result.select, result.edit).then((now) => !result.edit && now && focusRow(now));
           }}
-          onClose={() => {
-            setDialog(undefined);
-            focusRow(selected);
-          }}
+          onClose={() => setDialog(undefined)}
         />
       )}
       {dialog?.kind === "delete" && (
         <DeleteProfile
           wiring={wiring}
           row={dialog.row}
-          returnTo={listRef}
+          returnTo={selectedRow}
           switchAway={() => switchTo("default", true)}
           onDone={(n) => {
             setDialog(undefined);
             setNotice(n);
-            void read().then(() => focusRow(inUse === dialog.row.name ? "default" : selected));
+            // The deleted row is gone: focus goes to the row the list selects now.
+            void read().then((now) => now && focusRow(now));
           }}
-          onClose={() => {
-            setDialog(undefined);
-            focusRow(dialog.row.name);
-          }}
+          onClose={() => setDialog(undefined)}
         />
       )}
       {dialog?.kind === "clone" && wiring.clone && (
         <CloneProfileDialog
           api={wiring.clone}
           current={dialog.source}
-          returnTo={listRef}
+          returnTo={selectedRow}
           onClose={() => {
             setDialog(undefined);
             void read();
@@ -493,6 +504,7 @@ function CopyButton({ text, copy }: { text: string; copy: (text: string) => Prom
 /** One profile in the list: its name and badges, its model and skills, and its description. */
 function ProfileRowView({
   row,
+  rowRef,
   selected,
   inUse,
   unread,
@@ -502,6 +514,7 @@ function ProfileRowView({
   onMenuButton,
 }: {
   row: ProfileRow;
+  rowRef?: RefObject<HTMLDivElement | null>;
   selected: boolean;
   inUse: boolean;
   unread?: number;
@@ -515,6 +528,7 @@ function ProfileRowView({
   const more = useRef<HTMLButtonElement>(null);
   return (
     <div
+      ref={rowRef}
       className={`profile-row ${selected ? "on" : ""}`}
       role="option"
       aria-selected={selected}
@@ -740,7 +754,8 @@ function ProfileForm({
   const [stopping, setStopping] = useState(false);
   const [writing, setWriting] = useState(false);
   const [writeNote, setWriteNote] = useState<{ tone: "muted" | "bad"; text: string }>();
-  const [asking, setAsking] = useState(false);
+  /** Asked before leaving with unsaved changes: `then` is where leaving goes (the persona link), else the dialog closes. */
+  const [asking, setAsking] = useState<{ then?: () => void }>();
   const [madeNoModel, setMadeNoModel] = useState<{ name: string; error: string }>();
   const live = useRef(true);
   useEffect(() => {
@@ -779,7 +794,13 @@ function ProfileForm({
   const saveWhy = createWhy ?? (!connected ? w.notConnected : undefined) ?? (issue && (row ? nameChanged : true) ? issue : undefined) ?? busyText ?? renameWhy ?? descWhy ?? modelWhy;
   const nothing = row && !nameChanged && !descChanged && !modelChanged;
 
-  const close = () => (dirty && !saving ? setAsking(true) : onClose());
+  /** Leaves the dialog, asking first when it holds changes; never while a save or Write for me runs. */
+  const leave = (then?: () => void) => {
+    if (saving || writing) return;
+    if (dirty) setAsking({ then });
+    else (then ?? onClose)();
+  };
+  const close = () => leave();
 
   const writeForMe = async () => {
     if (!row) return;
@@ -856,6 +877,7 @@ function ProfileForm({
         fail("model", e, "setModel");
       }
     let renamedTo: string | undefined;
+    let localFailed = false;
     if (nameChanged && !failed) {
       const from = row.name;
       const timer = row.gatewayRunning ? setTimeout(() => live.current && setStopping(true), STOPPING_AFTER_MS) : undefined;
@@ -863,9 +885,14 @@ function ProfileForm({
       try {
         const done = await api.rename(from, trimmed);
         if (!isDefault) {
-          await wiring.local.renamed(from, done.name);
-          wiring.local.clear();
           renamedTo = done.name;
+          try {
+            await wiring.local.renamed(from, done.name);
+            wiring.local.clear();
+          } catch {
+            // Hermes renamed it; what didn't move here stays noted, and the tab offers the move again.
+            localFailed = true;
+          }
         }
         next.name = { kind: "saved" };
         setBase((b) => ({ ...b, name: isDefault ? (done.displayName ?? trimmed) : done.name }));
@@ -882,7 +909,13 @@ function ProfileForm({
     }
     if (!live.current) return;
     setSaving(false);
-    if (!failed) onDone({ notice: { tone: "muted", text: renamedTo ? w.renamed(row.name, renamedTo) : w.saved(isDefault ? row.name : (renamedTo ?? row.name)) }, select: renamedTo ?? row.name });
+    if (!failed)
+      onDone({
+        notice: localFailed && renamedTo
+          ? { tone: "warn", text: w.movePartly(row.name, renamedTo) }
+          : { tone: "muted", text: renamedTo ? w.renamed(row.name, renamedTo) : w.saved(row.name) },
+        select: renamedTo ?? row.name,
+      });
   };
 
   const stateNote = (s?: FieldState) =>
@@ -904,7 +937,7 @@ function ProfileForm({
           keys(e);
           if (e.key === "Escape" && !composing(e)) {
             e.preventDefault();
-            if (asking) setAsking(false);
+            if (asking) setAsking(undefined);
             else close();
           }
         }}
@@ -932,10 +965,10 @@ function ProfileForm({
           <>
             <p className="muted">{f.leaveNote}</p>
             <div className="confirm-actions">
-              <button className="btn" autoFocus onClick={() => setAsking(false)}>
+              <button className="btn" autoFocus onClick={() => setAsking(undefined)}>
                 {f.keepEditing}
               </button>
-              <button className="btn danger" onClick={onClose}>
+              <button className="btn danger" onClick={asking.then ?? onClose}>
                 {f.discard}
               </button>
             </div>
@@ -977,7 +1010,7 @@ function ProfileForm({
                   </button>
                 )}
               </div>
-              <input id={descId} value={description} onChange={(e) => setDescription(e.target.value)} disabled={writing} />
+              <input id={descId} value={description} onChange={(e) => setDescription(e.target.value)} disabled={writing || saving} />
               {writing && <div className="small muted">{f.writing}</div>}
               {writeNote && (
                 <div className={`small ${writeNote.tone === "bad" ? "sign-in-error" : "muted"}`} role={writeNote.tone === "bad" ? "alert" : "status"}>
@@ -1009,10 +1042,13 @@ function ProfileForm({
                 <span className="field-label">{w.menu.persona}</span>
                 <button
                   className="link-btn profile-persona-link"
-                  onClick={() => {
-                    onClose();
-                    wiring.showTab("persona", row.name);
-                  }}
+                  disabled={saving || writing}
+                  onClick={() =>
+                    leave(() => {
+                      onClose();
+                      wiring.showTab("persona", row.name);
+                    })
+                  }
                 >
                   {f.personaLink}
                 </button>
@@ -1034,12 +1070,12 @@ function ProfileForm({
               </button>
             )}
             <div className="confirm-actions">
-              <button className="btn" onClick={close} disabled={saving}>
+              <button className="btn" onClick={close} disabled={saving || writing}>
                 {l.common.cancel}
               </button>
               <button
                 className="btn primary"
-                disabled={saving || !!saveWhy || (!!row && nothing)}
+                disabled={saving || writing || !!saveWhy || (!!row && nothing)}
                 title={saveWhy ?? (row && nothing ? f.nothingChanged : undefined)}
                 onClick={() => void (row ? save() : create())}
               >
@@ -1118,7 +1154,11 @@ function DeleteProfile({
     const timer = row.gatewayRunning ? setTimeout(() => live.current && setPhase("stopping"), STOPPING_AFTER_MS) : undefined;
     try {
       const out = await wiring.api.remove(row.name);
-      await wiring.local.deleted(row.name);
+      const forgot = await wiring.local.deleted(row.name).then(
+        () => true,
+        () => false,
+      );
+      if (!forgot) return onDone({ tone: "warn", text: d.forgetPartly(row.name) });
       onDone(
         out.kind === "settling"
           ? out.retryCommand

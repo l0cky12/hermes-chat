@@ -19,6 +19,7 @@ import { SettleAllDialog } from "./SettleAll";
 import { CloneProfileDialog } from "./CloneProfile";
 import type { ProfileCloneApi } from "../hermes/profileClone";
 import { Age, ArchiveButton, STATUS_LABEL, SettleButton, SourceIcon, Spinner, ago, composing, routeLabel, useReturnFocus } from "./bits";
+import { en } from "../i18n/en";
 import { useLocale, type Locale } from "../i18n/locale";
 import { viaLabel } from "../hermes/routes";
 import { dragChat, dragChatEnd, rowDragged } from "./Tabs";
@@ -644,10 +645,10 @@ function OtherBadge({ info }: { info?: OtherProfile }) {
 /** A profile's name as the switcher shows it: `default`'s display name first, when Hermes keeps one (ADR 0144). */
 export const profileLabel = (l: Locale, name: string, defaultName?: string) => (name === "default" && defaultName ? l.profiles.named(defaultName, name) : name);
 
-export function leavingNote(profile: string, chats: Chat[]): string | undefined {
-  if (chats.some((c) => c.items.some(isWaiting)))
-    return `An approval is waiting in ${profile}. Hermes waits for your answer only until it times out: switch back and open the chat to answer it.`;
-  if (chats.some((c) => c.running)) return `A reply is still running in ${profile}. Hermes keeps it going, and it shows here when you switch back.`;
+/** What switching away from `profile` leaves behind, in `words` (the catalogue's; English where the screen isn't converted). */
+export function leavingNote(profile: string, chats: Chat[], words: Locale["profiles"]["leaving"] = en.profiles.leaving): string | undefined {
+  if (chats.some((c) => c.items.some(isWaiting))) return words.approval(profile);
+  if (chats.some((c) => c.running)) return words.reply(profile);
 }
 
 /**
@@ -1233,7 +1234,7 @@ export function ChatList({
           defaultName={defaultName}
           others={others}
           checkTimes={checkTimes}
-          leaving={leavingNote(profile, chats)}
+          leaving={leavingNote(profile, chats, l.profiles.leaving)}
           onListProfiles={onListProfiles}
           onCheckOthers={onCheckOthers}
           onSwitch={onSwitchProfile}

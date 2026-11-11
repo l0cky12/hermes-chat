@@ -101,8 +101,17 @@ export function toProfileRow(r: unknown): ProfileRow | undefined {
   };
 }
 
-/** The rows of a `GET /api/profiles` answer, in Hermes's order. */
+/** The rows of a `GET /api/profiles` answer, in Hermes's order; none for an answer of another shape. */
 export const toProfileRows = (res: unknown): ProfileRow[] => (isObj(res) && Array.isArray(res.profiles) ? res.profiles.flatMap((r) => toProfileRow(r) ?? []) : []);
+
+/**
+ * The rows of a `GET /api/profiles` answer, refusing one of another shape: such an answer says nothing about which
+ * profiles Hermes has, so it must never read as "none" (a delete settled by the list would count as done).
+ */
+export function readProfileRows(res: unknown): ProfileRow[] {
+  if (!isObj(res) || !Array.isArray(res.profiles)) throw new Error("Hermes answered the profile list with something this app doesn't read.");
+  return toProfileRows(res);
+}
 
 /** Each change Settings → Profiles makes, by the Hermes route it goes through. */
 export type ProfileAction = "create" | "rename" | "describe" | "describeAuto" | "setModel" | "remove";
@@ -201,7 +210,7 @@ export class ProfilesApi {
   /** Every profile Hermes has, in its order. */
   async list(): Promise<ProfileRow[]> {
     try {
-      return toProfileRows(await deadline(this.rest("GET", "api/profiles"), this.timeouts.readMs, "listing profiles"));
+      return readProfileRows(await deadline(this.rest("GET", "api/profiles"), this.timeouts.readMs, "listing profiles"));
     } catch (e) {
       throw new ProfileError(profileFailure(e, "create"));
     }

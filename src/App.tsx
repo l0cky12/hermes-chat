@@ -103,7 +103,7 @@ import type { RepoApi } from "./hermes/repo";
 import { tauriRepo } from "./ui/tauriRepo";
 import { ApplyDefaults, NewChatSettingsView } from "./ui/ProjectDefaultsNotes";
 import { appearanceStore } from "./ui/appearance";
-import { LocaleContext } from "./i18n/locale";
+import { LocaleContext, useLocale } from "./i18n/locale";
 import { StatusBar } from "./ui/StatusBar";
 import { ApprovalsPill } from "./ui/ApprovalsPill";
 import { systemFonts } from "./ui/tauriFonts";
@@ -219,9 +219,10 @@ const account: Account = {
 const serverMethods = (d: SignInDetails) => readMethods((one, expect) => tauriReach(one, expect, true, true), d);
 
 /** Deletes what this computer keeps for a removed connection (forgetConnection.ts). */
-const forgetLocal = (c: SavedConnection) => forgetConnectionData(c, { defaults: savedDefaults, tags: savedTagsFile, persona: savedPersona, afterwards: syncScreenshotOutbox });
+const forgetLocal = (c: SavedConnection) =>
+  forgetConnectionData(c, { defaults: savedDefaults, tags: savedTagsFile, persona: savedPersona, drafts: savedDrafts, afterwards: syncScreenshotOutbox });
 /** The stores a profile's rename moves and its delete forgets, beside this webview's storage (profileLocalData.ts). */
-const profileStores = () => ({ defaults: savedDefaults, tags: savedTagsFile, persona: savedPersona });
+const profileStores = () => ({ defaults: savedDefaults, tags: savedTagsFile, persona: savedPersona, drafts: savedDrafts });
 
 const savedDrafts = drafts(localStorage);
 /** Adds `text` to the Draft at `key`, after anything already there. */
@@ -892,6 +893,7 @@ export function Main({
   tray?: TrayWiring;
 }) {
   const connection: SavedConnection = "id" in given ? given : { ...given, id: "", name: defaultName(given), addedAt: 0 };
+  const words = useLocale();
   const { profile, chats, olderPulled, archivedListed, status, route, unsecure, closedReason, syncError, others, live, models, switching, branchNews, defaultName: defaultProfileName } = useSyncExternalStore(
     hermes.subscribe,
     hermes.getSnapshot,
@@ -3144,20 +3146,29 @@ export function Main({
               },
               lostMessages: (name) => hermes.heldMessagesIn(name),
               jobCount: (name) => hermes.cron.list(name).then((jobs) => jobs.length, () => undefined),
-              leaving: leavingNote(profile, chats),
+              leaving: leavingNote(profile, chats, words.profiles.leaving),
               switchTo: switchFromProfiles,
               local: {
                 pending: () => renamePending(connection),
                 note: (from, to) => noteRename(connection, from, to),
                 clear: () => clearRename(connection),
                 renamed: async (from, to) => {
-                  await renameProfileLocally(connection, from, to, profileStores());
-                  // The profile in use keeps its chats on screen under its new name, as a switch would show them.
-                  if (hermes.profile === from) void hermes.switchProfile(to);
+                  try {
+                    await renameProfileLocally(connection, from, to, profileStores());
+                  } finally {
+                    // The inbox's dismissals were rewritten under the new name: it reads them again.
+                    acks.reload();
+                    // The profile in use keeps its chats on screen under its new name, as a switch would show them.
+                    if (hermes.profile === from) void hermes.switchProfile(to);
+                  }
                 },
                 deleted: async (name) => {
-                  await forgetProfileLocally(connection, name, profileStores());
-                  await syncScreenshotOutbox().catch(() => {});
+                  try {
+                    await forgetProfileLocally(connection, name, profileStores());
+                  } finally {
+                    acks.reload();
+                    await syncScreenshotOutbox().catch(() => {});
+                  }
                 },
               },
               copyText: (text) => (navigator.clipboard?.writeText ? navigator.clipboard.writeText(text) : Promise.reject(new Error("No clipboard"))),
