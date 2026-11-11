@@ -96,6 +96,7 @@ export class TerminalSession {
   private endedByOwner = false;
   /** The size the screen last asked for; one asked for while ssh starts is sent once it has an id. */
   private size = { cols: 0, rows: 0 };
+  private refusalShown = false;
 
   constructor(
     private api: TerminalApi,
@@ -117,6 +118,7 @@ export class TerminalSession {
     const run = ++this.run;
     this.id = undefined;
     this.endedByOwner = false;
+    this.refusalShown = false;
     target = target.trim();
     this.size = { cols, rows };
     this.set({ kind: "connecting", target });
@@ -147,9 +149,21 @@ export class TerminalSession {
     }
   }
 
-  /** What the owner typed or pasted. Dropped while no ssh is running. */
+  /**
+   * What the owner typed or pasted. Dropped while no ssh is running. Rust refuses it while the program has a backlog
+   * it isn't reading (terminal.rs); why is printed once, then again only after some input has gone through.
+   */
   input(data: string) {
-    if (this.id !== undefined && this.state.kind === "open") void this.api.write(this.id, data).catch(() => {});
+    const id = this.id;
+    if (id === undefined || this.state.kind !== "open") return;
+    this.api.write(id, data).then(
+      () => (this.refusalShown = false),
+      (e: unknown) => {
+        if (this.refusalShown || id !== this.id || this.state.kind !== "open") return;
+        this.refusalShown = true;
+        this.output(new TextEncoder().encode(`\r\n\x1b[2m── ${e instanceof Error ? e.message : String(e)} ──\x1b[0m\r\n`));
+      },
+    );
   }
 
   resize(cols: number, rows: number) {

@@ -7,6 +7,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use hermes_chat::lock::Locked;
 use hermes_chat::project_context::{self, AttachedFile, ContextDir, ContextPath, GitExclude};
 use hermes_chat::transport::{self, Attachable, Credential, Dashboard, SignIn};
 use serde_json::{json, Value};
@@ -37,11 +38,11 @@ impl Disk {
     }
 
     fn put(&self, path: &str, bytes: &[u8]) {
-        self.files.lock().unwrap().insert(path.to_owned(), bytes.to_vec());
+        self.files.locked().insert(path.to_owned(), bytes.to_vec());
     }
 
     fn file(&self, path: &str) -> Option<Vec<u8>> {
-        self.files.lock().unwrap().get(path).cloned()
+        self.files.locked().get(path).cloned()
     }
 
     fn text(&self, path: &str) -> Option<String> {
@@ -50,7 +51,7 @@ impl Disk {
 
     fn is_dir(&self, path: &str) -> bool {
         let under = format!("{path}/");
-        self.dirs.lock().unwrap().iter().any(|d| d == path || d.starts_with(&under)) || self.files.lock().unwrap().keys().any(|f| f.starts_with(&under))
+        self.dirs.locked().iter().any(|d| d == path || d.starts_with(&under)) || self.files.locked().keys().any(|f| f.starts_with(&under))
     }
 
     fn exists(&self, path: &str) -> bool {
@@ -58,15 +59,15 @@ impl Disk {
     }
 
     fn resolved(&self, path: &str) -> String {
-        self.links.lock().unwrap().get(path).cloned().unwrap_or_else(|| path.to_owned())
+        self.links.locked().get(path).cloned().unwrap_or_else(|| path.to_owned())
     }
 
     fn writes(&self) -> Vec<String> {
-        self.writes.lock().unwrap().clone()
+        self.writes.locked().clone()
     }
 
     fn reads(&self) -> Vec<String> {
-        self.reads.lock().unwrap().clone()
+        self.reads.locked().clone()
     }
 }
 
@@ -80,15 +81,14 @@ async fn login() -> Response {
 
 async fn list(State(disk): State<Shared>, Query(q): Query<HashMap<String, String>>) -> Response {
     let path = q["path"].clone();
-    disk.reads.lock().unwrap().push(format!("list {path}"));
+    disk.reads.locked().push(format!("list {path}"));
     if !disk.is_dir(&path) {
         return detail(StatusCode::NOT_FOUND, "Path not found");
     }
     let under = format!("{path}/");
     let entries: Vec<Value> = disk
         .files
-        .lock()
-        .unwrap()
+        .locked()
         .keys()
         .filter_map(|f| f.strip_prefix(&under).filter(|n| !n.contains('/')).map(|n| (n.to_owned(), f.clone())))
         .map(|(name, f)| json!({"name": name, "path": disk.resolved(&f), "is_directory": false}))
@@ -98,7 +98,7 @@ async fn list(State(disk): State<Shared>, Query(q): Query<HashMap<String, String
 
 async fn download(State(disk): State<Shared>, Query(q): Query<HashMap<String, String>>) -> Response {
     let path = q["path"].clone();
-    disk.reads.lock().unwrap().push(format!("download {path}"));
+    disk.reads.locked().push(format!("download {path}"));
     match disk.file(&path) {
         Some(bytes) => bytes.into_response(),
         None if disk.is_dir(&path) => detail(StatusCode::BAD_REQUEST, "Path is not a file"),
@@ -119,22 +119,22 @@ async fn upload_stream(State(disk): State<Shared>, mut form: axum::extract::Mult
     if overwrite == "false" && disk.exists(&path) {
         return detail(StatusCode::CONFLICT, "File already exists");
     }
-    disk.writes.lock().unwrap().push(format!("upload-stream {path}"));
+    disk.writes.locked().push(format!("upload-stream {path}"));
     disk.put(&path, &bytes);
     Json(json!({"ok": true, "path": path, "size": bytes.len()})).into_response()
 }
 
 async fn mkdir(State(disk): State<Shared>, Json(body): Json<Value>) -> Response {
     let path = body["path"].as_str().unwrap().to_owned();
-    disk.writes.lock().unwrap().push(format!("mkdir {path}"));
-    disk.dirs.lock().unwrap().push(path.clone());
+    disk.writes.locked().push(format!("mkdir {path}"));
+    disk.dirs.locked().push(path.clone());
     Json(json!({"ok": true, "path": path, "entry": {"name": "context", "is_directory": true}})).into_response()
 }
 
 async fn delete(State(disk): State<Shared>, Json(body): Json<Value>) -> Response {
     let path = body["path"].as_str().unwrap().to_owned();
-    disk.writes.lock().unwrap().push(format!("delete {path} recursive={}", body["recursive"]));
-    match disk.files.lock().unwrap().remove(&path) {
+    disk.writes.locked().push(format!("delete {path} recursive={}", body["recursive"]));
+    match disk.files.locked().remove(&path) {
         Some(_) => Json(json!({"ok": true, "path": path})).into_response(),
         None => detail(StatusCode::NOT_FOUND, "Path not found"),
     }
@@ -142,7 +142,7 @@ async fn delete(State(disk): State<Shared>, Json(body): Json<Value>) -> Response
 
 async fn read_text(State(disk): State<Shared>, Query(q): Query<HashMap<String, String>>) -> Response {
     let path = q["path"].clone();
-    disk.reads.lock().unwrap().push(format!("read-text {path} profile={}", q.get("profile").map_or("", String::as_str)));
+    disk.reads.locked().push(format!("read-text {path} profile={}", q.get("profile").map_or("", String::as_str)));
     match disk.file(&path) {
         Some(data) => {
             let head = &data[..data.len().min(4096)];
@@ -167,7 +167,7 @@ async fn write_text(State(disk): State<Shared>, RawQuery(query): RawQuery, Json(
     if !disk.is_dir(parent) {
         return detail(StatusCode::BAD_REQUEST, "Parent directory does not exist");
     }
-    disk.writes.lock().unwrap().push(format!("write-text {path} {}", query.unwrap_or_default()));
+    disk.writes.locked().push(format!("write-text {path} {}", query.unwrap_or_default()));
     let content = body["content"].as_str().unwrap();
     disk.put(&path, content.as_bytes());
     Json(json!({"ok": true, "path": path, "byteSize": content.len()})).into_response()
@@ -175,7 +175,7 @@ async fn write_text(State(disk): State<Shared>, RawQuery(query): RawQuery, Json(
 
 async fn git_root(State(disk): State<Shared>, Query(q): Query<HashMap<String, String>>) -> Response {
     let mut dir = q["path"].clone();
-    disk.reads.lock().unwrap().push(format!("git-root {dir} profile={}", q.get("profile").map_or("", String::as_str)));
+    disk.reads.locked().push(format!("git-root {dir} profile={}", q.get("profile").map_or("", String::as_str)));
     loop {
         if disk.exists(&format!("{dir}/.git")) {
             return Json(json!({ "root": dir })).into_response();
@@ -234,10 +234,10 @@ async fn an_upload_lands_in_the_context_folder_and_a_taken_name_is_refused_as_ex
 
     let progress = Arc::new(Mutex::new(Vec::new()));
     let seen = progress.clone();
-    let report = move |done, total| seen.lock().unwrap().push((done, total));
+    let report = move |done, total| seen.locked().push((done, total));
     project_context::upload(&dashboard, AttachedFile::check(&attachable, &local).unwrap(), &to, false, None, report).await.expect("uploaded");
     assert_eq!(disk.text("/srv/plan/context/spec.md").as_deref(), Some("# Spec\nThe answer is 42.\n"));
-    assert_eq!(progress.lock().unwrap().last(), Some(&(25, Some(25))));
+    assert_eq!(progress.locked().last(), Some(&(25, Some(25))));
 
     std::fs::write(&local, b"newer").unwrap();
     let err = project_context::upload(&dashboard, AttachedFile::check(&attachable, &local).unwrap(), &to, false, None, |_, _| {}).await.unwrap_err();
@@ -303,7 +303,7 @@ async fn remove_deletes_one_file_never_recursively() {
 #[tokio::test]
 async fn on_an_ssh_profile_only_text_goes_through_write_text_and_binary_is_refused() {
     let disk = Disk::with(&[("/srv/plan/context/taken.md", "old")]);
-    disk.dirs.lock().unwrap().push("/srv/plan/context".into());
+    disk.dirs.locked().push("/srv/plan/context".into());
     let dashboard = stub(&disk).await;
     let attachable = Attachable::default();
     let dir = scratch("ssh");
@@ -334,7 +334,7 @@ async fn on_an_ssh_profile_only_text_goes_through_write_text_and_binary_is_refus
 #[tokio::test]
 async fn on_an_ssh_profile_a_file_keeps_its_byte_order_mark_and_its_size_past_what_read_text_sends() {
     let disk = Disk::with(&[]);
-    disk.dirs.lock().unwrap().push("/srv/plan/context".into());
+    disk.dirs.locked().push("/srv/plan/context".into());
     let dashboard = stub(&disk).await;
     let attachable = Attachable::default();
     let dir = scratch("ssh-sizes");
@@ -457,7 +457,7 @@ async fn git_exclude_writes_nothing_to_another_repository_a_git_file_or_commondi
 async fn git_exclude_leaves_a_linked_or_non_utf8_info_exclude_alone() {
     for ssh in [None, Some("work")] {
         let disk = Disk::with(&[("/r/.git/HEAD", "ref: refs/heads/main\n"), ("/r/.git/info/exclude", "x"), ("/etc/target", "keep\n")]);
-        disk.links.lock().unwrap().insert("/r/.git/info/exclude".into(), "/etc/target".into());
+        disk.links.locked().insert("/r/.git/info/exclude".into(), "/etc/target".into());
         let dashboard = stub(&disk).await;
         let err = project_context::git_exclude(&dashboard, "/r", ssh).await.unwrap_err();
         assert!(err.contains("is a link"), "{ssh:?}: {err}");

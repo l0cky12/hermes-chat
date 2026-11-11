@@ -1126,6 +1126,8 @@ Object.defineProperty(document.getElementById('save'), 'innerText', {{ get() {{ 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use crate::lock::Locked;
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
         Rect { x, y, width, height }
@@ -1266,7 +1268,7 @@ mod tests {
                     let request = String::from_utf8_lossy(&request[..n]).into_owned();
                     let path = request.split_whitespace().nth(1).unwrap_or("/").to_owned();
                     let cookie = request.lines().find_map(|l| l.strip_prefix("Cookie: ")).unwrap_or("");
-                    log.lock().unwrap().push(format!("{path} {cookie}"));
+                    log.locked().push(format!("{path} {cookie}"));
                     let set = if path == "/sign-in" { "Set-Cookie: session=a; Path=/; HttpOnly\r\nSet-Cookie: seen=a; Path=/\r\n" } else { "" };
                     let body = "<script>document.title = 'cookie:' + document.cookie</script>";
                     let response =
@@ -1282,7 +1284,7 @@ mod tests {
         let into = sent.clone();
         let channel = Channel::new(move |body| {
             if let tauri::ipc::InvokeResponseBody::Json(text) = body {
-                into.lock().unwrap().push(serde_json::from_str(&text).unwrap());
+                into.locked().push(serde_json::from_str(&text).unwrap());
             }
             Ok(())
         });
@@ -1294,14 +1296,14 @@ mod tests {
 
         let (jar_a, jar_b) = (Some(Jar::of("hermes", "http://localhost:3000")), Some(Jar::of("hermes", "http://localhost:8080")));
         let load = |url: String, jar: &Option<Jar>| {
-            sent_cookies.lock().unwrap().clear();
+            sent_cookies.locked().clear();
             imp::go("page", url::Url::parse(&url).unwrap(), jar.clone());
             let (view, _) = imp::shown("page").unwrap();
             let deadline = Instant::now() + Duration::from_secs(20);
             loop {
                 if let Some(title) = view.title().filter(|t| t.starts_with("cookie:") && !view.is_loading()) {
                     assert_eq!(overlay.children().len(), 1, "the view in the jar before it is gone");
-                    let asked = sent_cookies.lock().unwrap().iter().rev().find(|r| !r.starts_with("/favicon")).cloned().unwrap();
+                    let asked = sent_cookies.locked().iter().rev().find(|r| !r.starts_with("/favicon")).cloned().unwrap();
                     break (title.trim_start_matches("cookie:").to_owned(), asked);
                 }
                 assert!(Instant::now() < deadline, "{url} never loaded");
@@ -1314,7 +1316,7 @@ mod tests {
         assert_eq!(load(format!("{b}/"), &jar_b), ("".into(), "/ ".into()), "page B, on another port, gets none of A's cookies");
         assert_eq!(load(format!("{b}/"), &None), ("".into(), "/ ".into()), "nor does a page that isn't a server page");
         assert_eq!(load(format!("{b}/"), &jar_a), ("seen=a".into(), "/ session=a; seen=a".into()), "page A, opened again on another port, is still signed in");
-        let last = sent.lock().unwrap().last().cloned();
+        let last = sent.locked().last().cloned();
         assert_eq!(last, Some(serde_json::json!({ "kind": "at", "url": format!("{b}/"), "replace": true })), "the page's events follow it to each view");
     }
 
@@ -1356,7 +1358,7 @@ mod tests {
         let into = sent.clone();
         let channel = Channel::new(move |body| {
             if let tauri::ipc::InvokeResponseBody::Json(text) = body {
-                into.lock().unwrap().push(serde_json::from_str(&text).unwrap());
+                into.locked().push(serde_json::from_str(&text).unwrap());
             }
             Ok(())
         });
@@ -1382,7 +1384,7 @@ mod tests {
                 run(20);
             }
             run(300);
-            let got: Vec<Value> = std::mem::take(&mut *sent.lock().unwrap());
+            let got: Vec<Value> = std::mem::take(&mut *sent.locked());
             assert_eq!(got, want, "{what}");
         };
         let script = |js: &'static str| {
@@ -1412,7 +1414,7 @@ mod tests {
         let unreachable = url::Url::parse(&format!("http://{}/", closed.addr)).unwrap();
         imp::go_in(&view, &moves, unreachable);
         run(1500);
-        let got: Vec<Value> = std::mem::take(&mut *sent.lock().unwrap());
+        let got: Vec<Value> = std::mem::take(&mut *sent.locked());
         assert!(matches!(got.as_slice(), [e] if e["kind"] == "failed"), "a load that fails says so, and nothing else: {got:?}");
         step("the page moves after a failed load", &script("history.pushState({}, '', '/after-failing')"), vec![at("/after-failing", false)]);
         step("a load the page stops", &script("document.getElementById('slow').click(); setTimeout(() => window.stop(), 300)"), vec![]);

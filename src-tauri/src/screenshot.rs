@@ -18,6 +18,7 @@
 //! portal wrote in a temporary folder is deleted once copied; one it saved anywhere else (some desktops keep a copy in
 //! Pictures) is the desktop's and is left alone.
 
+use crate::lock::Locked;
 use serde::Serialize;
 use std::collections::HashSet;
 #[cfg(unix)]
@@ -645,6 +646,8 @@ pub mod portal {
     //! D-Bus and the portal are Linux's; elsewhere `version` and `screenshot` say there is no portal.
     use super::CaptureError;
     #[cfg(target_os = "linux")]
+    use crate::lock::Locked;
+    #[cfg(target_os = "linux")]
     use dbus::arg::{PropMap, RefArg, Variant};
     #[cfg(target_os = "linux")]
     use dbus::blocking::stdintf::org_freedesktop_dbus::Properties;
@@ -753,7 +756,7 @@ pub mod portal {
             let rule = MatchRule::new_signal("org.freedesktop.portal.Request", "Response").with_path(path);
             conn.add_match(rule, move |(code, results): (u32, PropMap), _, _| {
                 let uri = results.get("uri").and_then(|v| v.0.as_str()).map(str::to_owned);
-                *answer.lock().unwrap() = Some((code, uri));
+                *answer.locked() = Some((code, uri));
                 false
             })
         };
@@ -772,7 +775,7 @@ pub mod portal {
 
         let deadline = Instant::now() + timeout;
         loop {
-            if let Some((code, uri)) = answer.lock().unwrap().take() {
+            if let Some((code, uri)) = answer.locked().take() {
                 return response(code, uri.as_deref());
             }
             if Instant::now() >= deadline {
@@ -1036,7 +1039,12 @@ impl Captures {
 
     /// Deletes a staged capture and its folder. Anything else is left alone; returns whether it was one.
     pub fn discard(&self, path: &Path) -> bool {
-        if !self.owns(path) || !self.real_storage_dir(&self.mine) || self.retained.lock().unwrap().contains(path) {
+        if !self.owns(path) || !self.real_storage_dir(&self.mine) {
+            return false;
+        }
+        // Held while deleting, so an outbox sync on another thread can't keep this path between the check and the delete.
+        let retained = self.retained.locked();
+        if retained.contains(path) {
             return false;
         }
         if let Some(dir) = path.parent().filter(|dir| self.real_storage_dir(dir)) {
@@ -1054,7 +1062,7 @@ impl Captures {
                 && !p.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::CurDir))
         };
         let next: HashSet<PathBuf> = paths.into_iter().filter(valid).collect();
-        let mut retained = self.retained.lock().unwrap();
+        let mut retained = self.retained.locked();
         for path in retained.difference(&next) {
             if let Some(slot) = path.parent().filter(|slot| self.real_storage_dir(slot)) {
                 let _ = std::fs::remove_dir_all(slot);
@@ -1069,7 +1077,7 @@ impl Captures {
         if !self.real_storage_dir(dir) {
             return;
         }
-        let retained = self.retained.lock().unwrap();
+        let retained = self.retained.locked();
         let Ok(slots) = std::fs::read_dir(dir) else {
             return;
         };
