@@ -135,6 +135,18 @@ describe("A rebound shortcut", () => {
     expect(palette()).toBeNull();
   });
 
+  it("on a Tab chord the owner gave a search result key, leaves the focus in the palette's box", async () => {
+    const s = await signedIn({ paletteUp: ["Ctrl+Shift+Tab"], paletteDown: ["Ctrl+Tab"] });
+    await s.user.keyboard("{Control>}k{/Control}");
+    const words = screen.getByRole("textbox", { name: "Words to search for" });
+    expect(focused()).toBe(words);
+    await s.user.keyboard("{Control>}{Tab}{/Control}");
+    expect(focused()).toBe(words);
+    await s.user.keyboard("{Control>}{Shift>}{Tab}{/Shift}{/Control}");
+    expect(focused()).toBe(words);
+    expect(palette()).toBeTruthy();
+  });
+
   it("never fires while an IME is composing", async () => {
     await signedIn({ search: ["Ctrl+J"] });
     fireEvent.keyDown(composer(), { key: "j", code: "KeyJ", ctrlKey: true, isComposing: true, keyCode: 229 });
@@ -166,6 +178,8 @@ describe("The Keyboard Shortcuts page", () => {
       "Make the replay",
       "Go up to the parent folder in Files",
       "Fill in the chosen slash command",
+      "Stop the reply being read aloud in a voice conversation; the reply stays in the chat",
+      "Cancel Dictation, dropping what it heard",
     ]) {
       expect(screen.getByText(fixed)).toBeTruthy();
       expect(screen.queryByRole("button", { name: new RegExp(`^Change ${fixed}`) })).toBeNull();

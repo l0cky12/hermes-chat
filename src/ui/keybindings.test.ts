@@ -47,6 +47,11 @@ describe("Writing a key press down as a chord", () => {
     expect(chordOf(press("|", "Backslash", { ctrl: true, shift: true }))).toBe("Ctrl+Shift+\\");
     expect(chordOf(press("<", "Comma", { ctrl: true, shift: true }))).toBe("Ctrl+Shift+,");
     expect(chordOf(press("ы", "KeyS", { ctrl: true }))).toBe("Ctrl+S");
+    // Unshifted punctuation is what it types: AZERTY's comma sits where US has M, so Ctrl+, still opens Settings there.
+    expect(chordOf(press(",", "KeyM", { ctrl: true }))).toBe("Ctrl+,");
+    expect(pickApp(press(",", "KeyM", { ctrl: true }))).toBe("settings");
+    // A layout whose comma key types a letter (Russian б) goes by position.
+    expect(chordOf(press("б", "Comma", { ctrl: true }))).toBe("Ctrl+,");
     // A virtual keyboard reports no position: the key typed is used.
     expect(chordOf(press(",", ""))).toBe(",");
   });

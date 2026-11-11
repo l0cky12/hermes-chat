@@ -147,7 +147,8 @@ export function SearchPalette({
         // applying nothing, then the palette.
         onKeyDown={(e) => {
           if (!passKey(e) && !isTextEdit(e)) e.stopPropagation();
-          trapTab(e, box.current);
+          // A Tab chord the owner gave a result key is the input's, not the trap's.
+          if (!e.defaultPrevented) trapTab(e, box.current);
           if (pick(e, "palette") !== "paletteClose") return;
           // Taken, so Search's own app-wide keys, if the owner put Close on them too, don't open it again.
           e.preventDefault();

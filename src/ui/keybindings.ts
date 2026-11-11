@@ -78,11 +78,13 @@ export type KeyLike = Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "altKey" 
 
 /**
  * The key a press is for. A letter or digit by what it types, else by its position (`KeyS`, `Digit1`), so Shift or
- * another layout gives the same key; punctuation by position first, so Ctrl+, is the same key whatever Ctrl makes it
- * type. Undefined for a modifier alone, or a key no chord can name.
+ * another layout gives the same key. Unshifted ASCII punctuation by what it types too, so Ctrl+, is the comma wherever
+ * the layout puts it (AZERTY has it where US has M); shifted, or on a layout whose key there types a letter, by
+ * position, so Ctrl+Shift+, is still the comma key. Undefined for a modifier alone, or a key no chord can name.
  */
 function keyOf(e: KeyLike): string | undefined {
   if (/^[a-z0-9]$/i.test(e.key)) return e.key.toUpperCase();
+  if (!e.shiftKey && /^[!-/:-@[-`{-~]$/.test(e.key)) return e.key;
   const position = /^(?:Key([A-Z])|Digit(\d))$/.exec(e.code);
   if (position) return position[1] ?? position[2];
   const punctuation = PUNCTUATION_BY_CODE[e.code];
@@ -123,6 +125,8 @@ export const FIXED: readonly FixedKey[] = [
   { title: "Save a queued message you're editing", keys: [chord("Enter")], when: "queueEditFocus", group: "chat" },
   { title: "Steer a subagent with what you typed", keys: [chord("Enter")], when: "subagentSteerFocus", group: "chat" },
   { title: "Copy or paste in the Terminal", keys: [chord("Ctrl+Shift+C"), chord("Ctrl+Shift+V")], when: "terminalFocus", group: "chat" },
+  { title: "Cancel Dictation, dropping what it heard", keys: [chord("Escape")], when: "dictating", group: "chat" },
+  { title: "Stop the reply being read aloud in a voice conversation; the reply stays in the chat", keys: [chord("Escape")], when: "voiceReplyPlaying", group: "chat" },
   { title: "Close the chat's menu", keys: [chord("Escape")], when: "chatMenuOpen", group: "threads" },
   { title: "Keep Tab inside the chat's menu; the letter beside an item picks it", keys: [chord("Tab")], when: "chatMenuOpen", group: "threads" },
   { title: "Make the branch", keys: [chord("Enter")], when: "branchNameFocus", group: "threads" },
@@ -133,7 +137,8 @@ export const FIXED: readonly FixedKey[] = [
     when: "oneLineFieldFocus",
     group: "threads",
   },
-  { title: "Cancel a delete question, or close a dialog, panel or popover", keys: [chord("Escape")], when: "dialogOpen", group: "navigation" },
+  { title: "Cancel a question, step back out of a file's review, or close a dialog, panel or popover", keys: [chord("Escape")], when: "dialogOpen", group: "navigation" },
+  { title: "Stop recording a shortcut, keeping the one it had", keys: [chord("Escape")], when: "shortcutRecording", group: "navigation" },
   { title: "Cancel what you're typing: a queued message, the Preview's address, a filter", keys: [chord("Escape")], when: "fieldEditing", group: "navigation" },
   { title: "Move between a menu's items", keys: [chord("ArrowDown"), chord("ArrowUp"), chord("Home"), chord("End")], when: "menuOpen", group: "navigation" },
   { title: "Close a menu, back to its button", keys: [chord("Escape")], when: "menuOpen", group: "navigation" },
