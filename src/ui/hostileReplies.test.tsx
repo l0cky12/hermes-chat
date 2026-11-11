@@ -46,9 +46,11 @@ describe("A reply built to stall the renderer", { timeout: 30_000 }, () => {
     expect(ms).toBeLessThan(10 * prose(text));
   });
 
-  it("still typesets a formula closed after many unclosed ones", () => {
-    const { html } = fastest("$a ".repeat(2_000) + "\n\nthen $x^2$ and \\(y\\)");
-    expect(html.match(/class="katex"/g)).toHaveLength(2);
+  it.each([
+    ["the next paragraph", "$a ".repeat(2_000) + "\n\nthen $x^2$ and \\(y\\)", 2],
+    ["the same paragraph, of another kind", "$a ".repeat(2_000) + "then \\(x^2\\) and \\[y\\]", 2],
+  ])("still typesets formulas closed in %s after many unclosed ones", (_, text, formulas) => {
+    expect(fastest(text).html.match(/class="katex"/g)).toHaveLength(formulas);
   });
 
   it("leaves a code block over 100 KB plain, about as fast as prose", () => {

@@ -8,6 +8,7 @@ import remarkRehype from "remark-rehype";
 import { rehypePlugins, remarkPlugins } from "../src/ui/markdownPipeline";
 import { findSecrets } from "../src/hermes/secrets";
 import { filterMatches } from "../src/hermes/automations";
+import { testPattern } from "../src/hermes/pyRegex";
 
 /** What ReactMarkdown runs over one message, marking `query` as find-in-chat does. */
 function render(text: string, query = "") {
@@ -53,9 +54,9 @@ export const CASES: Case[] = [
   { name: "secrets-dot", what: 'findSecrets("a.".repeat(n))', sizes: [5000, 10000, 20000, 40000], run: (n) => findSecrets("a.".repeat(n)) },
   {
     name: "webhook-regex",
-    what: 'filter { regex: "(a+)+$" } on a field of n "a"s and a "!"',
+    what: 'filter { regex: "(a+)+$" } on a field of n "a"s and a "!", tested on this thread as the pattern worker does',
     sizes: [16, 18, 20, 22],
-    run: (n) => filterMatches({ field: "x", regex: "(a+)+$" }, { x: "a".repeat(n) + "!" }, "push", {}),
+    run: (n) => filterMatches({ field: "x", regex: "(a+)+$" }, { x: "a".repeat(n) + "!" }, "push", {}, testPattern),
   },
 ];
 
