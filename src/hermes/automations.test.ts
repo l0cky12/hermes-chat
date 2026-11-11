@@ -60,6 +60,19 @@ describe("the preview matches Hermes's webhook adapter", () => {
     expect(preview({ ...f, coalesce: { key: "pull_request.number", windowSeconds: 30, maxWaitSeconds: 300 } }, payload, "issues")).toMatchObject({ ungrouped: true, group: undefined });
   });
 
+  it("leaves a filter's pattern to the test it is given, never running it on the calling thread (#490)", () => {
+    // `(a+)+$` backtracks: each 2 more "a"s before the "!" take 4 times as long, and 24 already take most of a second.
+    const f = { name: "x", events: [], prompt: "", filters: [{ field: "issue.title", regex: "(a+)+$" }], coalesce: undefined };
+    const payload = { issue: { title: `${"a".repeat(24)}!` } };
+    const asked: [string, string][] = [];
+    const started = performance.now();
+    const p = preview(f, payload, "issues", (pattern: string, text: string) => (asked.push([pattern, text]), "checking" as const));
+    expect(performance.now() - started).toBeLessThan(250);
+    expect(asked).toEqual([["(a+)+$", payload.issue.title]]);
+    expect(p.filters[0].matches).toBe("checking");
+    expect(p.starts).toBe("checking");
+  });
+
   it("creates names of at most 64 characters, by Hermes's rule", () => {
     expect(NAME_RE.test("a".repeat(64))).toBe(true);
     expect(NAME_RE.test("a".repeat(65))).toBe(false);
