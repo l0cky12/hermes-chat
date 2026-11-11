@@ -3,6 +3,8 @@ pub mod backup;
 pub mod browser;
 pub mod connect_steps;
 pub mod connection_attempts;
+#[cfg(target_os = "linux")]
+pub mod copied_files;
 pub mod defaults_file;
 pub mod dev_servers;
 pub mod display;
@@ -633,6 +635,21 @@ async fn attach_picked_files(app: tauri::AppHandle, attachable: State<'_, Attach
     for path in picked {
         paths.push(path.into_path().map_err(|e| e.to_string())?.to_string_lossy().into_owned());
     }
+    attachable.add(paths.clone());
+    Ok(paths)
+}
+
+/// Attaches the files the owner copied in a file manager and pasted into the composer, by path, as a drop does (ADR
+/// 0143). `[]`: the clipboard holds no local files. Elsewhere than Linux the webview's paste event carries the files.
+#[tauri::command]
+async fn attach_copied_files(app: tauri::AppHandle, attachable: State<'_, Attachable>) -> Result<Vec<String>, String> {
+    #[cfg(target_os = "linux")]
+    let paths = copied_files::read(&app).await?;
+    #[cfg(not(target_os = "linux"))]
+    let paths = {
+        let _ = app;
+        Vec::new()
+    };
     attachable.add(paths.clone());
     Ok(paths)
 }
@@ -1517,6 +1534,12 @@ async fn preview_check_web(url: String, user_agent: String) -> Result<web_page::
     web_page::check(&url, &user_agent).await
 }
 
+/// Whether a typed address's https:// form answers, so the address box opens it rather than http:// (ADR 0103).
+#[tauri::command]
+async fn preview_https_answers(url: String) -> Result<bool, String> {
+    web_page::https_answers(&url).await
+}
+
 /// A Markdown image the owner clicked to load, as a `data:` URL (`markdown_image::load`, ADR 0136).
 #[tauri::command]
 async fn markdown_image_load(url: String) -> Result<String, String> {
@@ -1799,6 +1822,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             hermes_stat_files,
             hermes_read_preview,
             attach_picked_files,
+            attach_copied_files,
             stage_clipboard_file,
             hermes_request,
             hermes_transcribe,
@@ -1862,6 +1886,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             preview_read_local,
             preview_read_local_image,
             preview_check_web,
+            preview_https_answers,
             markdown_image_load,
             preview_open_in_browser,
             preview_page_open,

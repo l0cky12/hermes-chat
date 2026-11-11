@@ -9,6 +9,7 @@ import {
   FileText,
   Globe,
   Laptop,
+  LockOpen,
   MoreHorizontal,
   RotateCw,
   Server,
@@ -240,6 +241,12 @@ function Badge({ here, serverLabel, onSwitch }: { here: PreviewTarget | undefine
   }
   switch (here.kind) {
     case "web":
+      if (new URL(here.url).protocol === "http:")
+        return (
+          <span className="where where-insecure" title="Not secure: this page came over http://, so what it shows and what you send it aren't encrypted">
+            <LockOpen size={12} /> Not secure
+          </span>
+        );
       return (
         <span className="where where-web" title="A web page, loaded by this computer and kept apart from Hermes Chat">
           <Globe size={12} /> Web
@@ -751,6 +758,7 @@ function BrowserView({
   onBusy: (busy: boolean) => void;
   onOpenInBrowser: (url: string) => void;
 }) {
+  const trying = useHttpsFirst(here, web, onStep, onBusy);
   const need = tunnelNeeded(here);
   const [tunnel, retry] = useStickyTunnel(need, serverPages);
   const open = tunnel.kind === "open" ? tunnel.tunnel : undefined;
@@ -770,14 +778,56 @@ function BrowserView({
     if (need && tunnel.kind !== "open" && tunnel.kind !== "opening") retry();
   }, [reloadSeq, need, tunnel.kind, retry]);
 
+  // While https is tried, nothing loads, and the page view stays, hidden, for the address that comes after.
+  const tryingNote = trying && (
+    <div className="preview-state preview-loading" role="status">
+      <Spinner /> Trying {hostOf(here.url)} over https…
+    </div>
+  );
   if (!web.native)
-    return tunnelState || (src ? <FramedWebView key={`${src}:${reloadSeq}`} url={here.url} src={src} check={web.check} onOpenInBrowser={() => onOpenInBrowser(src)} /> : null);
-  return <PageView here={here} src={src} tunnel={open} reloadSeq={reloadSeq} cover={tunnelState} native={web.native} onStep={onStep} onBusy={onBusy} />;
+    return tryingNote || tunnelState || (src ? <FramedWebView key={`${src}:${reloadSeq}`} url={here.url} src={src} check={web.check} onOpenInBrowser={() => onOpenInBrowser(src)} /> : null);
+  return (
+    <PageView here={here} src={trying ? undefined : src} trying={trying} tunnel={open} reloadSeq={reloadSeq} cover={tryingNote || tunnelState} native={web.native} onStep={onStep} onBusy={onBusy} />
+  );
+}
+
+/**
+ * Whether the https:// try for a typed address (`fallback`, ADR 0103) is still out. Nothing loads meanwhile. One that
+ * doesn't answer puts the http:// address in its entry's place. The try belongs to the entry on screen: once another
+ * entry shows (Back, a link from a reply, another profile) or the pane goes, its answer changes nothing.
+ */
+function useHttpsFirst(here: WebTarget, web: WebPages, onStep: (s: HistoryStep) => void, onBusy: (busy: boolean) => void): boolean {
+  const asked = here.fallback ? here.url : undefined;
+  const [answered, setAnswered] = useState<string>();
+  const latest = useRef({ here, onStep, onBusy });
+  latest.current = { here, onStep, onBusy };
+  useEffect(() => {
+    const fallback = latest.current.here.fallback;
+    if (!asked || !fallback) return;
+    let live = true;
+    latest.current.onBusy(true);
+    void web
+      .httpsAnswers(asked)
+      .catch(() => false)
+      .then((secure) => {
+        if (!live) return;
+        live = false;
+        latest.current.onBusy(false);
+        if (secure) setAnswered(asked);
+        else latest.current.onStep({ kind: "arrived", target: { kind: "web", url: fallback }, replace: true });
+      });
+    return () => {
+      if (live) latest.current.onBusy(false);
+      live = false;
+    };
+  }, [asked, web]);
+  return !!asked && answered !== asked;
 }
 
 function PageView({
   here,
   src,
+  trying,
   tunnel,
   reloadSeq,
   cover,
@@ -787,6 +837,8 @@ function PageView({
 }: {
   here: WebTarget;
   src: ViewUrl | undefined;
+  /** The entry's https try is out (`useHttpsFirst`): nothing is asked of the view, and what it reports isn't the entry's. */
+  trying: boolean;
   tunnel: Tunnel | undefined;
   reloadSeq: number;
   cover: ReactNode;
@@ -800,8 +852,8 @@ function PageView({
   const [slow, setSlow] = useState(false);
   const viewAt = useRef<ViewUrl>(undefined);
   const sentThrough = useRef<Tunnel>(undefined);
-  const latest = useRef({ tunnel, onStep });
-  latest.current = { tunnel, onStep };
+  const latest = useRef({ tunnel, onStep, trying });
+  latest.current = { tunnel, onStep, trying };
 
   useEffect(() => {
     let live = true;
@@ -810,7 +862,9 @@ function PageView({
       if (e.kind === "at") {
         viewAt.current = e.url;
         setState("shown");
-        latest.current.onStep({ kind: "arrived", target: fromView(e.url, sentThrough.current), replace: e.replace });
+        // While the entry's https try is out, a page landing is the one before it, which mustn't take the entry's place.
+        if (!latest.current.trying)
+          latest.current.onStep({ kind: "arrived", target: fromView(e.url, sentThrough.current), replace: e.replace });
       } else if (e.kind === "failed") setState({ message: e.message, url: e.url && fromView(e.url, sentThrough.current).url });
       else if (e.kind === "escaped") box.current?.focus();
     });

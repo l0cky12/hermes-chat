@@ -528,6 +528,13 @@ export type Snapshot = {
   queues: Record<string, ChatQueue>;
   /** The models the shown profile can switch to (`loadModels`); none until read. */
   models?: ModelCatalog;
+  /**
+   * The server's bots as last read, and when (`bots`). A roster spans the profiles, so it is kept across profile
+   * switches and reconnects, for the Bots view to show at once while it reads them again.
+   */
+  bots?: { roster: Bot[]; at: number };
+  /** Each bot's picture as a data URL, by profile, read once per connection for a bot that has one. */
+  botPictures: Record<string, string>;
   /** The switch to `profile` from `from`, until the new profile's list has been read. `error`: why it hasn't yet. */
   switching?: { from: string; error?: string };
   /** The shown profile's branches made here, and those asked for whose answer was lost (ADR 0027). */
@@ -685,6 +692,10 @@ export class Hermes {
   private botChatIds = new Map<string, Set<string>>();
   /** The roster read for the Bot Chats' ids on a connection (`knownBotChats`). */
   private botChatsRead?: { gen: number; done: Promise<void> };
+  /** This connection's picture asks, by profile: each a token the next ask replaces, so only the latest one lands. */
+  private pictureAsks?: { gen: number; asks: Map<string, object> };
+  /** Roster reads by number: started, and the newest whose answer landed, so an older answer arriving late is dropped. */
+  private rosterReads = { started: 0, landed: 0 };
   /** Chats archived or restored here whose flag Hermes hasn't confirmed yet: the `archived` flag each should have.
    * While a chat is here, this flag beats the one the server lists. */
   private archiveWanted = new PerProfile<boolean>();
@@ -965,6 +976,7 @@ export class Hermes {
       others: noOthers,
       queues: loadQueues(cache, profile),
       branches: cache.loadBranches(profile),
+      botPictures: {},
     };
   }
 
@@ -1919,9 +1931,16 @@ export class Hermes {
    */
   async bots(): Promise<Bot[]> {
     const gen = this.generation;
+    const n = ++this.rosterReads.started;
     try {
       const bots = rosterOf(await this.request("profiles.list", {}));
-      if (gen === this.generation) this.botChatIds = new Map(bots.map((b) => [b.profile, new Set(b.botChat ? [b.botChat.id, b.botChat.resolvedId] : [])]));
+      if (gen === this.generation && n > this.rosterReads.landed) {
+        this.rosterReads.landed = n;
+        this.botChatIds = new Map(bots.map((b) => [b.profile, new Set(b.botChat ? [b.botChat.id, b.botChat.resolvedId] : [])]));
+        const pictures = Object.fromEntries(Object.entries(this.snapshot.botPictures).filter(([p]) => bots.some((b) => b.profile === p && b.hasAvatar)));
+        this.update({ bots: { roster: bots, at: Date.now() }, botPictures: pictures });
+        this.readBotPictures(gen, bots);
+      }
       return bots;
     } catch (e) {
       const unsupported =
@@ -1940,6 +1959,29 @@ export class Hermes {
     if (profile) return !!this.botChatIds.get(profile)?.has(chatId);
     for (const ids of this.botChatIds.values()) if (ids.has(chatId)) return true;
     return false;
+  }
+
+  /**
+   * Asks for each bot's picture once per connection, so a picture changed in another client shows after a reconnect.
+   * One held already stays shown meanwhile; a bot without one, or whose picture fails, shows its initial.
+   */
+  private readBotPictures(gen: number, bots: readonly Bot[]) {
+    if (this.pictureAsks?.gen !== gen) this.pictureAsks = { gen, asks: new Map() };
+    const asks = this.pictureAsks.asks;
+    const withPicture = new Set(bots.filter((b) => b.hasAvatar).map((b) => b.profile));
+    // A bot gone, or listed without a picture, is forgotten: a picture put back is asked for, and a late answer to the
+    // old ask is dropped.
+    for (const profile of asks.keys()) if (!withPicture.has(profile)) asks.delete(profile);
+    for (const profile of withPicture) {
+      if (asks.has(profile)) continue;
+      const ask = {};
+      asks.set(profile, ask);
+      this.track(
+        this.botAvatar(profile).then((url) => {
+          if (url && gen === this.generation && asks.get(profile) === ask) this.update({ botPictures: { ...this.snapshot.botPictures, [profile]: url } });
+        }),
+      );
+    }
   }
 
   /** A bot's picture, as a data URL, or none when it has none or Hermes sent something that isn't an image. */
@@ -1985,7 +2027,8 @@ export class Hermes {
 
   /**
    * Reads the roster once per connection, for the Bot Chats' ids, so search can leave them out before the Bots view
-   * has ever opened. A Hermes without Bot Mode, or a read that fails, leaves only the title to go by.
+   * has ever opened, and so the view shows the bots and their pictures as soon as it opens. A Hermes without Bot Mode,
+   * or a read that fails, leaves only the title to go by.
    */
   private knownBotChats(): Promise<void> {
     const gen = this.generation;
@@ -4457,6 +4500,7 @@ export class Hermes {
       this.update({ chats, syncError: undefined, switching: undefined });
     this.kanbanWatch.chatsListed();
     this.placeRoster();
+    this.track(this.knownBotChats());
     for (const chatId of readOnScreen) this.seen(chatId);
     this.saveList(profile, chats);
     if (switched) this.cache.rememberProfile(profile);

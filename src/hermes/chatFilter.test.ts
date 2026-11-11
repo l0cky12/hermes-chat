@@ -150,8 +150,8 @@ describe("Running a chat filter", () => {
     await runFilter({ tags: ["infra"], state: "all" }, hermes, tags);
     await runFilter({ text: "backup", state: "all", model: "opus" }, hermes, tags);
     expect(server.restRequests.filter((r) => r.method !== "GET")).toEqual([]);
-    // Only the roster is read over /api/ws, once, for the Bot Chats a filter leaves out (ADR 0066).
-    expect(server.requests.slice(ws).map((r) => r.method)).toEqual(["profiles.list"]);
+    // Nothing is read over /api/ws: the roster that names the Bot Chats a filter leaves out was read on connecting (ADR 0066).
+    expect(server.requests.slice(ws).map((r) => r.method)).toEqual([]);
     expect(hermes.getSnapshot().chats).toBe(chats);
   });
 
