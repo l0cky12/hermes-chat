@@ -153,10 +153,10 @@ impl ServerPage {
         format!("{host}:{}", self.port)
     }
 
-    /// The same page through the tunnel's local end: only the host and port change.
-    pub fn local_url(&self, local_port: u16) -> Url {
+    /// The same page through the tunnel's local end at `host`: only the host and port change.
+    pub fn local_url(&self, host: &str, local_port: u16) -> Url {
         let mut u = self.url.clone();
-        u.set_host(Some("127.0.0.1")).expect("an http(s) URL takes an IP host");
+        u.set_host(Some(host)).expect("an http(s) URL takes a loopback host");
         u.set_port(Some(local_port)).expect("an http(s) URL takes a port");
         u
     }
@@ -738,12 +738,25 @@ struct Served {
     jar: Jar,
 }
 
-/// Every server page is served at `127.0.0.1`, and cookies don't tell ports apart, so in one jar each page would get
-/// every other server page's cookies.
+/// Every server page's tunnel listens on `127.0.0.1`, and cookies don't tell ports apart, so in one jar each page would
+/// get every other server page's cookies. On Linux each jar is a WebKit context of its own (`page_view`). On Windows the
+/// page is a frame in the app's one WebView2, so each jar is a host name instead (`host`, ADR 0143).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Jar {
     target: String,
     origin: url::Origin,
+}
+
+/// Keyed afresh each run, so the names, and the cookies WebView2 keeps on disk under them, last only the run, as Linux's
+/// jars do (ADR 0081).
+static RUN: std::sync::LazyLock<std::hash::RandomState> = std::sync::LazyLock::new(std::hash::RandomState::new);
+
+impl Jar {
+    /// The jar's own name under `localhost`, which WebView2 resolves to loopback (RFC 6761): `p` and 16 hex digits.
+    pub fn host(&self) -> String {
+        use std::hash::BuildHasher;
+        format!("p{:016x}.localhost", RUN.hash_one(self))
+    }
 }
 
 #[cfg(test)]
@@ -836,8 +849,10 @@ impl ServerPages {
             }
         };
         let local_port = listener.local_addr().map_err(|e| ServerPageError::Io(e.to_string()))?.port();
+        let jar = Jar { target: target.clone(), origin: page.url.origin() };
+        let host = if cfg!(windows) { jar.host() } else { "127.0.0.1".to_owned() };
         if let Some(open) = self.open.lock().unwrap().get_mut(&key) {
-            open.served = Some(Served { local_port, jar: Jar { target: target.clone(), origin: page.url.origin() } });
+            open.served = Some(Served { local_port, jar });
         }
 
         let pages = Arc::clone(self);
@@ -870,7 +885,7 @@ impl ServerPages {
             }
         });
 
-        Ok(Opened { id: key, url: page.local_url(local_port).to_string(), target, at: page.at() })
+        Ok(Opened { id: key, url: page.local_url(&host, local_port).to_string(), target, at: page.at() })
     }
 
     /// Closes the tunnel `key`, starting or open. The webview asked, so it isn't told. A key not seen yet is kept, so
@@ -1130,9 +1145,26 @@ mod tests {
 
     #[test]
     fn the_frame_loads_the_same_page_on_the_local_end() {
-        assert_eq!(page("http://localhost:3000/a/b?q=1#f").local_url(41234).as_str(), "http://127.0.0.1:41234/a/b?q=1#f");
-        assert_eq!(page("https://[::1]/x").local_url(40000).as_str(), "https://127.0.0.1:40000/x");
+        assert_eq!(page("http://localhost:3000/a/b?q=1#f").local_url("127.0.0.1", 41234).as_str(), "http://127.0.0.1:41234/a/b?q=1#f");
+        assert_eq!(page("https://[::1]/x").local_url("127.0.0.1", 40000).as_str(), "https://127.0.0.1:40000/x");
+        let host = Jar::of("hermes", "http://localhost:3000").host();
+        assert_eq!(page("http://localhost:3000/a").local_url(&host, 41234).as_str(), format!("http://{host}:41234/a"));
         assert_eq!(page("http://0.0.0.0:8000").at(), "0.0.0.0:8000");
+    }
+
+    #[test]
+    fn each_jar_has_a_host_name_of_its_own_and_keeps_it() {
+        let a = Jar::of("hermes", "http://localhost:3000");
+        assert_eq!(a.host(), Jar::of("hermes", "http://localhost:3000").host(), "opened again, the same name");
+        let names: std::collections::HashSet<String> =
+            [&a, &Jar::of("hermes", "http://localhost:8080"), &Jar::of("other", "http://localhost:3000"), &Jar::of("hermes", "https://localhost:3000")]
+                .map(Jar::host)
+                .into();
+        assert_eq!(names.len(), 4, "another port, server or scheme gets another name: {names:?}");
+        for name in &names {
+            let label = name.strip_suffix(".localhost").unwrap();
+            assert!(label.len() == 17 && label.starts_with('p') && label[1..].bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()), "{name}");
+        }
     }
 
     #[test]

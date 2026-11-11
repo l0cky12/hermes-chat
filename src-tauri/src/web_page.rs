@@ -9,6 +9,7 @@
 
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_SECURITY_POLICY, USER_AGENT, X_FRAME_OPTIONS};
 use serde::Serialize;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 use url::Url;
 
@@ -45,7 +46,13 @@ pub fn web_url(raw: &str) -> Result<Url, String> {
 /// final response refuses framing. Only the headers are read; the body is dropped. No cookies are sent or kept.
 pub async fn check(url: &str, user_agent: &str) -> Result<Framing, String> {
     let url = web_url(url)?;
-    let http = reqwest::Client::builder().timeout(CHECK_TIMEOUT).build().map_err(|e| e.to_string())?;
+    let mut http = reqwest::Client::builder().timeout(CHECK_TIMEOUT);
+    // Every name under `localhost` is loopback (RFC 6761), as the frame's webview resolves it, but not every system
+    // resolver agrees, or tries 127.0.0.1, where a server page's tunnel listens (server_page::Jar::host).
+    if let Some(name) = url.host_str().filter(|h| h.ends_with(".localhost")) {
+        http = http.resolve_to_addrs(name, &[(Ipv4Addr::LOCALHOST, 0).into(), (Ipv6Addr::LOCALHOST, 0).into()]);
+    }
+    let http = http.build().map_err(|e| e.to_string())?;
     let mut req = http
         .get(url)
         .header(ACCEPT, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
@@ -232,6 +239,20 @@ mod tests {
         for list in ["*", "http:", "localhost:*", "tauri:", "'self' http://localhost:1420"] {
             assert_eq!(refusal(&headers(&[(CSP, &format!("frame-ancestors {list}"))])), None, "{list}");
         }
+    }
+
+    #[tokio::test]
+    async fn asks_a_page_under_localhost_on_127_0_0_1() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let _ = s.read(&mut [0; 4096]).await;
+            s.write_all(b"HTTP/1.1 200 OK\r\nX-Frame-Options: DENY\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+        });
+        let framing = check(&format!("http://p0123456789abcdef.localhost:{port}/"), "").await.unwrap();
+        assert_eq!(framing, Framing::Refused { by: "X-Frame-Options: DENY".into() });
     }
 
     #[test]
