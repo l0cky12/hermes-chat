@@ -4,6 +4,7 @@
 // Hermes and which captures were deleted.
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import { connect, type Hermes } from "../hermes/transport";
@@ -95,16 +96,15 @@ function fakeRust(server: FakeHermes) {
 }
 
 /** Signed in with one Active chat and the New chat pane on screen, focus in its composer. */
-async function signedIn() {
+async function signedIn({ strict = false } = {}) {
   const server = new FakeHermes();
   server.sessions = [row("backup", 1, { pinned: true, title: "Nightly backup" }), row("nas", 2, { pinned: true, title: "NAS disks" })];
   server.transcripts = { backup: [{ role: "user", text: "Why did the backup fail?" }], nas: [{ role: "user", text: "Which disk is failing?" }] };
   const hermes = await connect(server.openPipe, undefined, localChatCache({ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }));
   const rust = fakeRust(server);
   const user = userEvent.setup();
-  const view = render(
-    <Main hermes={hermes} connection={{ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }} onSignOut={async () => {}} screenshots={rust.wiring} />,
-  );
+  const main = <Main hermes={hermes} connection={{ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }} onSignOut={async () => {}} screenshots={rust.wiring} />;
+  const view = render(strict ? <StrictMode>{main}</StrictMode> : main);
   await screen.findByRole("button", { name: /Nightly backup/ });
   await settle(hermes);
   composer().focus();
@@ -485,6 +485,18 @@ describe("Attachments staged in each chat (#443)", () => {
       expect(missing).toEqual([]);
     }
     expect(chips()).toHaveLength(0);
+  });
+
+  it("keeps what is attached in a window StrictMode mounts twice, with the desk of the second mount", async () => {
+    const { rust, user, hermes } = await signedIn({ strict: true });
+    await openChat(user, hermes, /Nightly backup/);
+    await user.click(screen.getByRole("button", { name: "Attach a screenshot" }));
+    const path = await rust.land();
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    await openChat(user, hermes, /NAS disks/);
+    await openChat(user, hermes, /Nightly backup/);
+    expect(chips()).toHaveLength(1);
+    expect(rust.discarded).not.toContain(path);
   });
 
   it("deletes a chat's captures when the chat is deleted", async () => {
