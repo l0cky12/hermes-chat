@@ -2024,6 +2024,114 @@ mod tests {
         }
     }
 
+    fn connecting_app() -> tauri::App<tauri::test::MockRuntime> {
+        tauri::test::mock_builder()
+            .manage(super::AppState::default())
+            .manage(super::Transfers::default())
+            .manage(super::display::Displays::default())
+            .manage(std::sync::Arc::new(super::server_page::ServerPages::default()))
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap()
+    }
+
+    async fn connect_command(app: &tauri::App<tauri::test::MockRuntime>, base: &url::Url, attempt: &str) -> Result<super::Route, String> {
+        use tauri::Manager;
+        let password = super::SignInWith::Password { username: "liam".into(), password: "hunter2".into(), provider: None };
+        super::hermes_connect(
+            app.state(),
+            app.state(),
+            app.state(),
+            app.state(),
+            super::Target::Url { url: base.to_string(), headers: Vec::new() },
+            password,
+            "default".into(),
+            Some(attempt.into()),
+            tauri::ipc::Channel::new(|_| Ok(())),
+            None,
+            None,
+            None,
+            tauri::ipc::Channel::new(|_| Ok(())),
+        )
+        .await
+    }
+
+    /// #480: attempt B waits behind A for the connection, and the webview stops it meanwhile. A signs in. B then
+    /// gives up without touching A's connection, which the webview now uses.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_connect_stopped_before_it_began_leaves_the_live_connection_alone() {
+        use tauri::Manager;
+        let (base, _, _, _) = counting_dashboard().await;
+        let app = connecting_app();
+        connect_command(&app, &base, "a").await.expect("a signs in");
+        let pages = app.state::<std::sync::Arc<super::server_page::ServerPages>>();
+        let _page = pages.begin("page", "me@hermes").unwrap();
+
+        super::hermes_connect_cancel(app.state(), "b".into());
+        assert_eq!(connect_command(&app, &base, "b").await.err().as_deref(), Some(super::CONNECT_STOPPED));
+
+        assert!(app.state::<super::AppState>().0.lock().await.is_some(), "a's connection is still there");
+        assert_eq!(pages.len(), 1, "the server page is still open");
+    }
+
+    /// #480: a sign-in that fails leaves the app signed out, so the server pages it had go with it (server_page.rs).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_connect_closes_the_server_pages() {
+        use tauri::Manager;
+        let (base, _, _, _) = counting_dashboard().await;
+        let app = connecting_app();
+        connect_command(&app, &base, "a").await.expect("a signs in");
+        let pages = app.state::<std::sync::Arc<super::server_page::ServerPages>>();
+        let _page = pages.begin("page", "me@hermes").unwrap();
+
+        let refused = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let nowhere = url::Url::parse(&format!("http://{}/", refused.local_addr().unwrap())).unwrap();
+        drop(refused);
+        assert!(connect_command(&app, &nowhere, "b").await.is_err(), "nothing answers there");
+
+        assert!(app.state::<super::AppState>().0.lock().await.is_none());
+        assert!(pages.is_empty(), "the server pages closed with the sign-in");
+    }
+
+    /// #480: a reopen that fails, a stop included, drops the connection, so its server pages close too.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_reopen_closes_the_server_pages() {
+        use tauri::Manager;
+        let (base, _, _, _) = counting_dashboard().await;
+        let app = connecting_app();
+        connect_command(&app, &base, "a").await.expect("a signs in");
+        let pages = app.state::<std::sync::Arc<super::server_page::ServerPages>>();
+        let _page = pages.begin("page", "me@hermes").unwrap();
+
+        super::hermes_connect_cancel(app.state(), "r".into());
+        let reopened = super::hermes_reopen(
+            app.state(),
+            app.state(),
+            app.state(),
+            "default".into(),
+            "r".into(),
+            tauri::ipc::Channel::new(|_| Ok(())),
+            tauri::ipc::Channel::new(|_| Ok(())),
+        )
+        .await;
+
+        assert_eq!(reopened.unwrap_err(), super::CONNECT_STOPPED);
+        assert!(app.state::<super::AppState>().0.lock().await.is_none());
+        assert!(pages.is_empty(), "the server pages closed with the connection");
+    }
+
+    /// #480: the webview can stop an attempt just after it finished. That stop has nothing left to stop, and the
+    /// names of such stops aren't kept without end.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stops_that_came_too_late_are_not_kept_without_end() {
+        use tauri::Manager;
+        let app = connecting_app();
+        for i in 0..10_000 {
+            super::hermes_connect_cancel(app.state(), format!("finished-{i}"));
+        }
+        let kept = app.state::<super::AppState>().2.lock().unwrap().stopped.len();
+        assert!(kept < 1000, "{kept} stops kept");
+    }
+
     fn send_through_ipc(webview: &tauri::WebviewWindow<tauri::test::MockRuntime>, path: &std::path::Path) -> Result<(), String> {
         let request = tauri::webview::InvokeRequest {
             cmd: "hermes_send_file".into(),

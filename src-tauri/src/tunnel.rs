@@ -154,13 +154,18 @@ mod tests {
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpStream;
 
-    /// A stand-in for ssh: it writes the local end it was told to listen on (`-L <listen>:<host>:<port>`) to
-    /// `<dir>/listen`, takes a second to "sign in", then listens there and forwards each connection to `<host>:<port>`
-    /// here. As real ssh with `ExitOnForwardFailure=yes`, it exits 255 if it can't listen.
+    /// A stand-in for ssh: it writes its arguments to `<dir>/args`, one per line, and the local end it was told to
+    /// listen on (`-L <listen>:<host>:<port>`) to `<dir>/listen`, takes a second to "sign in", then listens there and
+    /// forwards each connection to `<host>:<port>` here. As real ssh with `ExitOnForwardFailure=yes`, it exits 255 if
+    /// it can't listen. With `<dir>/chatty`, it prints 128 KiB to stderr for each connection before forwarding it, as
+    /// ssh with `LogLevel DEBUG` does over a busy tunnel.
     #[cfg(unix)]
     const FAKE_SSH: &str = r#"
 import os, socket, sys, threading, time
 d, args = sys.argv[1], sys.argv[2:]
+with open(os.path.join(d, "args"), "w") as f:
+    f.write("\n".join(args))
+chatty = os.path.exists(os.path.join(d, "chatty"))
 listen, host, port = args[args.index("-L") + 1].rsplit(":", 2)
 with open(os.path.join(d, "listen.tmp"), "w") as f:
     f.write(listen)
@@ -194,6 +199,9 @@ def pump(a, b):
         except OSError:
             pass
 def handle(c):
+    if chatty:
+        sys.stderr.write("debug1: channel 3: new [direct-streamlocal@openssh.com]\n" * 2400)
+        sys.stderr.flush()
     r = socket.create_connection((host, int(port)))
     threading.Thread(target=pump, args=(c, r), daemon=True).start()
     pump(r, c)
@@ -421,6 +429,34 @@ fn main() {
         let tunnel = signed.opened.expect("the tunnel opens");
         assert!(signed.dashboard.iter().any(|r| r.contains(PASSWORD)), "the sign-in reached the dashboard through ssh");
         assert!(TcpListener::bind(("127.0.0.1", tunnel.local_port)).await.is_err(), "the tunnel's port is held, so no other program can listen on it");
+    }
+
+    /// ssh's stderr is a pipe of 64 KiB on Linux. Unread, a chatty ssh fills it and stops forwarding (#479).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_chatty_ssh_keeps_forwarding() {
+        let ssh = FakeSsh::new("chatty");
+        std::fs::write(ssh.dir.join("chatty"), "").unwrap();
+        let signed = sign_in(&ssh, false).await;
+        signed.opened.expect("the tunnel opens");
+        assert!(signed.dashboard.iter().any(|r| r.contains(PASSWORD)), "the sign-in reached the dashboard through a chatty ssh");
+    }
+
+    /// With the owner's `ControlMaster auto`, the forward would be set up in their shared connection and outlive the
+    /// tunnel's ssh, as ADR 0114 says for server pages (#479). The first value ssh reads for an option wins, so options
+    /// on the command line come before the owner's config.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_tunnels_ssh_never_shares_the_owners_connection() {
+        let ssh = FakeSsh::new("control-master");
+        let signed = sign_in(&ssh, false).await;
+        signed.opened.expect("the tunnel opens");
+        let args = std::fs::read_to_string(ssh.dir.join("args")).unwrap();
+        let args: Vec<&str> = args.lines().collect();
+        let target = args.iter().position(|a| *a == "--").expect("the target comes after --");
+        for option in ["ControlMaster=no", "ControlPath=none"] {
+            assert!(args[..target].windows(2).any(|w| w == ["-o", option]), "ssh got -o {option}: {args:?}");
+        }
     }
 
     /// Scoop and Chocolatey put a shim named ssh.exe on PATH that runs the real ssh.exe as its child.
