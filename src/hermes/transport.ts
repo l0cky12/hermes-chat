@@ -2928,6 +2928,8 @@ export class Hermes {
     if (skill) text = callText(skill);
     const profile = this.profile;
     const activating = chat.settled;
+    // A message that goes nowhere leaves a reply already running as it is, and ended if it ended meanwhile.
+    const stillRunning = (c: Chat) => !!chat.running && !!c.running;
     const wantedBefore = this.pinWanted.get(chatId);
     if (activating) this.pinWanted.set(chatId, true);
     const user: OutgoingItem = {
@@ -2956,7 +2958,7 @@ export class Hermes {
         if (wantedBefore === undefined) this.pinWanted.delete(chatId);
         else this.pinWanted.set(chatId, wantedBefore);
       }
-      this.patchChat(chatId, (c) => ({ ...c, running: false, settled: activating || c.settled, items: c.items.filter((i) => i.id !== user.id) }));
+      this.patchChat(chatId, (c) => ({ ...c, running: stillRunning(c), settled: activating || c.settled, items: c.items.filter((i) => i.id !== user.id) }));
       this.saveOutbox(chatId);
       return { delivery: { delivery: "unsent", reason: PAUSED.unsaved } };
     }
@@ -3014,7 +3016,7 @@ export class Hermes {
       this.setOutgoing(profile, chatId, user.id, (r) => withOutgoing(r, { state: unknown ? "unknown" : "failed", reason }));
       // A message Hermes turned down begins no turn, so the next turn there isn't taken for its.
       if (!unknown && this.turns.get(chatId)?.userId === user.id) this.turns.delete(chatId);
-      this.patchChat(chatId, (c) => ({ ...c, running: false, settled: activating || c.settled }));
+      this.patchChat(chatId, (c) => ({ ...c, running: stillRunning(c), settled: activating || c.settled }));
       return { delivery: { delivery: unknown ? "unknown" : "unsent", reason }, itemId: user.id };
     }
   }

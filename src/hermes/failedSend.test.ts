@@ -100,6 +100,16 @@ describe("Case 1: the send fails before Hermes accepts it", () => {
     expect(stored()).toEqual([]);
   });
 
+  it("Hermes refuses a message sent while a reply runs: the reply still shows as running", async () => {
+    const { server, hermes, chat } = await ready();
+    expect(await hermes().send("c1", "Check the disks")).toEqual({ delivery: "accepted" });
+    server.event(chat().runtimeId!, "message.start");
+    server.rejectPrompt = { code: 4009, message: "session busy" };
+
+    expect(await hermes().send("c1", TEXT)).toEqual({ delivery: "unsent", reason: "session busy" });
+    expect(chat()).toMatchObject({ running: true });
+  });
+
   it("the connection can't take the frame: failed, and nothing reached Hermes", async () => {
     const { server, hermes, sent, submits } = await ready();
     server.failSend = "The connection to Hermes is closed.";
