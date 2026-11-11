@@ -64,7 +64,7 @@ The owner's action that removes a chat from Hermes for good, in every Hermes cli
 _Avoid_: remove, archive
 
 **Export**:
-Saving one chat as a Markdown file, in a place the owner picks in the Save dialog. The Export dialog comes first: the owner picks the messages, whether tool calls and Approvals and the names of attached files go in (left out at first), and what is redacted, and sees the file exactly as it will be saved. Likely secrets are flagged and redacted unless the owner keeps them, and the owner can redact any text they select. The file holds only what Hermes Chat has loaded for the chat, as it was when the dialog opened, and never an attachment's contents. It warns that it may still contain sensitive information, since detection can miss a secret. Nothing is uploaded (ADR 0076).
+Saving one chat as a file, in a place the owner picks in the Save dialog: Markdown to read, JSON in Hermes's own session format, an Image (a PNG), or an HTML page that runs no script and loads nothing. The Export dialog comes first: the owner picks the messages, whether tool calls and Approvals and the names of attached files go in (left out at first), and what is redacted, and sees the file exactly as it will be saved. Likely secrets are flagged and redacted unless the owner keeps them, and the owner can redact any text they select. The file holds only what Hermes Chat has loaded for the chat, as it was when the dialog opened, and never an attachment's contents. It warns that it may still contain sensitive information, since detection can miss a secret. Nothing is uploaded (ADR 0076).
 _Avoid_: download, backup, snapshot (#92's published copy, which waits for a hosting service), share
 
 **Backup**:

@@ -1465,12 +1465,13 @@ fn read_transcript(path: &std::path::Path, max_bytes: u64) -> Result<String, Str
     Ok(text.strip_prefix('\u{feff}').map(str::to_owned).unwrap_or(text))
 }
 
-/// The formats a chat exports as text (src/hermes/exportChat.ts `ExportFormat`). Any other is refused.
+/// The formats a chat exports as text, an HTML page among them (src/hermes/exportChat.ts `ExportFormat`). Any other is refused.
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(rename_all = "lowercase")]
 enum ExportFormat {
     Markdown,
     Json,
+    Html,
 }
 
 impl ExportFormat {
@@ -1478,6 +1479,7 @@ impl ExportFormat {
         match self {
             ExportFormat::Markdown => ("Markdown", &["md"]),
             ExportFormat::Json => ("JSON", &["json"]),
+            ExportFormat::Html => ("HTML page", &["html"]),
         }
     }
 }
@@ -2063,11 +2065,12 @@ mod tests {
     }
 
     #[test]
-    fn a_chat_exports_only_as_markdown_or_json_each_with_its_own_extension() {
+    fn a_chat_exports_only_as_markdown_json_or_an_html_page_each_with_its_own_extension() {
         let format = |s: &str| serde_json::from_str::<super::ExportFormat>(s);
         assert_eq!(format("\"markdown\"").unwrap().filter(), ("Markdown", &["md"][..]));
         assert_eq!(format("\"json\"").unwrap().filter(), ("JSON", &["json"][..]));
-        for other in ["\"png\"", "\"Markdown\"", "\"md\"", "\"\""] {
+        assert_eq!(format("\"html\"").unwrap().filter(), ("HTML page", &["html"][..]));
+        for other in ["\"png\"", "\"Markdown\"", "\"md\"", "\"htm\"", "\"HTML\"", "\"\""] {
             assert!(format(other).is_err(), "{other} should be refused");
         }
     }

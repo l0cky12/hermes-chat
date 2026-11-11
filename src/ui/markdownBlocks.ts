@@ -32,7 +32,10 @@ const countFence = (type: "code" | "math") =>
   };
 const countFences = { enter: { codeFencedFence: countFence("code"), mathFlowFence: countFence("math") } };
 
-const options = { extensions: [gfm(), mathSyntax], mdastExtensions: [gfmFromMarkdown(), mathMdast, countFences] };
+/** The transcript's Markdown syntax: GFM and the app's math. The snapshot page (hermes/snapshotPage.ts) parses with it too. */
+export const transcriptSyntax = { extensions: [gfm(), mathSyntax], mdastExtensions: [gfmFromMarkdown(), mathMdast] };
+
+const options = { ...transcriptSyntax, mdastExtensions: [...transcriptSyntax.mdastExtensions, countFences] };
 
 /**
  * Whether `node`, parsed from `source`, ends in code that may still be coming in: code or a `$$` math block with
