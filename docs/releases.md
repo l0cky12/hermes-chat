@@ -23,7 +23,7 @@ A build without `plugins.updater` (the PKGBUILD's, and every build that doesn't 
 The private key never enters Git or a log:
 
 - A dry run makes a throwaway key in a temporary folder and deletes it at the end. Its stdout is dropped, and in GitHub Actions every line of the key is masked before the build starts.
-- The production key lives in the repository secret `TAURI_SIGNING_PRIVATE_KEY`, with its password in `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Neither exists yet. The workflow writes the key to a file only the runner user can read, and passes the CLI that file's path, not its contents.
+- The production key lives in the secret `TAURI_SIGNING_PRIVATE_KEY` of the `release-signing` environment, with its password in `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Neither exists yet. They are environment secrets, not repository secrets, so a job reads them only when it names that environment and a required reviewer approves the run. The workflow signs with them only on `main`. It writes the key to a file only the runner user can read, passes the CLI that file's path, not its contents, and deletes the file at the end of the job.
 - `scripts/release/verify.sh` refuses a release folder that holds a private key, and `dry-run.sh` checks the staged folder for the key it signed with.
 
 ## Rehearse a release
@@ -124,7 +124,7 @@ The app trusts exactly one public key, the one it was built with. A release sign
 
    `tauri build` warns that the key doesn't match `pubkey`. For a bridge, that is expected. `release/updater.key.pub` holds the old public key, and `verify.sh` has checked the staged AppImage against it.
 4. Publish the bridge with both `latest.json` and `latest-2.json` pointing at it.
-5. Replace the repository secrets with the new key and password.
+5. Replace the `release-signing` environment's secrets with the new key and password.
 6. Every later release is built as usual with the new key, publishes its own `latest-2.json`, and attaches a copy of the bridge's `latest.json`, so a copy still on the old key always finds the bridge first.
 
 **Lost key.** No installed copy can be updated through the updater again. Make a new key, publish a release signed with it, and tell owners to download that AppImage by hand. The README and release notes say so.
@@ -157,7 +157,8 @@ The `rust` CI job runs it. `scripts/release/verify.test.sh` covers the release s
 
 These need a decision or a secret only the owner has, and none was exercised:
 
-- Generate the production key, keep it offline, and set the `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repository secrets.
+- Create the `release-signing` environment (Settings → Environments) with yourself as a required reviewer and `main` as its only deployment branch.
+- Generate the production key, keep it offline, and set `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` as secrets of that environment.
 - Put its public key in `src-tauri/tauri.release.conf.json`'s `pubkey`.
 - Decide the hosting. The configured endpoint assumes GitHub releases on this repo.
 - Add a publishing step (a tagged release with the staged files as assets), separately authorized. The dry run never publishes. It should attach to the same tagged release the Windows job does (ADR 0080), so the newest release carries both the installer and `latest.json`.
