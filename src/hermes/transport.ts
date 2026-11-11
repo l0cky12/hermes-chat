@@ -3315,6 +3315,25 @@ export class Hermes {
   }
 
   /**
+   * Asks Hermes which requests it still waits on in the chat's session (`open_requests`), and closes the Clarify, Sudo
+   * password and Secret cards that were waiting when the read went out and that Hermes no longer lists. Hermes withdraws
+   * a request it stops waiting on itself with `request.cancel`, so one it dropped without a word was answered in another
+   * Hermes client, which Hermes tells no other client of (#390). A Hermes that can't list them closes nothing here.
+   */
+  private async settleQuestions(chatId: string) {
+    const chat = this.snapshot.chats.find((c) => c.id === chatId);
+    const asked = new Set(chat?.items.filter((i) => isWaiting(i) && i.kind !== "approval").map((i) => i.id));
+    const runtimeId = chat?.runtimeId;
+    if (!runtimeId || !asked.size) return;
+    // Past any event Hermes numbered, so it replays none.
+    const res = obj(await this.request("session.events.since", { session_id: runtimeId, last_seen: Number.MAX_SAFE_INTEGER }).catch(() => undefined));
+    if (!Array.isArray(res?.open_requests)) return;
+    const listed = new Set(res.open_requests.map((r) => obj(r)?.id));
+    const answered = (i: QuestionItem) => asked.has(i.id) && !listed.has(i.id);
+    this.patchChat(chatId, (c) => (c.runtimeId === runtimeId ? { ...c, items: endWaiting(c.items, "resolved", answered) } : c));
+  }
+
+  /**
    * Sends an Approval's answer: `approval.respond`, which settles it in Hermes's approval queue, so Hermes withdraws
    * the card from every other app with the chat open (`request.cancel`). A response frame to the request settles it
    * first, and no other app hears (#318). A Hermes without `approval.respond`, or a card without a request id, still
@@ -3754,6 +3773,8 @@ export class Hermes {
       },
       delta,
     );
+    // A tool call that went on, or a turn that ended, may have been waiting on a question another client answered.
+    if (type === "tool.complete" || type === "message.complete" || type === "error") this.track(this.settleQuestions(chat.id));
     if (type === "message.complete") {
       const receipt = (payload.persisted_turn ?? {}) as PersistedTurn;
       this.noteRows(chat.id, [receipt.user_row_id, receipt.final_assistant_row_id, ...(Array.isArray(receipt.row_ids) ? receipt.row_ids : [])]);
@@ -5332,21 +5353,10 @@ function secretItem(r: ServerRequest): Extract<QuestionItem, { kind: "secret" }>
 const endWaiting = (items: Item[], ended: string, which = (_: QuestionItem) => true) => items.map((i): Item => (isWaiting(i) && which(i) ? { ...i, ended } : i));
 
 /**
- * Closes the waiting cards that `toolId`'s call was running before, once no tool call before them still runs. The call
- * that asked a question was running when it arrived, so by then it has finished, and Hermes stops waiting. Hermes
- * withdraws a question it stopped waiting on itself (`request.cancel`) before the call goes on, so a card still waiting
- * here was answered in another Hermes client, which Hermes tells no other client of (#390). A tool call that started
- * after a card, and one this app never saw start, close nothing.
+ * Closes the waiting Approvals with `ended`. A Clarify, Sudo password or Secret question closes only once Hermes stops
+ * listing it (`settleQuestions`), since the turn that ends may not be the one that asked it.
  */
-function endAnsweredElsewhere(items: Item[], toolId: string): Item[] {
-  const at = items.findIndex((i) => i.kind === "tool" && i.id === toolId);
-  if (at < 0) return items;
-  let running = false;
-  return items.map((i, n): Item => {
-    if (i.kind === "tool" && i.status === "running") running = true;
-    return n > at && !running && isWaiting(i) ? { ...i, ended: "resolved" } : i;
-  });
-}
+const endApprovals = (items: Item[], ended: string) => endWaiting(items, ended, (i) => i.kind === "approval");
 
 const obj = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined);
 
@@ -5472,20 +5482,17 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: st
     case "tool.complete":
       return {
         ...c,
-        items: endAnsweredElsewhere(
-          items.map((i) =>
-            i.kind === "tool" && i.id === String(p.tool_id)
-              ? {
-                  ...i,
-                  status: "done",
-                  durationS: p.duration_s as number | undefined,
-                  // A screenshot inside it stays on the server (ADR 0061).
-                  result: toolResultText(p.result),
-                  summary: p.summary as string | undefined,
-                }
-              : i,
-          ),
-          String(p.tool_id),
+        items: items.map((i) =>
+          i.kind === "tool" && i.id === String(p.tool_id)
+            ? {
+                ...i,
+                status: "done",
+                durationS: p.duration_s as number | undefined,
+                // A screenshot inside it stays on the server (ADR 0061).
+                result: toolResultText(p.result),
+                summary: p.summary as string | undefined,
+              }
+            : i,
         ),
       };
     // Every second or so while a turn runs.
@@ -5517,14 +5524,14 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: st
       if (!answered && typeof p.text === "string" && p.text) items.push({ kind: "assistant", id: nextId(items, "a"), text: p.text });
       const end = { ...c, live: withLive(c.live, undefined, p.usage), running: false, stopping: false, updatedAt: Date.now() };
       // Stopped here or from another Hermes client.
-      if (p.status === "interrupted") return { ...end, items: markInterrupted(endWaiting(items, "turn ended"), from) };
+      if (p.status === "interrupted") return { ...end, items: markInterrupted(endApprovals(items, "turn ended"), from) };
       const failure = p.error ?? (p.status === "error" ? p.failure_reason ?? "The turn failed." : undefined);
       if (failure) items.push(errorItem({ ...c, items }, String(failure)));
-      return { ...end, items: endRunningTools(endWaiting(items, "turn ended"), "done") };
+      return { ...end, items: endRunningTools(endApprovals(items, "turn ended"), "done") };
     }
     case "error":
       items.push(errorItem(c, String(p.message ?? "Hermes reported an error.")));
-      return { ...c, items: endWaiting(items, "turn ended"), running: false, stopping: false };
+      return { ...c, items: endApprovals(items, "turn ended"), running: false, stopping: false };
     default:
       return c;
   }
