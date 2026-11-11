@@ -2,7 +2,7 @@
 
 A user message with ASKCLARIFY makes the model call `clarify` with two questions; ASKSUDO, `terminal` with
 `./sudo apt-get install -y ripgrep` (the stand-in `sudo` in the terminal's working folder, never the real one); ASKSECRET,
-`skill_view` on a skill whose API key is missing.
+`skill_view` on a skill whose API key is missing; RUNTOOL, `terminal` with `sleep 12; echo tool-ran-390`.
 With SLOW too, the reply after the tool result waits 20 s first. After a tool result the reply is
 `GOT <tool>: <result>`. Anything else gets "ok". Every request is one JSON line in requests.log.
 """
@@ -44,6 +44,8 @@ def reply_for(messages):
     if "ASKSUDO" in asked:
         args = {"command": "./sudo apt-get install -y ripgrep"}
         return {"tool": {"id": "call_sudo_%d" % n, "name": "terminal", "arguments": json.dumps(args)}}
+    if "RUNTOOL" in asked:
+        return {"tool": {"id": "call_run_%d" % n, "name": "terminal", "arguments": json.dumps({"command": "sleep 12; echo tool-ran-390"})}}
     if "ASKSECRET" in asked:
         return {"tool": {"id": "call_secret_%d" % n, "name": "skill_view", "arguments": json.dumps({"name": "weather-check"})}}
     return {"text": "ok"}
