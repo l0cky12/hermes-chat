@@ -13,6 +13,7 @@ import { OfficeCard } from "./OfficeCard";
 import { OfficeQualitySwitch } from "./OfficeSettings";
 import { deskLabel } from "./officeText";
 import { usePageHidden, useWindowFocused } from "./windowState";
+import { errorText } from "../hermes/values";
 
 const HEAD_TO_TAG_GRACE_MS = 250;
 
@@ -94,6 +95,7 @@ export function OfficeBuilding({
     const b = officeFloors(rooms, memory.current.floors, Date.now());
     memory.current = { ...memory.current, floors: b.memory };
     return b;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [rooms, memory, wake]);
   useEffect(() => {
     if (built.wakeAt === undefined) return;
@@ -180,11 +182,12 @@ export function OfficeBuilding({
         );
         setScene(made);
       })
-      .catch((e: unknown) => live && fallback.current(`The building couldn't be loaded: ${e instanceof Error ? e.message : String(e)}`));
+      .catch((e: unknown) => live && fallback.current(`The building couldn't be loaded: ${errorText(e)}`));
     return () => {
       live = false;
       made?.dispose();
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, []);
 
   const started = useRef<OfficeScene>(undefined);

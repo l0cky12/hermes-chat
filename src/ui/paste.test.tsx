@@ -16,7 +16,6 @@ type Invoke = (cmd: string, args?: unknown, opts?: { headers?: Record<string, st
 const tauri = vi.hoisted(() => ({ invoke: (async () => undefined) as Invoke }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: Parameters<Invoke>) => tauri.invoke(...a) }));
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};

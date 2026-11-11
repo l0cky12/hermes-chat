@@ -6,7 +6,7 @@
 //! signing out, and activating or removing an endpoint carry nothing secret, so the window sends those through the
 //! REST relay (`provider_account_write`).
 
-use super::{client_kept_to_origin, endpoint, Dashboard, TransportError};
+use super::{client, endpoint, Dashboard, TransportError};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -172,7 +172,7 @@ impl Dashboard {
     }
 
     async fn read_json(&self, url: Url) -> Result<Value, TransportError> {
-        let http = client_kept_to_origin(&self.headers, true)?;
+        let http = client(&self.headers)?;
         let text = self.call(&http, Method::GET, url, None, true).await?;
         serde_json::from_str(&text).map_err(|e| TransportError::Unexpected { status: 200, body: format!("not JSON: {e}") })
     }
@@ -209,7 +209,7 @@ impl Dashboard {
     async fn check_and_save_endpoint(&self, profile: &str, form: &EndpointForm, anyway: bool) -> Result<EndpointSave, TransportError> {
         let (name, url, model, key) = checked_form(form)?;
         let base_url = url.as_str().trim_end_matches('/').to_owned();
-        let http = client_kept_to_origin(&self.headers, true)?;
+        let http = client(&self.headers)?;
         // With a key in the body, a failed answer isn't shown: FastAPI's 422 repeats the body.
         let show_failure = key.is_none();
         let scrub = |s: &str| match &key {

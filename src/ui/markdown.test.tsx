@@ -21,6 +21,25 @@ afterEach(() => {
 });
 
 describe("Markdown", () => {
+  it("says Copied only once the clipboard took the code, and says so when it didn't", async () => {
+    const writeText = vi.fn(async (_text: string) => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    try {
+      renderDom(<Markdown text={"```sh\nls -la\n```"} />);
+      await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+      expect(writeText).toHaveBeenCalledWith("ls -la\n");
+      await screen.findByRole("button", { name: "Copied" });
+      cleanup();
+      writeText.mockRejectedValueOnce(new DOMException("denied", "NotAllowedError"));
+      renderDom(<Markdown text={"```sh\nls -la\n```"} />);
+      await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+      await screen.findByRole("button", { name: "Couldn't copy" });
+      expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("highlights tagged code, and guesses the language of untagged code, on every render", () => {
     const untagged = "```\nfn parse(line: &str) -> Option<u32> {\n    let n: u32 = line.trim().parse().ok()?;\n    Some(n)\n}\n```";
     // The highlighter is shared between renders, so the second must come out the same as the first.

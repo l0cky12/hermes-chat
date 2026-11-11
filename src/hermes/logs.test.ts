@@ -28,8 +28,8 @@ class FakeLogFile {
 const lines = (b: LogBuffer) => b.getSnapshot().entries.filter((e): e is Extract<Entry, { kind: "line" }> => e.kind === "line").map((e) => e.text);
 const marks = (b: LogBuffer) => b.getSnapshot().entries.filter((e) => e.kind === "mark").map((e) => e.text);
 
-/** Runs one poll of `f` and lets its answer land. */
-async function poll(f: LogFollower) {
+/** Runs one poll and lets its answer land. */
+async function poll() {
   await vi.advanceTimersByTimeAsync(1000);
 }
 
@@ -178,20 +178,20 @@ describe("LogFollower", () => {
     // 300 lines a second: each read finds them all, overlapping the last.
     for (let s = 0; s < 5; s++) {
       file.write(300);
-      await poll(f);
+      await poll();
     }
     expect(lines(f.buffer)).toHaveLength(1600);
     expect(lines(f.buffer).at(-1)).toMatch(/line 1599$/);
     expect(marks(f.buffer)).toEqual([]);
     // 2000 lines between reads: only the last 500 come back, and the gap is noted.
     file.write(2000);
-    await poll(f);
+    await poll();
     expect(marks(f.buffer)).toEqual([`More than ${TAIL} lines were written between two reads, so some were missed here.`]);
     expect(lines(f.buffer).at(-1)).toMatch(/line 3599$/);
     // Bounded: the buffer never holds more than its capacity.
     for (let s = 0; s < 20; s++) {
       file.write(400);
-      await poll(f);
+      await poll();
     }
     const snap = f.buffer.getSnapshot();
     expect(snap.entries.length).toBeLessThanOrEqual(2000);
@@ -209,7 +209,7 @@ describe("LogFollower", () => {
     await vi.advanceTimersByTimeAsync(0);
     file.rotate();
     file.write(3, (i) => `2026-11-04 10:00:05,000 INFO new file ${i}`);
-    await poll(f);
+    await poll();
     expect(marks(f.buffer)).toEqual(["The log file was rotated or emptied since the last read. Lines written just before that may be missing."]);
     expect(lines(f.buffer).slice(-3)).toEqual(["2026-11-04 10:00:05,000 INFO new file 50", "2026-11-04 10:00:05,000 INFO new file 51", "2026-11-04 10:00:05,000 INFO new file 52"]);
     f.stop("done");
@@ -231,12 +231,12 @@ describe("LogFollower", () => {
     expect(lines(f.buffer)).toHaveLength(15);
 
     file.fail = new Error("Couldn't reach the dashboard: connection refused");
-    await poll(f);
+    await poll();
     expect(f.getState()).toMatchObject({ kind: "failed", reason: "Couldn't reach the dashboard: connection refused" });
-    await poll(f);
+    await poll();
     file.fail = undefined;
     file.write(2);
-    await poll(f);
+    await poll();
     expect(f.getState().kind).toBe("ok");
     expect(marks(f.buffer)[1]).toMatch(/connection refused$/);
     expect(lines(f.buffer)).toHaveLength(17);
@@ -262,7 +262,7 @@ describe("LogFollower", () => {
       const f = follow(file);
       f.start();
       await vi.advanceTimersByTimeAsync(0);
-      await poll(f);
+      await poll();
       return { state: f.getState(), reads: file.reads };
     };
     expect(await run(new RestError(404, `{"detail":"Not Found"}`))).toMatchObject({ state: { kind: "unsupported" }, reads: 1 });
@@ -310,7 +310,7 @@ describe("LogFollower redaction across lines and reads", () => {
     f.start();
     await vi.advanceTimersByTimeAsync(0);
     file.lines.push(body[1] + "\n", body[2] + "\n", "-----END RSA PRIVATE KEY-----\n", "2026-11-04 10:00:01,000 INFO tools.x: after\n");
-    await poll(f);
+    await poll();
     const text = bundleText([{ title: "agent", detail: "", snapshot: f.buffer.getSnapshot() }], { connection: "x", now: 0 });
     for (const b of body) expect(text).not.toContain(b);
     expect(lines(f.buffer).at(-1)).toBe("2026-11-04 10:00:01,000 INFO tools.x: after");
@@ -327,7 +327,7 @@ describe("LogFollower redaction across lines and reads", () => {
     f.start();
     await vi.advanceTimersByTimeAsync(0);
     file.lines.push("shortRow2==\n", "-----END \x1b[31mPRIVATE KEY-----\n", "after\n");
-    await poll(f);
+    await poll();
     expect(lines(f.buffer)).toEqual([...Array(4).fill("[redacted private key]"), "after"]);
     f.stop("done");
   });
@@ -359,7 +359,7 @@ describe("LogFollower redaction across lines and reads", () => {
     await vi.advanceTimersByTimeAsync(0);
     // Rotated to a file whose only line looks the same once redacted.
     file.lines = ["2026-11-04 10:00:00,000 INFO x: api_key=second-key\n"];
-    await poll(f);
+    await poll();
     expect(lines(f.buffer)).toEqual(["2026-11-04 10:00:00,000 INFO x: api_key=[redacted]", "2026-11-04 10:00:00,000 INFO x: api_key=[redacted]"]);
     expect(marks(f.buffer)).toEqual(["The log file was rotated or emptied since the last read. Lines written just before that may be missing."]);
     f.stop("done");
@@ -373,10 +373,10 @@ describe("LogFollower redaction across lines and reads", () => {
     f.start();
     await vi.advanceTimersByTimeAsync(0);
     file.fail = new RestError(502, `{"detail":"upstream refused token=rawSecret123"}`);
-    await poll(f);
+    await poll();
     expect(f.getState()).toMatchObject({ kind: "failed", reason: "upstream refused token=[redacted]" });
     file.fail = undefined;
-    await poll(f);
+    await poll();
     const text = bundleText([{ title: "agent", detail: "", snapshot: f.buffer.getSnapshot() }], { connection: "x", now: 0 });
     expect(marks(f.buffer)[0]).toMatch(/upstream refused token=\[redacted\]$/);
     expect(text).not.toContain("rawSecret123");

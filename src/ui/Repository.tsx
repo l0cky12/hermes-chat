@@ -54,6 +54,7 @@ import {
 import { Spinner } from "./bits";
 import { useModal } from "./modal";
 import { WorktreesPanel, type WorktreeHooks } from "./Worktrees";
+import { errorText } from "../hermes/values";
 
 type Load<T> = { state: "idle" } | { state: "loading"; last?: T } | { state: "ready"; data: T } | { state: "failed"; error: RepoFailure; last?: T };
 
@@ -744,7 +745,7 @@ function CommitBox({
                 if (current.current === asked) onMessage(m);
                 else setAskError("you changed the message while Hermes was writing, so its suggestion wasn't used");
               },
-              (e: unknown) => alive.current && setAskError(e instanceof Error ? e.message : String(e)),
+              (e: unknown) => alive.current && setAskError(errorText(e)),
             ).finally(() => alive.current && setAsking(false));
           }}
         >

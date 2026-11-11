@@ -14,6 +14,7 @@ import { rowText } from "./branch";
 import { RestError, type RestMethod } from "./pipe";
 import { CapabilityUnsupportedError } from "./capabilities";
 import { type Schedule, type Zone, knownZone, offsetAt, offsetLabel, parseSchedule, storedSchedule } from "./schedule";
+import { errorText, isObj } from "./values";
 
 /** How Hermes last ran a job, from its execution ledger (`cron/executions.py`). */
 export type Execution = { status: string; claimedAt?: string; finishedAt?: string; error?: string; delivery?: string };
@@ -156,7 +157,6 @@ export function missedRunNote(s: Schedule, periodMs: number | undefined, catchUp
 
 export type RestFn = (method: RestMethod, pathAndQuery: string, body?: unknown) => Promise<unknown>;
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const text = (v: unknown) => (typeof v === "string" ? v : "");
 const opt = (v: unknown) => (typeof v === "string" && v.trim() ? v : undefined);
 const strings = (v: unknown) => (Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : typeof v === "string" && v ? [v] : []);
@@ -316,7 +316,7 @@ const sentence = (s: string) => {
  */
 export function cronError(e: unknown): CronError {
   if (e instanceof CronError) return e;
-  const message = e instanceof Error ? e.message : String(e);
+  const message = errorText(e);
   if (message === "Not connected to Hermes." || message === "The chat connection is closed.")
     return new CronError("offline", "Hermes Chat isn't connected to Hermes, so nothing was sent. Jobs keep running on the server.");
   if (e instanceof RestError && e.status === 401) return new CronError("forbidden", "The dashboard sign-in has expired, so nothing was changed. Sign in again.");

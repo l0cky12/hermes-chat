@@ -71,6 +71,7 @@ import { ProviderSettings, type ProviderKeysApi } from "./ProviderSettings";
 import { SignInSettings, type SignInApi } from "./SignInSettings";
 import { EndpointSettings, type EndpointApi } from "./EndpointSettings";
 import { useLocale } from "../i18n/locale";
+import { errorText } from "../hermes/values";
 
 type Tab = "general" | "appearance" | "model" | "providers" | "voice" | "toolsets" | "mcp" | "gateways" | "persona" | "memory" | "skills" | "diagnostics";
 /**
@@ -331,7 +332,9 @@ export function SettingsScreen({
     memoryParts.current[part] = dirty;
     onMemoryDirty(memoryParts.current.entries || memoryParts.current.providers);
   };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const onEntriesDirty = useCallback(memoryPart("entries"), [onMemoryDirty]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const onProvidersDirty = useCallback(memoryPart("providers"), [onMemoryDirty]);
   const [tab, setTabNow] = useState<Tab>(
     showTextGeneration ? "model" : showMemory && memory ? "memory" : showDiagnostics && capabilities ? "diagnostics" : showVoice ? "voice" : "general",
@@ -389,16 +392,19 @@ export function SettingsScreen({
     if (!showTextGeneration) return;
     setQuery("");
     setTab("model");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [showTextGeneration]);
   useEffect(() => {
     if (!showMemory || !memory) return;
     setQuery("");
     setTab("memory");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [showMemory]);
   useEffect(() => {
     if (!showVoice) return;
     setQuery("");
     setTab("voice");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [showVoice]);
   useEffect(() => {
     if (!showDiagnostics || !capabilities) return;
@@ -406,6 +412,7 @@ export function SettingsScreen({
     setDiagFocus(showDiagnostics.id ? { id: showDiagnostics.id } : undefined);
     setDiagGroup("server");
     setTab("diagnostics");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [showDiagnostics]);
   /** A tab's note about a feature Hermes lacks opens Diagnostics at it. */
   const toDiagnostics = (id: CapabilityId) =>
@@ -431,7 +438,7 @@ export function SettingsScreen({
     try {
       setPulled(pulledText(await onPullOlder()));
     } catch (e) {
-      setPullError(`Couldn't pull older history: ${e instanceof Error ? e.message : String(e)}`);
+      setPullError(`Couldn't pull older history: ${errorText(e)}`);
     } finally {
       setPulling(false);
     }

@@ -16,7 +16,6 @@ import { Main } from "../App";
 import { RestError } from "../hermes/pipe";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -284,7 +283,10 @@ describe("A chat link and what the owner does meanwhile", () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const list = server.rest["GET /api/sessions"];
-    server.rest["GET /api/sessions"] = async (req) => (req.query.get("profile") === "work" && (await gate), list(req));
+    server.rest["GET /api/sessions"] = async (req) => {
+      if (req.query.get("profile") === "work") await gate;
+      return list(req);
+    };
     // Not `open`, which waits for Hermes to be idle: the held list keeps it busy.
     await act(async () => inbox.arrive(linkTo("work", "old")));
     await waitFor(() => expect(hermes.getSnapshot().profile).toBe("work"));

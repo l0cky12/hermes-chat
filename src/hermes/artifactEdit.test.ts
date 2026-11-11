@@ -80,7 +80,7 @@ describe("Hermes's proposed edit", () => {
 
   it("allows tokens for an answer about as long as the selection", () => {
     expect(askMaxTokens(10)).toBe(1024);
-    expect(askMaxTokens(30_000)).toBe(20_512 > 16_384 ? 16_384 : 20_512);
+    expect(askMaxTokens(30_000)).toBe(16_384);
     expect(askMaxTokens(3000)).toBeGreaterThan(1500);
   });
 });

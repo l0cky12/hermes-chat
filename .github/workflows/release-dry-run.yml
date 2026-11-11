@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       signing:
-        description: "throwaway: a key made in this job and discarded with it. secret: the TAURI_SIGNING_PRIVATE_KEY repository secret, which must match the public key in src-tauri/tauri.release.conf.json."
+        description: "throwaway: a key made in this job and discarded with it. secret: the release-signing environment's TAURI_SIGNING_PRIVATE_KEY, on main only, which must match the public key in src-tauri/tauri.release.conf.json."
         type: choice
         options: [throwaway, secret]
         default: throwaway
@@ -29,11 +29,19 @@ jobs:
   appimage:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    # The production key is a secret of this environment, not of the repository, so only a run an owner approved
+    # there reads it (docs/releases.md).
+    environment: ${{ inputs.signing == 'secret' && 'release-signing' || '' }}
     env:
       SIGNING: ${{ inputs.signing || 'throwaway' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Sign with the production key only on main
+        if: env.SIGNING == 'secret' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::The production key signs only main, and this run is on $GITHUB_REF."
+          exit 1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -43,14 +51,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev librsvg2-dev libdbus-1-dev \
             libayatana-appindicator3-dev patchelf file minisign
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri
       - run: npm ci
       - name: Check that verify.sh refuses broken releases
         run: scripts/release/verify.test.sh
-      - name: Take the owner's key from the repository secret
+      - name: Take the owner's key from the environment secret
         if: env.SIGNING == 'secret'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -65,7 +73,10 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ env.SIGNING == 'secret' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: scripts/release/dry-run.sh
-      - uses: actions/upload-artifact@v4
+      - name: Delete the owner's key file
+        if: always() && env.SIGNING == 'secret'
+        run: rm -f "$RUNNER_TEMP/updater.key"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: appimage-${{ env.SIGNING }}-${{ github.sha }}
           path: release/

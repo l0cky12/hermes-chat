@@ -1,3 +1,4 @@
+import { errorText } from "./values";
 // A terminal on the server: the owner's own `ssh` run in a pseudo-terminal by Rust (src-tauri/src/terminal.rs,
 // ADR 0022). This is the session's lifecycle, apart from the screen that draws it (src/ui/Terminal.tsx).
 
@@ -142,7 +143,7 @@ export class TerminalSession {
       if (this.endedByOwner) this.api.close(id);
       else if (this.size.cols !== cols || this.size.rows !== rows) void this.api.resize(id, this.size.cols, this.size.rows).catch(() => {});
     } catch (e) {
-      if (run === this.run) this.set({ kind: "failed", target, message: e instanceof Error ? e.message : String(e) });
+      if (run === this.run) this.set({ kind: "failed", target, message: errorText(e) });
     }
   }
 

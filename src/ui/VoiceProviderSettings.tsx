@@ -131,7 +131,9 @@ export function VoiceProviderSettings({
     setSaving(false);
     if (connected) load();
     else epoch.current++;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
     return () => void epoch.current++;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [api, profile, connected]);
 
   const changed = draftChanges(draft);
@@ -143,6 +145,7 @@ export function VoiceProviderSettings({
   useEffect(() => {
     if (wasElsewhere.current && !elsewhere && connected) load();
     wasElsewhere.current = elsewhere;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [elsewhere]);
   const busy = saving || elsewhere;
 

@@ -1,6 +1,6 @@
 // Transcript, thinking, tool-call groups, Approval cards, find bar, composer and the Settle button, ported from the prototype.
 // Dictation and Read aloud come from Voice.tsx.
-import { createContext, memo, type ReactNode, type RefObject, useCallback, startTransition, useContext, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, memo, type ReactNode, type RefObject, useCallback, startTransition, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, Columns2, CornerDownRight, EyeOff, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Square, Trash2, Wrench, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -48,6 +48,7 @@ import { CopyButton, replyMarkdown } from "./CopyMessage";
 import { turnsOf, type ReplayKind, type Variant } from "../hermes/replay";
 import type { FollowUp } from "../hermes/uiPrefs";
 import { sttRoute } from "../hermes/sttRoute";
+import { errorText } from "../hermes/values";
 
 /**
  * What a message sent while the chat's reply runs does (ADR 0057). `mode`: what Enter does, the Follow-up behavior
@@ -256,6 +257,7 @@ function MoreMenu({
   const [exporting, setExporting] = useState(false);
   useEffect(() => {
     if (!onDelete) setAskDelete(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [!onDelete]);
   const item = (label: string, icon: ReactNode, run: () => void, title?: string, danger?: boolean) => (
     <button
@@ -490,6 +492,7 @@ export function ChatPane({
     const s = new Speaker((text) => voiceRef.current!.speak(text));
     setSpeaker(s);
     return () => s.dispose();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [!voice]);
   const listen = speaker && { speaker, blocked: listenBlocked(status, voiceSetup) };
   useEffect(() => { if (!active) speaker?.stop(); }, [active, speaker]);
@@ -589,6 +592,7 @@ export function ChatPane({
     setQuery(findTarget.query);
     setLanding(true);
     stickToBottom.current = false;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [findTarget?.at]);
 
   const openFind = () => {
@@ -614,6 +618,7 @@ export function ChatPane({
   const [q, setQ] = useState("");
   /** The query being marked in the background, and since when; "" when none is. */
   const asked = useRef({ query: "", at: 0 });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- every render on purpose, so each streamed delta checks the query
   useLayoutEffect(() => {
     if (q === typed) asked.current.query = "";
     else if (!typed) setQ("");
@@ -625,6 +630,7 @@ export function ChatPane({
   const finding = q !== typed;
   const finds = useMemo(() => (q ? new RegExp(escapeRe(q), "i") : undefined), [q]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useLayoutEffect(() => {
     if (q !== typed) return;
     const marks = q ? Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("mark.hit") ?? []) : [];
@@ -652,7 +658,9 @@ export function ChatPane({
     if (!jumpTo) return;
     stickToBottom.current = false;
     setJumping(jumpTo);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [jumpTo?.at]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useLayoutEffect(() => {
     if (!jumping) return;
     let el: HTMLElement | null | undefined;
@@ -751,6 +759,7 @@ export function ChatPane({
   const shown = useTranscriptWindow({ scroller: scrollRef, chunks, all: !!q, stuck: stickToBottom, target: jumpChunk ?? revealChunk });
   revealRef.current = (has) => shown.reveal(chunks.findIndex((c) => c.some(has)));
   // Cards ignore clicks for a moment after the transcript changes, since it may have moved them under the pointer.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const movedAt = useMemo(() => performance.now(), [chat.items, chat.sideQuestions]);
   const last = chat.items[chat.items.length - 1];
   const waiting = chat.items.some(isWaiting);
@@ -1324,6 +1333,7 @@ function ToolRow({ t }: { t: ToolItem }) {
   const jump = useContext(JumpContext);
   useEffect(() => {
     if (jump?.callId && t.callId === jump.callId) setOpen(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [jump?.at]);
   const summary = t.status === "stopped" ? "stopped" : t.summary;
   return (
@@ -1397,6 +1407,7 @@ function ToolGroup({ tools }: { tools: ToolItem[] }) {
   const jump = useContext(JumpContext);
   useEffect(() => {
     if (jump?.callId && tools.some((t) => t.callId === jump.callId)) setOpen(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [jump?.at]);
   if (tools.length === 1)
     return (
@@ -1494,7 +1505,9 @@ function Composer({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   // What an update's restart would drop, for Settings to name (unsaved.ts).
   const me = useRef({}).current;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => stagedFiles.set(me, attachments), [attachments]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => () => stagedFiles.set(me, []), []);
   const focused = useRef(autoFocus);
   focused.current = autoFocus;
@@ -1537,12 +1550,15 @@ function Composer({
   useEffect(() => {
     if (wasDictating.current && !dictation.active && autoFocus) taRef.current?.focus();
     wasDictating.current = dictation.active;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [dictation.active]);
   // Leaving a pane (including Settings or the narrow switcher) releases its microphone and drops late transcripts.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => { if (!autoFocus) dictation.cancel(); }, [autoFocus]);
   // So does hiding the window to the tray: the microphone never stays open behind a hidden window (ADR 0034). The
   // recording is dropped, as Cancel drops it; nothing is sent to Hermes to transcribe.
   const windowHidden = useWindowHidden();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => { if (windowHidden) dictation.cancel(); }, [windowHidden]);
 
   // Files still being read, saved or checked: sending waits for them, so none misses the message it was added for.
@@ -1566,7 +1582,7 @@ function Composer({
       return got.attachments.map((a) => a.path);
     } catch (e) {
       if (!stillHere()) return [];
-      setRefused([`Couldn't attach files: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't attach files: ${errorText(e)}`]);
       return [];
     }
   });
@@ -1648,7 +1664,7 @@ function Composer({
       const notes = tooBig.map((f) => overLimitNote(nameOf(f), f.size, LIMITS.file));
       if (notes.length) setRefused((cur) => (paths.length ? [...cur, ...notes] : notes));
     } catch (e) {
-      setRefused([`Couldn't attach the files: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't attach the files: ${errorText(e)}`]);
     }
   });
   // Files copied in a file manager attach by path, as a drop does. Rust reads them, since WebKitGTK hides them.
@@ -1658,7 +1674,7 @@ function Composer({
       if (paths.length) await add(paths, () => open.current);
       else setRefused(["Only files on this computer can be attached."]);
     } catch (e) {
-      setRefused([`Couldn't attach the files: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't attach the files: ${errorText(e)}`]);
     }
   });
   const stageRef = useRef(stageFiles);
@@ -1701,7 +1717,7 @@ function Composer({
     try {
       await add(await invoke<string[]>("attach_picked_files"));
     } catch (e) {
-      setRefused([`Couldn't open the file picker: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't open the file picker: ${errorText(e)}`]);
     }
   };
 
@@ -1754,7 +1770,7 @@ function Composer({
       const out = await followUp!.steer(words);
       if (out) setRefused([out]);
     } catch (e) {
-      setRefused([`Couldn't steer the reply, so nothing was sent: ${e instanceof Error ? e.message : String(e)}`]);
+      setRefused([`Couldn't steer the reply, so nothing was sent: ${errorText(e)}`]);
     } finally {
       setSteering(false);
     }

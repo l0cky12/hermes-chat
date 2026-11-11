@@ -5,6 +5,7 @@
 import type { RestRequest } from "./fakeHermes";
 import { envKeyFor, type McpEdit } from "./mcp";
 import { RestError } from "./pipe";
+import { errorText } from "./values";
 
 type Cfg = Record<string, unknown>;
 type Flow = { flow_id: string; server_name: string; profile: string; status: string; authorization_url: string | null; error: string | null; tools: { name: string; description: string }[] };
@@ -383,7 +384,7 @@ export class FakeMcp {
         servers[name] = cfg;
       });
     } catch (err) {
-      if (token) throw new Error(`Not confirmed: Hermes saved the new bearer token, but not the rest of the change: ${err instanceof Error ? err.message : String(err)}`);
+      if (token) throw new Error(`Not confirmed: Hermes saved the new bearer token, but not the rest of the change: ${errorText(err)}`);
       throw err;
     }
   }

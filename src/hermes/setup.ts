@@ -6,6 +6,7 @@ import type { Route } from "./pipe";
 import type { Reached, SignInDetails } from "./tauriPipe";
 import { isUnsecure } from "./unsecure";
 import { KIND_LABEL, routeTargetLabel, routesOf, singleRoute, type RouteDetails } from "./routes";
+import { errorText } from "./values";
 
 /**
  * How far a connection test got: the address or SSH tunnel, the dashboard's port, the sign-in, then the chat
@@ -107,7 +108,7 @@ function notReady(frame: string): ProbeFailure | undefined {
 const asFailure = (e: unknown): ProbeFailure =>
   e && typeof e === "object" && "stage" in e && "message" in e
     ? (e as ProbeFailure)
-    : { stage: "address", message: e instanceof Error ? e.message : String(e) };
+    : { stage: "address", message: errorText(e) };
 
 /** Tests `d` with `probe` and explains the result. Never rejects. */
 export async function testConnection(probe: Probe, d: SignInDetails, profile = "default", quick = false): Promise<TestOutcome> {
