@@ -150,7 +150,10 @@ async function streamReply(make: (salt: string) => string, chunk: number) {
   };
 }
 
-/** Opens a short chat whose last reply is hostile reply `name` (hostile.ts) at size `n`. `commitMs` as in `open`. */
+/**
+ * Opens a short chat whose last reply is hostile reply `name` (hostile.ts) at size `n`. `commitMs` as in `open`;
+ * `chars` and `tokens`: the reply's text and highlighted tokens on screen, so a fast open is known to have drawn it.
+ */
 async function hostileOpen(name: string, n: number) {
   root.render(<></>);
   await painted();
@@ -160,7 +163,8 @@ async function hostileOpen(name: string, n: number) {
   flushSync(() => root.render(<Host key={++opened} initial={current} />));
   const t1 = performance.now();
   const t2 = await painted();
-  return { name, n, commitMs: Math.round(t1 - t0), paintMs: Math.round(t2 - t0) };
+  const shown = document.querySelector('[data-item="a-hostile"]');
+  return { name, n, commitMs: Math.round(t1 - t0), paintMs: Math.round(t2 - t0), chars: shown?.textContent?.length ?? 0, tokens: shown?.querySelectorAll('[class^="hljs-"]').length ?? 0 };
 }
 
 /** Streams hostile reply `name` at size `n`, as `streamCode` streams code. */
