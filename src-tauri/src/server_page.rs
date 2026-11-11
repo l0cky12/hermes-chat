@@ -7,7 +7,8 @@
 //!   the page's loopback host and port on the server: `ssh -N -L <socket>:<host>:<port> -- <target>`. Every argument is
 //!   one `Command` argument: the host is one of three fixed strings, the port a number, the socket a path this module
 //!   made, and the target is the one Rust signed in with, checked as the sign-in tunnel checks it. No shell runs.
-//!   Windows' OpenSSH can't listen on a Unix socket, so there ssh listens on a loopback port instead (`LocalEnd`).
+//!   Windows' OpenSSH can't listen on a Unix socket, so there ssh listens on a loopback port instead (`LocalEnd`), and
+//!   each connection to it is used only if ssh holds its far end (ADR 0140).
 //! - A TCP listener Rust binds on `127.0.0.1:0` and keeps, so the port is ephemeral and never released for another
 //!   program to take before ssh binds it. Each connection the frame makes is copied to and from ssh's socket. On
 //!   Linux and Windows, a connection from a program run by another account is closed unanswered (`loopback_peer`,
@@ -291,7 +292,7 @@ fn socket_path_ok(s: &str) -> bool {
 /// This computer's end of ssh's forward, for a server page and for the sign-in tunnel (tunnel.rs, ADR 0098). On Linux,
 /// a Unix socket in a private folder (`SocketDir`) that only the owner can connect to. On Windows, a loopback port
 /// picked just before ssh binds it: any program on this computer could connect to it, as to the relay's own port, and
-/// could take it before ssh binds it.
+/// could take it before ssh binds it, so `connect` checks that ssh holds each connection's far end (ADR 0140).
 #[cfg(unix)]
 pub(crate) struct LocalEnd(SocketDir);
 #[cfg(windows)]
@@ -300,8 +301,13 @@ pub(crate) struct LocalEnd(u16);
 /// What the relay connects each frame connection to.
 #[cfg(unix)]
 pub(crate) type Address = PathBuf;
+/// What the relay connects each frame connection to: ssh's port, and the ssh that must hold it.
 #[cfg(windows)]
-pub(crate) type Address = u16;
+#[derive(Clone)]
+pub(crate) struct Address {
+    port: u16,
+    ssh: crate::loopback_owner::SshProcess,
+}
 
 #[cfg(unix)]
 impl LocalEnd {
@@ -320,8 +326,9 @@ impl LocalEnd {
         ssh_args(target, &self.0.socket(), page)
     }
 
-    pub(crate) fn address(&self) -> Address {
-        self.0.socket()
+    /// Where to reach `_ssh`'s end of the forward.
+    pub(crate) fn address(&self, _ssh: &Child) -> std::io::Result<Address> {
+        Ok(self.0.socket())
     }
 
     /// ssh couldn't make this tunnel's socket (`unix_listener: cannot bind to path …`).
@@ -351,8 +358,9 @@ impl LocalEnd {
         tcp_ssh_args(target, self.0, page)
     }
 
-    pub(crate) fn address(&self) -> Address {
-        self.0
+    /// Where to reach `ssh`'s end of the forward.
+    pub(crate) fn address(&self, ssh: &Child) -> std::io::Result<Address> {
+        Ok(Address { port: self.0, ssh: crate::loopback_owner::SshProcess::of(ssh)? })
     }
 
     fn named_in(&self, said: &str) -> bool {
@@ -360,9 +368,13 @@ impl LocalEnd {
     }
 }
 
+/// A connection to ssh's port. Fails with `ErrorKind::PermissionDenied`, sending nothing, when another program holds
+/// its far end: one that bound the port before ssh did.
 #[cfg(windows)]
 pub(crate) async fn connect(address: &Address) -> std::io::Result<tokio::net::TcpStream> {
-    tokio::net::TcpStream::connect(("127.0.0.1", *address)).await
+    let stream = tokio::net::TcpStream::connect(("127.0.0.1", address.port)).await?;
+    crate::loopback_owner::check(&stream, address.ssh)?;
+    Ok(stream)
 }
 
 /// A private folder for one tunnel's socket: `$XDG_RUNTIME_DIR` (the owner's own, 0700) when it is usable, else the
@@ -475,7 +487,7 @@ fn spawner() -> std::sync::mpsc::Sender<Job> {
 /// `ssh` with `args`: stdin closed, stdout to `stdout`, stderr kept. It is killed when dropped, and, through
 /// `PR_SET_PDEATHSIG`, when the app ends, since it is started from `spawner`'s thread.
 #[cfg(unix)]
-async fn spawn_ssh(program: &str, args: &[OsString], stdout: Stdio) -> Result<Child, ServerPageError> {
+async fn spawn_ssh(program: &str, args: &[OsString], stdout: Stdio) -> Result<Ssh, ServerPageError> {
     let mut command = Command::new(program);
     command.args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).kill_on_drop(true);
     let parent = std::process::id() as libc::pid_t;
@@ -501,75 +513,176 @@ async fn spawn_ssh(program: &str, args: &[OsString], stdout: Stdio) -> Result<Ch
             let _ = tx.send(command.spawn());
         }))
         .map_err(|_| ServerPageError::Spawn("the ssh spawner thread is gone".into()))?;
-    rx.await.map_err(|_| ServerPageError::Spawn("the ssh spawner thread is gone".into()))?.map_err(|e| ServerPageError::Spawn(e.to_string()))
+    let child = rx.await.map_err(|_| ServerPageError::Spawn("the ssh spawner thread is gone".into()))?.map_err(|e| ServerPageError::Spawn(e.to_string()))?;
+    Ok(Ssh { child })
 }
 
 #[cfg(windows)]
-async fn spawn_ssh(program: &str, args: &[OsString], stdout: Stdio) -> Result<Child, ServerPageError> {
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+async fn spawn_ssh(program: &str, args: &[OsString], stdout: Stdio) -> Result<Ssh, ServerPageError> {
     let mut command = Command::new(program);
-    command.args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).kill_on_drop(true).creation_flags(CREATE_NO_WINDOW);
-    let child = command.spawn().map_err(|e| ServerPageError::Spawn(e.to_string()))?;
-    if let Some(handle) = child.raw_handle() {
-        job::ends_with_app(handle).map_err(|e| ServerPageError::Spawn(format!("couldn't tie ssh to Hermes Chat: {e}")))?;
+    command.args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped());
+    Ssh::start(&mut command).map_err(|e| ServerPageError::Spawn(e.to_string()))
+}
+
+/// A running ssh, ended when dropped. On Windows that includes every process ssh started, such as the real ssh.exe
+/// behind a Scoop or Chocolatey shim, which killing the shim alone would leave holding the forward.
+pub(crate) struct Ssh {
+    child: Child,
+    #[cfg(windows)]
+    _job: job::Own,
+}
+
+impl Ssh {
+    /// Starts `command`. On Windows it starts suspended, goes into the app's job, so it ends with the app, and into a
+    /// job of its own, so it ends with this `Ssh`, and only then runs: nothing it starts can be outside both.
+    #[cfg(windows)]
+    pub(crate) fn start(command: &mut Command) -> std::io::Result<Ssh> {
+        const CREATE_SUSPENDED: u32 = 0x0000_0004;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let child = command.kill_on_drop(true).creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED).spawn()?;
+        let (Some(handle), Some(pid)) = (child.raw_handle(), child.id()) else {
+            return Err(std::io::Error::other("ssh exited as it started"));
+        };
+        job::ends_with_app(handle)?;
+        let own = job::Own::new()?;
+        own.add(handle)?;
+        job::resume(pid)?;
+        Ok(Ssh { child, _job: own })
     }
-    Ok(child)
+
+    #[cfg(unix)]
+    pub(crate) fn start(command: &mut Command) -> std::io::Result<Ssh> {
+        Ok(Ssh { child: command.kill_on_drop(true).spawn()? })
+    }
+}
+
+impl std::ops::Deref for Ssh {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        &self.child
+    }
+}
+
+impl std::ops::DerefMut for Ssh {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.child
+    }
 }
 
 #[cfg(windows)]
 mod job {
     use std::sync::OnceLock;
-    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32};
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
+    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
-    /// A job that kills what is in it once its last handle closes. Its handle is never closed, so Windows closes it
-    /// when this process ends, crashed or not.
-    fn the_job() -> std::io::Result<HANDLE> {
-        static JOB: OnceLock<Result<usize, i32>> = OnceLock::new();
-        let made = JOB.get_or_init(|| {
-            // SAFETY: plain Win32 calls; the limits struct outlives the call that reads it.
-            unsafe {
-                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-                if job.is_null() {
-                    return Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(0));
-                }
-                let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                let set = SetInformationJobObject(
-                    job,
-                    JobObjectExtendedLimitInformation,
-                    &limits as *const _ as *const core::ffi::c_void,
-                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                );
-                if set == 0 {
-                    return Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(0));
-                }
-                Ok(job as usize)
+    /// A new job that kills what is in it once its last handle closes.
+    fn killing_job() -> std::io::Result<HANDLE> {
+        // SAFETY: plain Win32 calls; the limits struct outlives the call that reads it.
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return Err(std::io::Error::last_os_error());
             }
-        });
-        made.map(|h| h as HANDLE).map_err(std::io::Error::from_raw_os_error)
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let set = SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as *const core::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if set == 0 {
+                let e = std::io::Error::last_os_error();
+                CloseHandle(job);
+                return Err(e);
+            }
+            Ok(job)
+        }
     }
 
-    /// Puts the process `handle` in the job, so it ends with this app.
-    pub fn ends_with_app(handle: std::os::windows::io::RawHandle) -> std::io::Result<()> {
-        let job = the_job()?;
-        // SAFETY: `handle` is a live process handle the caller's Child owns.
-        if unsafe { AssignProcessToJobObject(job, handle as HANDLE) } == 0 {
+    fn add(job: HANDLE, process: std::os::windows::io::RawHandle) -> std::io::Result<()> {
+        // SAFETY: `process` is a live process handle the caller's Child owns.
+        if unsafe { AssignProcessToJobObject(job, process as HANDLE) } == 0 {
             return Err(std::io::Error::last_os_error());
         }
         Ok(())
+    }
+
+    /// The app's job. Its handle is never closed, so Windows closes it when this process ends, crashed or not.
+    fn the_job() -> std::io::Result<HANDLE> {
+        static JOB: OnceLock<Result<usize, i32>> = OnceLock::new();
+        let made = JOB.get_or_init(|| killing_job().map(|job| job as usize).map_err(|e| e.raw_os_error().unwrap_or(0)));
+        made.map(|h| h as HANDLE).map_err(std::io::Error::from_raw_os_error)
+    }
+
+    /// Puts the process `handle` in the app's job, so it ends with this app.
+    pub fn ends_with_app(handle: std::os::windows::io::RawHandle) -> std::io::Result<()> {
+        add(the_job()?, handle)
+    }
+
+    /// A job of one process's own, nested in the app's. Dropping it ends that process and everything it started.
+    pub struct Own(usize);
+
+    impl Own {
+        pub fn new() -> std::io::Result<Own> {
+            killing_job().map(|job| Own(job as usize))
+        }
+
+        pub fn add(&self, process: std::os::windows::io::RawHandle) -> std::io::Result<()> {
+            add(self.0 as HANDLE, process)
+        }
+    }
+
+    impl Drop for Own {
+        fn drop(&mut self) {
+            // SAFETY: the job handle `new` made, closed once.
+            unsafe { CloseHandle(self.0 as HANDLE) };
+        }
+    }
+
+    /// Lets process `pid`, started suspended, run.
+    pub fn resume(pid: u32) -> std::io::Result<()> {
+        let mut resumed = false;
+        // SAFETY: plain Win32 calls on handles opened and closed here; `entry` is sized as Thread32First asks.
+        unsafe {
+            let threads = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            if threads == INVALID_HANDLE_VALUE {
+                return Err(std::io::Error::last_os_error());
+            }
+            let mut entry: THREADENTRY32 = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+            let mut more = Thread32First(threads, &mut entry) != 0;
+            while more {
+                if entry.th32OwnerProcessID == pid {
+                    let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
+                    if !thread.is_null() {
+                        resumed |= ResumeThread(thread) != u32::MAX;
+                        CloseHandle(thread);
+                    }
+                }
+                more = Thread32Next(threads, &mut entry) != 0;
+            }
+            CloseHandle(threads);
+        }
+        if resumed {
+            Ok(())
+        } else {
+            Err(std::io::Error::other("couldn't let ssh run after putting it in its job"))
+        }
     }
 }
 
 /// The last `STDERR_KEPT` bytes ssh printed, read as it prints, so a chatty ssh never blocks on a full pipe.
 #[derive(Clone, Default)]
-struct Stderr(Arc<Mutex<Vec<u8>>>);
+pub(crate) struct Stderr(Arc<Mutex<Vec<u8>>>);
 
 impl Stderr {
-    fn drain(&self, mut from: tokio::process::ChildStderr) {
+    pub(crate) fn drain(&self, mut from: tokio::process::ChildStderr) -> tokio::task::JoinHandle<()> {
         let kept = self.0.clone();
         tokio::spawn(async move {
             let mut buf = [0u8; 1024];
@@ -582,10 +695,10 @@ impl Stderr {
                 let over = k.len().saturating_sub(STDERR_KEPT);
                 k.drain(..over);
             }
-        });
+        })
     }
 
-    fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         String::from_utf8_lossy(&self.0.lock().unwrap()).trim().to_owned()
     }
 
@@ -666,8 +779,9 @@ fn key_ok(key: &str) -> bool {
 
 /// What `start` made, handed to the task that keeps the tunnel.
 struct Started {
-    child: Child,
+    child: Ssh,
     end: LocalEnd,
+    address: Address,
     stderr: Stderr,
     listener: TcpListener,
 }
@@ -714,7 +828,7 @@ impl ServerPages {
             started = start(program, &target, &page) => started,
             why = &mut stopped => Err(ServerPageError::Closed(why.unwrap_or(None))),
         };
-        let Started { mut child, end, stderr, listener } = match started {
+        let Started { mut child, end, address, stderr, listener } = match started {
             Ok(s) => s,
             Err(e) => {
                 self.open.lock().unwrap().remove(&key);
@@ -722,7 +836,6 @@ impl ServerPages {
             }
         };
         let local_port = listener.local_addr().map_err(|e| ServerPageError::Io(e.to_string()))?.port();
-        let address = end.address();
         if let Some(open) = self.open.lock().unwrap().get_mut(&key) {
             open.served = Some(Served { local_port, jar: Jar { target: target.clone(), origin: page.url.origin() } });
         }
@@ -857,8 +970,8 @@ async fn read_kept(mut from: impl tokio::io::AsyncRead + Unpin, kept: u64, into:
 /// dropped, ending ssh, if this fails or is dropped part-way.
 async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started, ServerPageError> {
     let end = LocalEnd::new().map_err(|e| ServerPageError::Io(format!("{}: {e}", LocalEnd::COULDNT)))?;
-    let address = end.address();
     let mut child = spawn_ssh(program, &end.ssh_args(target, page)?, Stdio::null()).await?;
+    let address = end.address(&child).map_err(|e| ServerPageError::Spawn(e.to_string()))?;
     let stderr = Stderr::default();
     if let Some(e) = child.stderr.take() {
         stderr.drain(e);
@@ -873,8 +986,12 @@ async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started
             let said = stderr.text();
             return Err(ServerPageError::Ssh(if said.is_empty() { "ssh exited without saying why.".into() } else { said }));
         }
-        if let Ok(s) = connect(&address).await {
-            break s;
+        match connect(&address).await {
+            Ok(s) => break s,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(ServerPageError::Io(format!("The page didn't open through the SSH tunnel: {e}")));
+            }
+            Err(_) => {}
         }
         // ssh couldn't make this tunnel's socket (`unix_listener: cannot bind to path …`); it keeps running for the
         // rest, so say so now rather than at the timeout.
@@ -897,7 +1014,7 @@ async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started
         return Err(ServerPageError::Ssh(said));
     }
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| ServerPageError::Io(e.to_string()))?;
-    Ok(Started { child, end, stderr, listener })
+    Ok(Started { child, end, address, stderr, listener })
 }
 
 /// Whether anything answers through a new tunnel. ssh closing the connection with nothing said means the server
@@ -1722,7 +1839,9 @@ while True:
         let (ssh, address, end) = {
             let ssh = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
             let port = ssh.local_addr().unwrap().port();
-            (ssh, port, ())
+            // The stand-in runs in this process, so this process is the ssh the relay checks for.
+            let this = crate::loopback_owner::SshProcess { pid: std::process::id(), started: 0 };
+            (ssh, Address { port, ssh: this }, ())
         };
         tokio::spawn(async move {
             while let Ok((mut s, _)) = ssh.accept().await {

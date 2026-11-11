@@ -11,6 +11,7 @@ pub mod fonts;
 pub mod gtk_clipboard;
 pub mod links;
 pub mod local_stt;
+mod loopback_owner;
 mod loopback_peer;
 pub mod main_window;
 pub mod markdown_image;
@@ -171,8 +172,11 @@ struct AppState(Mutex<Option<Connection>>, std::sync::Mutex<Option<tokio::task::
 #[derive(Default)]
 struct Connecting {
     now: Option<(String, tokio::task::AbortHandle)>,
-    stopped: std::collections::HashSet<String>,
+    stopped: std::collections::VecDeque<String>,
 }
+
+/// The most attempts stopped before they began kept.
+const STOPPED_KEPT: usize = 256;
 
 /// How long opening a connection may take, all steps together, so a server that stops answering midway can't keep
 /// the app, or Sign out, waiting for good.
@@ -250,10 +254,12 @@ async fn hermes_connect(
     on_step: Channel<connect_steps::Started>,
 ) -> Result<Route, String> {
     let mut slot = state.0.lock().await;
-    *slot = None;
-    transfers.stop_all();
-    displays.close_all();
-    let (connection, route) = as_attempt(&state, attempt.unwrap_or_default(), async move {
+    let leave = || {
+        *slot = None;
+        transfers.stop_all();
+        displays.close_all();
+    };
+    let opened = as_attempt(&state, attempt.unwrap_or_default(), leave, async move {
         // Which step it is on, for the record of connection attempts (#270).
         let steps = Steps::reporting(move |s| drop(on_step.send(s)));
         let opening = open_connection(target, credential, profile, on_event, expect_server, quick.unwrap_or(false), ssh_route, steps);
@@ -261,11 +267,20 @@ async fn hermes_connect(
             .await
             .unwrap_or_else(|_| Err(format!("Hermes didn't finish connecting within {}s.", CONNECT_TIMEOUT.as_secs())))
     })
-    .await?;
-    // Server pages opened through another SSH target, or for a URL sign-in none, belong to the server left behind.
-    pages.close_other_targets(connection.ssh_target.as_deref(), SIGNED_IN_ELSEWHERE);
-    *slot = Some(connection);
-    Ok(route)
+    .await;
+    match opened {
+        Attempt::StoppedFirst => Err(CONNECT_STOPPED.into()),
+        Attempt::Ran(Ok((connection, route))) => {
+            // Server pages opened through another SSH target, or for a URL sign-in none, belong to the server left behind.
+            pages.close_other_targets(connection.ssh_target.as_deref(), SIGNED_IN_ELSEWHERE);
+            *slot = Some(connection);
+            Ok(route)
+        }
+        Attempt::Ran(Err(e)) => {
+            pages.close_all(SIGNED_OUT);
+            Err(e)
+        }
+    }
 }
 
 /// How long a reopen's ticket and socket may each take: a closed socket usually means the rest of the connection still
@@ -275,12 +290,14 @@ const REOPEN_LIMITS: transport::StepLimits = transport::StepLimits { ticket: QUI
 /// Opens `/api/ws` for `profile` again on the connection held now, after its socket closed. The SSH tunnel and the
 /// sign-in are kept, so this mints a ticket and opens the socket, nothing more. Transfers stop as on any reconnect (ADR
 /// 0023), and so do Screens, whose lease came over the closed socket. Any failure, a stop included, closes the whole
-/// connection, so the webview opens it again from the start with `hermes_connect`.
+/// connection and its server pages, so the webview opens it again from the start with `hermes_connect`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn hermes_reopen(
     state: State<'_, AppState>,
     transfers: State<'_, Transfers>,
     displays: State<'_, display::Displays>,
+    pages: State<'_, Arc<server_page::ServerPages>>,
     profile: String,
     attempt: String,
     on_event: Channel<PipeEvent>,
@@ -293,11 +310,15 @@ async fn hermes_reopen(
         return Err(transport::TransportError::Closed.to_string());
     };
     let dashboard = conn.dashboard.clone();
-    let opened = as_attempt(&state, attempt, async move {
+    let opened = as_attempt(&state, attempt, || {}, async move {
         let steps = Steps::reporting(move |s| drop(on_step.send(s)));
         dashboard.open_pipe_within(&profile, move |e| drop(on_event.send(e)), Some(REOPEN_LIMITS), &steps).await.map_err(|e| e.to_string())
     })
     .await;
+    let opened = match opened {
+        Attempt::StoppedFirst => Err(CONNECT_STOPPED.into()),
+        Attempt::Ran(opened) => opened,
+    };
     match opened {
         Ok(pipe) => {
             conn.pipe = Arc::new(pipe);
@@ -305,22 +326,32 @@ async fn hermes_reopen(
         }
         Err(e) => {
             *slot = None;
+            pages.close_all(SIGNED_OUT);
             Err(e)
         }
     }
 }
 
-/// Runs `opening` apart as the attempt the webview names `attempt`, so `hermes_connect_cancel` can stop it.
+/// How an attempt `as_attempt` was given went: stopped by `hermes_connect_cancel` before it began, or run.
+enum Attempt<T> {
+    StoppedFirst,
+    Ran(Result<T, String>),
+}
+
+/// Runs `begin`, then `opening` apart, as the attempt the webview names `attempt`, so `hermes_connect_cancel` can stop it.
 async fn as_attempt<T: Send + 'static>(
     state: &AppState,
     attempt: String,
+    begin: impl FnOnce(),
     opening: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
-) -> Result<T, String> {
+) -> Attempt<T> {
     let task = {
         let mut connecting = state.2.lock().unwrap();
-        if connecting.stopped.remove(&attempt) {
-            return Err(CONNECT_STOPPED.into());
+        if let Some(i) = connecting.stopped.iter().position(|a| *a == attempt) {
+            connecting.stopped.remove(i);
+            return Attempt::StoppedFirst;
         }
+        begin();
         let task = tokio::spawn(opening);
         connecting.now = Some((attempt.clone(), task.abort_handle()));
         task
@@ -332,11 +363,11 @@ async fn as_attempt<T: Send + 'static>(
             connecting.now = None;
         }
     }
-    match opened {
+    Attempt::Ran(match opened {
         Ok(opened) => opened,
         Err(e) if e.is_cancelled() => Err(CONNECT_STOPPED.into()),
         Err(e) => Err(e.to_string()),
-    }
+    })
 }
 
 /// Opens the tunnel or resolves the URL, checks the dashboard there is Hermes, and the one `expect_server` names, then
@@ -380,7 +411,10 @@ fn hermes_connect_cancel(state: State<'_, AppState>, attempt: String) {
     match &connecting.now {
         Some((now, task)) if *now == attempt => task.abort(),
         _ => {
-            connecting.stopped.insert(attempt);
+            if connecting.stopped.len() >= STOPPED_KEPT {
+                connecting.stopped.pop_front();
+            }
+            connecting.stopped.push_back(attempt);
         }
     }
 }
@@ -2024,6 +2058,109 @@ mod tests {
             assert_eq!(*heard.lock().unwrap(), want.map(|(p, a)| (p.to_owned(), a)));
             assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2, "one HTTP connection plus the WebSocket, for {sign_in}");
         }
+    }
+
+    fn connecting_app() -> tauri::App<tauri::test::MockRuntime> {
+        tauri::test::mock_builder()
+            .manage(super::AppState::default())
+            .manage(super::Transfers::default())
+            .manage(super::display::Displays::default())
+            .manage(std::sync::Arc::new(super::server_page::ServerPages::default()))
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap()
+    }
+
+    async fn connect_command(app: &tauri::App<tauri::test::MockRuntime>, base: &url::Url, attempt: &str) -> Result<super::Route, String> {
+        use tauri::Manager;
+        let password = super::SignInWith::Password { username: "liam".into(), password: "hunter2".into(), provider: None };
+        super::hermes_connect(
+            app.state(),
+            app.state(),
+            app.state(),
+            app.state(),
+            super::Target::Url { url: base.to_string(), headers: Vec::new() },
+            password,
+            "default".into(),
+            Some(attempt.into()),
+            tauri::ipc::Channel::new(|_| Ok(())),
+            None,
+            None,
+            None,
+            tauri::ipc::Channel::new(|_| Ok(())),
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_connect_stopped_before_it_began_leaves_the_live_connection_alone() {
+        use tauri::Manager;
+        let (base, _, _, _) = counting_dashboard().await;
+        let app = connecting_app();
+        connect_command(&app, &base, "a").await.expect("a signs in");
+        let pages = app.state::<std::sync::Arc<super::server_page::ServerPages>>();
+        let _page = pages.begin("page", "me@hermes").unwrap();
+
+        super::hermes_connect_cancel(app.state(), "b".into());
+        assert_eq!(connect_command(&app, &base, "b").await.err().as_deref(), Some(super::CONNECT_STOPPED));
+
+        assert!(app.state::<super::AppState>().0.lock().await.is_some(), "a's connection is still there");
+        assert_eq!(pages.len(), 1, "the server page is still open");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_connect_closes_the_server_pages() {
+        use tauri::Manager;
+        let (base, _, _, _) = counting_dashboard().await;
+        let app = connecting_app();
+        connect_command(&app, &base, "a").await.expect("a signs in");
+        let pages = app.state::<std::sync::Arc<super::server_page::ServerPages>>();
+        let _page = pages.begin("page", "me@hermes").unwrap();
+
+        let refused = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let nowhere = url::Url::parse(&format!("http://{}/", refused.local_addr().unwrap())).unwrap();
+        drop(refused);
+        assert!(connect_command(&app, &nowhere, "b").await.is_err(), "nothing answers there");
+
+        assert!(app.state::<super::AppState>().0.lock().await.is_none());
+        assert!(pages.is_empty(), "the server pages closed with the sign-in");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_reopen_closes_the_server_pages() {
+        use tauri::Manager;
+        let (base, _, _, _) = counting_dashboard().await;
+        let app = connecting_app();
+        connect_command(&app, &base, "a").await.expect("a signs in");
+        let pages = app.state::<std::sync::Arc<super::server_page::ServerPages>>();
+        let _page = pages.begin("page", "me@hermes").unwrap();
+
+        super::hermes_connect_cancel(app.state(), "r".into());
+        let reopened = super::hermes_reopen(
+            app.state(),
+            app.state(),
+            app.state(),
+            app.state(),
+            "default".into(),
+            "r".into(),
+            tauri::ipc::Channel::new(|_| Ok(())),
+            tauri::ipc::Channel::new(|_| Ok(())),
+        )
+        .await;
+
+        assert_eq!(reopened.unwrap_err(), super::CONNECT_STOPPED);
+        assert!(app.state::<super::AppState>().0.lock().await.is_none());
+        assert!(pages.is_empty(), "the server pages closed with the connection");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stops_that_came_too_late_are_not_kept_without_end() {
+        use tauri::Manager;
+        let app = connecting_app();
+        for i in 0..10_000 {
+            super::hermes_connect_cancel(app.state(), format!("finished-{i}"));
+        }
+        let kept = app.state::<super::AppState>().2.lock().unwrap().stopped.len();
+        assert!(kept < 1000, "{kept} stops kept");
     }
 
     fn send_through_ipc(webview: &tauri::WebviewWindow<tauri::test::MockRuntime>, path: &std::path::Path) -> Result<(), String> {

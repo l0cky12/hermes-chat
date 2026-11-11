@@ -256,6 +256,13 @@ export function row(id: string, daysAgo: number, over: Partial<SessionRow> = {})
   return { id, source: "gui", title: `Chat ${id}`, preview: "", started_at: at, last_active: at, message_count: 2, pinned: false, archived: false, last_read_at: null, ...over };
 }
 
+/** `row`, read up to its own last activity. A read mark taken from the clock separately could land a millisecond before
+ * that activity, and leave the chat unread. */
+export function readRow(id: string, daysAgo: number, over: Partial<SessionRow> = {}): SessionRow {
+  const r = row(id, daysAgo, over);
+  return { ...r, last_read_at: r.last_active };
+}
+
 /** A session edit's body without the request id and revision every edit carries. */
 export function editFlags(body: Record<string, unknown> | undefined) {
   const { request_id: _id, expected_revision: _revision, ...flags } = body ?? {};

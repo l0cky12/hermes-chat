@@ -4,7 +4,7 @@
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { FakeHermes, row } from "../hermes/fakeHermes";
+import { FakeHermes, readRow, row } from "../hermes/fakeHermes";
 import { FakeTray } from "../hermes/fakeTray";
 import { memoryCache } from "../hermes/memoryCache";
 import { connect, type Hermes } from "../hermes/transport";
@@ -33,13 +33,13 @@ const nowS = () => Date.now() / 1000;
 async function launch(setup: (server: FakeHermes) => void = () => {}) {
   const server = new FakeHermes();
   server.sessions = [
-    row("backup", 1, { pinned: true, title: "Nightly backup", last_read_at: nowS() }),
+    readRow("backup", 1, { pinned: true, title: "Nightly backup" }),
     row("notes", 0.01, { pinned: true, title: "Release notes", last_read_at: 0 }),
   ];
   server.otherProfiles = {
     work: [
       row("deploy", 0.02, { pinned: true, title: "Deploy plan", last_read_at: 0 }),
-      row("migrate", 0, { pinned: true, title: "Migrate db", last_read_at: nowS() }),
+      readRow("migrate", 0, { pinned: true, title: "Migrate db" }),
     ],
   };
   server.liveSessions = [{ id: "rt-w", session_key: "migrate", status: "waiting", last_active: nowS() - 300 }];
@@ -184,7 +184,7 @@ describe("The inbox", () => {
 
   it("opens a waiting chat older than the profile's list holds", async () => {
     const { hermes, user, openInbox } = await launch((server) => {
-      server.otherProfiles.work.push(row("audit", 40, { title: "Quarterly audit", last_read_at: nowS() }));
+      server.otherProfiles.work.push(readRow("audit", 40, { title: "Quarterly audit" }));
       server.liveSessions = [{ id: "rt-a", session_key: "audit", status: "waiting", last_active: nowS() - 60 }];
       server.openRequests.set("srq-audit", { sid: "rt-a", stored: "audit", method: "approval", params: { request_id: "apr-audit", command: "x", description: "y", choices: ["once", "deny"] } });
     });

@@ -235,7 +235,7 @@ pub fn client(headers: &HeaderMap) -> Result<reqwest::Client, TransportError> {
 /// `client`, with redirects kept to the dashboard's origin even without extra headers when `always` is set, as for a
 /// request that carries a provider key.
 fn client_kept_to_origin(headers: &HeaderMap, always: bool) -> Result<reqwest::Client, TransportError> {
-    let mut http = reqwest::Client::builder().default_headers(headers.clone());
+    let mut http = reqwest::Client::builder().default_headers(headers.clone()).no_proxy();
     if always || !headers.is_empty() {
         http = http.redirect(redirect::Policy::custom(same_origin_redirects));
     }
