@@ -7,7 +7,8 @@
 //!   the page's loopback host and port on the server: `ssh -N -L <socket>:<host>:<port> -- <target>`. Every argument is
 //!   one `Command` argument: the host is one of three fixed strings, the port a number, the socket a path this module
 //!   made, and the target is the one Rust signed in with, checked as the sign-in tunnel checks it. No shell runs.
-//!   Windows' OpenSSH can't listen on a Unix socket, so there ssh listens on a loopback port instead (`LocalEnd`).
+//!   Windows' OpenSSH can't listen on a Unix socket, so there ssh listens on a loopback port instead (`LocalEnd`), and
+//!   each connection to it is used only if ssh holds its far end (ADR 0138).
 //! - A TCP listener Rust binds on `127.0.0.1:0` and keeps, so the port is ephemeral and never released for another
 //!   program to take before ssh binds it. Each connection the frame makes is copied to and from ssh's socket. On
 //!   Linux, a connection from a program run by another account is closed unanswered (`loopback_peer`, ADR 0105).
@@ -274,7 +275,7 @@ fn socket_path_ok(s: &str) -> bool {
 /// This computer's end of ssh's forward, for a server page and for the sign-in tunnel (tunnel.rs, ADR 0098). On Linux,
 /// a Unix socket in a private folder (`SocketDir`) that only the owner can connect to. On Windows, a loopback port
 /// picked just before ssh binds it: any program on this computer could connect to it, as to the relay's own port, and
-/// could take it before ssh binds it.
+/// could take it before ssh binds it, so `connect` checks that ssh holds each connection's far end (ADR 0138).
 #[cfg(unix)]
 pub(crate) struct LocalEnd(SocketDir);
 #[cfg(windows)]
@@ -283,8 +284,13 @@ pub(crate) struct LocalEnd(u16);
 /// What the relay connects each frame connection to.
 #[cfg(unix)]
 pub(crate) type Address = PathBuf;
+/// What the relay connects each frame connection to: ssh's port, and the ssh that must hold it.
 #[cfg(windows)]
-pub(crate) type Address = u16;
+#[derive(Clone)]
+pub(crate) struct Address {
+    port: u16,
+    ssh: crate::loopback_owner::SshProcess,
+}
 
 #[cfg(unix)]
 impl LocalEnd {
@@ -303,8 +309,9 @@ impl LocalEnd {
         ssh_args(target, &self.0.socket(), page)
     }
 
-    pub(crate) fn address(&self) -> Address {
-        self.0.socket()
+    /// Where to reach `_ssh`'s end of the forward.
+    pub(crate) fn address(&self, _ssh: &Child) -> std::io::Result<Address> {
+        Ok(self.0.socket())
     }
 
     /// ssh couldn't make this tunnel's socket (`unix_listener: cannot bind to path …`).
@@ -334,8 +341,9 @@ impl LocalEnd {
         tcp_ssh_args(target, self.0, page)
     }
 
-    pub(crate) fn address(&self) -> Address {
-        self.0
+    /// Where to reach `ssh`'s end of the forward.
+    pub(crate) fn address(&self, ssh: &Child) -> std::io::Result<Address> {
+        Ok(Address { port: self.0, ssh: crate::loopback_owner::SshProcess::of(ssh)? })
     }
 
     fn named_in(&self, said: &str) -> bool {
@@ -343,9 +351,13 @@ impl LocalEnd {
     }
 }
 
+/// A connection to ssh's port. Fails with `ErrorKind::PermissionDenied`, sending nothing, when another program holds
+/// its far end: one that bound the port before ssh did.
 #[cfg(windows)]
 pub(crate) async fn connect(address: &Address) -> std::io::Result<tokio::net::TcpStream> {
-    tokio::net::TcpStream::connect(("127.0.0.1", *address)).await
+    let stream = tokio::net::TcpStream::connect(("127.0.0.1", address.port)).await?;
+    crate::loopback_owner::check(&stream, address.ssh)?;
+    Ok(stream)
 }
 
 /// A private folder for one tunnel's socket: `$XDG_RUNTIME_DIR` (the owner's own, 0700) when it is usable, else the
@@ -651,6 +663,7 @@ fn key_ok(key: &str) -> bool {
 struct Started {
     child: Child,
     end: LocalEnd,
+    address: Address,
     stderr: Stderr,
     listener: TcpListener,
 }
@@ -697,7 +710,7 @@ impl ServerPages {
             started = start(program, &target, &page) => started,
             why = &mut stopped => Err(ServerPageError::Closed(why.unwrap_or(None))),
         };
-        let Started { mut child, end, stderr, listener } = match started {
+        let Started { mut child, end, address, stderr, listener } = match started {
             Ok(s) => s,
             Err(e) => {
                 self.open.lock().unwrap().remove(&key);
@@ -705,7 +718,6 @@ impl ServerPages {
             }
         };
         let local_port = listener.local_addr().map_err(|e| ServerPageError::Io(e.to_string()))?.port();
-        let address = end.address();
         if let Some(open) = self.open.lock().unwrap().get_mut(&key) {
             open.served = Some(Served { local_port, jar: Jar { target: target.clone(), origin: page.url.origin() } });
         }
@@ -840,8 +852,8 @@ async fn read_kept(mut from: impl tokio::io::AsyncRead + Unpin, kept: u64, into:
 /// dropped, ending ssh, if this fails or is dropped part-way.
 async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started, ServerPageError> {
     let end = LocalEnd::new().map_err(|e| ServerPageError::Io(format!("{}: {e}", LocalEnd::COULDNT)))?;
-    let address = end.address();
     let mut child = spawn_ssh(program, &end.ssh_args(target, page)?, Stdio::null()).await?;
+    let address = end.address(&child).map_err(|e| ServerPageError::Spawn(e.to_string()))?;
     let stderr = Stderr::default();
     if let Some(e) = child.stderr.take() {
         stderr.drain(e);
@@ -856,8 +868,12 @@ async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started
             let said = stderr.text();
             return Err(ServerPageError::Ssh(if said.is_empty() { "ssh exited without saying why.".into() } else { said }));
         }
-        if let Ok(s) = connect(&address).await {
-            break s;
+        match connect(&address).await {
+            Ok(s) => break s,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(ServerPageError::Io(format!("The page didn't open through the SSH tunnel: {e}")));
+            }
+            Err(_) => {}
         }
         // ssh couldn't make this tunnel's socket (`unix_listener: cannot bind to path …`); it keeps running for the
         // rest, so say so now rather than at the timeout.
@@ -880,7 +896,7 @@ async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started
         return Err(ServerPageError::Ssh(said));
     }
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| ServerPageError::Io(e.to_string()))?;
-    Ok(Started { child, end, stderr, listener })
+    Ok(Started { child, end, address, stderr, listener })
 }
 
 /// Whether anything answers through a new tunnel. ssh closing the connection with nothing said means the server

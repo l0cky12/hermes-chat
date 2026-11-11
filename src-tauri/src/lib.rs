@@ -11,6 +11,7 @@ pub mod fonts;
 pub mod gtk_clipboard;
 pub mod links;
 pub mod local_stt;
+mod loopback_owner;
 mod loopback_peer;
 pub mod main_window;
 pub mod markdown_image;
