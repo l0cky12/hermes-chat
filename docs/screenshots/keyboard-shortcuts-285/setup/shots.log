@@ -19,7 +19,7 @@ warnings: [
 ]
 shot 06-conflict-warning
 closed
-session e725888e-92f6-49da-a528-5558a9f87c0a
+session 5414a5ee-1299-468e-9d9a-74f31aa26581
 shot 07-ctrl-j-after-restart
 after restart: "Change Search all chats (Ctrl+J)"
 shot 08-custom-after-restart
