@@ -1450,6 +1450,8 @@ impl Dashboard {
     /// JSON body. `POST` and `PUT` reach only Settings → Model's two writes (`POST api/model/set`,
     /// `PUT api/config`), the scheduled-job writes (`cron_write`), Settings → Persona's
     /// `PUT api/profiles/{name}/soul`, the Clone profile dialog's `POST api/profiles` (`profile_create_allowed`, ADR 0074),
+    /// Settings → Profiles' description, model and written-for-me description (`profile_field_write`,
+    /// `profile_describe_auto`, ADR 0144),
     /// and Settings → Toolsets' switch, `PUT api/tools/toolsets/<name>` with exactly
     /// `{"enabled": true|false}` (`toolset_toggle_allowed`), Settings → Skills' two writes, `PUT api/skills/toggle` and
     /// `PUT api/skills/content` with exactly their fields (`skill_write_allowed`), Settings → Skills' copy to another
@@ -1488,6 +1490,8 @@ impl Dashboard {
             ("PUT", _) if webhook_write("PUT", path, body.as_deref()) => Method::PUT,
             ("PUT", p) if is_profile_soul(p) => Method::PUT,
             ("POST", "api/profiles") if profile_create_allowed(body.as_deref()) => Method::POST,
+            ("PUT", p) if profile_field_write(p, body.as_deref()) => Method::PUT,
+            ("POST", p) if profile_describe_auto(p, body.as_deref()) => Method::POST,
             ("POST", "api/sessions/import") if import_body_allowed(body.as_deref()) => Method::POST,
             ("POST", _) if crate::mcp::relayed("POST", path, body.as_deref()) => Method::POST,
             ("PUT", _) if crate::mcp::relayed("PUT", path, body.as_deref()) => Method::PUT,
@@ -2575,6 +2579,41 @@ pub fn profile_create_allowed(body: Option<&str>) -> bool {
     name_ok && source_ok && known
 }
 
+/// Whether a `PUT` is Settings → Profiles' description or model write for one profile (ADR 0144):
+/// `api/profiles/{id}/description` with exactly `{"description": string}`, or `api/profiles/{id}/model` with exactly
+/// `{"provider", "model"}`, both non-empty strings. `{id}` is a profile id, `default` included.
+pub fn profile_field_write(path: &str, body: Option<&str>) -> bool {
+    let Some((name, field)) = path.strip_prefix("api/profiles/").and_then(|p| p.split_once('/')) else {
+        return false;
+    };
+    let Some(fields) = body.and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok()) else {
+        return false;
+    };
+    let Some(fields) = fields.as_object() else {
+        return false;
+    };
+    let text = |k: &str| fields.get(k).and_then(|v| v.as_str());
+    let filled = |k: &str| text(k).is_some_and(|v| !v.trim().is_empty() && v.len() <= 512);
+    profile_id(name)
+        && match field {
+            "description" => fields.len() == 1 && text("description").is_some_and(|d| d.len() <= 4096),
+            "model" => fields.len() == 2 && filled("provider") && filled("model"),
+            _ => false,
+        }
+}
+
+/// Whether a `POST` is Settings → Profiles' "Write for me": `api/profiles/{id}/describe-auto` with exactly
+/// `{"overwrite": bool}` (ADR 0144). Hermes writes the description with an LLM; nothing else is sent.
+pub fn profile_describe_auto(path: &str, body: Option<&str>) -> bool {
+    let Some(name) = path.strip_prefix("api/profiles/").and_then(|p| p.strip_suffix("/describe-auto")) else {
+        return false;
+    };
+    let Some(fields) = body.and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok()) else {
+        return false;
+    };
+    profile_id(name) && fields.as_object().is_some_and(|f| f.len() == 1 && f.get("overwrite").is_some_and(|v| v.is_boolean()))
+}
+
 /// Said in place of an error body that can't be shown.
 const HIDDEN: &str = "(not shown, as it may repeat your password or a request header)";
 
@@ -3118,8 +3157,8 @@ fn agent_text_body(path: &str, text: &str, session: Option<&str>) -> Result<serd
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_text_body, memory_entry_edit_allowed, memory_provider_write, profile_create_allowed, provider_key_name, skill_create_allowed,
-        text_unless_stalled, unless_stalled, webhook_write, TransportError,
+        agent_text_body, memory_entry_edit_allowed, memory_provider_write, profile_create_allowed, profile_describe_auto, profile_field_write,
+        provider_key_name, skill_create_allowed, text_unless_stalled, unless_stalled, webhook_write, TransportError,
     };
     use std::time::Duration;
 
@@ -3204,6 +3243,46 @@ mod tests {
         }
         assert!(!profile_create_allowed(Some(&format!(r#"{{"name":"{}"}}"#, "a".repeat(65)))));
         assert!(!profile_create_allowed(None));
+    }
+
+    #[test]
+    fn settings_profiles_writes_carry_only_their_own_field() {
+        for (path, body) in [
+            ("api/profiles/work/description", r#"{"description":"Writes code"}"#),
+            ("api/profiles/default/description", r#"{"description":""}"#),
+            ("api/profiles/work/model", r#"{"provider":"openrouter","model":"x/y"}"#),
+        ] {
+            assert!(profile_field_write(path, Some(body)), "{path} {body}");
+        }
+        for (path, body) in [
+            ("api/profiles/work/description", r#"{"description":"x","display_name":"y"}"#),
+            ("api/profiles/work/description", r#"{"description":1}"#),
+            ("api/profiles/work/model", r#"{"provider":"openrouter"}"#),
+            ("api/profiles/work/model", r#"{"provider":"","model":"x"}"#),
+            ("api/profiles/work/model", r#"{"provider":"p","model":"m","base_url":"http://x"}"#),
+            ("api/profiles/Work/description", r#"{"description":"x"}"#),
+            ("api/profiles/../description", r#"{"description":"x"}"#),
+            ("api/profiles/work/soul2", r#"{"description":"x"}"#),
+            ("api/profiles/work/description/x", r#"{"description":"x"}"#),
+            ("api/profiles/work/description", "not json"),
+        ] {
+            assert!(!profile_field_write(path, Some(body)), "{path} {body}");
+        }
+        assert!(!profile_field_write("api/profiles/work/description", None));
+        assert!(!profile_field_write("api/profiles/work/description", Some(&format!(r#"{{"description":"{}"}}"#, "a".repeat(4097)))));
+
+        assert!(profile_describe_auto("api/profiles/work/describe-auto", Some(r#"{"overwrite":true}"#)));
+        assert!(profile_describe_auto("api/profiles/default/describe-auto", Some(r#"{"overwrite":false}"#)));
+        for (path, body) in [
+            ("api/profiles/work/describe-auto", r#"{"overwrite":"yes"}"#),
+            ("api/profiles/work/describe-auto", r#"{"overwrite":true,"model":"x"}"#),
+            ("api/profiles/work/describe-auto", "{}"),
+            ("api/profiles/../describe-auto", r#"{"overwrite":true}"#),
+            ("api/profiles/work/export", r#"{"overwrite":true}"#),
+        ] {
+            assert!(!profile_describe_auto(path, Some(body)), "{path} {body}");
+        }
+        assert!(!profile_describe_auto("api/profiles/work/describe-auto", None));
     }
 
     #[test]

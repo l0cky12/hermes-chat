@@ -19,7 +19,7 @@
 // a dropped connection or a 5xx, which may pass. Every capability starts `unknown`, and only `unsupported` holds a
 // screen back or refuses a write.
 import { redact as redactSecrets } from "./logs";
-import { RestError } from "./pipe";
+import { RestError, type RestMethod } from "./pipe";
 import { isObj } from "./values";
 
 /** The features whose server support is tracked. */
@@ -34,6 +34,7 @@ export type CapabilityId =
   | "toolsets"
   | "toolsetSwitches"
   | "persona"
+  | "profiles"
   | "skills"
   | "serverFiles"
   | "scheduledJobs"
@@ -56,7 +57,15 @@ export type Capability = {
   why?: string;
   /** When this state was learnt; none while not checked yet. */
   checkedAt?: number;
+  /** The routes of its `actions` Hermes was found to lack, as `shown`: each disables only its own action. */
+  lacking?: string[];
 };
+
+/**
+ * A change a screen makes through one route of its own, which an older Hermes may lack without the screen lacking
+ * everything (Settings → Profiles' rename, say). `shown`: the route as Hermes's router declares it.
+ */
+export type CapabilityAction = { name: string; method: RestMethod; route: RegExp; shown: string };
 
 /** A check that only reads: a dashboard GET, or a JSON-RPC request whose method only reads. */
 /**
@@ -89,6 +98,11 @@ export type CapabilitySpec = {
   writeRoutes?: RegExp[];
   /** JSON-RPC methods that change something, refused here while the capability is unsupported. */
   writeMethods?: RegExp;
+  /**
+   * Writes Hermes may lack one at a time. A missing one doesn't make the capability unsupported: it is listed in
+   * `lacking`, and that write alone is refused here until the build changes or diagnostics checks again.
+   */
+  actions?: CapabilityAction[];
   /** Why it is unknown before anything has settled it, when no check will. */
   notChecked?: string;
 };
@@ -217,6 +231,27 @@ export const CAPABILITIES: readonly CapabilitySpec[] = [
     probe: { kind: "rest", path: (profile) => `api/profiles/${encodeURIComponent(profile)}/soul`, shape: isObj },
     routes: [/^api\/profiles\/[^/]+\/soul$/],
     writeRoutes: [/^api\/profiles\/[^/]+\/soul$/],
+  },
+  {
+    id: "profiles",
+    label: "Profiles",
+    usedBy: "Settings → Profiles",
+    needs:
+      "GET /api/profiles, and to change them POST /api/profiles, PATCH and DELETE /api/profiles/{name}, and PUT /api/profiles/{name}/description, POST /api/profiles/{name}/describe-auto and PUT /api/profiles/{name}/model.",
+    without: "Settings → Profiles explains what is missing, and reads or writes nothing. A server with the list but not one of the changes disables only that change, and says which route it lacks.",
+    anchor: "profiles",
+    probe: { kind: "rest", path: () => "api/profiles", maxBytes: 2 * 1024 * 1024, shape: (b) => isObj(b) && isList(b.profiles) },
+    routes: [/^api\/profiles$/],
+    // Not `writeRoutes`: the Clone profile dialog creates and deletes through the same routes, and a server without
+    // one change still lists and makes the others. Each is refused alone once found missing.
+    actions: [
+      { name: "create", method: "POST", route: /^api\/profiles$/, shown: "POST /api/profiles" },
+      { name: "rename", method: "PATCH", route: /^api\/profiles\/[^/]+$/, shown: "PATCH /api/profiles/{name}" },
+      { name: "describe", method: "PUT", route: /^api\/profiles\/[^/]+\/description$/, shown: "PUT /api/profiles/{name}/description" },
+      { name: "describeAuto", method: "POST", route: /^api\/profiles\/[^/]+\/describe-auto$/, shown: "POST /api/profiles/{name}/describe-auto" },
+      { name: "setModel", method: "PUT", route: /^api\/profiles\/[^/]+\/model$/, shown: "PUT /api/profiles/{name}/model" },
+      { name: "remove", method: "DELETE", route: /^api\/profiles\/[^/]+$/, shown: "DELETE /api/profiles/{name}" },
+    ],
   },
   {
     id: "skills",
@@ -559,7 +594,25 @@ export class CapabilityUnsupportedError extends Error {
   }
 }
 
-/** The capability a dashboard request's path belongs to, for its writes; none for a path no capability guards. */
+/**
+ * A write refused here because the connected Hermes was found to lack its one route (a capability's `actions`). Nothing
+ * was sent. `route`: the route as Hermes's router declares it.
+ */
+export class RouteMissingError extends Error {
+  constructor(readonly route: string) {
+    super(`Hermes Chat doesn't relay this: the connected Hermes server has no route for ${route}, so nothing was sent. See Settings → Diagnostics.`);
+  }
+}
+
+/** The capability action a dashboard write is, by its method and path; none for a write that isn't one. */
+const actionOf = (method: string, path: string): [CapabilitySpec, CapabilityAction] | undefined => {
+  for (const c of CAPABILITIES) {
+    const a = c.actions?.find((a) => a.method === method && a.route.test(path));
+    if (a) return [c, a];
+  }
+  return undefined;
+};
+
 /** Every capability that guards a write: a route can belong to more than one, such as a toolset switch. */
 const writeRouteOwners = (path: string) => CAPABILITIES.filter((c) => c.writeRoutes?.some((r) => r.test(path)));
 const writeMethodOwners = (method: string) => CAPABILITIES.filter((c) => c.writeMethods?.test(method));
@@ -582,6 +635,8 @@ export class CapabilityStore {
   private revs = new Map<CapabilityId, number>();
   /** For each capability, the routes and methods Hermes was found to lack, by key (`found`). */
   private missing = new Map<CapabilityId, Set<string>>();
+  /** For each capability, the `actions` Hermes was found to lack, by name. */
+  private lackingActions = new Map<CapabilityId, Set<string>>();
   /** The build the last whole check was for. */
   private checkedFor?: string;
   /** When the current connection opened: what was settled since then needs no check. */
@@ -614,7 +669,27 @@ export class CapabilityStore {
   private setCap(id: CapabilityId, cap: Omit<Capability, "id" | "checkedAt">) {
     const why = cap.why === undefined ? undefined : redact(cap.why);
     this.revs.set(id, (this.revs.get(id) ?? 0) + 1);
-    this.set({ caps: { ...this.snap.caps, [id]: { id, ...cap, why, checkedAt: this.now() } } });
+    this.set({ caps: { ...this.snap.caps, [id]: { id, ...cap, why, checkedAt: this.now(), ...this.lackingOf(id) } } });
+  }
+
+  /** The `lacking` field for capability `id`: the routes of its actions Hermes was found to lack, if any. */
+  private lackingOf(id: CapabilityId): Pick<Capability, "lacking"> {
+    const names = this.lackingActions.get(id);
+    if (!names?.size) return {};
+    return { lacking: specOf(id).actions!.filter((a) => names.has(a.name)).map((a) => a.shown) };
+  }
+
+  /** Forgets the actions found missing, for `id` or every capability, and shows that. */
+  private forgetLacking(id?: CapabilityId) {
+    const ids = id ? [id] : [...this.lackingActions.keys()];
+    if (!ids.some((i) => this.lackingActions.get(i)?.size)) return;
+    for (const i of ids) this.lackingActions.delete(i);
+    const caps = { ...this.snap.caps };
+    for (const i of ids) {
+      const { lacking: _, ...rest } = caps[i];
+      caps[i] = rest;
+    }
+    this.set({ caps });
   }
 
   /** Puts back a capability as it starts, before anything is learnt. */
@@ -700,11 +775,21 @@ export class CapabilityStore {
    * Hermes says it has no such route or method, the capability that write belongs to is not supported, and the next
    * write for it is refused before it is sent.
    */
-  observeWrite(gen: number, call: { route: string } | { method: string }, error: unknown) {
+  observeWrite(gen: number, call: { route: string; verb?: string } | { method: string }, error: unknown) {
     if (!this.scope || this.scope.gen !== gen || gen !== this.liveGen()) return;
     const { state, why } = stateOfFailure(failureOf(error));
     if (state !== "unsupported") return;
     const path = "route" in call ? call.route.split("?")[0] : undefined;
+    // One of a capability's own actions: only that action goes, and the capability stays as its reads show.
+    const action = path !== undefined && "verb" in call && call.verb ? actionOf(call.verb, path) : undefined;
+    if (action) {
+      const [spec, a] = action;
+      const names = this.lackingActions.get(spec.id) ?? new Set<string>();
+      if (names.has(a.name)) return;
+      this.lackingActions.set(spec.id, names.add(a.name));
+      this.set({ caps: { ...this.snap.caps, [spec.id]: { ...this.snap.caps[spec.id], ...this.lackingOf(spec.id) } } });
+      return;
+    }
     const owners = path !== undefined ? writeRouteOwners(path) : writeMethodOwners((call as { method: string }).method);
     for (const spec of owners) {
       const key = path !== undefined ? `write ${spec.writeRoutes!.find((r) => r.test(path))!.source}` : `write ${(call as { method: string }).method}`;
@@ -754,6 +839,17 @@ export class CapabilityStore {
     return owners.find((c) => this.snap.caps[c.id].state === "unsupported")?.id;
   }
 
+  /** The route of a capability action this write is, when Hermes was found to lack it: the write is refused here. */
+  lacks(call: { rest: string; path: string }): string | undefined {
+    const action = actionOf(call.rest, call.path.split("?")[0]);
+    return action && this.lackingActions.get(action[0].id)?.has(action[1].name) ? action[1].shown : undefined;
+  }
+
+  /** Whether Hermes was found to lack the action `name` of capability `id`. */
+  lacksAction(id: CapabilityId, name: string): boolean {
+    return !!this.lackingActions.get(id)?.has(name);
+  }
+
   private async check(scope: Scope, force: boolean): Promise<void> {
     const run = ++this.run;
     this.set({ checking: true });
@@ -767,10 +863,13 @@ export class CapabilityStore {
     if (!sameBuild && this.checkedFor !== undefined) {
       const kept = Object.values(this.snap.caps).filter((c) => (c.checkedAt ?? 0) >= this.connectedAt);
       for (const id of [...this.missing.keys()]) if (!kept.some((c) => c.id === id)) this.missing.delete(id);
+      this.lackingActions.clear();
       this.set({ caps: { ...fresh(), ...Object.fromEntries(kept.map((c) => [c.id, c])) } });
     }
     // Check again asks each screen to find out afresh what diagnostics can't check by reading (toolset switches).
     if (force) {
+      // A change found missing is let through again, so its own screen can find it there after an update.
+      this.forgetLacking();
       const start = fresh();
       for (const c of CAPABILITIES)
         if (!c.probe && c.notChecked && c.id !== "chat" && c.id !== "approvals") {
@@ -896,7 +995,8 @@ export function reportText(snap: CapabilitySnapshot, ctx: { app: string; server?
     "",
     ...CAPABILITIES.map((c) => {
       const cap = snap.caps[c.id];
-      return `${c.label}: ${stateText(cap.state)} (${sourceText(cap.source)}${cap.checkedAt ? `, ${when(cap.checkedAt)}` : ""})${cap.why ? ` - ${cap.why}` : ""}`;
+      const lacking = cap.lacking?.length ? ` - Hermes has no route for ${cap.lacking.join(", ")}` : "";
+      return `${c.label}: ${stateText(cap.state)} (${sourceText(cap.source)}${cap.checkedAt ? `, ${when(cap.checkedAt)}` : ""})${cap.why ? ` - ${cap.why}` : ""}${lacking}`;
     }),
   ];
   return redact(lines.join("\n"));

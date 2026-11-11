@@ -250,6 +250,7 @@ export function DiagnosticsSettings({
                     </td>
                     <td className="small">
                       {cap.why && <div>{cap.why}</div>}
+                      {cap.lacking?.length ? <div>Hermes has no route for {cap.lacking.join(", ")}, so that change is disabled.</div> : null}
                       {cap.state !== "supported" && (
                         <div className="muted">
                           Needs: {spec.needs} Without it: {spec.without}{" "}

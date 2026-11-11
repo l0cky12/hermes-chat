@@ -42,10 +42,16 @@ export function PersonaPage({
   keyOf,
   onDirty,
   now,
+  start,
+  defaultName,
 }: {
   api: PersonaApi;
-  /** `profile`: the profile in use, which the picker starts on. */
+  /** `profile`: the profile in use, which the picker starts on unless `start` names another. */
   where: PersonaWhere;
+  /** The profile the picker starts on, when Settings → Profiles opened Persona at one (ADR 0144). */
+  start?: string;
+  /** The display name Hermes keeps for `default`, shown before its id (ADR 0144). */
+  defaultName?: string;
   connected: boolean;
   store: PersonaStore;
   /** Where a profile's edits are kept for this connection (personaStore.ts `personaKey`). */
@@ -54,7 +60,7 @@ export function PersonaPage({
   now?: () => number;
 }) {
   const inUse = where.profile;
-  const [picked, setPicked] = useState(inUse);
+  const [picked, setPicked] = useState(start ?? inUse);
   /** The server's profiles by name, once listed. */
   const [listed, setListed] = useState<string[]>();
   const [listProblem, setListProblem] = useState<string>();
@@ -107,7 +113,7 @@ export function PersonaPage({
     <select className="select persona-profile" aria-label="Profile" value={picked} onChange={(e) => pick(e.target.value)}>
       {names.map((p) => (
         <option key={p} value={p}>
-          {p === inUse ? `${p} (in use)` : p}
+          {(p === "default" && defaultName ? `${defaultName} (default)` : p) + (p === inUse ? " (in use)" : "")}
         </option>
       ))}
     </select>

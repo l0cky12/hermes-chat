@@ -19,6 +19,7 @@ import { SettleAllDialog } from "./SettleAll";
 import { CloneProfileDialog } from "./CloneProfile";
 import type { ProfileCloneApi } from "../hermes/profileClone";
 import { Age, ArchiveButton, Ticking, STATUS_LABEL, SettleButton, SourceIcon, Spinner, ago, composing, routeLabel, useReturnFocus } from "./bits";
+import { en } from "../i18n/en";
 import { useLocale, type Locale } from "../i18n/locale";
 import { viaLabel } from "../hermes/routes";
 import { dragChat, dragChatEnd, rowDragged } from "./Tabs";
@@ -644,10 +645,13 @@ function OtherBadge({ info }: { info?: OtherProfile }) {
  * What the owner leaves behind in `profile` by switching away now, if anything: an Approval waiting, or a reply
  * running. Hermes keeps running the reply; an Approval waits only until Hermes stops waiting (its timeout).
  */
-export function leavingNote(profile: string, chats: Chat[]): string | undefined {
-  if (chats.some((c) => c.items.some(isWaiting)))
-    return `An approval is waiting in ${profile}. Hermes waits for your answer only until it times out: switch back and open the chat to answer it.`;
-  if (chats.some((c) => c.running)) return `A reply is still running in ${profile}. Hermes keeps it going, and it shows here when you switch back.`;
+/** A profile's name as the switcher shows it: `default`'s display name first, when Hermes keeps one (ADR 0144). */
+export const profileLabel = (l: Locale, name: string, defaultName?: string) => (name === "default" && defaultName ? l.profiles.named(defaultName, name) : name);
+
+/** What switching away from `profile` leaves behind, in `words` (the catalogue's; English where the screen isn't converted). */
+export function leavingNote(profile: string, chats: Chat[], words: Locale["profiles"]["leaving"] = en.profiles.leaving): string | undefined {
+  if (chats.some((c) => c.items.some(isWaiting))) return words.approval(profile);
+  if (chats.some((c) => c.running)) return words.reply(profile);
 }
 
 /**
@@ -659,6 +663,7 @@ export function leavingNote(profile: string, chats: Chat[]): string | undefined 
  */
 function ProfileSwitcher({
   profile,
+  defaultName,
   others,
   checkTimes,
   leaving,
@@ -668,6 +673,8 @@ function ProfileSwitcher({
   clone,
 }: {
   profile: string;
+  /** The display name Hermes keeps for `default`, shown before its id (ADR 0144). */
+  defaultName?: string;
   others: OtherProfiles;
   checkTimes: CheckTimesStore;
   leaving?: string;
@@ -740,7 +747,7 @@ function ProfileSwitcher({
         onFocus={freshTip}
         onClick={() => (open ? close() : setOpen(true))}
       >
-        <span className="profile-name">{profile}</span>
+        <span className="profile-name">{profileLabel(l, profile, defaultName)}</span>
         {elsewhere && <span className="dot" aria-label="Unread chats in other profiles" />}
         <ChevronDown size={14} className="profile-chev" />
       </button>
@@ -748,6 +755,7 @@ function ProfileSwitcher({
       {open && !asking && (
         <ProfileMenu
           profile={profile}
+          defaultName={defaultName}
           profiles={profiles}
           error={error}
           others={others}
@@ -853,6 +861,7 @@ function SwitchStatus({
 /** The open profile menu. Closing it puts focus back on the profile button. */
 function ProfileMenu({
   profile,
+  defaultName,
   profiles,
   error,
   others,
@@ -862,6 +871,7 @@ function ProfileMenu({
   onClone,
 }: {
   profile: string;
+  defaultName?: string;
   profiles?: string[];
   error?: string;
   others: OtherProfiles;
@@ -875,7 +885,7 @@ function ProfileMenu({
   const [filter, setFilter] = useState("");
   useReturnFocus();
 
-  const shown = (profiles ?? [profile]).filter((p) => p.toLowerCase().includes(filter.trim().toLowerCase()));
+  const shown = (profiles ?? [profile]).filter((p) => profileLabel(l, p, defaultName).toLowerCase().includes(filter.trim().toLowerCase()));
 
   return (
     <div
@@ -903,7 +913,7 @@ function ProfileMenu({
             className={`profile-option ${p === profile ? "on" : ""}`}
             onClick={() => onPick(p)}
           >
-            <span className="row-title">{p}</span>
+            <span className="row-title">{profileLabel(l, p, defaultName)}</span>
             {p === profile ? <Check size={14} /> : <OtherBadge info={others.byName[p]} />}
           </button>
         ))}
@@ -969,6 +979,7 @@ function moveBetweenChats(e: KeyboardEvent<HTMLElement>) {
  */
 export function ChatList({
   profile,
+  defaultName,
   bots,
   projectSwitcher,
   savedFilters,
@@ -1060,6 +1071,8 @@ export function ChatList({
   onCopyLink?: (chat: Chat) => void;
   /** Opens Settings → Model at the Text generation model, the model titles are made with. */
   onTextGenerationSettings?: () => void;
+  /** The display name Hermes keeps for `default` (ADR 0144). */
+  defaultName?: string;
   onListProfiles: () => Promise<string[]>;
   onCheckOthers: () => void;
   onSwitchProfile: (name: string) => void;
@@ -1128,6 +1141,7 @@ export function ChatList({
     if (selectedIn) setCollapsed(selectedIn, false);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [selectedId]);
+  const l = useLocale();
   const latest = { chats, onOpen, onOpenIn, onOpenTab, onSettle, onArchive, onRename, onRegenTitle, onCopyLink, onTextGenerationSettings, projectsOf, tagsOf, onPin, onStopWaiting, onSnooze, onWake };
   const live = useRef(latest);
   // After the commit, not during render: a render React throws away would leave its props here (#436).
@@ -1231,9 +1245,10 @@ export function ChatList({
       <div className="sb-head">
         <ProfileSwitcher
           profile={profile}
+          defaultName={defaultName}
           others={others}
           checkTimes={checkTimes}
-          leaving={leavingNote(profile, chats)}
+          leaving={leavingNote(profile, chats, l.profiles.leaving)}
           onListProfiles={onListProfiles}
           onCheckOthers={onCheckOthers}
           onSwitch={onSwitchProfile}

@@ -6,19 +6,18 @@ import { Check, CircleAlert, Minus, TriangleAlert } from "lucide-react";
 import {
   CATEGORIES,
   CATEGORY_LABELS,
-  nameProblem,
   preview,
   type FailedSkill,
   type Outcome,
   type Part,
   type Plan,
   type ProfileCloneApi,
-  type ProfileRow,
   type Result,
   type Source,
   type Stage,
   type StageState,
 } from "../hermes/profileClone";
+import { nameProblem, type ProfileRow } from "../hermes/profiles";
 import { Spinner, composing } from "./bits";
 import { useModal } from "./modal";
 import { errorText } from "../hermes/values";
@@ -55,12 +54,15 @@ export function CloneProfileDialog({
   current,
   returnTo,
   onOpen,
+  onMade,
   onClose,
 }: {
   api: ProfileCloneApi;
   current: string;
   returnTo?: RefObject<HTMLElement | null>;
   onOpen: (name: string) => void;
+  /** Called with the new profile's name once Hermes has it (Settings → Profiles selects it). */
+  onMade?: (name: string) => void;
   onClose: () => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -130,6 +132,7 @@ export function CloneProfileDialog({
     if (!live.current) return;
     setRunning(false);
     setOutcome(out);
+    if (out.kind === "made") onMade?.(out.name);
     // A name taken meanwhile shows against the list as it is now. The source read at open still stands.
     if (out.kind === "refused")
       api.profiles().then(

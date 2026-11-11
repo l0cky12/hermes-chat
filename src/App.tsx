@@ -10,6 +10,7 @@ import { CHECK_EVERY_MS } from "./hermes/otherProfiles";
 import { type Account, type Kept, type SavedSignIn, launchOpen, launchSignIn, removeConnection, savedSignIn, savedSignInOrForm, signIn, signInForm, signOutToSignIn } from "./hermes/account";
 import { CONNECTIONS_KEY, Connections, type SavedConnection, addressLabel, defaultName, keptRouteHealth, prefScope } from "./hermes/connections";
 import { forgetConnectionData } from "./hermes/forgetConnection";
+import { clearRename, forgetProfileLocally, noteRename, renameProfileLocally, renamePending } from "./hermes/profileLocalData";
 import { serial as makeSerial } from "./hermes/serial";
 import { localChatCache } from "./hermes/chatCache";
 import { draftKey, drafts } from "./hermes/drafts";
@@ -102,7 +103,7 @@ import type { RepoApi } from "./hermes/repo";
 import { tauriRepo } from "./ui/tauriRepo";
 import { ApplyDefaults, NewChatSettingsView } from "./ui/ProjectDefaultsNotes";
 import { appearanceStore } from "./ui/appearance";
-import { LocaleContext } from "./i18n/locale";
+import { LocaleContext, useLocale } from "./i18n/locale";
 import { StatusBar } from "./ui/StatusBar";
 import { ApprovalsPill } from "./ui/ApprovalsPill";
 import { systemFonts } from "./ui/tauriFonts";
@@ -217,7 +218,10 @@ const account: Account = {
 const serverMethods = (d: SignInDetails) => readMethods((one, expect) => tauriReach(one, expect, true, true), d);
 
 /** Deletes what this computer keeps for a removed connection (forgetConnection.ts). */
-const forgetLocal = (c: SavedConnection) => forgetConnectionData(c, { defaults: savedDefaults, tags: savedTagsFile, persona: savedPersona, afterwards: syncScreenshotOutbox });
+const forgetLocal = (c: SavedConnection) =>
+  forgetConnectionData(c, { defaults: savedDefaults, tags: savedTagsFile, persona: savedPersona, drafts: savedDrafts, afterwards: syncScreenshotOutbox });
+/** The stores a profile's rename moves and its delete forgets, beside this webview's storage (profileLocalData.ts). */
+const profileStores = () => ({ defaults: savedDefaults, tags: savedTagsFile, persona: savedPersona, drafts: savedDrafts });
 
 const savedDrafts = drafts(localStorage);
 /** Adds `text` to the Draft at `key`, after anything already there. */
@@ -891,7 +895,8 @@ export function Main({
   tray?: TrayWiring;
 }) {
   const connection: SavedConnection = "id" in given ? given : { ...given, id: "", name: defaultName(given), addedAt: 0 };
-  const { profile, chats, olderPulled, archivedListed, status, route, unsecure, closedReason, syncError, others, live, models, switching, branchNews, bots, botPictures } = useSyncExternalStore(
+  const words = useLocale();
+  const { profile, chats, olderPulled, archivedListed, status, route, unsecure, closedReason, syncError, others, live, models, switching, branchNews, bots, botPictures, defaultName: defaultProfileName } = useSyncExternalStore(
     hermes.subscribe,
     hermes.getSnapshot,
   );
@@ -1776,7 +1781,7 @@ export function Main({
 
   // The other profile's chats replace the list, so one pane stays, on a fresh draft. The profile left keeps its last
   // open chat for the next launch.
-  const switchProfileNow = (name: string) => {
+  const switchProfileNow = (name: string, keepSettings = false) => {
     navGen.current++;
     const keep = activeKeyRef.current;
     setGoTo(undefined);
@@ -1786,15 +1791,27 @@ export function Main({
     activeKeyRef.current = keep;
     setActiveKey(keep);
     setReopening(undefined);
-    setSettingsOpen(false);
+    if (!keepSettings) setSettingsOpen(false);
     setProjectOpen(false);
     setToast(null);
     // What the Preview showed was the old profile's; the Screen tab starts again for the new one.
     stepPreview({ kind: "clear" });
     if (panelTab === "preview") setPanelOpen(false);
-    void hermes.switchProfile(name);
+    return hermes.switchProfile(name);
   };
-  const switchProfile = (name: string) => guard(() => switchProfileNow(name), "profile");
+  const switchProfile = (name: string) => guard(() => void switchProfileNow(name), "profile");
+  /**
+   * Settings → Profiles' switch (ADR 0144): the switcher's guard, then the switch. Resolves whether the app is on `name`
+   * once the switch has gone through; false when the owner stayed. `keepSettings`: a delete goes on in Settings.
+   */
+  const switchFromProfiles = (name: string, keepSettings?: boolean) =>
+    new Promise<boolean>((done) =>
+      guard(
+        () => void switchProfileNow(name, keepSettings).then(() => done(hermes.profile === name), () => done(hermes.profile === name)),
+        "profile",
+        () => done(false),
+      ),
+    );
 
   // Another saved connection (ADR 0112). Whatever is running or waiting here is named first, from the inbox's entries,
   // which cover every profile on this server; an unsaved persona or memory edit asks first too. Nothing is stopped:
@@ -1904,7 +1921,7 @@ export function Main({
   const openBot = (b: Bot, then: "open" | "new") => {
     setBotsOpen(false);
     guard(() => {
-      if (b.profile !== profile) switchProfileNow(b.profile);
+      if (b.profile !== profile) void switchProfileNow(b.profile);
       // Anything the owner opens or switches to after this, before the Bot Chat opens, wins over it (`navGen`).
       setBotGo({ bot: b, then, nav: navGen.current, stay: botsInList });
     }, b.profile !== profile ? "profile" : "leave");
@@ -2282,7 +2299,7 @@ export function Main({
     guard(
       () => {
         if (!isCurrent(next) || hermes.profile !== next.from) return;
-        switchProfileNow(job.link.profile);
+        void switchProfileNow(job.link.profile);
         // The switch itself is a move; only the owner's moves after it drop the link.
         const switched: LinkJob = { ...next, gen: navGen.current };
         linkJobRef.current = switched;
@@ -2783,6 +2800,7 @@ export function Main({
       />
       {listOpen && (
         <ChatList
+          defaultName={defaultProfileName}
           profile={profile}
           bots={
             botsInList &&
@@ -3177,6 +3195,54 @@ export function Main({
             onPersonaDirty={onPersonaDirty}
             guard={guard}
             listProfiles={listProfiles}
+            defaultName={defaultProfileName}
+            profilesTab={{
+              api: hermes.manageProfiles,
+              clone: hermes.profileClone,
+              capabilities: hermes.capabilities,
+              inUse: profile,
+              connected: status === "connected",
+              unread: (name) => others.byName[name]?.unread,
+              catalog: () => hermes.modelSettings.providers(),
+              busy: (name) => {
+                if (name === profile) {
+                  const running = chats.find((c) => c.running);
+                  if (running) return { kind: "reply", title: running.title };
+                  const queues = hermes.getSnapshot().queues;
+                  return Object.values(queues).some((q) => !q.paused && q.items.length) ? { kind: "queue" } : undefined;
+                }
+                const working = live?.sessions.find((s) => s.profile === name && s.status === "working");
+                return working ? { kind: "reply", title: working.title } : undefined;
+              },
+              lostMessages: (name) => hermes.heldMessagesIn(name),
+              jobCount: (name) => hermes.cron.list(name).then((jobs) => jobs.length, () => undefined),
+              leaving: leavingNote(profile, chats, words.profiles.leaving),
+              switchTo: switchFromProfiles,
+              local: {
+                pending: () => renamePending(connection),
+                note: (from, to) => noteRename(connection, from, to),
+                clear: () => clearRename(connection),
+                renamed: async (from, to) => {
+                  try {
+                    await renameProfileLocally(connection, from, to, profileStores());
+                  } finally {
+                    // The inbox's dismissals were rewritten under the new name: it reads them again.
+                    acks.reload();
+                    // The profile in use keeps its chats on screen under its new name, as a switch would show them.
+                    if (hermes.profile === from) void hermes.switchProfile(to);
+                  }
+                },
+                deleted: async (name) => {
+                  try {
+                    await forgetProfileLocally(connection, name, profileStores());
+                  } finally {
+                    acks.reload();
+                    await syncScreenshotOutbox().catch(() => {});
+                  }
+                },
+              },
+              copyText: (text) => (navigator.clipboard?.writeText ? navigator.clipboard.writeText(text) : Promise.reject(new Error("No clipboard"))),
+            }}
           />
         ) : usageOpen ? (
           <UsageAnalytics

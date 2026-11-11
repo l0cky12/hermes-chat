@@ -169,8 +169,12 @@ export type DefaultsDoc = {
   save(scope: string, id: string, base: number, draft: DefaultsDraft): Promise<ProjectDefaults>;
   /** Forgets one project's defaults, after this app deleted the project. Leaves a newer app's document alone. */
   forget(scope: string, id: string): Promise<void>;
-  /** Forgets every scope `match` picks, after the owner removed their connection. Leaves a newer app's document alone. */
-  forgetScopes(match: (scope: string) => boolean): Promise<void>;
+  /**
+   * Moves each scope to where `move` says (null: forgets it; undefined: leaves it), after a profile was renamed or
+   * deleted, or the owner removed their connection. A moved scope replaces any already there. Leaves a newer app's
+   * document alone.
+   */
+  moveScopes(move: (scope: string) => string | null | undefined): Promise<void>;
 };
 
 type Parsed = { v: number; scopes: Record<string, unknown>; rest: Record<string, unknown> };
@@ -248,14 +252,29 @@ export function defaultsDoc(file: DefaultsFile): DefaultsDoc {
         const { [id]: _gone, ...left } = entries;
         return { next: withScope(doc, scope, left), result: undefined };
       }),
-    forgetScopes: (match) =>
+    moveScopes: (move) =>
       update((doc) => {
-        const gone = Object.keys(doc.scopes).filter(match);
-        if (doc.v > DEFAULTS_VERSION || !gone.length) return { result: undefined };
-        const scopes = Object.fromEntries(Object.entries(doc.scopes).filter(([s]) => !gone.includes(s)));
+        const scopes = moveScopeKeys(doc.scopes, move);
+        if (doc.v > DEFAULTS_VERSION || !scopes) return { result: undefined };
         return { next: JSON.stringify({ ...doc.rest, v: Math.max(doc.v, DEFAULTS_VERSION), scopes }), result: undefined };
       }),
   };
+}
+
+/**
+ * `scopes` with each scope moved where `move` says (null drops it; undefined keeps it), a moved one replacing any
+ * already there; undefined when nothing moves.
+ */
+export function moveScopeKeys<T>(scopes: Record<string, T>, move: (scope: string) => string | null | undefined): Record<string, T> | undefined {
+  const moves = Object.keys(scopes).flatMap((s): [string, string | null][] => {
+    const to = move(s);
+    return to === undefined ? [] : [[s, to]];
+  });
+  if (!moves.length) return undefined;
+  const next = { ...scopes };
+  for (const [from] of moves) delete next[from];
+  for (const [from, to] of moves) if (to !== null) next[to] = scopes[from];
+  return next;
 }
 
 /** The app's file: `project-defaults.json` in its data folder, swapped under a lock every instance takes (defaults_file.rs). */

@@ -5,7 +5,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeHermes } from "./fakeHermes";
 import { connect, type Hermes } from "./transport";
-import { nameProblem, preview, type OnStage, type Outcome, type Part, type Plan, type Stage, type StageState } from "./profileClone";
+import { nameProblem } from "./profiles";
+import { preview, type OnStage, type Outcome, type Part, type Plan, type Stage, type StageState } from "./profileClone";
 import { RestError } from "./pipe";
 
 const running: Hermes[] = [];
