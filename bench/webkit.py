@@ -3,8 +3,8 @@
 # Chromium. Build the page first (`npx vite build --config bench/vite.config.ts`), then run under a display, such as
 # `xvfb-run -a -s "-screen 0 1280x900x24" python3 bench/webkit.py 'bench.streamCode(10,false)' ...`.
 # Each expression runs in turn in one page; each result prints as a line of JSON, with `rssMB`, the resident memory
-# of the page's web process once the expression is done. The expression `settle` waits 10 s, for
-# WebKit to collect garbage on its own timers (WebKitGTK 4.1 has no call to force it), then prints the memory.
+# of the page's web process once the expression is done. The expression `settle` waits 10 s, for WebKit to collect
+# garbage on its own timers (WebKitGTK 4.1 has no call to force it), then prints the memory.
 import functools
 import http.server
 import json

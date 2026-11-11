@@ -508,7 +508,7 @@ export function ChatPane({
   dismissSideRef.current = onDismissSideQuestion;
   const dismissSide = useCallback((id: string) => dismissSideRef.current?.(id), []);
   // Each turn's owner's message, and its last reply with text: where Regenerate and the versions of the turn go.
-  // The same object while its content is, so a streamed delta doesn't re-render every chunk of the transcript.
+  // Kept as the same object while its content is unchanged, so a streamed delta doesn't re-render every chunk.
   const turns = useStable(useMemo((): Turns => {
     const ofUser = turnsOf(chat.items);
     const lastReply = new Map<number, string>();

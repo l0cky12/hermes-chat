@@ -63,7 +63,6 @@ export function useTranscriptWindow({
   let [win, setWin] = useState<Window>("tail");
   /** Each chunk's height when it was last in the DOM, by key. */
   const measured = useRef(new Map<string, number>());
-  // A streaming chunk's height changes every frame, so the estimate is taken again only when the window moves.
   const perBlock = useRef(BLOCK_HEIGHT);
   const heights = useCallback((chunks: Chunk[]) => chunks.map((c) => measured.current.get(c[0].id) ?? c.length * perBlock.current), []);
   const width = useRef(0);
@@ -115,6 +114,7 @@ export function useTranscriptWindow({
       if (tops[i] < hi) to = i;
     });
     to = Math.max(from, to);
+    // A streaming chunk's height changes every frame, so the estimate is taken again only when the window moves.
     if (typeof win === "string" || win.from !== from || win.to !== to) {
       let height = 0;
       let blocks = 0;

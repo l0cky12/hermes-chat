@@ -9,9 +9,9 @@ function fnv1a(s: string): number {
 const CHUNK_SIZE = 64;
 
 /**
- * The transcript's blocks in chunks of about 64. A chunk starts at a block whose id hashes to a multiple of 64, so where
- * one starts depends only on that block: adding or removing a block changes only the chunk that holds it, and a chunk
- * keyed by its first block's id keeps its key.
+ * The transcript's blocks in chunks of about `CHUNK_SIZE`. A chunk starts at a block whose id hashes to a multiple of
+ * `CHUNK_SIZE`, so where one starts depends only on that block: adding or removing a block changes only the chunk that
+ * holds it, and a chunk keyed by its first block's id keeps its key.
  */
 export function chunkBlocks<T extends { id: string }>(blocks: T[]): T[][] {
   const chunks: T[][] = [];

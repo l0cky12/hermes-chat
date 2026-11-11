@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Checks the transcript window (ADR 0138) in the real app on the bench's long chat, with real input: it opens at the
 // bottom with few messages in the page; wheel steps of 150 and 400 px up move what is in view exactly that far down the
-// screen, as chunks come and go and the transcript corrects its scroll position for them (#418); find counts its matches; the view holds still while a reply streams below
-// it, and follows the reply again once scrolled back to the bottom. Starts its own `hv up` (stand-in with HV_TURNS and
-// HV_LONG_REPLY) and signs in, so it needs only `hv build` first. Prints one JSON line of results; exits 1 on a failed
-// check.
+// screen, as chunks come and go and the transcript corrects its scroll position for them (#418); find counts its
+// matches; the view holds still while a reply streams below it, and follows the reply again once scrolled back to the
+// bottom. Starts its own `hv up` (stand-in with HV_TURNS and HV_LONG_REPLY) and signs in, so it needs only `hv build`
+// first. Prints one JSON line of results; exits 1 on a failed check.
 //   node bench/app-split/window.mjs [turns]
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
