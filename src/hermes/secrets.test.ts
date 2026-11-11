@@ -85,4 +85,17 @@ describe("Flagging likely secrets", () => {
   ])("doesn't flag ordinary chat: %s", (text) => {
     expect(found(text)).toEqual([]);
   });
+
+  // The export dialog scans every message when it opens; each of these runs took seconds at 40 KB (#490).
+  it.each(["a-", "a.", "a+", "a.a.", "password-", "sk-", "eyJaaaaaaaaa-", "eyJaaaaaaaaa."])("scans 40 KB of %s repeated in linear time", (run) => {
+    const text = run.repeat(Math.ceil(40_000 / run.length));
+    const t0 = performance.now();
+    findSecrets(text);
+    expect(performance.now() - t0).toBeLessThan(100);
+  });
+
+  it("still flags a password named after a long run of words, or in a link with a long scheme", () => {
+    expect(found("a-b-c-d-e-f-g-h-i-j-k-l-db_password=Tr0ub4dor!3")).toEqual([["password or key", "Tr0ub4dor!3"]]);
+    expect(found("postgresql+asyncpg://app:Pa55w0rd!@db.internal/app")).toEqual([["password in a link", "Pa55w0rd!"]]);
+  });
 });

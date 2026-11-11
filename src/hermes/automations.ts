@@ -704,28 +704,33 @@ export function resolveField(field: unknown, payload: unknown, eventType: string
 
 const filterString = (v: unknown) => (v === MISSING ? "" : isObj(v) || Array.isArray(v) ? pyJson(v, undefined, true) : pyStr(v));
 
-/** Python's regular expressions, as near as JavaScript's come: named groups are spelled differently. */
-function pyRegex(pattern: string): RegExp | undefined {
-  try {
-    return new RegExp(pattern.replace(/\(\?P<([A-Za-z_]\w*)>/g, "(?<$1>").replace(/\(\?P=([A-Za-z_]\w*)\)/g, "\\k<$1>"), "u");
-  } catch {
-    try {
-      return new RegExp(pattern);
-    } catch {
-      return undefined;
-    }
+/**
+ * Whether a filter matches an example event. A `regex` filter's pattern is tested elsewhere (patternRunner.ts), so it
+ * can be unknown: "checking" until it has been, and "too-slow" when it ran out of time and never will be.
+ */
+export type Verdict = boolean | "checking" | "too-slow";
+/** Tests a filter's pattern on a field's text, the way Hermes's `re.search` would. */
+export type PatternTest = (pattern: string, text: string) => Verdict;
+
+/** Kleene's "and": false wins, then unknown. An unknown result is "checking" while any of its parts may still resolve. */
+function every<T>(items: readonly T[], verdict: (item: T) => Verdict): Verdict {
+  let out: Verdict = true;
+  for (const item of items) {
+    const v = verdict(item);
+    if (v === false) return false;
+    if (v !== true && out !== "checking") out = v;
   }
+  return out;
 }
+const not = (v: Verdict): Verdict => (typeof v === "boolean" ? !v : v);
 
 /** `WebhookRouteProcessor.filter_matches`. */
-export function filterMatches(spec: unknown, payload: unknown, eventType: string, headers: Record<string, string>): boolean {
+export function filterMatches(spec: unknown, payload: unknown, eventType: string, headers: Record<string, string>, test: PatternTest): Verdict {
   if (!isObj(spec)) return false;
-  for (const key of ["all", "any"] as const)
-    if (key in spec) {
-      const items = spec[key];
-      return Array.isArray(items) && (key === "all" ? items.every((i) => filterMatches(i, payload, eventType, headers)) : items.some((i) => filterMatches(i, payload, eventType, headers)));
-    }
-  if ("not" in spec) return !filterMatches(spec.not, payload, eventType, headers);
+  const matches = (s: unknown) => filterMatches(s, payload, eventType, headers, test);
+  if ("all" in spec) return Array.isArray(spec.all) && every(spec.all, matches);
+  if ("any" in spec) return Array.isArray(spec.any) && not(every(spec.any, (s) => not(matches(s))));
+  if ("not" in spec) return not(matches(spec.not));
   const value = resolveField(spec.field, payload, eventType, headers);
   if (!("exists" in spec) && spec.missing === true) return value === MISSING;
   if ("exists" in spec) return (value !== MISSING) === !!spec.exists;
@@ -739,11 +744,7 @@ export function filterMatches(spec: unknown, payload: unknown, eventType: string
   }
   if ("in" in spec) return Array.isArray(spec.in) && value !== MISSING && spec.in.some((x) => pyEq(x, value));
   if ("in_file" in spec) return false;
-  if ("regex" in spec) {
-    if (value === MISSING) return false;
-    const re = pyRegex(String(spec.regex));
-    return !!re && re.test(filterString(value));
-  }
+  if ("regex" in spec) return value !== MISSING && test(String(spec.regex), filterString(value));
   return false;
 }
 
@@ -803,8 +804,10 @@ export function coalesceGroup(key: string, payload: unknown, eventType: string, 
 
 export type Preview = {
   eventTaken: boolean;
-  filters: { spec: FilterSpec; matches: boolean }[];
-  starts: boolean;
+  filters: { spec: FilterSpec; matches: Verdict }[];
+  starts: Verdict;
+  /** A pattern ran out of time on this event, even one whose group was decided without it. Hermes may stall on it too. */
+  slow: boolean;
   group?: string;
   /** The coalescing key didn't resolve: Hermes runs this event at once instead of grouping it. */
   ungrouped?: boolean;
@@ -813,13 +816,19 @@ export type Preview = {
 };
 
 /** What Hermes would do with `payload` as event `eventType` on a route set up as `f`. */
-export function preview(f: Pick<AutomationFields, "name" | "events" | "prompt" | "filters" | "coalesce">, payload: unknown, eventType: string, deliveryId = "00000000-0000-4000-8000-000000000000"): Preview {
+export function preview(f: Pick<AutomationFields, "name" | "events" | "prompt" | "filters" | "coalesce">, payload: unknown, eventType: string, test: PatternTest, deliveryId = "00000000-0000-4000-8000-000000000000"): Preview {
   const headers = { "Content-Type": "application/json", "X-GitHub-Event": eventType, "X-GitHub-Delivery": deliveryId, "User-Agent": "GitHub-Hookshot/example" };
   const eventTaken = !f.events.length || f.events.includes(eventType);
-  const filters = f.filters.map((spec) => ({ spec, matches: filterMatches(spec, payload, eventType, headers) }));
-  const starts = eventTaken && filters.every((x) => x.matches);
+  let slow = false;
+  const timed: PatternTest = (pattern, text) => {
+    const v = test(pattern, text);
+    slow ||= v === "too-slow";
+    return v;
+  };
+  const filters = f.filters.map((spec) => ({ spec, matches: filterMatches(spec, payload, eventType, headers, timed) }));
+  const starts = eventTaken && every(filters, (x) => x.matches);
   const group = f.coalesce ? coalesceGroup(f.coalesce.key, payload, eventType, f.name || "route") : undefined;
-  return { eventTaken, filters, starts, group, ungrouped: !!f.coalesce && group === undefined, prompt: renderPrompt(f.prompt, payload, eventType, f.name || "route"), missing: missingKeys(f.prompt, payload) };
+  return { eventTaken, filters, starts, slow, group, ungrouped: !!f.coalesce && group === undefined, prompt: renderPrompt(f.prompt, payload, eventType, f.name || "route"), missing: missingKeys(f.prompt, payload) };
 }
 
 // ---------------------------------------------------------------------------------------------------------------

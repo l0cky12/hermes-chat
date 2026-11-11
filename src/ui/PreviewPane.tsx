@@ -35,6 +35,7 @@ import {
   type WebTarget,
 } from "../hermes/preview";
 import { Markdown } from "./Markdown";
+import { HIGHLIGHT_MAX_CHARS } from "./markdownPipeline";
 import { Spinner, fmtSize } from "./bits";
 import { Menu } from "./ChatMenu";
 import { ServerPageError, type DevServers, type Listening, type LocalFiles, type NativePage, type NativePages, type ServerPages, type WebPages } from "./tauriPreview";
@@ -43,8 +44,6 @@ import { canGoBack, canGoForward, type HistoryStep, type PreviewHistory } from "
 import type { ArtifactStore } from "../hermes/artifacts";
 import { ArtifactEditor } from "./ArtifactEditor";
 
-/** Text past this many characters shows without highlighting, which would hold up the window. */
-const HIGHLIGHT_MAX_CHARS = 100_000;
 /** When a web page that hasn't loaded gets a note that it may never show. */
 const SLOW_PAGE_MS = 15_000;
 
