@@ -20,11 +20,9 @@ import {
 } from "../hermes/outputs";
 import { STATUS_LABEL, Spinner, fmtSize, storedTime } from "./bits";
 import { errorText } from "../hermes/values";
+import { OUTPUT_PAGE } from "./outputPage";
 
 export type OutputsScope = "chat" | "project" | "profile";
-
-/** How many rows show at first, and how many more each "Show more" adds. */
-export const OUTPUT_PAGE = 200;
 
 const TYPE_ICON: Record<OutputType, typeof File> = { image: FileImage, text: FileText, document: FileText, media: FileAudio, archive: FileArchive, other: File };
 

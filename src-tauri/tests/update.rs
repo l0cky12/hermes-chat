@@ -258,9 +258,9 @@ async fn a_download_given_up_on_leaves_the_appimage_alone() {
 
 #[tokio::test]
 async fn an_endpoint_that_does_not_answer_is_an_error_not_an_update() {
-    let free = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();
+    let closed = common::refusing();
     let appimage = installed("down");
-    let app = app(KEY_A, &format!("http://{free}/latest.json"));
+    let app = app(KEY_A, &format!("http://{}/latest.json", closed.addr));
     let updater = app.updater_builder().executable_path(&appimage).build().unwrap();
     assert!(matches!(updater.check().await, Err(Error::Reqwest(_))));
     assert_eq!(std::fs::read(&appimage).unwrap(), INSTALLED);
