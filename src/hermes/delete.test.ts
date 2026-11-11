@@ -274,4 +274,35 @@ describe("A copied profile, whose chats keep the ids they had", () => {
     answer();
     await archiving;
   });
+
+  it("a pin write that ends after the owner switched to the copy says nothing there", async () => {
+    const { server, hermes } = await listed(row("c", 1, { pinned: true }));
+    server.otherProfiles = { work: [row("c", 1, { pinned: true })] };
+    const answer = hold(server, "PATCH /api/sessions/c", () => Promise.reject(new Error("The dashboard answered 503")));
+    const settling = hermes.settle("c");
+    await hermes.switchProfile("work");
+    await hermes.sync();
+    answer();
+    await settling;
+    expect(hermes.getSnapshot().syncError).toBeUndefined();
+    expect(hermes.getSnapshot().chats.find((c) => c.id === "c")).toMatchObject({ settled: false });
+  });
+
+  it("a send cut off by switching to the copy leaves the copy's chat as it is", async () => {
+    const { server, hermes } = await listed(row("c", 1, { pinned: false }));
+    server.otherProfiles = { work: [row("c", 1, { pinned: true })] };
+    // The copy's list is kept on this computer from a visit before.
+    await hermes.switchProfile("work");
+    await hermes.sync();
+    await hermes.switchProfile("default");
+    await hermes.sync();
+    await hermes.open("c");
+    server.handlers["prompt.submit"] = () => {};
+    const sending = hermes.send("c", "Check the disks");
+    while (!server.requests.some((r) => r.method === "prompt.submit")) await tick();
+    await hermes.switchProfile("work");
+    expect(await sending).toMatchObject({ delivery: "unknown" });
+    expect(hermes.getSnapshot().chats.find((c) => c.id === "c")).toMatchObject({ settled: false });
+    expect(hermes.getSnapshot().chats.find((c) => c.id === "c")?.running).toBeFalsy();
+  });
 });

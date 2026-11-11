@@ -3031,7 +3031,7 @@ export class Hermes {
       this.setOutgoing(profile, chatId, user.id, (r) => withOutgoing(r, { state: unknown ? "unknown" : "failed", reason }));
       // A message Hermes turned down begins no turn, so the next turn there isn't taken for its.
       if (!unknown && this.turns.get(profile, chatId)?.userId === user.id) this.turns.delete(profile, chatId);
-      this.patchChat(chatId, (c) => ({ ...c, running: stillRunning(c), settled: activating || c.settled }));
+      if (this.profile === profile) this.patchChat(chatId, (c) => ({ ...c, running: stillRunning(c), settled: activating || c.settled }));
       return { delivery: { delivery: unknown ? "unknown" : "unsent", reason }, itemId: user.id };
     }
   }
@@ -4267,11 +4267,12 @@ export class Hermes {
     const write = (this.pinWrites.get(chatId) ?? Promise.resolve(true)).then(async () => {
       const pinned = this.pinWanted.get(profile, chatId);
       if (pinned === undefined) return true;
-      const running = this.snapshot.chats.find((c) => c.id === chatId)?.running;
+      const running = this.profile === profile && this.snapshot.chats.find((c) => c.id === chatId)?.running;
       try {
         await this.patchSession(chatId, profile, { pinned });
-        this.pinnedSinceListRead.add(chatId);
         if (this.pinWanted.get(profile, chatId) === pinned) this.pinWanted.delete(profile, chatId);
+        if (this.profile !== profile) return true;
+        this.pinnedSinceListRead.add(chatId);
         this.patchChat(chatId, (c) => (c.settledHere ? { ...c, settledHere: undefined } : c));
         return true;
       } catch (e) {
@@ -4279,7 +4280,7 @@ export class Hermes {
           this.keepSettledHere(chatId, profile, pinned);
           return true;
         }
-        if (!running) this.update({ syncError: `Couldn't keep a chat ${pinned ? "Active" : "Settled"} on the server: ${(e as Error).message}` });
+        if (!running && this.profile === profile) this.update({ syncError: `Couldn't keep a chat ${pinned ? "Active" : "Settled"} on the server: ${(e as Error).message}` });
         return false;
       }
     });
