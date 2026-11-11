@@ -4192,6 +4192,8 @@ export class Hermes {
           messages?: unknown;
           /** A live session's turn is still going. */
           running?: boolean;
+          /** That turn's reply as streamed so far (`_inflight_snapshot`); its later deltas go on from there. */
+          inflight?: { assistant?: unknown };
           /** What a live session is still waiting on, oldest first. */
           open_requests?: ServerRequest[];
           info?: unknown;
@@ -4224,6 +4226,7 @@ export class Hermes {
           if (i.kind === "approval" && (i.answer || i.ended)) this.closedApprovals.set(profile, i.id, i);
         // The Saved copy, if shown, is among the stale items. Messages sent from here that Hermes hasn't confirmed go
         // last, and the history settles any that may have reached it (`reconcile`): read back, it wins.
+        const streamed = res.running && typeof res.inflight?.assistant === "string" ? res.inflight.assistant : "";
         this.patchChat(chatId, (c) => ({
           ...c,
           runtimeId: res.session_id,
@@ -4232,7 +4235,12 @@ export class Hermes {
           running: c.running || !!res.running,
           savedAt: undefined,
           items: withRows(
-            [...history, ...lost(c.items.slice(0, stale)), ...withoutLoadError(c.items.slice(stale)).filter((i) => !isOutgoing(i))],
+            [
+              ...history,
+              ...(streamed ? [{ kind: "assistant" as const, id: nextId([...history, ...c.items], "a"), text: streamed }] : []),
+              ...lost(c.items.slice(0, stale)),
+              ...withoutLoadError(c.items.slice(stale)).filter((i) => !isOutgoing(i)),
+            ],
             reconcile(c.items.filter(isOutgoing), readBack),
           ),
         }));

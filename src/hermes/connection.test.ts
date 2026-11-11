@@ -179,6 +179,30 @@ describe("Reconnecting", () => {
     expect(chat("tg").items.map((i) => ("text" in i ? i.text : i.kind))).toEqual(["How full is the NAS?", "82% used."]);
   });
 
+  it("shows the whole reply, once, when the connection drops while it streams (#433)", async () => {
+    const { server, hermes, chat } = await signedIn();
+    server.reattachTurns = true;
+    const id = await hermes.newChat();
+    await hermes.send(id, "slow 12");
+    const words = Array.from({ length: 12 }, (_, n) => `w${n + 1}`);
+    const say = (from: number, to: number) => words.slice(from, to).forEach((w) => server.event(server.runtimeIdOf(id)!, "message.delta", { text: `${w} ` }));
+    server.event(server.runtimeIdOf(id)!, "message.start");
+    say(0, 4);
+    server.drop();
+    // Streamed while the app reconnects: only the resume's in-flight reply carries it.
+    say(4, 6);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hermes.idle();
+    expect(chat(id)).toMatchObject({ running: true });
+    say(6, 12);
+    server.event(server.runtimeIdOf(id)!, "message.complete", { text: words.join(" "), status: "complete" });
+
+    expect(chat(id).items.map((i) => [i.kind, "text" in i ? i.text.trim() : i.id])).toEqual([
+      ["user", "slow 12"],
+      ["assistant", words.join(" ")],
+    ]);
+  });
+
   it("gives up a request Hermes never answers, so the chat it was loading can load again (#473)", async () => {
     const server = new FakeHermes();
     server.sessions = [row("tg", 2, { source: "telegram" })];
