@@ -478,6 +478,7 @@ pub fn png(pixels: &Pixels) -> Result<Vec<u8>, AnnotateError> {
 }
 
 /// The longest side a staged annotation's image may have.
+#[cfg(target_os = "linux")]
 const MAX_SIDE: f64 = 2560.0;
 
 /// Stages the still at `still` as annotation `n`: outlined at `rect` (CSS pixels) times `scale`, scaled down to at most
