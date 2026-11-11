@@ -29,6 +29,28 @@ const prompts = (server: FakeHermes) => server.requests.filter((r) => r.method =
 /** The card for Hermes's request `id`. */
 const cardOf = (id: string) => document.querySelector<HTMLElement>(`[data-item="${id}"]`)!;
 
+type Fiber = { child: Fiber | null; sibling: Fiber | null; memoizedState: unknown; memoizedProps: unknown };
+type Hook = { memoizedState: unknown; baseState?: unknown; queue?: { lastRenderedState?: unknown } | null; next: Hook | null };
+/**
+ * Whether React holds `text` in a mounted component's state or an element's props, as a card holds what is typed into
+ * its field. Both live on React's fibers, reached from the root's container.
+ */
+function reactHolds(text: string): boolean {
+  const has = (v: unknown) => typeof v === "string" && v.includes(text);
+  const container = [...document.body.children].find((el) => Object.keys(el).some((k) => k.startsWith("__reactContainer$")))!;
+  const key = Object.keys(container).find((k) => k.startsWith("__reactContainer$"))!;
+  const stack: Fiber[] = [(container as unknown as Record<string, { stateNode: { current: Fiber } }>)[key].stateNode.current];
+  while (stack.length) {
+    const f = stack.pop()!;
+    if (f.child) stack.push(f.child);
+    if (f.sibling) stack.push(f.sibling);
+    const props = f.memoizedProps;
+    if (has(props) || (props && typeof props === "object" && Object.values(props).some(has))) return true;
+    for (let h = f.memoizedState as Hook | null; h && typeof h === "object" && "next" in h; h = h.next) if ([h.memoizedState, h.baseState, h.queue?.lastRenderedState].some(has)) return true;
+  }
+  return false;
+}
+
 /** A new chat whose reply is running, focus in its composer, on a Hermes whose chats this computer keeps. */
 async function replying() {
   const server = new FakeHermes();
@@ -180,6 +202,42 @@ describe("Sudo password and Secret cards", () => {
     await settle(s.hermes);
     expect(s.server.settled).toEqual([{ id, method: "secret", result: { value: "" }, via: "request.answer" }]);
     expect(card.getByText("Skipped")).toBeTruthy();
+  });
+
+  it("keeps no typed value once the owner skips", async () => {
+    const s = await replying();
+    const id = await s.ask(() => s.server.askSecret(s.runtime));
+    const card = within(cardOf(id));
+    await s.user.type(card.getByLabelText("Value for OPENWEATHER_API_KEY"), "sk-typed-then-skipped");
+    expect(reactHolds("sk-typed-then-skipped")).toBe(true);
+
+    card.getByRole("button", { name: "Skip" }).focus();
+    await s.user.keyboard("{Enter}");
+    await settle(s.hermes);
+    expect(s.server.settled).toEqual([{ id, method: "secret", result: { value: "" }, via: "request.answer" }]);
+    expect(card.getByText("Skipped")).toBeTruthy();
+    expect(reactHolds("sk-typed-then-skipped")).toBe(false);
+  });
+
+  it.each([
+    ["Hermes stops waiting", "Timed out without an answer", (s: Awaited<ReturnType<typeof replying>>, id: string) => s.server.cancelRequest(id, "timeout")],
+    [
+      "another Hermes app answers",
+      "Answered in another Hermes client",
+      (s: Awaited<ReturnType<typeof replying>>, id: string) => {
+        s.server.answerElsewhere(id, "response");
+        s.server.event(s.runtime, "tool.complete", { tool_id: "t1" });
+      },
+    ],
+  ])("keeps no typed value once %s", async (_, note, close) => {
+    const s = await replying();
+    const id = await s.ask(() => s.server.askSudo(s.runtime));
+    await s.user.type(within(cardOf(id)).getByLabelText("Sudo password"), "hunter2-typed");
+    act(() => close(s, id));
+    await settle(s.hermes);
+    expect(within(cardOf(id)).getByText(note)).toBeTruthy();
+    expect(reactHolds("hunter2-typed")).toBe(false);
+    expect(s.server.settled).toEqual([]);
   });
 
   it("does nothing offline, and keeps what was typed for when Hermes is back", async () => {
