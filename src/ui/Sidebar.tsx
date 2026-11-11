@@ -333,6 +333,8 @@ function RenameRow({
         onFocus={(e) => e.currentTarget.select()}
         onKeyDown={(e) => {
           const command = pick(e, "rename");
+          // Taken, so an app-wide command on the same keys doesn't also run (App.tsx skips a press already handled).
+          if (command) e.preventDefault();
           if (command === "renameSave") save();
           else if (command === "renameCancel" && !saving) onDone();
         }}
@@ -882,7 +884,11 @@ function ProfileMenu({
       role="listbox"
       aria-label="Profiles"
       // Escape closes it from the filter or from an option the owner tabbed to.
-      onKeyDown={(e) => pick(e, "profileMenu") === "profileClose" && onClose()}
+      onKeyDown={(e) => {
+        if (pick(e, "profileMenu") !== "profileClose") return;
+        e.preventDefault();
+        onClose();
+      }}
     >
       <input
         className="profile-filter"
@@ -890,7 +896,11 @@ function ProfileMenu({
         placeholder="Filter profiles"
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
-        onKeyDown={(e) => pick(e, "profileMenu") === "profilePick" && shown[0] && onPick(shown[0])}
+        onKeyDown={(e) => {
+          if (pick(e, "profileMenu") !== "profilePick" || !shown[0]) return;
+          e.preventDefault();
+          onPick(shown[0]);
+        }}
       />
       <div className="profile-options">
         {shown.map((p) => (

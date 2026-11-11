@@ -149,6 +149,8 @@ export function SearchPalette({
           if (!passKey(e) && !isTextEdit(e)) e.stopPropagation();
           trapTab(e, box.current);
           if (pick(e, "palette") !== "paletteClose") return;
+          // Taken, so Search's own app-wide keys, if the owner put Close on them too, don't open it again.
+          e.preventDefault();
           if (panel) closePanel();
           else onClose();
         }}
@@ -170,7 +172,10 @@ export function SearchPalette({
               } else if (command === "paletteUp") {
                 e.preventDefault();
                 setSel((s) => Math.max(s - 1, 0));
-              } else if (command === "paletteOpen" && !stale && found[sel]) onPick(found[sel]);
+              } else if (command === "paletteOpen" && !stale && found[sel]) {
+                e.preventDefault();
+                onPick(found[sel]);
+              }
             }}
           />
           <button

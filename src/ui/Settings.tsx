@@ -23,7 +23,7 @@ import type { Chat, ConnectionStatus } from "../hermes/model";
 import type { Route } from "../hermes/pipe";
 import { viaLabel } from "../hermes/routes";
 import { TRANSCRIPT_LIMIT_BYTES } from "../hermes/chatCache";
-import { STATUS_LABEL, arrowSelect, fmtSize, routeLabel } from "./bits";
+import { STATUS_LABEL, arrowSelect, composing, fmtSize, routeLabel } from "./bits";
 import type { AppearanceStore, Fonts } from "./appearance";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { KeyboardSettings } from "./KeyboardSettings";
@@ -478,7 +478,7 @@ export function SettingsScreen({
         e.preventDefault();
         searchBox.current?.focus();
         searchBox.current?.select();
-      } else if (e.key === "Escape" && searchingRef.current) {
+      } else if (e.key === "Escape" && searchingRef.current && !composing(e)) {
         const at = document.activeElement;
         if (at && at !== document.body && !screenRef.current?.contains(at)) return;
         e.preventDefault();

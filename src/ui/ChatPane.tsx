@@ -1903,7 +1903,7 @@ function Composer({
           {enterSteers ? (
             <button
               className="send queue-btn"
-              title="Steer: add to the running reply without stopping it (Enter)"
+              title={`Steer: add to the running reply without stopping it (${sendKey})`}
               aria-label="Steer"
               disabled={!sendable || steering}
               onClick={() => send()}
@@ -1913,7 +1913,7 @@ function Composer({
           ) : (
             queueing &&
             onQueue && (
-              <button className="send queue-btn" title="Queue: send after the reply (Enter)" aria-label="Queue" disabled={!sendable || steering} onClick={() => send()}>
+              <button className="send queue-btn" title={`Queue: send after the reply (${sendKey})`} aria-label="Queue" disabled={!sendable || steering} onClick={() => send()}>
                 <ListPlus size={16} />
               </button>
             )

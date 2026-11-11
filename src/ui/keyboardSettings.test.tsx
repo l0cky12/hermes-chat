@@ -109,6 +109,32 @@ describe("A rebound shortcut", () => {
     expect(screen.getByRole("button", { name: /Nightly backup/ })).toBeTruthy();
   });
 
+  it("taken by the focused control doesn't also run the app-wide command on the same keys", async () => {
+    const s = await signedIn({ renameSave: ["Ctrl+K"], profileClose: ["Ctrl+K"], paletteClose: ["Ctrl+K"] });
+    // Confirm a rename on Ctrl+K renames, and Search doesn't open.
+    await s.user.pointer({ keys: "[MouseRight]", target: rowButton("Nightly backup") });
+    await s.user.click(screen.getByRole("menuitem", { name: "Rename…" }));
+    const title = screen.getByRole("textbox", { name: "Chat title" });
+    await s.user.clear(title);
+    await s.user.type(title, "Backups");
+    await s.user.keyboard("{Control>}k{/Control}");
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "Chat title" })).toBeNull());
+    expect(palette()).toBeNull();
+    // Closing the profile menu on Ctrl+K doesn't open Search either.
+    button(/^default/).focus();
+    await s.user.keyboard("{Enter}");
+    expect(screen.getByRole("listbox", { name: "Profiles" })).toBeTruthy();
+    await s.user.keyboard("{Control>}k{/Control}");
+    expect(screen.queryByRole("listbox", { name: "Profiles" })).toBeNull();
+    expect(palette()).toBeNull();
+    // Search opens on Ctrl+K, and its Close on Ctrl+K closes it rather than opening it again.
+    composer().focus();
+    await s.user.keyboard("{Control>}k{/Control}");
+    expect(palette()).toBeTruthy();
+    await s.user.keyboard("{Control>}k{/Control}");
+    expect(palette()).toBeNull();
+  });
+
   it("never fires while an IME is composing", async () => {
     await signedIn({ search: ["Ctrl+J"] });
     fireEvent.keyDown(composer(), { key: "j", code: "KeyJ", ctrlKey: true, isComposing: true, keyCode: 229 });
@@ -131,7 +157,16 @@ describe("The Keyboard Shortcuts page", () => {
     expect(button("Reset all").hasAttribute("disabled")).toBe(true);
     expect(screen.getByText("Take a screenshot for the composer")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^Change Take a screenshot/ })).toBeNull();
-    for (const fixed of ["Move between a menu's items", "Close a menu, back to its button", "Put back the Preview's address you were typing", "Add the folder whose path you typed to the project"]) {
+    for (const fixed of [
+      "Move between a menu's items",
+      "Close a menu, back to its button",
+      "Cancel what you're typing: a queued message, the Preview's address, a filter",
+      "Move a queued message down or up",
+      "Copy or paste in the Terminal",
+      "Make the replay",
+      "Go up to the parent folder in Files",
+      "Fill in the chosen slash command",
+    ]) {
       expect(screen.getByText(fixed)).toBeTruthy();
       expect(screen.queryByRole("button", { name: new RegExp(`^Change ${fixed}`) })).toBeNull();
     }

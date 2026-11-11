@@ -429,6 +429,7 @@ export function ProjectScreen({
                 onFocus={(e) => e.currentTarget.select()}
                 onKeyDown={(e) => {
                   const command = pick(e, "rename");
+                  if (command) e.preventDefault();
                   if (command === "renameSave") void rename();
                   else if (command === "renameCancel") {
                     setName(project.name);

@@ -204,3 +204,14 @@ describe("Settings → General → Chats", () => {
     expect(JSON.parse(localStorage.getItem("hermes-ui-prefs")!).followUp).toBe("steer");
   });
 });
+
+describe("A rebound Send", () => {
+  it("is the key the Queue and Steer buttons name", async () => {
+    const s = await replying();
+    act(() => void setUIPrefs({ keybindings: { send: ["Ctrl+J"] } }));
+    expect(screen.getByRole("button", { name: "Queue" }).title).toBe("Queue: send after the reply (Ctrl+J)");
+    act(() => void setUIPrefs({ followUp: "steer" }));
+    expect(screen.getByRole("button", { name: "Steer" }).title).toBe("Steer: add to the running reply without stopping it (Ctrl+J)");
+    await s.finish();
+  });
+});
