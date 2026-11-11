@@ -19,3 +19,4 @@ Failed and unknown messages are kept in each chat's outbox on this computer, per
 - On a server that doesn't send `row_id`, the baseline is missing. Then any owner's message with the same words in the history counts as arrival.
 - Hermes may store a message sent with files with more text around the owner's words. For such a message, the owner's words appearing in the history row are enough.
 - If a retry can't go out at all, an unknown message stays unknown. The first send may still have arrived.
+- A new chat has no row on Hermes until its first message is stored, so the list read wouldn't have it. A chat holding a failed or unknown message, or a queued one, stays in the list anyway, across reconnects and restarts, until the message is retried or dismissed (#468). Retry there resumes the chat by its id, and Hermes makes the row for an id it minted that has none (`_resume_materialize_minted` at `bf0203a`).

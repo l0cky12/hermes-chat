@@ -361,6 +361,61 @@ describe("Case 4: the app restarts mid-flight", () => {
   });
 });
 
+describe("A new chat whose first message failed (#468)", () => {
+  /** A chat started here, whose first message Hermes refused, so Hermes has no row for it. */
+  async function failedFirst() {
+    const server = new FakeHermes();
+    server.sessions = [row("c1", 0)];
+    let hermes = await launch(server);
+    const id = await hermes.newChat();
+    server.rejectPrompt = { code: 4009, message: "session busy" };
+    await hermes.send(id, TEXT);
+    server.rejectPrompt = undefined;
+    const chat = () => hermes.getSnapshot().chats.find((c) => c.id === id);
+    expect(chat()?.items).toMatchObject([{ text: TEXT, outgoing: { state: "failed", reason: "session busy" } }]);
+    expect(server.sessions.some((s) => s.id === id)).toBe(false);
+    const relaunch = async () => {
+      await hermes.close();
+      hermes = await launch(server);
+      return hermes;
+    };
+    return { server, hermes: () => hermes, id, chat, relaunch };
+  }
+
+  it("stays in the list, with its Failed message, after the connection drops and the list is read again", async () => {
+    const { server, hermes, chat } = await failedFirst();
+    server.drop();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(hermes().getSnapshot().status).toBe("connected");
+    await hermes().idle();
+    expect(server.restRequests.filter((r) => r.path === "/api/sessions").length).toBeGreaterThan(1);
+    expect(chat()?.items).toMatchObject([{ text: TEXT, outgoing: { state: "failed", reason: "session busy" } }]);
+  });
+
+  it("stays after a restart, and Retry sends it in that chat", async () => {
+    const { server, hermes, id, chat, relaunch } = await failedFirst();
+    await relaunch();
+    await hermes().idle();
+    const failed = chat()?.items.at(-1);
+    expect(failed).toMatchObject({ text: TEXT, outgoing: { state: "failed" } });
+
+    expect(await hermes().retry(id, failed!.id)).toEqual({ delivery: "accepted" });
+    expect(chat()?.items).toMatchObject([{ kind: "user", text: TEXT }]);
+    expect(chat()?.items.some(isOutgoing)).toBe(false);
+    expect((server.transcripts[id] ?? []).filter((m) => m.role === "user" && m.text === TEXT)).toHaveLength(1);
+  });
+
+  it("goes once the owner dismisses its message, at the next list read", async () => {
+    const { server, hermes, id, chat } = await failedFirst();
+    server.drop();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hermes().idle();
+    hermes().dismiss(id, chat()!.items[0].id);
+    await hermes().sync();
+    expect(chat()).toBeUndefined();
+  });
+});
+
 describe("The outbox on this computer", () => {
   it("a failed message survives a cache save/reload cycle, attachments and all, and stays out of the Saved copy", async () => {
     const { server, hermes, chat, relaunch } = await ready();

@@ -2950,6 +2950,9 @@ export class Hermes {
       title: c.items.length === 0 && c.runtimeId && !isBotChat(c) ? (text || attachments[0]?.name || c.title).slice(0, 48) : c.title,
       items: [...c.items, user],
     }));
+    // A chat's first message names it, and the chat goes in the saved list then, as Hermes has no row for it yet: a
+    // first message that fails comes back in its chat after a restart (#468).
+    if (chat.items.length === 0) this.saveList(profile, this.snapshot.chats);
     for (const fn of this.sendListeners) fn(profile, chatId);
     // Kept from the start, so a message on its way when the app closes isn't lost.
     const kept = this.saveOutbox(chatId);
@@ -4389,12 +4392,15 @@ export class Hermes {
         return c && sameFields(c, next) ? c : next;
       });
     // Chats started or resumed on this connection stay even before Hermes stores them (a new chat has no row
-    // until its first prompt), and so do chats picked from a search and chats being archived or restored.
+    // until its first prompt), and so do chats picked from a search and chats being archived or restored. So does a
+    // chat holding a message sent from here that Hermes hasn't confirmed, or a queue: a new chat whose first message
+    // failed has no row either, and its message stays until the owner retries or dismisses it (ADR 0006, #468).
     const listedIds = new Set(listed.map((c) => c.id));
+    const holdsUnsent = (c: Chat) => c.items.some(isOutgoing) || !!this.snapshot.queues[c.id]?.items.length;
     // One Hermes now lists as a Bot Chat, such as an ordinary chat renamed to the title in another client, stays out
     // of the list from now on, and is marked so every Bot Chat rule applies to it (ADR 0066).
     const onThisConnection = this.snapshot.chats
-      .filter((c) => (c.runtimeId || this.revealed.has(c.id) || this.archiveWanted.has(c.id)) && !listedIds.has(c.id))
+      .filter((c) => (c.runtimeId || this.revealed.has(c.id) || this.archiveWanted.has(c.id) || holdsUnsent(c)) && !listedIds.has(c.id))
       .map((c) => (botChats.has(c.id) && !c.bot ? { ...c, bot: true, title: BOT_CHAT_TITLE } : c));
     const chats = [...onThisConnection, ...listed];
     const wasUnlisted = !this.hasListed();
