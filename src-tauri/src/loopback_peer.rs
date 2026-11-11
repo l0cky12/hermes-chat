@@ -40,6 +40,14 @@ pub(crate) fn this_account() -> Account {
     Account
 }
 
+/// Whether process `pid` runs as this process's account. False when either account can't be read, which is the case
+/// for another account's process unless the app runs as an administrator.
+#[cfg(windows)]
+pub(crate) fn runs_as_this_account(pid: u32) -> bool {
+    let this = this_account();
+    this.is_some() && win::account_of(pid) == this
+}
+
 /// Who a relay port serves.
 #[derive(Clone, Copy)]
 pub(crate) enum Peers {

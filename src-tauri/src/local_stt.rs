@@ -419,6 +419,47 @@ fn command(program: &Path) -> tokio::process::Command {
     command
 }
 
+/// A running engine with everything it started, all ended when this is dropped. Killing the engine alone leaves what
+/// it started running: the real engine behind a `.cmd` or `.bat` launcher on Windows (`PROGRAM_SUFFIXES`), or behind
+/// a shell script, which goes on transcribing and holds the recording open.
+struct Tree {
+    /// The process group the engine was started as the leader of.
+    #[cfg(unix)]
+    group: libc::pid_t,
+    #[cfg(windows)]
+    _job: crate::server_page::job::Own,
+}
+
+impl Tree {
+    #[cfg(unix)]
+    fn start(command: &mut tokio::process::Command) -> std::io::Result<(tokio::process::Child, Tree)> {
+        let child = command.process_group(0).kill_on_drop(true).spawn()?;
+        let group = child.id().ok_or_else(|| std::io::Error::other("it exited as it started"))? as libc::pid_t;
+        Ok((child, Tree { group }))
+    }
+
+    #[cfg(windows)]
+    fn start(command: &mut tokio::process::Command) -> std::io::Result<(tokio::process::Child, Tree)> {
+        let (child, job) = crate::server_page::job::start(command)?;
+        Ok((child, Tree { _job: job }))
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Tree {
+    fn drop(&mut self) {
+        // SAFETY: a signal to a process group; no memory is involved.
+        unsafe { libc::killpg(self.group, libc::SIGKILL) };
+    }
+}
+
+const SCRATCH_PREFIX: &str = "hermes-chat-stt-";
+const SCRATCH_RETRY_EVERY: Duration = Duration::from_millis(200);
+const SCRATCH_RETRY_FOR: Duration = Duration::from_secs(5);
+/// How old a recording's folder is when a start of the app deletes it. No run still uses one that old: the longest
+/// recording (`MAX_WAV_BYTES`) gets 60 + 3 * (25 MiB / 32000) s, about 41 minutes (`time_limit`).
+const SCRATCH_STALE_AFTER: Duration = Duration::from_secs(60 * 60);
+
 /// A private folder for one recording, deleted with everything in it when dropped.
 struct Scratch(PathBuf);
 
@@ -427,7 +468,7 @@ impl Scratch {
         use std::sync::atomic::AtomicU64;
         static N: AtomicU64 = AtomicU64::new(0);
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-        let dir = std::env::temp_dir().join(format!("hermes-chat-stt-{}-{nanos}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        let dir = std::env::temp_dir().join(format!("{SCRATCH_PREFIX}{}-{nanos}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         // `create`, not `create_all`: it fails if anything, a link included, is already there. On Windows the folder
         // takes the ACL of the user's own temp folder.
         #[allow(unused_mut)]
@@ -439,9 +480,52 @@ impl Scratch {
     }
 }
 
+/// Deletes `dir` with everything in it. True once it is gone.
+fn removed(dir: &Path) -> bool {
+    std::fs::remove_dir_all(dir).map_or_else(|e| e.kind() == std::io::ErrorKind::NotFound, |()| true)
+}
+
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        if removed(&self.0) {
+            return;
+        }
+        // Windows won't delete a file a process still has open, and an engine that was just killed (`Tree`) lets go of
+        // the recording a moment later. So the folder is tried again for a few seconds, on a thread of its own, since
+        // this one may be the runtime's. A folder still there after that goes at a later start (`sweep_scratch`).
+        let dir = std::mem::take(&mut self.0);
+        std::thread::spawn(move || {
+            let until = Instant::now() + SCRATCH_RETRY_FOR;
+            while Instant::now() < until {
+                std::thread::sleep(SCRATCH_RETRY_EVERY);
+                if removed(&dir) {
+                    return;
+                }
+            }
+            eprintln!("hermes-chat: couldn't delete a recording's folder, {}; a later start of the app deletes it", dir.display());
+        });
+    }
+}
+
+/// Deletes the recordings' folders that earlier runs of the app left in the temp folder: one whose engine wouldn't let
+/// go in time, or whose app was killed mid-run. Called as the app starts, off the main thread (lib.rs).
+pub fn sweep_scratch() {
+    sweep_scratch_in(&std::env::temp_dir(), std::time::SystemTime::now());
+}
+
+fn sweep_scratch_in(temp: &Path, now: std::time::SystemTime) {
+    for dir in children(temp).into_iter().filter(|p| name_of(p).starts_with(SCRATCH_PREFIX)) {
+        // Not followed if it is a link: only a real folder, and on a shared `/tmp` only this account's, is deleted.
+        let Ok(found) = std::fs::symlink_metadata(&dir) else { continue };
+        #[cfg(unix)]
+        // SAFETY: `getuid` only reads this process's user id.
+        let mine = std::os::unix::fs::MetadataExt::uid(&found) == unsafe { libc::getuid() };
+        #[cfg(not(unix))]
+        let mine = true;
+        let stale = found.modified().is_ok_and(|at| now.duration_since(at).is_ok_and(|age| age >= SCRATCH_STALE_AFTER));
+        if found.is_dir() && mine && stale && !removed(&dir) {
+            eprintln!("hermes-chat: couldn't delete an old recording's folder, {}", dir.display());
+        }
     }
 }
 
@@ -451,7 +535,8 @@ fn time_limit(wav_bytes: usize) -> Duration {
 }
 
 /// Has `engine` transcribe a WAV recording in `language`, within `limit`. The recording is written to a private folder
-/// that is deleted afterwards, whatever happens. Errors say why, for the owner.
+/// that is deleted afterwards, whatever happens, and the engine is ended with everything it started, also when this is
+/// dropped half way (a cancel, or the backup's turn). Errors say why, for the owner.
 pub async fn transcribe(engine: &Engine, wav: &[u8], limit: Duration, language: &str) -> Result<Transcript, String> {
     if let Some(why) = problem(Some(engine)) {
         return Err(why);
@@ -472,17 +557,18 @@ pub async fn transcribe(engine: &Engine, wav: &[u8], limit: Duration, language: 
         f.write_all(wav).map_err(|e| format!("Couldn't save the recording to transcribe: {e}"))?;
     }
     let label = engine.kind.label();
-    let child = command(&engine.binary)
-        .args(args(engine, model, &wav_path, &scratch.0, language))
-        .current_dir(&scratch.0)
-        // faster-whisper's model is already here; it must never fetch one.
-        .env("HF_HUB_OFFLINE", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| format!("{label} couldn't be started: {e}"))?;
+    // Declared after `scratch`, so it is dropped first: the engine and what it started are killed, then the folder goes.
+    let (child, _tree) = Tree::start(
+        command(&engine.binary)
+            .args(args(engine, model, &wav_path, &scratch.0, language))
+            .current_dir(&scratch.0)
+            // faster-whisper's model is already here; it must never fetch one.
+            .env("HF_HUB_OFFLINE", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .map_err(|e| format!("{label} couldn't be started: {e}"))?;
     let out = match tokio::time::timeout(limit, child.wait_with_output()).await {
         Err(_) => return Err(format!("{label} took longer than {} s, so it was stopped.", limit.as_secs())),
         Ok(r) => r.map_err(|e| format!("{label} failed: {e}"))?,
@@ -1420,15 +1506,19 @@ mod tests {
         Engine { kind: Kind::WhisperCpp, binary, model: Some(dir.join("ggml-tiny.bin")) }
     }
 
+    /// Held by each test that makes a private folder: one of them counts those this process has left.
+    static SCRATCH_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// The private folders left behind in the temp dir by this process.
     fn leftovers() -> usize {
-        let prefix = format!("hermes-chat-stt-{}-", std::process::id());
+        let prefix = format!("{SCRATCH_PREFIX}{}-", std::process::id());
         children(&std::env::temp_dir()).iter().filter(|p| name_of(p).starts_with(&prefix)).count()
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn a_run_reads_the_transcript_and_deletes_the_recording_whatever_happens() {
+        let _scratch = SCRATCH_TESTS.lock().await;
         let d = temp("run");
         // Writes what it was given, as whisper-cli does with `-of <out>`; records the folder's mode and the language.
         let ok = fake_engine(
@@ -1455,9 +1545,125 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// Whether process `pid` still runs. One that was killed and waits for its new parent to collect it doesn't.
+    #[cfg(target_os = "linux")]
+    fn runs(pid: i32) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| !stat.rsplit(')').next().is_some_and(|rest| rest.trim_start().starts_with('Z')))
+    }
+
+    #[cfg(unix)]
+    async fn within(limit: Duration, mut done: impl FnMut() -> bool) -> bool {
+        let until = Instant::now() + limit;
+        while !done() {
+            if Instant::now() >= until {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        true
+    }
+
+    /// An engine behind a wrapper, as a `.cmd` launcher is on Windows: the wrapper starts the engine, which holds the
+    /// recording open, says which process that is and where it runs, and then does `then`.
+    #[cfg(target_os = "linux")]
+    fn wrapped_engine(d: &Path, name: &str, then: &str) -> (Engine, PathBuf) {
+        let said = d.join(format!("{name}.said"));
+        let script = format!(r#"sleep 300 <audio.wav >/dev/null 2>&1 & echo "$! $(pwd)" > '{0}.part'; mv '{0}.part' '{0}'; {then}"#, said.display());
+        (fake_engine(d, name, &script), said)
+    }
+
+    /// The wrapped engine's process and the recording's folder, once the wrapper has said them.
+    #[cfg(target_os = "linux")]
+    fn said(file: &Path) -> Option<(i32, PathBuf)> {
+        let text = std::fs::read_to_string(file).ok()?;
+        let (pid, folder) = text.trim_end().split_once(' ')?;
+        Some((pid.parse().ok()?, folder.into()))
+    }
+
+    /// The engine's process is gone and so is the recording's folder, soon after the run ended.
+    #[cfg(target_os = "linux")]
+    async fn assert_nothing_left(file: &Path, how: &str) {
+        let (pid, folder) = said(file).expect("the wrapper started the engine");
+        let ended = within(Duration::from_secs(10), || !runs(pid)).await;
+        if !ended {
+            // SAFETY: a signal to the `sleep` this test's wrapper started, which is still running.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        assert!(ended, "{how}: the engine behind the wrapper still runs");
+        assert!(within(Duration::from_secs(10), || !folder.exists()).await, "{how}: the recording's folder is still there");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_run_that_ends_takes_the_engine_behind_a_wrapper_and_the_recording_with_it() {
+        let _scratch = SCRATCH_TESTS.lock().await;
+        let d = temp("tree");
+
+        let (engine, file) = wrapped_engine(&d, "stopped", "wait");
+        let mut run = Box::pin(transcribe(&engine, b"RIFF", Duration::from_secs(30), "auto"));
+        tokio::select! {
+            r = &mut run => panic!("the run ended by itself: {r:?}"),
+            started = within(Duration::from_secs(10), || said(&file).is_some()) => assert!(started, "the wrapper never started the engine"),
+        }
+        drop(run);
+        assert_nothing_left(&file, "stopped").await;
+
+        let (engine, file) = wrapped_engine(&d, "slow", "wait");
+        let err = transcribe(&engine, b"RIFF", Duration::from_millis(500), "auto").await.unwrap_err();
+        assert!(err.contains("took longer than"), "{err}");
+        assert_nothing_left(&file, "out of time").await;
+
+        let (engine, file) = wrapped_engine(&d, "done", "echo hello > audio.txt");
+        assert_eq!(transcribe(&engine, b"RIFF", Duration::from_secs(10), "auto").await.unwrap().text, "hello");
+        assert_nothing_left(&file, "finished").await;
+
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A folder that can't be deleted until `locked` inside it is opened up, as one on Windows can't while an engine
+    /// holds the recording.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_folder_that_cant_go_at_once_goes_as_soon_as_it_can() {
+        let _scratch = SCRATCH_TESTS.lock().await;
+        let scratch = Scratch::new().unwrap();
+        let (dir, locked) = (scratch.0.clone(), scratch.0.join("locked"));
+        file(&locked.join("audio.wav"), "RIFF", 0o600);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
+        drop(scratch);
+        // Run as root, the folder went at once.
+        let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700));
+        assert!(within(Duration::from_secs(10), || !dir.exists()).await, "the recording's folder is still there");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_start_deletes_recordings_folders_over_an_hour_old_and_nothing_else() {
+        let d = temp("sweep");
+        let now = std::time::SystemTime::now();
+        let aged = |name: &str, age: Duration| {
+            let dir = d.join(name);
+            file(&dir.join("audio.wav"), "RIFF", 0o600);
+            std::fs::File::open(&dir).unwrap().set_modified(now - age).unwrap();
+            dir
+        };
+        let old = aged("hermes-chat-stt-1-2-3", SCRATCH_STALE_AFTER + Duration::from_secs(1));
+        let running = aged("hermes-chat-stt-4-5-6", time_limit(MAX_WAV_BYTES));
+        let other = aged("hermes-chat-update-test", SCRATCH_STALE_AFTER * 2);
+        // A link by a recording folder's name, to a folder that must stay.
+        let link = d.join("hermes-chat-stt-7-8-9");
+        std::os::unix::fs::symlink(&other, &link).unwrap();
+        sweep_scratch_in(&d, now);
+        assert!(!old.exists(), "a folder from over an hour ago is deleted");
+        assert!(running.join("audio.wav").exists(), "the longest run's folder is kept");
+        assert!(other.join("audio.wav").exists() && link.exists(), "nothing else is touched");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn a_failure_printed_only_on_stdout_is_still_said() {
+        let _scratch = SCRATCH_TESTS.lock().await;
         let d = temp("stdout");
         let e = fake_engine(&d, "stdout", "echo 'RuntimeError: Unable to open file model.bin'; exit 1");
         assert_eq!(
@@ -1484,6 +1690,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn with_this_computer_chosen_and_no_backup_a_recording_never_goes_to_hermes() {
+        let _scratch = SCRATCH_TESTS.lock().await;
         let d = temp("route");
         let path = d.join(SETTINGS_FILE);
         let sent = Arc::new(AtomicUsize::new(0));
@@ -1524,6 +1731,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn the_backup_transcribes_when_the_primary_fails_and_the_text_says_so() {
+        let _scratch = SCRATCH_TESTS.lock().await;
         let d = temp("backup");
         let path = d.join(SETTINGS_FILE);
         let sent = Arc::new(AtomicUsize::new(0));
