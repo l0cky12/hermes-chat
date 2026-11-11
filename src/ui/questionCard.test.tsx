@@ -204,12 +204,15 @@ describe("Sudo password and Secret cards", () => {
     expect(card.getByText("Skipped")).toBeTruthy();
   });
 
-  it("keeps no typed value once the owner skips", async () => {
+  it("keeps a typed value only in its field, and none once the owner skips", async () => {
     const s = await replying();
     const id = await s.ask(() => s.server.askSecret(s.runtime));
     const card = within(cardOf(id));
-    await s.user.type(card.getByLabelText("Value for OPENWEATHER_API_KEY"), "sk-typed-then-skipped");
-    expect(reactHolds("sk-typed-then-skipped")).toBe(true);
+    const field = card.getByLabelText<HTMLInputElement>("Value for OPENWEATHER_API_KEY");
+    await s.user.type(field, "sk-typed-then-skipped");
+    // The value is only in the field, never in React's state or props, even while it is typed.
+    expect(field.value).toBe("sk-typed-then-skipped");
+    expect(reactHolds("sk-typed-then-skipped")).toBe(false);
 
     card.getByRole("button", { name: "Skip" }).focus();
     await s.user.keyboard("{Enter}");

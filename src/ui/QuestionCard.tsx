@@ -1,5 +1,5 @@
 // A Clarify, Sudo password or Secret card (#390): what Hermes asks, and the owner's answer. A password or secret lives
-// only in the card's masked field until it goes to Hermes; the card then keeps only that it was answered (ADR 0138).
+// only in the card's masked DOM field until it goes to Hermes; the card then keeps only that it was answered (ADR 0138).
 import { useCallback, useId, useRef, useState, type KeyboardEvent } from "react";
 import { KeyRound, MessageCircleQuestion } from "lucide-react";
 import type { ClarifyQuestion, QuestionAnswer, QuestionItem } from "../hermes/model";
@@ -171,16 +171,20 @@ function Masked({ item, open, ...parts }: Parts & { item: Exclude<Card, { kind: 
 }
 
 /**
- * The masked field, whose value goes to Hermes and nowhere else. It shows only while the card waits, so the value goes
- * however the card closes, and Send clears it as it goes.
+ * The masked field, whose value goes to Hermes and nowhere else. The field is uncontrolled, so the value is only in the
+ * DOM field, never in React's state or props; React knows only whether it is empty. It shows only while the card
+ * waits, so the value goes however the card closes, and Send clears it as it goes.
  */
 function MaskedField({ item, offline, deliberate, keepFocus, send }: Omit<Parts, "open"> & { item: Exclude<Card, { kind: "clarify" }> }) {
-  const [value, setValue] = useState("");
+  const field = useRef<HTMLInputElement>(null);
+  const [filled, setFilled] = useState(false);
   const fieldId = useId();
   const go = () => {
-    if (offline || !value) return;
-    send({ kind: "value", value });
-    setValue("");
+    const input = field.current;
+    if (offline || !input?.value) return;
+    send({ kind: "value", value: input.value });
+    input.value = "";
+    setFilled(false);
   };
   return (
     <div className="question-masked" ref={keepFocus}>
@@ -189,17 +193,17 @@ function MaskedField({ item, offline, deliberate, keepFocus, send }: Omit<Parts,
       </label>
       <div className="question-own">
         <input
+          ref={field}
           id={fieldId}
           className="question-field"
           type="password"
-          value={value}
           autoComplete="off"
           spellCheck={false}
           placeholder={item.kind === "sudo" ? "Sudo password" : item.envVar}
-          onChange={(e) => setValue(e.target.value)}
+          onInput={(e) => setFilled(!!e.currentTarget.value)}
           onKeyDown={onEnter(go)}
         />
-        <button className="btn primary" aria-disabled={offline || !value || undefined} onClick={deliberate(go)}>
+        <button className="btn primary" aria-disabled={offline || !filled || undefined} onClick={deliberate(go)}>
           Send
         </button>
         <button className="btn" aria-disabled={offline || undefined} onClick={deliberate(() => send({ kind: "skip" }))}>
