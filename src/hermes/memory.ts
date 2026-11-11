@@ -167,7 +167,7 @@ const rpcCode = (e: unknown): number | undefined => (isObj(e) && typeof e.code =
 
 /** What `learning.*` answers when the id names text that's no longer there (`agent/learning_mutations.py`). */
 const isStale = (message: string) => /\bstale\b/i.test(message);
-/** A refusal for lack of permission: the server's file permissions, or a dashboard answer of 403. */
+/** A JSON-RPC refusal for lack of permission: the server's file permissions. */
 const isPermission = (message: string) => /permission denied|errno 13|not writable|\b403\b|forbidden/i.test(message);
 
 /**
@@ -271,8 +271,12 @@ function classify(e: unknown): Error {
   const message = messageOf(e);
   const rest = answered(e);
   if (rest?.status === 404 && /profile/i.test(rest.detail)) return new Error(`Hermes has no such profile: ${rest.detail}`);
-  if (!(e instanceof RestError) && /signed out|401|unauthori[sz]ed/i.test(message)) return new MemoryPermissionError(`The dashboard no longer accepts this sign-in: ${message}`);
-  if (isPermission(message)) return new MemoryPermissionError(`Hermes isn't allowed to do that on the server: ${message}`);
+  const signedOut = () => new MemoryPermissionError(`The dashboard no longer accepts this sign-in: ${message}`);
+  const refused = () => new MemoryPermissionError(`Hermes isn't allowed to do that on the server: ${message}`);
+  // A dashboard answer is told by its status: its body is server text (#486). Hermes's JSON-RPC answers by its message.
+  if (e instanceof RestError) return e.status === 401 ? signedOut() : e.status === 403 ? refused() : e;
+  if (/signed out|401|unauthori[sz]ed/i.test(message)) return signedOut();
+  if (isPermission(message)) return refused();
   return e instanceof Error ? e : new Error(message);
 }
 
