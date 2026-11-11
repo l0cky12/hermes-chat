@@ -253,7 +253,7 @@ describe("Questions on a chat another Hermes app also has open", () => {
   it("keeps a question no tool call of the chat asked while an unrelated tool call finishes, and takes its answer after", async () => {
     const { server, hermes, id: chatId, runtime, card } = await replying();
     server.event(runtime, "tool.start", { tool_id: "t1", name: "web_search" });
-    // A side question's skill asks for its secret under the chat's session, with no tool call of the chat's own.
+    // A background task's skill asks for its secret under the chat's session, with no tool call of the chat's own.
     const id = server.askSecret(runtime)!;
     server.event(runtime, "tool.complete", { tool_id: "t1" });
     server.event(runtime, "tool.start", { tool_id: "t2", name: "read_file" });
