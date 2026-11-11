@@ -584,7 +584,9 @@ async fn hermes_save_endpoint(
 
 #[tauri::command]
 async fn hermes_send(state: State<'_, AppState>, attempt: String, frame: String) -> Result<(), String> {
-    held(&*state.0.lock().await, &attempt)?.pipe.send(frame).map_err(|e| e.to_string())
+    // The send waits while the pipe's queue is full; don't hold the lock meanwhile.
+    let pipe = held(&*state.0.lock().await, &attempt)?.pipe.clone();
+    pipe.send(frame).await.map_err(|e| e.to_string())
 }
 
 /// Sends a frame with a file the owner attached (`Attachable`) in it.
@@ -1413,7 +1415,7 @@ fn read_transcript(path: &std::path::Path, max_bytes: u64) -> Result<String, Str
         return Err(too_big());
     }
     let mut bytes = Vec::new();
-    file.take(max_bytes + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    file.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     if bytes.len() as u64 > max_bytes {
         return Err(too_big());
     }
