@@ -502,6 +502,68 @@ mod imp {
         });
         view
     }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::time::{Duration, Instant};
+
+        /// The name and parent of process `pid`.
+        fn stat(pid: u32) -> Option<(String, u32)> {
+            let s = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+            let (head, rest) = s.rsplit_once(") ")?;
+            Some((head.split_once(" (")?.1.to_owned(), rest.split_whitespace().nth(1)?.parse().ok()?))
+        }
+
+        /// For each WebKit web process this process started, the names of the processes between the two.
+        fn web_processes() -> Vec<Vec<String>> {
+            let me = std::process::id();
+            let between = |pid: u32| {
+                let mut names = Vec::new();
+                let mut at = stat(pid)?.1;
+                while at != me {
+                    let (name, up) = stat(at).filter(|_| at > 1)?;
+                    names.push(name);
+                    at = up;
+                }
+                Some(names)
+            };
+            std::fs::read_dir("/proc")
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+                // Not by name: in the sandbox the process calls itself `Web`.
+                .filter(|&pid| {
+                    std::fs::read(format!("/proc/{pid}/cmdline"))
+                        .is_ok_and(|c| c.split(|&b| b == 0).next().is_some_and(|argv0| argv0.ends_with(b"/WebKitWebProcess")))
+                })
+                .filter_map(between)
+                .collect()
+        }
+
+        #[test]
+        #[ignore = "needs a display and a session bus: xvfb-run -a dbus-run-session -- cargo test --lib page_view -- --ignored"]
+        fn a_page_runs_inside_webkits_bubblewrap_sandbox() {
+            gtk::init().expect("a display");
+            let view = page_webview(&page_context());
+            let window = gtk::OffscreenWindow::new();
+            window.add(&view);
+            window.show_all();
+            let loaded = Rc::new(Cell::new(false));
+            let l = loaded.clone();
+            view.connect_load_changed(move |_, event| l.set(l.get() || event == LoadEvent::Finished));
+            view.load_html("<p>A page</p>", None);
+            let end = Instant::now() + Duration::from_secs(120);
+            while !loaded.get() {
+                assert!(Instant::now() < end, "the page never loaded");
+                gtk::main_iteration_do(false);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let found = web_processes();
+            assert!(!found.is_empty(), "the page has a web process of its own");
+            assert!(found.iter().all(|between| between.iter().any(|name| name == "bwrap")), "a web process runs outside bubblewrap: {found:?}");
+        }
+    }
 }
 
 #[cfg(test)]

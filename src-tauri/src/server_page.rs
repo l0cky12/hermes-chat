@@ -990,6 +990,17 @@ mod tests {
     }
 
     #[test]
+    fn ports_for_the_dashboard_and_other_services_than_web_pages_are_refused() {
+        for port in [9119, 22, 25, 110, 6000, 10080, 5432, 6379, 27017] {
+            let raw = format!("http://localhost:{port}/");
+            assert!(matches!(server_page(&raw), Err(ServerPageError::NotWeb(ref m)) if m.contains(&port.to_string())), "{raw}");
+        }
+        for port in [80, 443, 3000, 5173, 8000, 8080, 9118, 9120] {
+            assert_eq!(page(&format!("http://127.0.0.1:{port}/")).port, port);
+        }
+    }
+
+    #[test]
     fn the_frame_loads_the_same_page_on_the_local_end() {
         assert_eq!(page("http://localhost:3000/a/b?q=1#f").local_url(41234).as_str(), "http://127.0.0.1:41234/a/b?q=1#f");
         assert_eq!(page("https://[::1]/x").local_url(40000).as_str(), "https://127.0.0.1:40000/x");
