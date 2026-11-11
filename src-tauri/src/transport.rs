@@ -395,7 +395,7 @@ fn refusal_reason(status: StatusCode, body: &str, headers: &HeaderMap) -> String
     // reason, before it is shortened.
     let refused = matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::PROXY_AUTHENTICATION_REQUIRED);
     match text {
-        Some(t) if !(refused && !headers.is_empty()) && !repeats_header(t, headers) => t.chars().take(800).collect(),
+        Some(t) if !(refused && carried_extra(headers)) && !repeats_header(t, headers) => t.chars().take(800).collect(),
         _ => format!("the server answered {status}"),
     }
 }
@@ -1328,7 +1328,7 @@ pub struct Dashboard {
     /// WebSocket handshake adds the extra headers.
     headers: HeaderMap,
     /// What an error or close reason mustn't repeat to be shown: `headers`, and a token on its own, however short.
-    /// Never sent.
+    /// Never sent. An error mustn't repeat the session cookies either (`hidden`).
     hide: HeaderMap,
     /// Signed in with a token: `headers` holds its `Authorization`, which `signed` adds to each request (`http` is
     /// the route's shared client, which doesn't carry it) and the WebSocket handshake leaves out, as the socket is let
@@ -1448,7 +1448,7 @@ impl Dashboard {
         let ticket = self.signed(Method::POST, endpoint(&self.base, "api/auth/ws-ticket")).send().await.map_err(unreachable)?;
         self.keep_cookies(&ticket);
         if !ticket.status().is_success() {
-            return Err(unexpected(ticket, &self.hide).await);
+            return Err(unexpected(ticket, &self.hidden()).await);
         }
         let ticket = small_json(ticket).await?;
         ticket["ticket"].as_str().map(str::to_owned).ok_or_else(|| TransportError::Unexpected { status: 200, body: "ws-ticket response has no ticket".into() })
@@ -1555,7 +1555,7 @@ impl Dashboard {
             s if s.is_success() && config => config_without_credentials(&text_unless_stalled(resp, idle).await?),
             s if s.is_success() => text_unless_stalled(resp, idle).await,
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
-            _ => Err(unexpected_sent(resp, &self.hide, "", Some(idle)).await),
+            _ => Err(unexpected_sent(resp, &self.hidden(), "", Some(idle)).await),
         }
     }
 
@@ -1669,15 +1669,15 @@ impl Dashboard {
             return Err(TransportError::SignedOut);
         }
         if status.is_redirection() {
-            return Err(unexpected(resp, &self.hide).await);
+            return Err(unexpected(resp, &self.hidden()).await);
         }
         let text = text_unless_stalled(resp, ANSWER_IDLE_LIMIT).await?;
         if status.is_success() {
             return serde_json::from_str(&text)
                 .map(AudioAnswer::Done)
-                .map_err(|_| TransportError::Unexpected { status: status.as_u16(), body: shown_body(status, &text, &self.hide) });
+                .map_err(|_| TransportError::Unexpected { status: status.as_u16(), body: shown_body(status, &text, &self.hidden()) });
         }
-        let reason = refusal_reason(status, &text, &self.hide);
+        let reason = refusal_reason(status, &text, &self.hidden());
         // FastAPI's own "no such route" (and the headless backend's catch-all) differ from a refusal by the route
         // itself, such as an unknown profile, which also answers 404 but with its own reason.
         let no_route = match status {
@@ -1718,7 +1718,7 @@ impl Dashboard {
         match resp.status() {
             s if s.is_success() => {}
             StatusCode::UNAUTHORIZED => return Err(TransportError::SignedOut),
-            _ => return Err(unexpected(resp, &self.hide).await),
+            _ => return Err(unexpected(resp, &self.hidden()).await),
         }
         read_body(resp, max_bytes, ANSWER_IDLE_LIMIT).await.map_err(|e| match e {
             // These answers are files, and Outputs tells one over its limit by `FileTooLarge`'s text.
@@ -1746,7 +1746,7 @@ impl Dashboard {
         match resp.status() {
             s if s.is_success() => {}
             StatusCode::UNAUTHORIZED => return Err(TransportError::SignedOut),
-            _ => return Err(unexpected(resp, &self.hide).await),
+            _ => return Err(unexpected(resp, &self.hidden()).await),
         }
         let total = resp.content_length();
         let io = |e: std::io::Error| TransportError::File(format!("couldn't write it on this computer: {e}"));
@@ -1847,7 +1847,7 @@ impl Dashboard {
         match resp.status() {
             s if s.is_success() => small_answer(resp).await,
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
-            _ => Err(unexpected(resp, &self.hide).await),
+            _ => Err(unexpected(resp, &self.hidden()).await),
         }
     }
 
@@ -1881,24 +1881,41 @@ impl Dashboard {
         match resp.status() {
             s if s.is_success() => text_unless_stalled(resp, ANSWER_IDLE_LIMIT).await,
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
-            _ => Err(unexpected(resp, &self.hide).await),
+            _ => Err(unexpected(resp, &self.hidden()).await),
         }
     }
 
-    /// Take in every Set-Cookie: a new value replaces the old one, an empty one deletes it. Only
-    /// `name=value` is kept; the dashboard is the only site this jar talks to.
+    /// Take in every Set-Cookie: a new value replaces the old one, and an empty one or one set to expire (`expired`)
+    /// deletes it. Only `name=value` is kept; the dashboard is the only site this jar talks to.
     fn keep_cookies(&self, resp: &reqwest::Response) {
         let mut jar = self.cookies.lock().unwrap();
         for v in resp.headers().get_all(header::SET_COOKIE) {
-            let Some((name, value)) = v.to_str().ok().and_then(|v| v.split(';').next()?.split_once('=')) else {
+            let Some((pair, attributes)) = v.to_str().ok().map(|v| v.split_once(';').unwrap_or((v, ""))) else {
+                continue;
+            };
+            let Some((name, value)) = pair.split_once('=') else {
                 continue;
             };
             let (name, value) = (name.trim(), value.trim());
             jar.retain(|(n, _)| n != name);
-            if !value.is_empty() {
+            if !value.is_empty() && !expired(attributes) {
                 jar.push((name.to_owned(), value.to_owned()));
             }
         }
+    }
+
+    /// What an error mustn't repeat to be shown: `hide`, and the value of each session cookie, as a `cookie` entry
+    /// that `shown_body` doesn't count as an extra request header. A value shorter than `HEADER_PIECE` is left out:
+    /// no session cookie is that short, and one such as `1` would hide nearly every error.
+    fn hidden(&self) -> HeaderMap {
+        let mut hide = self.hide.clone();
+        for (_, value) in self.cookies.lock().unwrap().iter().filter(|(_, v)| v.len() >= HEADER_PIECE) {
+            if let Ok(mut value) = HeaderValue::from_str(value) {
+                value.set_sensitive(true);
+                hide.append(header::COOKIE, value);
+            }
+        }
+        hide
     }
 
     /// A request on the shared client with what the sign-in holds: the session cookies, or a token sign-in's
@@ -1919,6 +1936,76 @@ impl Dashboard {
         let jar = self.cookies.lock().unwrap();
         jar.iter().map(|(n, v)| format!("{n}={v}")).collect::<Vec<_>>().join("; ")
     }
+}
+
+/// Whether a Set-Cookie's attributes (what follows `name=value`) end the cookie now: a `Max-Age` of zero or less, or
+/// else an `Expires` already past. The last of each counts, and `Max-Age` wins (RFC 6265 §5.3).
+fn expired(attributes: &str) -> bool {
+    let (mut max_age, mut expires) = (None, None);
+    for attribute in attributes.split(';') {
+        let (name, value) = attribute.split_once('=').unwrap_or((attribute, ""));
+        let value = value.trim();
+        match name.trim().to_ascii_lowercase().as_str() {
+            "max-age" if value.starts_with(|c: char| c.is_ascii_digit() || c == '-') => max_age = value.parse::<i64>().ok().or(max_age),
+            "expires" => expires = cookie_date(value).or(expires),
+            _ => {}
+        }
+    }
+    let now = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    match max_age {
+        Some(seconds) => seconds <= 0,
+        None => expires.is_some_and(|at| at <= now()),
+    }
+}
+
+/// A Set-Cookie date in seconds since 1970, read as RFC 6265 §5.1.1 reads one, so each form servers send counts:
+/// `Sun, 06 Nov 1994 08:49:37 GMT`, `Sunday, 06-Nov-94 08:49:37 GMT` and `Sun Nov  6 08:49:37 1994`.
+fn cookie_date(date: &str) -> Option<i64> {
+    // `least` to `most` digits at the start of `token`, followed by no digit.
+    fn number(token: &str, least: usize, most: usize) -> Option<i64> {
+        let n = token.bytes().take_while(u8::is_ascii_digit).count();
+        if !(least..=most).contains(&n) {
+            return None;
+        }
+        token[..n].parse().ok()
+    }
+    const MONTHS: [&str; 12] = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+    let (mut time, mut day, mut month, mut year) = (None, None, None, None);
+    for token in date.split(|c: char| !c.is_ascii_alphanumeric() && c != ':').filter(|t| !t.is_empty()) {
+        let hms = || {
+            let mut parts = token.splitn(3, ':');
+            let (h, m, s) = (parts.next()?, parts.next()?, parts.next()?);
+            let whole = |p: &str| number(p, 1, 2).filter(|_| p.len() <= 2);
+            Some((whole(h)?, whole(m)?, number(s, 1, 2)?))
+        };
+        let named_month = || MONTHS.iter().position(|m| token.get(..3).is_some_and(|t| t.eq_ignore_ascii_case(m))).map(|i| i as i64 + 1);
+        if time.is_none() && hms().is_some() {
+            time = hms();
+        } else if day.is_none() && number(token, 1, 2).is_some() {
+            day = number(token, 1, 2);
+        } else if month.is_none() && named_month().is_some() {
+            month = named_month();
+        } else if year.is_none() && number(token, 2, 4).is_some() {
+            year = number(token, 2, 4);
+        }
+    }
+    let ((hour, minute, second), day, month, year) = (time?, day?, month?, year?);
+    let year = match year {
+        70..=99 => year + 1900,
+        0..=69 => year + 2000,
+        _ => year,
+    };
+    if !(1..=31).contains(&day) || year < 1601 || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    // Days since 1970 of a proleptic Gregorian date, counted from March so the leap day falls at the end of a year.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let year_of_era = y - era * 400;
+    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    Some(days * 86_400 + hour * 3600 + minute * 60 + second)
 }
 
 /// Runs blocking file work in place, telling a multi-threaded runtime (the app's) to move its other work elsewhere
@@ -2610,6 +2697,12 @@ fn repeats_header(text: &str, headers: &HeaderMap) -> bool {
     repeats_any(text.as_bytes(), headers.values().map(HeaderValue::as_bytes))
 }
 
+/// Whether a request that carried `headers` (what its error mustn't repeat) carried more than session cookies
+/// (`Dashboard::hidden`): extra request headers, or a token. The owner can't add a `cookie` header (`reserved`).
+fn carried_extra(headers: &HeaderMap) -> bool {
+    headers.keys().any(|name| name != header::COOKIE)
+}
+
 /// `repeats_header` for an address, whose host the URL parser lowercased.
 fn address_repeats_header(address: &str, headers: &HeaderMap) -> bool {
     let values: Vec<Vec<u8>> = headers.values().map(|v| v.as_bytes().to_ascii_lowercase()).collect();
@@ -2641,13 +2734,13 @@ fn strings_in(v: &serde_json::Value, out: &mut String) {
     }
 }
 
-/// An error body as it may be shown, for a request that carried `headers`: its extra request headers, and a token it
-/// sent. With none, its start as sent. Otherwise only the dashboard's own JSON `detail`, whole and repeating none of
-/// their values: a refusal (401, 403, 407) or any other page could come from a gateway in front, which can echo a value
-/// it turned down.
+/// An error body as it may be shown, for a request that carried `headers`: its extra request headers, a token it
+/// sent, and its session cookies. With only cookies, its start as sent, unless it repeats one of them. Otherwise only
+/// the dashboard's own JSON `detail`, whole and repeating none of their values: a refusal (401, 403, 407) or any other
+/// page could come from a gateway in front, which can echo a value it turned down.
 fn shown_body(status: StatusCode, text: &str, headers: &HeaderMap) -> String {
-    if headers.is_empty() {
-        return text.chars().take(300).collect();
+    if !carried_extra(headers) {
+        return if repeats_header(text, headers) { HIDDEN.into() } else { text.chars().take(300).collect() };
     }
     if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::PROXY_AUTHENTICATION_REQUIRED) {
         return HIDDEN.into();
@@ -3075,7 +3168,7 @@ impl Dashboard {
         match resp.status() {
             s if s.is_success() => text_unless_stalled(resp, ANSWER_IDLE_LIMIT).await,
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
-            _ if show_failure => Err(unexpected(resp, &self.hide).await),
+            _ if show_failure => Err(unexpected(resp, &self.hidden()).await),
             s => Err(TransportError::Unexpected { status: s.as_u16(), body: "(not shown, as it may hold the key)".into() }),
         }
     }
@@ -3160,7 +3253,7 @@ impl Dashboard {
             s => {
                 let answer = text_unless_stalled(resp, ANSWER_IDLE_LIMIT).await.unwrap_or_default();
                 // Neither a secret the map held nor a value of the owner's extra request headers is shown.
-                let body = shown_body(s, &crate::mcp::scrubbed(&answer, &edited.secrets), &self.hide);
+                let body = shown_body(s, &crate::mcp::scrubbed(&answer, &edited.secrets), &self.hidden());
                 Err(TransportError::Unexpected { status: s.as_u16(), body })
             }
         }
@@ -3768,6 +3861,80 @@ mod tests {
         assert_eq!(frames.recv().await.unwrap(), "[bGF0ZXI=]");
         let _ = std::fs::remove_file(&first);
         let _ = std::fs::remove_file(&second);
+    }
+
+    async fn serve(app: axum::Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        url
+    }
+
+    fn cookie_of(headers: &axum::http::HeaderMap) -> String {
+        headers.get("cookie").and_then(|v| v.to_str().ok()).unwrap_or("").to_owned()
+    }
+
+    /// A server removes a cookie by setting it to expire: `Max-Age` of zero or less, or an `Expires` already past.
+    /// `Max-Age` wins over `Expires` (RFC 6265 §5.3).
+    #[tokio::test]
+    async fn a_cookie_set_to_expire_is_no_longer_sent() {
+        use axum::response::AppendHeaders;
+        let set = |cookies: &'static [&'static str]| move || async move { AppendHeaders(cookies.iter().map(|c| ("set-cookie", *c)).collect::<Vec<_>>()) };
+        let app = axum::Router::new()
+            .route("/api/set", axum::routing::get(set(&["a=A1; Path=/", "b=B1", "c=C1", "d=D1", "e=E1", "f=F1"])))
+            .route(
+                "/api/expire",
+                axum::routing::get(set(&[
+                    "a=A1; Max-Age=0; Path=/",
+                    "b=B1; max-age=-1",
+                    "c=C1; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+                    "d=D1; expires=Sunday, 06-Nov-94 08:49:37 GMT",
+                    "e=E2; Expires=Fri, 01 Jan 2100 00:00:00 GMT",
+                    "f=F2; Max-Age=3600; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+                ])),
+            )
+            .route("/api/echo", axum::routing::get(|headers: axum::http::HeaderMap| async move { cookie_of(&headers) }));
+        let dashboard = dashboard_at(&serve(app).await);
+        dashboard.request("GET", "api/set", None).await.unwrap();
+        dashboard.request("GET", "api/expire", None).await.unwrap();
+        assert_eq!(dashboard.request("GET", "api/echo", None).await.unwrap(), "e=E2; f=F2");
+    }
+
+    #[test]
+    fn a_cookie_date_is_read_in_each_form_servers_send() {
+        // RFC 9110's example date, 784111777 s after 1970.
+        for date in ["Sun, 06 Nov 1994 08:49:37 GMT", "Sunday, 06-Nov-94 08:49:37 GMT", "Sun Nov  6 08:49:37 1994"] {
+            assert_eq!(super::cookie_date(date), Some(784111777), "{date}");
+        }
+        for bad in ["", "yesterday", "Sun, 32 Nov 1994 08:49:37 GMT", "Sun, 06 Nov 1994 24:49:37 GMT", "Sun, 06 Nov 1994"] {
+            assert_eq!(super::cookie_date(bad), None, "{bad}");
+        }
+    }
+
+    /// An error page that repeats a session cookie, as a proxy's or a debug page can, isn't shown; other errors are.
+    #[tokio::test]
+    async fn an_error_repeating_a_session_cookie_is_not_shown() {
+        use axum::http::StatusCode;
+        use axum::response::AppendHeaders;
+        let app = axum::Router::new()
+            .route("/api/set", axum::routing::get(|| async { AppendHeaders([("set-cookie", "hermes_session_at=at-0123456789abcdef; Path=/")]) }))
+            .route(
+                "/api/leak",
+                axum::routing::get(|headers: axum::http::HeaderMap| async move {
+                    (StatusCode::INTERNAL_SERVER_ERROR, format!("no session for {}", cookie_of(&headers)))
+                }),
+            )
+            .route("/api/fail", axum::routing::get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error") }));
+        let dashboard = dashboard_at(&serve(app).await);
+        dashboard.request("GET", "api/set", None).await.unwrap();
+        match dashboard.request("GET", "api/leak", None).await {
+            Err(TransportError::Unexpected { status: 500, body }) => assert_eq!(body, super::HIDDEN),
+            other => panic!("{other:?}"),
+        }
+        match dashboard.request("GET", "api/fail", None).await {
+            Err(TransportError::Unexpected { status: 500, body }) => assert_eq!(body, "Internal Server Error"),
+            other => panic!("{other:?}"),
+        }
     }
 
     /// A relayed answer is read up to the relay's 64 MiB: one announced past it is refused before any of it is read.
