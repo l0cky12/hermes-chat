@@ -980,7 +980,8 @@ div.route-result { display: flex; flex-direction: column; gap: 6px; }
 .rail-brand { cursor: pointer; }
 .profile-name { font-weight: 600; letter-spacing: -0.01em; font-size: calc(15rem / 14); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-switch { position: relative; min-width: 0; }
-.profile-btn { display: flex; align-items: center; gap: 4px; max-width: 220px; padding: 3px 6px; margin-left: -6px; border-radius: 7px; }
+.sb-hide { flex: none; margin-left: 8px; }
+.profile-btn { display: flex; align-items: center; gap: 4px; max-width: min(220px, calc(100% + 6px)); padding: 3px 6px; margin-left: -6px; border-radius: 7px; }
 .profile-btn:hover, .profile-btn[aria-expanded="true"] { background: var(--raised-2); }
 .profile-chev { color: var(--muted); flex: none; }
 .profile-menu {
@@ -1660,6 +1661,7 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 }
 .where-server { background: rgba(121, 192, 255, 0.13); color: #8ec8ff; }
 .where-local { background: rgba(74, 222, 128, 0.12); color: var(--ok); }
+.where-insecure { background: rgba(245, 184, 74, 0.14); color: var(--warn); }
 :root[data-mode="light"] .where-server { background: rgba(5, 80, 174, 0.1); color: #0550ae; }
 .preview-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .preview-state {
@@ -2443,6 +2445,13 @@ label.memory-pick { cursor: pointer; }
 .bots-hidden { padding: 4px 8px; }
 .bots-hidden-toggle { display: inline-flex; align-items: center; gap: 4px; color: var(--faint); font-size: calc(11.5rem / 14); }
 .bots-hidden-toggle:hover { color: var(--text); }
+/* Bot mode: the Bots view's rows on the list panel's background, the open bot marked as .row.sel marks the open chat. */
+.sb-bots-head { margin: 0; padding-top: 6px; }
+.sb-bots .inbox-list { padding: 0; overflow: visible; }
+.sb-bots .inbox-leave { margin: 0 0 8px; }
+.sb-bots .inbox-row:hover { background: var(--hover); }
+.sb-bots .bots-row.is-current { background: var(--hover-2); box-shadow: inset 0 0 0 1px var(--line); }
+.sb-bots .bots-hidden { padding: 4px 6px; }
 @media (max-width: 520px) {
   .inbox { width: calc(100vw - 60px); }
 }

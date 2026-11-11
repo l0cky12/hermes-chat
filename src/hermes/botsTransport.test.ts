@@ -1,7 +1,7 @@
 // Bot Mode through the real transport (transport.ts) against FakeHermes as the deployed f0d94882 (ADR 0066): the
 // roster, opening a bot's Bot Chat by title, creating it once, keeping it out of the chat list and search, and what a
 // Hermes without Bot Mode shows. The resolution rules themselves are in bots.test.ts.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "./fakeHermes";
 import { BOT_CHAT_TITLE, BotModeUnsupportedError } from "./bots";
 import { connect, type Hermes } from "./transport";
@@ -12,7 +12,7 @@ afterEach(async () => {
 });
 
 /** Signed in to a server with the default profile and Scribe, whose Bot Chat holds one exchange. */
-async function signedIn(server = new FakeHermes()) {
+async function signedIn(server = new FakeHermes(), setup: (server: FakeHermes) => void = () => {}) {
   server.sessions = [row("side", 1, { title: "Disk usage" })];
   server.otherProfiles = { scribe: [row("scribe-bot", 2, { title: BOT_CHAT_TITLE, hidden: true }), row("scribe-side", 3, { title: "Changelog wording" })] };
   server.transcripts = {
@@ -25,6 +25,7 @@ async function signedIn(server = new FakeHermes()) {
   };
   server.profileMeta = { scribe: { description: "Writes release notes", ui_meta: { "hermes-bots": { title: "Scribe", color: "#44aa77" } } } };
   server.botAvatars = { scribe: "data:image/png;base64,iVBORw0KGgo=" };
+  setup(server);
   const hermes = await connect(server.openPipe);
   running.push(hermes);
   await hermes.sync();
@@ -60,6 +61,121 @@ describe("the roster", () => {
     const { hermes } = await signedIn(server);
     await expect(hermes.bots()).rejects.toBeInstanceOf(BotModeUnsupportedError);
     expect(hermes.capabilities.get("botMode").state).toBe("unsupported");
+  });
+});
+
+describe("the roster kept for the Bots view", () => {
+  it("is read with the pictures after connecting, kept across a reconnect, and asks each picture once per connection", async () => {
+    const { server, hermes } = await signedIn();
+    await hermes.idle();
+    expect(hermes.getSnapshot().bots?.roster.map((b) => b.name)).toEqual(["Hermes", "Scribe"]);
+    expect(hermes.getSnapshot().botPictures).toEqual({ scribe: "data:image/png;base64,iVBORw0KGgo=" });
+    await hermes.bots();
+    await hermes.idle();
+    expect(rpc(server, "profiles.get_asset")).toHaveLength(1);
+
+    server.drop();
+    expect(hermes.getSnapshot().bots?.roster).toHaveLength(2);
+    expect(hermes.getSnapshot().botPictures).toEqual({ scribe: "data:image/png;base64,iVBORw0KGgo=" });
+    await hermes.reconnect();
+    await vi.waitFor(() => expect(rpc(server, "profiles.get_asset")).toHaveLength(2));
+    expect(hermes.getSnapshot().botPictures).toEqual({ scribe: "data:image/png;base64,iVBORw0KGgo=" });
+  });
+
+  it("drops a picture removed on the server, and shows one put back on the same connection", async () => {
+    const { server, hermes } = await signedIn();
+    await hermes.idle();
+    delete server.botAvatars.scribe;
+    await hermes.bots();
+    await hermes.idle();
+    expect(hermes.getSnapshot().botPictures).toEqual({});
+    server.botAvatars.scribe = "data:image/png;base64,iVBORw0KGgoAAAA=";
+    await hermes.bots();
+    await hermes.idle();
+    expect(hermes.getSnapshot().botPictures).toEqual({ scribe: "data:image/png;base64,iVBORw0KGgoAAAA=" });
+  });
+
+  it("keeps the newer picture when an older ask for it answers late", async () => {
+    const { server, hermes } = await signedIn();
+    await hermes.idle();
+    const asset = server.handlers["profiles.get_asset"];
+    // Each held ask answers with the picture the server had when it was asked.
+    const held: (() => void)[] = [];
+    server.handlers["profiles.get_asset"] = (r) => {
+      const then = { ...server.botAvatars };
+      held.push(() => {
+        const now = server.botAvatars;
+        server.botAvatars = then;
+        asset(r);
+        server.botAvatars = now;
+      });
+    };
+    delete server.botAvatars.scribe;
+    await hermes.bots();
+    server.botAvatars.scribe = "data:image/png;base64,QUFBQQ==";
+    await hermes.bots();
+    delete server.botAvatars.scribe;
+    await hermes.bots();
+    server.botAvatars.scribe = "data:image/png;base64,QkJCQg==";
+    await hermes.bots();
+    expect(held).toHaveLength(2);
+    held[1]();
+    held[0]();
+    server.handlers["profiles.get_asset"] = asset;
+    await hermes.idle();
+    expect(hermes.getSnapshot().botPictures).toEqual({ scribe: "data:image/png;base64,QkJCQg==" });
+  });
+
+  it("asks again for the picture of a bot that left the roster and came back", async () => {
+    const { server, hermes } = await signedIn();
+    await hermes.idle();
+    const scribe = server.otherProfiles.scribe;
+    delete server.otherProfiles.scribe;
+    await hermes.bots();
+    expect(hermes.getSnapshot().botPictures).toEqual({});
+    server.otherProfiles.scribe = scribe;
+    server.botAvatars.scribe = "data:image/png;base64,QkJCQg==";
+    await hermes.bots();
+    await hermes.idle();
+    expect(hermes.getSnapshot().botPictures).toEqual({ scribe: "data:image/png;base64,QkJCQg==" });
+  });
+
+  it("keeps the newer roster when an older read answers late", async () => {
+    const { server, hermes } = await signedIn();
+    await hermes.idle();
+    const list = server.handlers["profiles.list"];
+    const held: (() => void)[] = [];
+    server.handlers["profiles.list"] = (r) => void held.push(() => list(r));
+    const older = hermes.bots();
+    const newer = hermes.bots();
+    server.profileMeta.scribe = { ...server.profileMeta.scribe, ui_meta: { "hermes-bots": { title: "Quill" } } };
+    held[1]();
+    await newer;
+    server.profileMeta.scribe = { ...server.profileMeta.scribe, ui_meta: { "hermes-bots": { title: "Scribe" } } };
+    held[0]();
+    await older;
+    server.handlers["profiles.list"] = list;
+    expect(hermes.getSnapshot().bots?.roster.map((b) => b.name)).toEqual(["Hermes", "Quill"]);
+  });
+
+  it("keeps the roster and pictures shown across a profile switch", async () => {
+    const { hermes } = await signedIn();
+    await hermes.idle();
+    await hermes.switchProfile("scribe");
+    expect(hermes.getSnapshot().bots?.roster.map((b) => b.name)).toEqual(["Hermes", "Scribe"]);
+    expect(hermes.getSnapshot().botPictures).toEqual({ scribe: "data:image/png;base64,iVBORw0KGgo=" });
+  });
+
+  it("finds a Hermes without Bot Mode on connecting, from one profiles.list, and doesn't ask again on a reconnect", async () => {
+    const { server, hermes } = await signedIn(undefined, (s) => (s.botMode = "none"));
+    await hermes.idle();
+    expect(hermes.capabilities.get("botMode").state).toBe("unsupported");
+    expect(hermes.getSnapshot().bots).toBeUndefined();
+    server.drop();
+    await hermes.reconnect();
+    await hermes.sync();
+    await hermes.idle();
+    expect(rpc(server, "profiles.list")).toHaveLength(1);
   });
 });
 
@@ -147,16 +263,15 @@ describe("keeping Bot Chats out of the list and search", () => {
   });
 
   it("leaves out a compressed Bot Chat, by its lineage, before the Bots view has ever opened", async () => {
-    const server = new FakeHermes();
-    const { hermes } = await signedIn(server);
-    // A compressed Bot Chat whose newest segment is titled otherwise (Hermes carries the title over; this one didn't).
-    server.sessions.push(
-      row("bot-root", 2, { title: BOT_CHAT_TITLE, hidden: true, archived: true, listedAs: { id: "bot-tip", title: "Draft notes" } }),
-      row("bot-tip", 1, { unlisted: true, hidden: true }),
-    );
-    server.transcripts["bot-root"] = [{ role: "user", text: "release checklist for the bot" }];
-    server.transcripts["bot-tip"] = [{ role: "assistant", text: "Tip: the release is ready." }];
-    server.sessions.find((s) => s.id === "bot-root")!.archived = false;
+    const { hermes } = await signedIn(new FakeHermes(), (server) => {
+      // A compressed Bot Chat whose newest segment is titled otherwise (Hermes carries the title over; this one didn't).
+      server.sessions.push(
+        row("bot-root", 2, { title: BOT_CHAT_TITLE, hidden: true, listedAs: { id: "bot-tip", title: "Draft notes" } }),
+        row("bot-tip", 1, { unlisted: true, hidden: true }),
+      );
+      server.transcripts["bot-root"] = [{ role: "user", text: "release checklist for the bot" }];
+      server.transcripts["bot-tip"] = [{ role: "assistant", text: "Tip: the release is ready." }];
+    });
     // Search reports the hit at the tip, under the tip's title; only the roster's ids say it's the Bot Chat.
     const found = await hermes.search("release");
     expect(found.map((f) => f.chatId)).toEqual(["side"]);

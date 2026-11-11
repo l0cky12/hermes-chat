@@ -3,7 +3,7 @@
 // rail's foot. Right-clicking a chat opens its menu (ChatMenu.tsx).
 import { memo, useCallback, useEffect, useId, useReducer, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Hourglass, LockOpen, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
+import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Hourglass, LockOpen, PanelLeftClose, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
 import { waitingLabel, type Handoff } from "../hermes/dispatched";
 import type { Chat, CheckTimes, ConnectionStatus, OtherProfile, OtherProfiles } from "../hermes/model";
 import { SOURCE_LABEL, isWaiting } from "../hermes/model";
@@ -962,9 +962,12 @@ function moveBetweenChats(e: KeyboardEvent<HTMLElement>) {
  * Archived chats are in `chats` only while the Archived section is shown (App.tsx lists them then).
  * `projectSwitcher` sits under the profile's name; `chats` are only the shown project's when one is picked there.
  * `projectsOf`: the projects a chat's menu offers to put it in or take it out of.
+ * `bots`: bot mode, while a Bot Chat is open (ADR 0066): the bots (Bots.tsx `BotList`) under the profile's name, New
+ * chat and Search, in place of the project switcher and the chats.
  */
 export function ChatList({
   profile,
+  bots,
   projectSwitcher,
   savedFilters,
   projectsOf,
@@ -1004,8 +1007,10 @@ export function ChatList({
   profileClone,
   onNew,
   onSearch,
+  onHide,
 }: {
   profile: string;
+  bots?: ReactNode;
   projectSwitcher?: ReactNode;
   /** The profile's Saved filters (Tags.tsx), under the project switcher. */
   savedFilters?: ReactNode;
@@ -1062,6 +1067,8 @@ export function ChatList({
   /** The list's own New chat and Search buttons, labeled with their keys; the rail keeps icons for both. */
   onNew?: () => void;
   onSearch?: () => void;
+  /** Hides this panel, as Ctrl+B does. */
+  onHide?: () => void;
 }) {
   const { chatSectionsShown: shown, chatSectionsCollapsed: collapsed } = useSyncExternalStore(subscribeUIPrefs, getUIPrefs);
   const setCollapsed = (key: SectionKey, on: boolean) => {
@@ -1229,6 +1236,22 @@ export function ChatList({
           onSwitch={onSwitchProfile}
           clone={profileClone}
         />
+        {onHide && (
+          <button
+            className="icon-btn sb-hide"
+            title="Hide chats (Ctrl+B)"
+            aria-label="Hide chats (Ctrl+B)"
+            aria-keyshortcuts="Control+B"
+            onClick={(e) => {
+              onHide();
+              // The button goes with the panel, so a keyboard press moves focus to the rail's button that brings it
+              // back. A pointer click doesn't: focus there would show the rail's tip away from the pointer.
+              if (e.detail === 0) document.querySelector<HTMLElement>(".rail-brand")?.focus();
+            }}
+          >
+            <PanelLeftClose size={16} />
+          </button>
+        )}
       </div>
       {(onNew || onSearch) && (
         <div className="sb-actions">
@@ -1248,18 +1271,23 @@ export function ChatList({
           )}
         </div>
       )}
-      {projectSwitcher && <div className="sb-project">{projectSwitcher}</div>}
-      <div className="sb-scroll" data-drop={dropOn === "inbox" ? "inbox" : undefined} {...dropHandlers("inbox", overInbox)}>
+      {!bots && projectSwitcher && <div className="sb-project">{projectSwitcher}</div>}
+      <div className={`sb-scroll${bots ? " sb-bots" : ""}`} data-drop={dropOn === "inbox" ? "inbox" : undefined} {...(bots ? {} : dropHandlers("inbox", overInbox))}>
         {switching && (
           <SwitchStatus profile={profile} switching={switching} status={status} onRetry={onRetrySwitch} onBack={() => onSwitchProfile(switching.from)} />
         )}
-        {savedFilters}
+        {!bots && savedFilters}
         {syncError && !switching?.error && (
           <div className="sync-error" role="status">
             {syncError}
           </div>
         )}
-        {
+        {bots ? (
+          <>
+            <h2 className="section-label sb-bots-head">Bots</h2>
+            {bots}
+          </>
+        ) : (
           // One keyed array, so React keeps a row that moves from one section to another.
           shown.flatMap((k) => {
             if (k === "settled") return [];
@@ -1276,9 +1304,9 @@ export function ChatList({
               ),
             ];
           })
-        }
+        )}
       </div>
-      {shown.includes("settled") && (
+      {!bots && shown.includes("settled") && (
         // The drawer at the list's foot (ADR 0090): its header stays at the bottom however long the scroll above is.
         <div className={`settled-drawer ${settledOpen ? "open" : ""} ${dropOn === "settled" ? "drop" : ""}`} {...dropHandlers("settled")}>
           {header("settled", sections.settled, settledOpen)}
