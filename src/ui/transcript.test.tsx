@@ -5,6 +5,9 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApprovalChoice, Chat, Item } from "../hermes/model";
 import { ChatPane, type FindTarget } from "./ChatPane";
+import { ScreenshotDesk, type ScreenshotApi } from "../hermes/screenshots";
+
+const noScreenshots: ScreenshotApi = { capture: () => Promise.reject(new Error("no screenshots in this test")), discard: async () => {} };
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 
@@ -29,7 +32,7 @@ function pane(chat: Chat, findTarget?: FindTarget, onAnswer: Answer = () => {}) 
       chat={c}
       findTarget={t}
       status="connected"
-      draft=""
+      draft="" draftKey="draft" screenshots={new ScreenshotDesk(noScreenshots)}
       onDraft={() => {}}
       onDraftStep={() => undefined}
       onRetry={() => {}}
@@ -263,6 +266,8 @@ describe("A message that can't be drawn (#476)", () => {
         chat={chatOf(items)}
         status="connected"
         draft="And their sizes?"
+        draftKey="draft"
+        screenshots={new ScreenshotDesk(noScreenshots)}
         onDraft={() => {}}
         onDraftStep={() => undefined}
         onRetry={() => {}}

@@ -31,9 +31,9 @@ export function persist(storage: () => Pick<Storage, "setItem" | "removeItem">, 
 }
 
 /**
- * Files attached in each composer and not sent yet, by composer. An update's restart doesn't keep them (a draft is
- * text only, and a screenshot staged there is deleted at the next launch), so Settings names them before the owner
- * restarts (UpdateSettings).
+ * Files staged in every chat's composer and not sent yet, by screenshot desk (one for each signed-in window), whether
+ * or not the chat is on screen. An update's restart doesn't keep them (a draft is text only, and a screenshot staged
+ * there is deleted at the next launch), so Settings names them before the owner restarts (UpdateSettings).
  */
 export const stagedFiles = (() => {
   const by = new Map<object, readonly { name: string }[]>();
@@ -44,11 +44,11 @@ export const stagedFiles = (() => {
     listeners.forEach((fn) => fn());
   };
   return {
-    /** `files` is what `composer` has attached now; none forgets it. */
-    set(composer: object, files: readonly { name: string }[]) {
-      if (!files.length && !by.has(composer)) return;
-      if (files.length) by.set(composer, files);
-      else by.delete(composer);
+    /** `files` is what `desk` has staged now; none forgets it. */
+    set(desk: object, files: readonly { name: string }[]) {
+      if (!files.length && !by.has(desk)) return;
+      if (files.length) by.set(desk, files);
+      else by.delete(desk);
       changed();
     },
     getSnapshot: () => names,

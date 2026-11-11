@@ -2,6 +2,7 @@
 // Pasting a screenshot or files into the composer, or dropping files on the pane on Windows, attaches them like picked files. Rust
 // saves the bytes to a temp file (`stage_clipboard_file`, faked here onto the fake Hermes's disk); checking, previews
 // and sending are the real path against a fake Hermes.
+import type { ComponentProps } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -23,17 +24,24 @@ beforeAll(() => {
   URL.createObjectURL ??= () => "blob:preview";
   URL.revokeObjectURL ??= () => {};
 });
+const desks: ScreenshotDesk[] = [];
 afterEach(() => {
   cleanup();
+  for (const d of desks.splice(0)) d.dispose();
   vi.restoreAllMocks();
 });
+const noCaptures = (discard = vi.fn(async (_path: string) => {})) => {
+  const desk = new ScreenshotDesk({ capture: async () => Promise.reject(new Error("no captures here")), discard });
+  desks.push(desk);
+  return desk;
+};
 
 const MiB = 1024 * 1024;
 const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 const PNG = Uint8Array.from(atob(PNG_B64), (c) => c.charCodeAt(0));
 
 /** A new chat's pane on a fake Hermes, with `draft` in its composer. `staged` lists what Rust was asked to save. */
-async function setUp(draft = "", screenshots?: ScreenshotDesk) {
+async function setUp(draft = "", screenshots = noCaptures()) {
   const server = new FakeHermes();
   const hermes = await connect(server.openPipe);
   const id = await hermes.newChat();
@@ -55,6 +63,7 @@ async function setUp(draft = "", screenshots?: ScreenshotDesk) {
       chat={hermes.getSnapshot().chats.find((c) => c.id === id)!}
       status="connected"
       draft={draft}
+      draftKey="draft"
       onDraft={onDraft}
       onDraftStep={() => undefined}
       onRetry={() => {}}
@@ -67,7 +76,7 @@ async function setUp(draft = "", screenshots?: ScreenshotDesk) {
       screenshots={screenshots}
     />,
   );
-  return { server, runtime: server.runtimeIdOf(id)!, staged, onSend, onDraft };
+  return { server, runtime: server.runtimeIdOf(id)!, staged, onSend, onDraft, desk: screenshots };
 }
 
 const composer = () => screen.getByPlaceholderText<HTMLTextAreaElement>("Message Hermes");
@@ -85,6 +94,14 @@ const overlay = () => screen.queryByText("Drop files to attach");
 /** A drag carrying `files` from outside the app, as the webview reports it; false when the pane took it over. */
 const fileDrag = (type: "dragEnter" | "dragOver" | "drop", files: File[]) =>
   fireEvent[type](pane(), { dataTransfer: { types: ["Files"], files, dropEffect: "none" } });
+
+describe("A composer's staged files", () => {
+  it("can't be drawn without the desk that keeps them", () => {
+    // tsc checks this (npm run build): a composer with no desk would check the files the owner adds and keep none.
+    const needsDesk: undefined extends ComponentProps<typeof ChatPane>["screenshots"] ? false : true = true;
+    expect(needsDesk).toBe(true);
+  });
+});
 
 describe("Pasting into the composer", () => {
   it("attaches a pasted screenshot like a dropped image, previews it and sends it to Hermes", async () => {
@@ -113,8 +130,8 @@ describe("Pasting into the composer", () => {
     expect(chips()).toHaveLength(0);
   });
 
-  it("tells an update's restart which files are attached, until they're sent or the composer goes", async () => {
-    await setUp("Which cable is loose?");
+  it("tells an update's restart which files are attached, until they're sent or the window signs out, composer on screen or not", async () => {
+    const { desk } = await setUp("Which cable is loose?");
     paste([new File([PNG], "image.png", { type: "image/png" })]);
     await waitFor(() => expect(stagedFiles.getSnapshot()).toEqual([expect.stringMatching(/^clipboard-.*\.png$/)]));
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -122,6 +139,8 @@ describe("Pasting into the composer", () => {
     paste([new File([PNG], "image.png", { type: "image/png" })]);
     await waitFor(() => expect(stagedFiles.getSnapshot()).toHaveLength(1));
     cleanup();
+    expect(stagedFiles.getSnapshot()).toHaveLength(1);
+    desk.dispose();
     expect(stagedFiles.getSnapshot()).toEqual([]);
   });
 
@@ -145,9 +164,9 @@ describe("Pasting into the composer", () => {
     expect(onSend).toHaveBeenCalledWith("Which cable is loose?", [expect.objectContaining({ path: staged[0].path, kind: "image" })]);
   });
 
-  it("deletes a pasted file once it is removed from the composer, or the composer goes", async () => {
-    const discard = vi.fn(async () => {});
-    const desk = new ScreenshotDesk({ capture: async () => Promise.reject(new Error("no captures here")), discard });
+  it("deletes a pasted file once it is removed from the composer, or the window signs out, but not when the composer goes", async () => {
+    const discard = vi.fn(async (_path: string) => {});
+    const desk = noCaptures(discard);
     const { staged } = await setUp("", desk);
     paste([new File([PNG], "a.png", { type: "image/png" })]);
     await waitFor(() => expect(chips()).toHaveLength(1));
@@ -159,12 +178,15 @@ describe("Pasting into the composer", () => {
     await waitFor(() => expect(chips()).toHaveLength(1));
     expect(discard).toHaveBeenCalledTimes(1);
     cleanup();
+    expect(discard).toHaveBeenCalledTimes(1);
+    desk.dispose();
     expect(discard).toHaveBeenLastCalledWith(staged[1].path);
   });
 
-  it("deletes a paste that is saved after its composer has gone", async () => {
-    const discard = vi.fn(async () => {});
-    const { staged } = await setUp("", new ScreenshotDesk({ capture: async () => Promise.reject(new Error("no captures here")), discard }));
+  it("keeps a paste saved after its composer has gone in its chat, until the window signs out", async () => {
+    const discard = vi.fn(async (_path: string) => {});
+    const desk = noCaptures(discard);
+    const { staged } = await setUp("", desk);
     const save = tauri.invoke;
     let land: (() => void) | undefined;
     tauri.invoke = (cmd, args, opts) =>
@@ -173,12 +195,15 @@ describe("Pasting into the composer", () => {
     await waitFor(() => expect(land).toBeDefined());
     cleanup();
     land!();
-    await waitFor(() => expect(discard).toHaveBeenCalledWith(staged[0].path));
+    await waitFor(() => expect(desk.stagedIn("draft").map((a) => a.path)).toEqual([staged[0].path]));
+    expect(discard).not.toHaveBeenCalled();
+    desk.dispose();
+    expect(discard).toHaveBeenCalledWith(staged[0].path);
   });
 
   it("deletes the files already saved when a paste fails part-way", async () => {
-    const discard = vi.fn(async () => {});
-    const { staged } = await setUp("", new ScreenshotDesk({ capture: async () => Promise.reject(new Error("no captures here")), discard }));
+    const discard = vi.fn(async (_path: string) => {});
+    const { staged } = await setUp("", noCaptures(discard));
     const save = tauri.invoke;
     let saves = 0;
     tauri.invoke = (cmd, args, opts) =>
