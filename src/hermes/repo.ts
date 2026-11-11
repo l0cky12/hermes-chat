@@ -22,9 +22,12 @@ export type Entry = {
   unstaged?: [number, number] | null;
   /** An untracked file whose first 8000 bytes hold a NUL, as Git decides. */
   binary?: boolean;
-  /** SHA-256 of the working-tree file as read (null: it's gone), for a file with unstaged changes or untracked. Staging
-   * sends it back, and the helper stages nothing if the file has changed since. */
+  /** The working-tree file's stamp as read (null: it's gone), for a file with unstaged changes or untracked: SHA-256
+   * of its bytes, or its metadata ("meta:…") for a file over 32 MiB or past what one status hashes. Staging sends it
+   * back, and the helper stages nothing if the file has changed since. */
   worktree?: string | null;
+  /** Its name isn't UTF-8, so `path` shows it with � and names no file on the server: it can't be staged or unstaged here. */
+  nameLossy?: boolean;
 };
 
 export type Status = {
@@ -68,6 +71,8 @@ export type DiffReply = {
   stages: number[];
   /** The working-tree file's stamp as this diff shows it (unstaged and untracked sides only). */
   worktree?: string | null;
+  /** The same file's metadata stamp, to compare with a list that stamped it by its metadata. */
+  worktreeMeta?: string | null;
   /** HEAD and the index when the diff was read. */
   head?: string | null;
   index?: string;
@@ -111,6 +116,8 @@ export type Committed = {
   output: string;
   /** The commit holds exactly what the preview showed. False when a hook changed it. */
   matches: boolean;
+  /** Git's exit status. Not 0 when Git failed after the commit was made: it's made, and `output` says what failed. */
+  exitCode?: number;
   files: { status: string; path: string }[];
   branch: string | null;
 };
@@ -174,6 +181,12 @@ export class RepoFailure extends Error {
     super(message);
   }
 }
+
+/** A transport failure, or an answer that couldn't be read: whether a write happened isn't known. */
+export const lostAnswer = (e: RepoFailure) => e.kind === "timeout" || e.kind === "spawn" || e.kind === "bad-reply" || e.kind.startsWith("ssh");
+
+/** Whether the screen can stage or unstage this change: not a conflict, a submodule, or a file it can't name. */
+export const actionable = (c: Change) => c.side !== "conflict" && !c.submodule && !c.nameLossy;
 
 export function asRepoFailure(e: unknown): RepoFailure {
   if (e instanceof RepoFailure) return e;
@@ -247,6 +260,8 @@ export type Change = {
   counts?: [number, number];
   binary: boolean;
   submodule: boolean;
+  /** Its name isn't UTF-8: listed, but not staged or unstaged here. */
+  nameLossy?: boolean;
 };
 
 const CODE_LABEL: Record<string, string> = {
@@ -276,8 +291,9 @@ export type Grouped = { conflicts: Change[]; staged: Change[]; unstaged: Change[
 export function group(s: Status): Grouped {
   const out: Grouped = { conflicts: [], staged: [], unstaged: [], untracked: [] };
   for (const e of s.entries) {
+    const lossy = e.nameLossy ? { nameLossy: true } : {};
     if (e.kind === "untracked") {
-      out.untracked.push({ key: `untracked:${e.path}`, side: "untracked", path: e.path, code: "?", label: "Untracked", binary: !!e.binary, submodule: false });
+      out.untracked.push({ key: `untracked:${e.path}`, side: "untracked", path: e.path, code: "?", label: "Untracked", binary: !!e.binary, submodule: false, ...lossy });
       continue;
     }
     if (e.kind === "unmerged") {
@@ -296,6 +312,7 @@ export function group(s: Status): Grouped {
         ...(e.staged && { counts: e.staged }),
         binary: e.staged === null,
         submodule: e.sub,
+        ...lossy,
       });
     }
     if (e.y !== ".") {
@@ -308,6 +325,7 @@ export function group(s: Status): Grouped {
         ...(e.unstaged && { counts: e.unstaged }),
         binary: e.unstaged === null,
         submodule: e.sub,
+        ...lossy,
       });
     }
   }
@@ -537,7 +555,8 @@ export const expectOf = (s: { head: string | null; index: string }): Expect => (
  */
 export function diffStale(s: Status, entry: Entry | undefined, d: DiffReply): string | undefined {
   if (d.head !== undefined && (d.head !== s.head || d.index !== s.index)) return "The repository changed after the list was read.";
-  if (entry && (d.worktree !== undefined && d.worktree !== null) && entry.worktree !== d.worktree) return "This file changed after the list was read.";
+  const shown = entry?.worktree?.startsWith("meta:") ? (d.worktreeMeta ?? d.worktree) : d.worktree;
+  if (entry && shown !== undefined && shown !== null && entry.worktree !== shown) return "This file changed after the list was read.";
   return undefined;
 }
 
@@ -548,7 +567,7 @@ export function diffStale(s: Status, entry: Entry | undefined, d: DiffReply): st
  */
 export function hunksSupported(c: Change, d: DiffReply, parsed: ParsedDiff): boolean {
   if (c.side !== "staged" && c.side !== "unstaged") return false;
-  if (c.code !== "M" || c.binary || c.submodule || c.origPath) return false;
+  if (c.code !== "M" || c.binary || c.submodule || c.nameLossy || c.origPath) return false;
   if (d.truncated || d.lossy || parsed.combined || parsed.binary || parsed.newFile || parsed.deletedFile || parsed.mode || parsed.rename) return false;
   return parsed.hunks.length > 0;
 }
