@@ -34,6 +34,8 @@
 //   the request's id; the app's answer shows in `/__state` under `answers`.
 //   `POST /__changed[?n=<count>&gap=<ms>]` broadcasts `sessions.changed` n times (default 1), gap ms apart, as Hermes's
 //   change watcher does when another process writes the session store (a test's control).
+//   `POST /__gone?id=<chat id>` deletes the chat, as another client would, and drops the app's WebSocket, so the app
+//   reads the list again on reconnecting (a test's control).
 //   `POST /__frame[?chat=<chat id>]` sends the request body to the app verbatim, as one WebSocket text frame, malformed
 //   or not (a test's control). With `chat`, each `$SESSION` in the body is first replaced by the runtime session id of
 //   that chat, which must be open in the app: `{"jsonrpc":"2.0","method":"event","params":{"type":"tool.start",
@@ -264,6 +266,7 @@ function backgroundSubagent(id: string) {
 
 let pipe: Pipe | undefined;
 let send: ((text: string) => void) | undefined;
+let closeSocket: (() => void) | undefined;
 const open = async (profile: string) => {
   pipe = await server.openPipe((e) => (e.kind === "frame" ? send?.(e.text) : undefined), profile);
 };
@@ -361,6 +364,15 @@ const http = createServer(async (req, res) => {
     }
     return json(200, { ok: true, sent: n });
   }
+  if (url.pathname === "/__gone" && req.method === "POST") {
+    const id = url.searchParams.get("id") ?? "";
+    const before = server.sessions.length;
+    server.sessions = server.sessions.filter((s) => s.id !== id);
+    if (server.sessions.length === before) return json(404, { detail: `No stand-in chat ${id}` });
+    save();
+    closeSocket?.();
+    return json(200, { ok: true });
+  }
   if (url.pathname === "/__frame" && req.method === "POST") {
     const chat = url.searchParams.get("chat");
     const runtime = chat === null ? "" : server.runtimeIdOf(chat);
@@ -397,6 +409,7 @@ http.on("upgrade", async (req, sock: Socket) => {
   const accept = createHash("sha1").update(`${req.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
   sock.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
   send = (t) => sock.writable && sock.write(frame(t));
+  closeSocket = () => sock.destroy();
   readFrames(sock, (t) => {
     try {
       const msg = JSON.parse(t) as { method?: string; params?: { session_id?: string; text?: string; subagent_id?: string } };

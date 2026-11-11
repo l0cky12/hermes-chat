@@ -192,7 +192,7 @@ Another take on one turn of a chat, made with Edit under the owner's message or 
 _Avoid_: variant (in the UI), alternative, retry, rerun
 
 **Draft**:
-The text the owner has typed in a chat's composer and not sent. Each chat keeps its own draft, and so does the New chat pane, separately for each connection and profile. A draft is still there after switching chats or restarting the app. Sending or queuing it empties it. A message Hermes doesn't take becomes a Failed message, not a draft again. Only when a new chat can't be started does the text come back into the composer. Attachments aren't kept in a draft.
+The text the owner has typed in a chat's composer and not sent. Each chat keeps its own draft, and so does the New chat pane, separately for each connection and profile. A draft is still there after switching chats or restarting the app. Sending or queuing it empties it. A message Hermes doesn't take becomes a Failed message, not a draft again. The text comes back into the composer only when a new chat can't be started, or when the chat has left the list (deleted or archived elsewhere) before the message went in. A chat that leaves the list while open in a pane gives way to the New chat pane, and its draft goes there too. Attachments aren't kept in a draft.
 _Avoid_: unsent message, saved message
 
 **Queued message**:

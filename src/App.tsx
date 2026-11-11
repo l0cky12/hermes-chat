@@ -221,6 +221,11 @@ const serverMethods = (d: SignInDetails) => readMethods((one, expect) => tauriRe
 const forgetLocal = (c: SavedConnection) => forgetConnectionData(c, { defaults: savedDefaults, tags: savedTagsFile, persona: savedPersona, afterwards: syncScreenshotOutbox });
 
 const savedDrafts = drafts(localStorage);
+/** Adds `text` to the Draft at `key`, after anything already there. */
+const keepDraft = (key: string, text: string) => {
+  const now = savedDrafts.get(key);
+  if (text) savedDrafts.set(key, now ? `${now}\n\n${text}` : text);
+};
 const savedConnectionRefs = connectionRefs(localStorage);
 const savedProjects = projectLinks(localStorage);
 const savedContextLedger = contextLedger(localStorage);
@@ -753,6 +758,9 @@ let viewsMade = 0;
 /** A pane's `view`: new each time what the pane shows changes, but not when only its tabs do, so a chat starting in the
  * pane can tell the owner went elsewhere from a tab closing beside it. */
 const newView = () => ++viewsMade;
+
+/** Why a pane went to the New chat pane on its own: its chat left the list. */
+const CHAT_LEFT_LIST = "The chat open here is no longer on Hermes: it was deleted or archived elsewhere. Anything you typed in it is kept below, and sending it starts a new chat.";
 
 /** The chat a pane on the New chat pane shows: nothing yet, or why the chat couldn't start. */
 const draftChat = (draftError?: string): Chat => ({
@@ -2000,6 +2008,21 @@ export function Main({
       setToast({ text: `${archived ? "Archived" : "Restored"}: ${title}`, undo: archived ? () => setArchived(id, false) : undefined, at: Date.now() });
     void (archived ? hermes.archive(id) : hermes.restore(id)).then(done);
   };
+
+  // A chat that leaves the list at a sync, deleted or archived in another client, leaves its panes too, as one deleted
+  // here does. Its Draft goes with them to the New chat pane, so a send there starts a chat instead of reaching none,
+  // and nothing typed is lost (#467).
+  useEffect(() => {
+    if (switching || reopening || !hermes.hasListed()) return;
+    const gone = new Set(panes.flatMap((p) => p.tabs).filter((id): id is string => id !== null && !chats.some((c) => c.id === id)));
+    for (const id of gone) {
+      keepDraft(newChatDraftKey, savedDrafts.take(draftKey(connection, profile, id)));
+      const shown = panes.filter((p) => p.chatId === id).map((p) => p.key);
+      clearChat(id);
+      if (shown.length)
+        setPanes((ps) => ps.map((p) => (shown.includes(p.key) && p.chatId === null ? { ...p, draftError: CHAT_LEFT_LIST } : p)));
+    }
+  }, [chats, panes, switching, reopening]);
 
   // The chat to reopen opens as soon as the list has it, the saved one at first, and stays open once the list read from
   // Hermes has it too. If that list doesn't, the chat was deleted, archived, or is older than the list reaches: the New
@@ -3617,7 +3640,15 @@ function ChatView({
       if (!mirrored) savedDrafts.putBack(draftOf(null), typed);
       return false;
     }
-    await hermes.send(to.id, text, attachments, skill);
+    const { delivery, itemId } = await hermes.sendTracked(to.id, text, attachments, skill);
+    // No item: the chat left the list before the message went in, so it is in no outbox. Its words go back, to the New
+    // chat pane, which takes the place of a chat that left the list (#467).
+    if (itemId === undefined && delivery.delivery !== "accepted") {
+      if (!mirrored) keepDraft(draftOf(null), typed);
+      if (stillIn())
+        onDraftError(`Your message wasn't sent: ${delivery.reason} Its words are back in the composer${attachments.length ? "; attach again any of its files that aren't" : ""}.`);
+      return false;
+    }
     return true;
   };
   const deliverRef = useRef(deliver);

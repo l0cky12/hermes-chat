@@ -2742,15 +2742,15 @@ export class Hermes {
    * the owner retries or dismisses it, or reading the history back settles it. Nothing here ever sends it again.
    */
   async send(chatId: string, text: string, attachments: Attachment[] = [], skill?: SkillCall): Promise<Delivery> {
-    return (await this.deliver(chatId, text, attachments, undefined, skill)).delivery;
+    return (await this.sendTracked(chatId, text, attachments, skill)).delivery;
   }
 
   /**
    * Sends a message as `send` does, and also says which item in the chat it is, so a Voice conversation can follow the
    * reply to that message and no other (ADR 0111). `itemId` is missing only when the chat isn't in the list.
    */
-  sendTracked(chatId: string, text: string): Promise<{ delivery: Delivery; itemId?: string }> {
-    return this.deliver(chatId, text, []);
+  sendTracked(chatId: string, text: string, attachments: Attachment[] = [], skill?: SkillCall): Promise<{ delivery: Delivery; itemId?: string }> {
+    return this.deliver(chatId, text, attachments, undefined, skill);
   }
 
   /**
