@@ -17,6 +17,8 @@
 //   plugin environment and external tools by the manifest's own shell command. Only sent once the owner has seen them.
 //
 // Hermes picks the provider when it builds a chat's agent, so a change reaches chats started after it.
+import { failureOf, type Failure } from "./toolsets";
+import { errorText } from "./values";
 
 /** One signed-in dashboard REST call; resolves to the parsed JSON body. */
 export type Rest = (method: "GET" | "PUT" | "POST", pathAndQuery: string, body?: unknown) => Promise<unknown>;
@@ -139,27 +141,6 @@ const obj = (v: unknown): Json => (v && typeof v === "object" && !Array.isArray(
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const strs = (v: unknown): string[] => (Array.isArray(v) ? v.map((x) => String(x ?? "").trim()).filter(Boolean) : []);
 const text = (v: unknown): string => (v === null || v === undefined ? "" : typeof v === "boolean" ? (v ? "true" : "false") : typeof v === "object" ? JSON.stringify(v) : String(v));
-
-/** A failed dashboard call: the HTTP status and Hermes's reason when it answered, none when it couldn't be reached. */
-export type Failure = { status?: number; reason: string; notRelayed?: boolean; signedOut?: boolean };
-
-/** Reads an error the way the Rust relay and FakeHermes word it: `The dashboard answered 400: {"detail":…}`. */
-export function failureOf(e: unknown): Failure {
-  const message = e instanceof Error ? e.message : String(e);
-  if (/sign-in has expired/i.test(message)) return { status: 401, reason: message, signedOut: true };
-  if (/^Hermes Chat doesn't relay /.test(message)) return { reason: message, notRelayed: true };
-  const m = /^The dashboard answered (\d{3}): ([\s\S]*)$/.exec(message);
-  if (!m) return { reason: message };
-  let reason = m[2].trim();
-  try {
-    const d = JSON.parse(reason).detail;
-    if (typeof d === "string" && d.trim()) reason = d.trim();
-    else if (Array.isArray(d)) reason = d.map((x) => str(obj(x).msg)).filter(Boolean).join("; ") || reason;
-  } catch {
-    // Not JSON, or cut short by the relay: the text as it came.
-  }
-  return { status: Number(m[1]), reason };
-}
 
 export class MemoryProvidersUnsupported extends Error {}
 
@@ -359,7 +340,7 @@ export class MemoryProvidersApi {
           const store = m.active && STORES[m.active] ? await this.form(profile, m.active).then(storeOf, () => undefined) : undefined;
           return { profile, ok: true, active: m.active, ...(status ? { status } : {}), ...(store ? { store } : {}) };
         } catch (e) {
-          return { profile, ok: false, reason: e instanceof Error ? e.message : String(e) };
+          return { profile, ok: false, reason: errorText(e) };
         }
       }),
     );

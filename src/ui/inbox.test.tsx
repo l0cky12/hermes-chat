@@ -4,7 +4,7 @@
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { FakeHermes, row } from "../hermes/fakeHermes";
+import { FakeHermes, readRow, row } from "../hermes/fakeHermes";
 import { FakeTray } from "../hermes/fakeTray";
 import { memoryCache } from "../hermes/memoryCache";
 import { connect, type Hermes } from "../hermes/transport";
@@ -12,7 +12,6 @@ import { setUIPrefs } from "../hermes/uiPrefs";
 import { Main } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -33,13 +32,13 @@ const nowS = () => Date.now() / 1000;
 async function launch(setup: (server: FakeHermes) => void = () => {}) {
   const server = new FakeHermes();
   server.sessions = [
-    row("backup", 1, { pinned: true, title: "Nightly backup", last_read_at: nowS() }),
+    readRow("backup", 1, { pinned: true, title: "Nightly backup" }),
     row("notes", 0.01, { pinned: true, title: "Release notes", last_read_at: 0 }),
   ];
   server.otherProfiles = {
     work: [
       row("deploy", 0.02, { pinned: true, title: "Deploy plan", last_read_at: 0 }),
-      row("migrate", 0, { pinned: true, title: "Migrate db", last_read_at: nowS() }),
+      readRow("migrate", 0, { pinned: true, title: "Migrate db" }),
     ],
   };
   server.liveSessions = [{ id: "rt-w", session_key: "migrate", status: "waiting", last_active: nowS() - 300 }];
@@ -74,6 +73,20 @@ describe("The inbox", () => {
     // Focus goes to the first entry, so the keyboard can start there.
     expect(document.activeElement).toBe(approval);
     expect(inbox().textContent).toMatch(/Checked profiles just now, running work just now\./);
+  });
+
+  it("says it checked just now after a check that found nothing new", async () => {
+    const { hermes, user, openInbox } = await launch();
+    openInbox();
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 180_000 });
+    try {
+      await user.click(filter(/^Completed/));
+      expect(inbox().textContent).toMatch(/Checked profiles 3m ago, running work 3m ago\./);
+      await act(async () => void (await hermes.checkOtherProfiles()));
+      expect(inbox().textContent).toMatch(/Checked profiles just now, running work just now\./);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("takes the Office's place when opened from the tray, as the rail's tools replace each other", async () => {
@@ -127,7 +140,7 @@ describe("The inbox", () => {
   });
 
   it("closes when focus goes into a frame, such as a page in the Preview, but not when the window loses focus to another app", async () => {
-    const { user, openInbox } = await launch();
+    const { openInbox } = await launch();
     openInbox();
     // Another app: focus stays on the entry, and the inbox stays.
     act(() => void window.dispatchEvent(new FocusEvent("blur")));
@@ -170,7 +183,7 @@ describe("The inbox", () => {
 
   it("opens a waiting chat older than the profile's list holds", async () => {
     const { hermes, user, openInbox } = await launch((server) => {
-      server.otherProfiles.work.push(row("audit", 40, { title: "Quarterly audit", last_read_at: nowS() }));
+      server.otherProfiles.work.push(readRow("audit", 40, { title: "Quarterly audit" }));
       server.liveSessions = [{ id: "rt-a", session_key: "audit", status: "waiting", last_active: nowS() - 60 }];
       server.openRequests.set("srq-audit", { sid: "rt-a", stored: "audit", method: "approval", params: { request_id: "apr-audit", command: "x", description: "y", choices: ["once", "deny"] } });
     });
@@ -257,7 +270,7 @@ describe("The inbox", () => {
   });
 
   it("dismisses finished entries older than the time picked in Settings, from then on, and nothing else", async () => {
-    const { server, hermes, user, openInbox } = await launch((server) => {
+    const { server, hermes, openInbox } = await launch((server) => {
       server.sessions.push(row("report", 3, { pinned: true, title: "Weekly report", last_read_at: 0 }));
       server.otherProfiles.work.push(row("brief", 3, { pinned: true, title: "Morning brief", last_read_at: 0 }));
       server.liveSessions.push({ id: "rt-old", session_key: "brief", status: "waiting", last_active: nowS() - 3 * 86_400 });
@@ -272,7 +285,7 @@ describe("The inbox", () => {
   });
 
   it("drops a completed entry once its chat is open in another pane, without the inbox closing", async () => {
-    const { hermes, user, openInbox } = await launch();
+    const { hermes, openInbox } = await launch();
     openInbox();
     expect(rowNames()).toContain("Completed, unread: Release notes");
     // The owner opens the chat in a second pane from its menu, with the inbox still open.
@@ -282,7 +295,7 @@ describe("The inbox", () => {
   });
 
   it("says when Hermes can't be reached, and shows what it last saw", async () => {
-    const { server, user, openInbox } = await launch();
+    const { server, openInbox } = await launch();
     server.refuse = "Connection refused";
     await act(async () => server.drop());
     openInbox();

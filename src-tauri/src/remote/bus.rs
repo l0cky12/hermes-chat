@@ -119,6 +119,7 @@ fn serve_into(conn: Connection, queue: bool, inbox: &'static Inbox) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lock::Locked;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
 
@@ -207,9 +208,9 @@ mod tests {
         // Once it is, it gets both, in order.
         let got = std::sync::Arc::new(Mutex::new(vec![]));
         let g = got.clone();
-        inbox.set_handler(move |r| g.lock().unwrap().push(r));
+        inbox.set_handler(move |r| g.locked().push(r));
         send_on(&second, &Request::Screenshot).unwrap();
-        assert_eq!(*got.lock().unwrap(), vec![Request::Show { token: Some("tok".into()) }, Request::Toggle { token: None }, Request::Screenshot]);
+        assert_eq!(*got.locked(), vec![Request::Show { token: Some("tok".into()) }, Request::Toggle { token: None }, Request::Screenshot]);
     }
 
     #[test]
@@ -220,7 +221,7 @@ mod tests {
         let inbox: &'static Inbox = Box::leak(Box::default());
         let got = std::sync::Arc::new(Mutex::new(vec![]));
         let g = got.clone();
-        inbox.set_handler(move |r| g.lock().unwrap().push(r));
+        inbox.set_handler(move |r| g.locked().push(r));
         serve_into(first, false, inbox);
         let second = connect(&bus.address);
         let link = "hermes-chat://chat?v=1&connection=abcdefghijklmnopqrst&profile=work&id=c9".to_owned();
@@ -230,6 +231,6 @@ mod tests {
         assert_eq!(refused.unwrap_err().name(), Some("org.freedesktop.DBus.Error.InvalidArgs"));
         let long: Result<(), dbus::Error> = proxy.method_call(IFACE, "OpenLink", (format!("hermes-chat://{}", "a".repeat(2000)), ""));
         assert!(long.is_err());
-        assert_eq!(*got.lock().unwrap(), vec![Request::OpenLink { link, token: Some("tok".into()) }]);
+        assert_eq!(*got.locked(), vec![Request::OpenLink { link, token: Some("tok".into()) }]);
     }
 }

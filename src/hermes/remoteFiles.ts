@@ -6,7 +6,9 @@
 // checking its revision and with a read-back (ADR 0024). The server decides what may be read: it lists and reads as its own OS user, can lock browsing to one
 // folder, and never lists, reads or sends credential files such as `.env` or `auth.json`. Wire details:
 // docs/research/hermes-gateway-api.md, "Server files".
+import { RestError, statusOf } from "./pipe";
 import { EDIT_MAX_BYTES, decodeForEdit, encodeEdit, revisionOf, type EditableText } from "./textEdit";
+import { errorText } from "./values";
 
 /** A directory entry as `GET /api/files` lists it (`_managed_file_entry`, `hermes_cli/web_server_files.py` at `bf0203a`). */
 type WireEntry = {
@@ -235,9 +237,8 @@ export function remoteFiles(get: RemoteGet, pipe: TransferPipe): RemoteFiles {
       await deadline(pipe.saveText(id, path, text, overwrite), EDIT_DEADLINES.writeMs);
     } catch (e) {
       if (e instanceof TimedOut) void pipe.cancel(id).catch(() => {});
-      const message = errorText(e);
-      if (refusedBeforeWriting(message)) throw explainSave(message);
-      throw { lost: e instanceof TimedOut ? `Hermes didn't answer within ${EDIT_DEADLINES.writeMs / 1000} s.` : explainSave(message).message };
+      if (refusedBeforeWriting(e)) throw explainSave(e);
+      throw { lost: e instanceof TimedOut ? `Hermes didn't answer within ${EDIT_DEADLINES.writeMs / 1000} s.` : explainSave(e).message };
     }
   };
   const list = async (path?: string) => {
@@ -260,8 +261,7 @@ export function remoteFiles(get: RemoteGet, pipe: TransferPipe): RemoteFiles {
     return id;
   };
   const failed = (id: number, e: unknown, what: "download" | "upload") => {
-    const message = e instanceof Error ? e.message : String(e);
-    change(id, message === TRANSFER_STOPPED ? { state: "stopped" } : { state: "failed", error: explainTransfer(message, what) });
+    change(id, errorText(e) === TRANSFER_STOPPED ? { state: "stopped" } : { state: "failed", error: explainTransfer(e, what) });
   };
   const planUpload = (listing: RemoteListing, picked: PickedUpload): UploadPlan => {
     const names = new Set(listing.entries.map((e) => e.name));
@@ -367,6 +367,8 @@ const tooLarge = (size: number, max: number) => `It's ${mb(size)}. Previews go u
 
 /** Raster and vector images the webview shows in an `<img>`, where an SVG can't run scripts. */
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon"]);
+/** A `data:` URL of one of those types: what the file browser and the preview pane show as an image. */
+export const IMAGE_DATA_URL = /^data:image\/(png|jpeg|gif|webp|bmp|svg\+xml|x-icon|vnd\.microsoft\.icon);base64,[A-Za-z0-9+/=]*$/;
 const TEXT_TYPES = new Set([
   "application/json",
   "application/ld+json",
@@ -436,17 +438,16 @@ async function call(run: () => Promise<string>, what: "list" | "read", previewMa
   try {
     return await run();
   } catch (e) {
-    throw explain(e instanceof Error ? e.message : String(e), what, previewMax);
+    throw explain(e, what, previewMax);
   }
 }
 
 /** Why a transfer failed, in the owner's words: the server's refusals as `explain` words them, the rest as they come. */
-function explainTransfer(message: string, what: "download" | "upload"): string {
-  if (what === "upload" && /^The dashboard answered 409: .*File already exists/.test(message))
-    return "A file with that name is on the server now. Nothing was replaced.";
-  if (what === "upload" && /^The dashboard answered 403: .*File is not writable/.test(message)) return "The Hermes server's user isn't allowed to write there.";
-  if (/^The dashboard answered \d{3}:|^Not connected|^The chat connection is closed|^The dashboard sign-in/.test(message))
-    return explain(message, what === "download" ? "read" : "write").message;
+function explainTransfer(e: unknown, what: "download" | "upload"): string {
+  const message = errorText(e);
+  if (what === "upload" && refused(e, 409, "File already exists")) return "A file with that name is on the server now. Nothing was replaced.";
+  if (what === "upload" && refused(e, 403, "File is not writable")) return "The Hermes server's user isn't allowed to write there.";
+  if (e instanceof RestError || /^Not connected|^The chat connection is closed/.test(message)) return explain(e, what === "download" ? "read" : "write").message;
   if (/^couldn't (write|read) it on this computer/.test(message)) return message[0].toUpperCase() + message.slice(1) + ".";
   if (/^it's .* MB now, over the .* MB limit/.test(message)) return `It's grown: ${message}.`;
   if (/^Hermes Chat doesn't relay/.test(message)) return message;
@@ -478,16 +479,14 @@ function sizeChecked(text: string): Uint8Array {
  * reached it. Anything else, a 500 from the entry Hermes describes after writing or a gateway's 5xx included, may come
  * after the write landed, so it is settled by reading the file back.
  */
-function refusedBeforeWriting(message: string): boolean {
-  if (/^Hermes Chat doesn't relay|^Not connected|^The dashboard sign-in/.test(message)) return true;
-  const m = /^The dashboard answered (\d{3}): ([\s\S]*)$/.exec(message);
-  if (!m) return false;
-  const status = Number(m[1]);
-  // FastAPI checks the form before the route runs.
-  if (status === 422) return true;
+function refusedBeforeWriting(e: unknown): boolean {
+  if (!(e instanceof RestError)) return /^Hermes Chat doesn't relay|^Not connected/.test(errorText(e));
+  const status = e.status;
+  // An expired sign-in never reaches the route, and FastAPI checks the form before it runs.
+  if (status === 401 || status === 422) return true;
   let detail: unknown;
   try {
-    detail = (JSON.parse(m[2]) as { detail?: unknown }).detail;
+    detail = (JSON.parse(e.body) as { detail?: unknown }).detail;
   } catch {
     // Cut short or not Hermes's own JSON: not known to be a refusal.
     return false;
@@ -503,12 +502,15 @@ function refusedBeforeWriting(message: string): boolean {
 }
 
 /** Why Hermes refused a save, in the owner's words. Its write is atomic, so a refused save changed nothing. */
-function explainSave(message: string): RemoteFilesError {
-  if (/^The dashboard answered 403: .*File is not writable/.test(message)) return new RemoteFilesError("The Hermes server's user isn't allowed to write this file.", 403);
-  if (/^The dashboard answered 409: .*File already exists/.test(message)) return new RemoteFilesError("A file with that name is on the server now. Nothing was replaced.", 409);
-  if (/^Hermes Chat doesn't relay/.test(message)) return new RemoteFilesError(message);
-  return explain(message, "write");
+function explainSave(e: unknown): RemoteFilesError {
+  if (refused(e, 403, "File is not writable")) return new RemoteFilesError("The Hermes server's user isn't allowed to write this file.", 403);
+  if (refused(e, 409, "File already exists")) return new RemoteFilesError("A file with that name is on the server now. Nothing was replaced.", 409);
+  if (/^Hermes Chat doesn't relay/.test(errorText(e))) return new RemoteFilesError(errorText(e));
+  return explain(e, "write");
 }
+
+/** Whether Hermes answered `status` with `reason` in its body, as `files.py` refuses an upload. */
+const refused = (e: unknown, status: number, reason: string) => e instanceof RestError && e.status === status && e.body.includes(reason);
 
 /**
  * How a text editor reaches one machine's files: Server files through the managed-files routes (ADR 0024), an
@@ -617,7 +619,6 @@ export function textEditing(io: EditIo) {
   };
 }
 
-export const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const fmtBytes = (n?: number) => (n === undefined ? "an unknown size" : `${n.toLocaleString("en-US")} bytes`);
 
 /** `name (2).ext`, `name (3).ext`, … : the first that `taken` doesn't have. A leading dot isn't an extension's. */
@@ -647,26 +648,24 @@ export function protectedPath(path: string): boolean {
 export const SANDBOX_NOT_FOUND_PREFIX = "File not found on the gateway host";
 /** Hermes's 409 when a save names a chat whose own copy of the file is gone (`SANDBOX_COPY_MISSING`). */
 export const SANDBOX_COPY_MISSING = "File is no longer in this session's workspace";
-/** A `session_id` Hermes doesn't have in the profile (`_fs_owned_session`): the chat was deleted. */
-export const SESSION_GONE = /^The dashboard answered 404: \{"detail":"Session not found"\}/;
 /** What the owner reads for `SANDBOX_NOT_FOUND`. */
 export const SANDBOX_MISSING = "Hermes can't find it in its chat's sandbox. It may have been removed, or be in a sandbox the dashboard can't read.";
 
 const OFFLINE = [/^Not connected to Hermes/, /^The chat connection is closed/, /^Can't reach the Hermes dashboard/];
 
 /**
- * The Rust side reports a refused call as `The dashboard answered <status>: <body>`, the body cut at 300 characters
+ * A failed call in the owner's words. A refused one is a `RestError`, its body cut at 300 characters
  * (`TransportError::Unexpected`). The dashboard's own reasons are FastAPI `{"detail": ...}` bodies (`files.py`).
  */
-export function explain(message: string, what: "list" | "read" | "write", previewMax?: number): RemoteFilesError {
+export function explain(e: unknown, what: "list" | "read" | "write", previewMax?: number): RemoteFilesError {
+  const message = errorText(e);
   if (OFFLINE.some((re) => re.test(message))) return new RemoteFilesError("Hermes isn't connected. Server files can be browsed again once it is.", undefined, true);
-  if (/^The dashboard sign-in has expired/.test(message)) return new RemoteFilesError(message, 401, true);
+  if (statusOf(e) === 401) return new RemoteFilesError(message, 401, true);
   if (/^it's .* MB now, over the .* MB limit/.test(message))
     return new RemoteFilesError(`The file grew past what a preview reads${previewMax ? ` (${mb(previewMax)})` : ""}.`, 413);
-  const m = /^The dashboard answered (\d{3}): ([\s\S]*)$/.exec(message);
-  if (!m) return new RemoteFilesError(message);
-  const status = Number(m[1]);
-  let detail = m[2].trim();
+  if (!(e instanceof RestError)) return new RemoteFilesError(message);
+  const status = e.status;
+  let detail = e.body.trim();
   try {
     const parsed = JSON.parse(detail) as { detail?: unknown; error?: unknown };
     const d = parsed.detail ?? parsed.error;
@@ -773,7 +772,10 @@ function parseRead(body: string, entry: RemoteEntry, support: PreviewSupport, as
   const max = "max" in support ? support.max : TEXT_PREVIEW_MAX_BYTES;
   const size = num(wire.size) ?? entry.size ?? 0;
   if (size > max) throw new RemoteFilesError(tooLarge(size, max));
-  if (support.kind === "image" && !asText) return { kind: "image", path, name, size, mime, dataUrl };
+  if (support.kind === "image" && !asText) {
+    if (!IMAGE_DATA_URL.test(dataUrl)) throw new RemoteFilesError("The server's answer isn't an image.");
+    return { kind: "image", path, name, size, mime, dataUrl };
+  }
   let bytes: Uint8Array;
   try {
     bytes = Uint8Array.from(atob(dataUrl.slice(m[0].length)), (c) => c.charCodeAt(0));

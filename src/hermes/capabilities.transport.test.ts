@@ -4,9 +4,8 @@
 // check is under way can't let an older connection's answers through.
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeHermes, row, type RestRequest } from "./fakeHermes";
-import { CapabilityUnsupportedError } from "./capabilities";
 import { ProtocolMismatchError, connect, type Hermes } from "./transport";
-import type { OpenPipe } from "./pipe";
+import { RestError, type OpenPipe } from "./pipe";
 
 /** The server's pipe, with the toolsets write check (a PUT to `PROBE_NAME`) held back while `held` is set. */
 function holdingWriteChecks(server: FakeHermes) {
@@ -52,6 +51,8 @@ async function expectSoon(ok: () => boolean, ms = 3000) {
   }
 }
 
+const leaves = (value: unknown): unknown[] => (value !== null && typeof value === "object" ? Object.values(value).flatMap(leaves) : [value]);
+
 const writesSent = (server: FakeHermes) => server.restRequests.filter((r: RestRequest) => r.method !== "GET");
 const rpcSent = (server: FakeHermes, method: string) => server.requests.filter((r) => r.method === method);
 
@@ -69,8 +70,11 @@ describe("capabilities over the transport", () => {
     // Nothing the check sent wrote: no REST write, and no JSON-RPC method beyond the reads it names.
     expect(writesSent(server).length).toBe(writesBefore);
     for (const m of ["projects.create", "learning.edit", "learning.delete", "command.dispatch", "slash.exec"]) expect(rpcSent(server, m)).toEqual([]);
-    // /api/status's path, process id and install id are never kept.
-    expect(JSON.stringify(snap)).not.toMatch(/fixture\/\.hermes|4242|install-1f2e/);
+    // /api/status's path, process id and install id are never kept. Matched per value, so a `checkedAt` whose digits
+    // contain the pid is not a hit.
+    const { hermes_home: home, gateway_pid: pid, install_id: install } = server.status as { hermes_home: string; gateway_pid: number; install_id: string };
+    const pidInText = new RegExp(`\\b${pid}\\b`);
+    expect(leaves(snap).filter((v) => v === pid || (typeof v === "string" && (v.includes(home) || v.includes(install) || pidInText.test(v))))).toEqual([]);
   });
 
   it("finds what Hermes 0.16.0 lacks, and keeps chat working there", { timeout: 10_000 }, async () => {
@@ -177,7 +181,7 @@ describe("capabilities over the transport", () => {
     server.souls = { default: "# Fixture\n" };
     // This Hermes reads SOUL.md but has no route to write it.
     server.rest["PUT /api/profiles/default/soul"] = () => {
-      throw new Error(`The dashboard answered 404: {"detail":"Not Found"}`);
+      throw new RestError(404, `{"detail":"Not Found"}`);
     };
     const hermes = await signedIn(server);
     await checked(hermes);
@@ -206,7 +210,7 @@ describe("capabilities over the transport", () => {
     server.rest["GET /api/files"] = (req) => {
       if (!first) return files(req);
       first = false;
-      return new Promise((_, reject) => (release = () => reject(new Error(`The dashboard answered 404: {"detail":"Not Found"}`))));
+      return new Promise((_, reject) => (release = () => reject(new RestError(404, `{"detail":"Not Found"}`))));
     };
     const hermes = await signedIn(server);
     await expectSoon(() => !first, 6000);

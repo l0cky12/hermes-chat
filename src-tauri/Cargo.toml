@@ -33,8 +33,9 @@ base64 = "0.22"
 # Already in the tree (through tauri-plugin-updater): deflates the Repository helper so it fits one ssh argument (repo_git.rs).
 flate2 = "1"
 tauri-plugin-dialog = "2"
-# Already comes with tauri-plugin-updater, without compression: backups are zips of stored JSON files (backup.rs).
-zip = { version = "9", default-features = false }
+# Already comes with tauri-plugin-updater: backups are zips of stored JSON files (backup.rs).
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+lopdf = { version = "0.47", default-features = false }
 # Verified self-updates for a standalone AppImage built with an update key (update.rs). Never used on a pacman install.
 tauri-plugin-updater = "2"
 
@@ -53,15 +54,19 @@ gdkx11 = "0.18"
 x11 = { version = "2.21", features = ["xlib"] }
 # Already comes with tauri (wry turns on `v2_40`); used to turn on WebKitGTK's media capture for dictation.
 webkit2gtk = { version = "2.0", features = ["v2_40"] }
+# Already comes with webkit2gtk; reads the string the annotation query returns (page_view.rs).
+javascriptcore-rs = "1.1"
+# Already comes with gtk; `png` writes an annotation's still and its marked image (annotate.rs).
+cairo-rs = { version = "0.18", features = ["png"] }
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3.6", features = ["windows-native"] }
 # The Terminal's pseudo-terminal on Windows is ConPTY (terminal.rs); Linux keeps openpty.
 portable-pty = "0.9"
-# Already comes with tokio and tauri. Job objects so ssh ends with the app (server_page.rs), whether a captures
-# folder's pid is still Hermes Chat (screenshot.rs), the installed fonts (fonts.rs), opening a page in the browser
-# (web_page.rs), and where the touch keyboard is (touch_keyboard.rs).
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# Already comes with tokio and tauri. Job objects so ssh ends with the app (server_page.rs), which process holds a
+# tunnel's port (loopback_owner.rs), whether a captures folder's pid is still Hermes Chat (screenshot.rs), the installed
+# fonts (fonts.rs), opening a page in the browser (web_page.rs), and where the touch keyboard is (touch_keyboard.rs).
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 # Already comes with tauri (tao, wry, webview2-com): WinRT toasts are the desktop notifications on Windows (notify.rs).
 windows = { version = "0.62", features = ["Data_Xml_Dom", "UI_Notifications"] }
 

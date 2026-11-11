@@ -9,6 +9,7 @@ import {
   FileText,
   Globe,
   Laptop,
+  LockOpen,
   MoreHorizontal,
   RotateCw,
   Server,
@@ -35,6 +36,7 @@ import {
   type WebTarget,
 } from "../hermes/preview";
 import { Markdown } from "./Markdown";
+import { HIGHLIGHT_MAX_CHARS } from "./markdownPipeline";
 import { Spinner, fmtSize } from "./bits";
 import { Menu } from "./ChatMenu";
 import { ServerPageError, type DevServers, type Listening, type LocalFiles, type NativePage, type NativePages, type ServerPages, type WebPages } from "./tauriPreview";
@@ -42,18 +44,17 @@ import { usePlacement } from "./pagePlacement";
 import { canGoBack, canGoForward, type HistoryStep, type PreviewHistory } from "./previewHistory";
 import type { ArtifactStore } from "../hermes/artifacts";
 import { ArtifactEditor } from "./ArtifactEditor";
+import { errorText } from "../hermes/values";
 
-/** Text past this many characters shows without highlighting, which would hold up the window. */
-const HIGHLIGHT_MAX_CHARS = 100_000;
 /** When a web page that hasn't loaded gets a note that it may never show. */
 const SLOW_PAGE_MS = 15_000;
 
 /**
- * What a framed web page may use. It may run scripts, send forms and use its own storage under its own origin, which is
- * never the app's (preview.ts `checkWebUrl`). WebKitGTK keeps no third-party cookies for it. It may not navigate the app's
- * window, open windows, or download.
+ * What a framed web page may use. It may run scripts and send forms. It may not navigate the app's window, open windows,
+ * or download. Its origin is opaque, wherever it moves the frame: WebView2 gives every frame Tauri's IPC, and Tauri
+ * turns down a call whose origin is `null` (ADR 0138).
  */
-const WEB_SANDBOX = "allow-scripts allow-forms allow-same-origin";
+const WEB_SANDBOX = "allow-scripts allow-forms";
 const WEB_PERMISSIONS = [
   "camera",
   "microphone",
@@ -71,8 +72,6 @@ const WEB_PERMISSIONS = [
 ]
   .map((f) => `${f} 'none'`)
   .join("; ");
-
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function PreviewPane({
   history,
@@ -115,7 +114,7 @@ export function PreviewPane({
       const file = await local.pick();
       if (file) open({ kind: "local", ...file });
     } catch (e) {
-      setNote({ text: `Couldn't open the file picker: ${messageOf(e)}`, failed: true });
+      setNote({ text: `Couldn't open the file picker: ${errorText(e)}`, failed: true });
     } finally {
       setPicking(false);
     }
@@ -124,14 +123,14 @@ export function PreviewPane({
     setNote(undefined);
     web.openInBrowser(url).then(
       (browser) => setNote({ text: `Opened in ${browser ?? "your browser"}.`, failed: false }),
-      (e) => setNote({ text: `Couldn't open it in your browser: ${messageOf(e)}`, failed: true }),
+      (e) => setNote({ text: `Couldn't open it in your browser: ${errorText(e)}`, failed: true }),
     );
   };
   const copy = (address: string) => {
     if (!navigator.clipboard?.writeText) return setNote({ text: "Couldn't copy the address.", failed: true });
     navigator.clipboard.writeText(address).then(
       () => setNote({ text: "Address copied.", failed: false }),
-      (e) => setNote({ text: `Couldn't copy the address: ${messageOf(e)}`, failed: true }),
+      (e) => setNote({ text: `Couldn't copy the address: ${errorText(e)}`, failed: true }),
     );
   };
 
@@ -241,6 +240,12 @@ function Badge({ here, serverLabel, onSwitch }: { here: PreviewTarget | undefine
   }
   switch (here.kind) {
     case "web":
+      if (new URL(here.url).protocol === "http:")
+        return (
+          <span className="where where-insecure" title="Not secure: this page came over http://, so what it shows and what you send it aren't encrypted">
+            <LockOpen size={12} /> Not secure
+          </span>
+        );
       return (
         <span className="where where-web" title="A web page, loaded by this computer and kept apart from Hermes Chat">
           <Globe size={12} /> Web
@@ -379,7 +384,7 @@ function MoreMenu({
           <div className="menu-sep" />
           <div className="preview-menu-note">
             Pages here run on their own, with no access to Hermes Chat or your sign-in, and only you can use them.
-            {framed && " Links you follow inside a page don't change the address here."}
+            {framed && " Links you follow inside a page don't change the address here. Pages here can't use their own storage, so some sites work only in your browser."}
           </div>
         </Menu>
       )}
@@ -421,7 +426,7 @@ function EmptyState({
     setFound(undefined);
     web.devServers().then(
       (d) => live && setFound(d),
-      (e) => live && setFound({ error: messageOf(e) }),
+      (e) => live && setFound({ error: errorText(e) }),
     );
     return () => {
       live = false;
@@ -491,7 +496,7 @@ function FileBody({ name, load }: { name: string; load: () => Promise<FileView> 
         made = blob;
         setState({ view });
       },
-      (e) => live && setState({ error: messageOf(e) }),
+      (e) => live && setState({ error: errorText(e) }),
     );
     return () => {
       live = false;
@@ -603,10 +608,8 @@ function TextView({ view, name }: { view: Extract<FileView, { kind: "text" }>; n
 function FramedWebView({ url, src, check, onOpenInBrowser }: { url: string; src: string; check: (url: string) => Promise<Framing>; onOpenInBrowser: () => void }) {
   const [loaded, setLoaded] = useState(false);
   const [slow, setSlow] = useState(false);
-  const [closed, setClosed] = useState(false);
   const [framing, setFraming] = useState<Framing>();
   const [showAnyway, setShowAnyway] = useState(false);
-  const frame = useRef<HTMLIFrameElement>(null);
   const checkRef = useRef(check);
   checkRef.current = check;
   useEffect(() => {
@@ -624,32 +627,7 @@ function FramedWebView({ url, src, check, onOpenInBrowser }: { url: string; src:
       live = false;
     };
   }, [src]);
-  const onLoad = () => {
-    // A page that redirected the frame onto the app's own origin could reach the app; such a frame is emptied at once.
-    // The frame-src policy (index.html) and Tauri's invoke key are the main guards; this is the last one (ADR 0007).
-    try {
-      const href = frame.current?.contentWindow?.location.href;
-      if (href !== undefined && href !== "about:blank") {
-        frame.current!.src = "about:blank";
-        setClosed(true);
-        return;
-      }
-    } catch {
-      // Cross-origin, as it should be.
-    }
-    setLoaded(true);
-  };
   const host = hostOf(url);
-  if (closed)
-    return (
-      <div className="preview-state preview-error" role="alert">
-        <AlertTriangle size={18} />
-        <div>
-          <div className="preview-state-title">This page was closed</div>
-          <div>It tried to load Hermes Chat's own pages inside the preview.</div>
-        </div>
-      </div>
-    );
   if (framing?.kind === "refused" && !showAnyway)
     return (
       <div className="preview-state preview-error" role="alert">
@@ -681,14 +659,13 @@ function FramedWebView({ url, src, check, onOpenInBrowser }: { url: string; src:
     <div className="preview-web">
       <div className="preview-web-frame">
         <iframe
-          ref={frame}
           className="preview-frame"
           title={`Web page: ${url}`}
           src={src}
           sandbox={WEB_SANDBOX}
           allow={WEB_PERMISSIONS}
           referrerPolicy="no-referrer"
-          onLoad={onLoad}
+          onLoad={() => setLoaded(true)}
         />
         {!loaded &&
           (framing?.kind === "unreachable" ? (
@@ -746,7 +723,7 @@ function useStickyTunnel(need: string | undefined, pages: ServerPages): [TunnelS
       },
       (e) => {
         if (!live || ended) return;
-        const error = e instanceof ServerPageError ? e : new ServerPageError("io", messageOf(e));
+        const error = e instanceof ServerPageError ? e : new ServerPageError("io", errorText(e));
         setState(error.kind === "closed" ? { kind: "closed", remote, message: error.message } : { kind: "failed", remote, error });
       },
     );
@@ -780,6 +757,7 @@ function BrowserView({
   onBusy: (busy: boolean) => void;
   onOpenInBrowser: (url: string) => void;
 }) {
+  const trying = useHttpsFirst(here, web, onStep, onBusy);
   const need = tunnelNeeded(here);
   const [tunnel, retry] = useStickyTunnel(need, serverPages);
   const open = tunnel.kind === "open" ? tunnel.tunnel : undefined;
@@ -799,14 +777,56 @@ function BrowserView({
     if (need && tunnel.kind !== "open" && tunnel.kind !== "opening") retry();
   }, [reloadSeq, need, tunnel.kind, retry]);
 
+  // While https is tried, nothing loads, and the page view stays, hidden, for the address that comes after.
+  const tryingNote = trying && (
+    <div className="preview-state preview-loading" role="status">
+      <Spinner /> Trying {hostOf(here.url)} over https…
+    </div>
+  );
   if (!web.native)
-    return tunnelState || (src ? <FramedWebView key={`${src}:${reloadSeq}`} url={here.url} src={src} check={web.check} onOpenInBrowser={() => onOpenInBrowser(src)} /> : null);
-  return <PageView here={here} src={src} tunnel={open} reloadSeq={reloadSeq} cover={tunnelState} native={web.native} onStep={onStep} onBusy={onBusy} />;
+    return tryingNote || tunnelState || (src ? <FramedWebView key={`${src}:${reloadSeq}`} url={here.url} src={src} check={web.check} onOpenInBrowser={() => onOpenInBrowser(src)} /> : null);
+  return (
+    <PageView here={here} src={trying ? undefined : src} trying={trying} tunnel={open} reloadSeq={reloadSeq} cover={tryingNote || tunnelState} native={web.native} onStep={onStep} onBusy={onBusy} />
+  );
+}
+
+/**
+ * Whether the https:// try for a typed address (`fallback`, ADR 0103) is still out. Nothing loads meanwhile. One that
+ * doesn't answer puts the http:// address in its entry's place. The try belongs to the entry on screen: once another
+ * entry shows (Back, a link from a reply, another profile) or the pane goes, its answer changes nothing.
+ */
+function useHttpsFirst(here: WebTarget, web: WebPages, onStep: (s: HistoryStep) => void, onBusy: (busy: boolean) => void): boolean {
+  const asked = here.fallback ? here.url : undefined;
+  const [answered, setAnswered] = useState<string>();
+  const latest = useRef({ here, onStep, onBusy });
+  latest.current = { here, onStep, onBusy };
+  useEffect(() => {
+    const fallback = latest.current.here.fallback;
+    if (!asked || !fallback) return;
+    let live = true;
+    latest.current.onBusy(true);
+    void web
+      .httpsAnswers(asked)
+      .catch(() => false)
+      .then((secure) => {
+        if (!live) return;
+        live = false;
+        latest.current.onBusy(false);
+        if (secure) setAnswered(asked);
+        else latest.current.onStep({ kind: "arrived", target: { kind: "web", url: fallback }, replace: true });
+      });
+    return () => {
+      if (live) latest.current.onBusy(false);
+      live = false;
+    };
+  }, [asked, web]);
+  return !!asked && answered !== asked;
 }
 
 function PageView({
   here,
   src,
+  trying,
   tunnel,
   reloadSeq,
   cover,
@@ -816,6 +836,8 @@ function PageView({
 }: {
   here: WebTarget;
   src: ViewUrl | undefined;
+  /** The entry's https try is out (`useHttpsFirst`): nothing is asked of the view, and what it reports isn't the entry's. */
+  trying: boolean;
   tunnel: Tunnel | undefined;
   reloadSeq: number;
   cover: ReactNode;
@@ -829,8 +851,8 @@ function PageView({
   const [slow, setSlow] = useState(false);
   const viewAt = useRef<ViewUrl>(undefined);
   const sentThrough = useRef<Tunnel>(undefined);
-  const latest = useRef({ tunnel, onStep });
-  latest.current = { tunnel, onStep };
+  const latest = useRef({ tunnel, onStep, trying });
+  latest.current = { tunnel, onStep, trying };
 
   useEffect(() => {
     let live = true;
@@ -839,7 +861,9 @@ function PageView({
       if (e.kind === "at") {
         viewAt.current = e.url;
         setState("shown");
-        latest.current.onStep({ kind: "arrived", target: fromView(e.url, sentThrough.current), replace: e.replace });
+        // While the entry's https try is out, a page landing is the one before it, which mustn't take the entry's place.
+        if (!latest.current.trying)
+          latest.current.onStep({ kind: "arrived", target: fromView(e.url, sentThrough.current), replace: e.replace });
       } else if (e.kind === "failed") setState({ message: e.message, url: e.url && fromView(e.url, sentThrough.current).url });
       else if (e.kind === "escaped") box.current?.focus();
     });

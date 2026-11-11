@@ -11,9 +11,9 @@ import { memoryCache } from "../hermes/memoryCache";
 import { PersonaStore, personaKey } from "../hermes/personaStore";
 import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
+import { RestError } from "../hermes/pipe";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -291,7 +291,7 @@ describe("Settings → Persona for any profile", () => {
     await waitFor(() => expect(screen.getByRole("alertdialog", { name: "Replace spare's SOUL.md?" }).textContent).toMatch(/25 characters/));
     // Hermes writes it, then the answer is lost, and reading it back fails too.
     s.soulWriteLost = "Can't reach the Hermes dashboard: connection reset";
-    s.afterSoulWrite = () => (s.soulReadError = `The dashboard answered 500: {"detail":"read failed"}`);
+    s.afterSoulWrite = () => (s.soulReadError = new RestError(500, `{"detail":"read failed"}`));
     await user.click(screen.getByRole("button", { name: "Replace spare's" }));
     expect((await screen.findByRole("alert")).textContent).toMatch(/Hermes may have written the copy to spare, but it couldn't be confirmed/);
     expect(s.souls.spare).toBe(SOUL);

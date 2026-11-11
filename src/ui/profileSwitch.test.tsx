@@ -10,7 +10,6 @@ import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -53,6 +52,23 @@ async function switched(hermes: Hermes, profile: string) {
 }
 
 describe("Switching profile in the app", () => {
+  it("says in the switcher's tooltip how long ago the other profiles were checked, as of when it shows", async () => {
+    const { hermes, user } = await launch();
+    await act(async () => void (await hermes.checkOtherProfiles()));
+    const button = document.querySelector<HTMLElement>(".profile-btn")!;
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 180_000 });
+    try {
+      await user.hover(button);
+      expect(button.title).toMatch(/; last 3m ago$/);
+      await user.unhover(button);
+      await act(async () => void (await hermes.checkOtherProfiles()));
+      await user.hover(button);
+      expect(button.title).toMatch(/; last just now$/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("asks before leaving a profile where an Approval is waiting, and stays when the owner says so", async () => {
     const { server, hermes, user } = await launch();
     await act(async () => {

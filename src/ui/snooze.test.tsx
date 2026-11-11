@@ -7,6 +7,7 @@ import { useState } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import type { Chat, Item } from "../hermes/model";
+import { CheckTimesStore } from "../hermes/otherProfiles";
 import { SNOOZE_KEY } from "../hermes/snooze";
 import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
@@ -16,7 +17,6 @@ import { useSnoozeClock } from "./Snooze";
 import { readFileSync } from "node:fs";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -56,6 +56,7 @@ function List({
       profile="default"
       status="connected"
       others={{ byName: {} }}
+      checkTimes={new CheckTimesStore()}
       chats={chats}
       selectedId={null}
       onOpen={() => {}}
@@ -88,6 +89,7 @@ function ListSince({ chats, since }: { chats: Chat[]; since: Record<string, numb
       profile="default"
       status="connected"
       others={{ byName: {} }}
+      checkTimes={new CheckTimesStore()}
       chats={chats}
       selectedId={null}
       onOpen={() => {}}

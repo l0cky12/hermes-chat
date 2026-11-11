@@ -21,10 +21,11 @@
 // Hermes has no conditional write, so a Save first reads SKILL.md again and writes only if it is still the file and text
 // the editor started from, then reads it back (as Persona does, ADR 0014). Skill text is instructions for the agent from
 // wherever it came from: it is only ever shown as plain text.
-import type { RestMethod } from "./pipe";
+import { RestError, type RestMethod } from "./pipe";
 import { answered, asReadBack, deadline } from "./persona";
 import { pyStrip } from "./memory";
 import { MINE_MARK, SPLIT_MARK, THEIRS_MARK } from "./textEdit";
+import { errorText, isObj } from "./values";
 
 /** Where a skill came from, as `GET /api/skills` says (`provenance`). An unknown word is kept as Hermes sent it. */
 export type SkillSource = "hub" | "bundled" | "external" | "agent";
@@ -124,7 +125,6 @@ export type TransferOutcome =
 const KEEP_VERSIONS = 10;
 
 const chars = (s: string) => [...s].length;
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /**
  * Whether Hermes Chat sends a skill name to Hermes at all (the Rust relay checks the same): one line, no backslash, and
@@ -257,7 +257,7 @@ const DENIED = /permission denied|errno 13\b|errno 1\b|operation not permitted|r
 /** Sorts an error from a skills call. `doing`: what was asked, for the message. */
 export function skillsError(e: unknown, doing: "list" | "read" | "save" | "toggle" | "copy" | "archive", name?: string): SkillsError {
   if (e instanceof SkillsError) return e;
-  const message = e instanceof Error ? e.message : String(e);
+  const message = errorText(e);
   const what = {
     list: "list skills",
     read: `read ${name ?? "the skill"}`,
@@ -268,9 +268,9 @@ export function skillsError(e: unknown, doing: "list" | "read" | "save" | "toggl
   }[doing];
   if (/^Not connected to Hermes|^The chat connection is closed/.test(message)) return new SkillsError("disconnected", "Not connected to Hermes.", undefined, true);
   if (/^Can't reach the Hermes dashboard/.test(message)) return new SkillsError("disconnected", message);
-  if (/^The dashboard sign-in has expired/.test(message)) return new SkillsError("signed-out", message);
+  if (e instanceof RestError && e.status === 401) return new SkillsError("signed-out", message);
   if (/^Hermes Chat doesn't relay/.test(message)) return new SkillsError("unsupported", message, undefined, true);
-  const a = answered(message);
+  const a = answered(e);
   if (!a) return new SkillsError("error", `Couldn't ${what}: ${message}`);
   const said = a.detail ? ` Hermes said: ${a.detail}${/[.!?]$/.test(a.detail) ? "" : "."}` : "";
   const route = {
@@ -436,11 +436,11 @@ export class SkillsApi {
           const entries = isObj(res) && Array.isArray(res.entries) ? res.entries : [];
           names = new Set(entries.flatMap((e) => (isObj(e) && typeof e.name === "string" && e.broken_link !== true ? [e.name] : [])));
         } catch (e) {
-          const a = answered(e instanceof Error ? e.message : String(e));
+          const a = answered(e);
           // A folder that isn't there: everything named in it is missing.
           if (a?.status === 404 && /^path not found$/i.test(a.detail)) names = new Set();
           else {
-            unchecked = `Couldn't list ${folder} on the server to check the files the skill names: ${a ? `${a.status} ${a.detail}` : e instanceof Error ? e.message : String(e)}`;
+            unchecked = `Couldn't list ${folder} on the server to check the files the skill names: ${a ? `${a.status} ${a.detail}` : errorText(e)}`;
             return;
           }
         }

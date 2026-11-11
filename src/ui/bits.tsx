@@ -114,6 +114,16 @@ export function useDismiss(ref: React.RefObject<HTMLElement | null>, open: boole
   }, [open, close, ref]);
 }
 
+/** For a menu's `onKeyDown`: moves focus among its items with the arrow keys, Home and End. */
+export function menuArrows(e: ReactKeyboardEvent<HTMLElement>) {
+  const step = { ArrowDown: 1, ArrowUp: -1, Home: 0, End: 0 }[e.key];
+  if (step === undefined) return;
+  const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)')];
+  const at = items.indexOf(document.activeElement as HTMLElement);
+  e.preventDefault();
+  (e.key === "Home" ? items[0] : e.key === "End" ? items[items.length - 1] : items[(at + step + items.length) % items.length])?.focus();
+}
+
 /**
  * For a popover: when it closes, focus goes back to what had it when the popover opened, unless the owner has
  * moved focus somewhere else meanwhile (clicked another control, or the popover's pick opened something that
@@ -127,6 +137,7 @@ export function useReturnFocus() {
       const now = document.activeElement;
       if ((!now || now === document.body) && opener instanceof HTMLElement && opener.isConnected) opener.focus();
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
     [],
   );
 }
@@ -207,6 +218,15 @@ const ageClock = (() => {
 export function Age({ at }: { at: number }) {
   useSyncExternalStore(ageClock.subscribe, ageClock.ticks);
   return useLocale().fmt.age(at);
+}
+
+/**
+ * Text that depends on the time, worked out again on Age's minute clock without the rest of its parent rendering:
+ * a snoozed chat's wake time loses its weekday once midnight passes (#438).
+ */
+export function Ticking({ children }: { children: () => string }) {
+  useSyncExternalStore(ageClock.subscribe, ageClock.ticks);
+  return children();
 }
 
 /** How long ago, as a phrase: "just now" (or `justNow`), "5m ago". */

@@ -4,7 +4,7 @@
 // screen's helper (worktrees.ts).
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Check, CircleAlert, FolderGit2, GitBranch, Lock, MessageSquarePlus, Plus, RefreshCw, RotateCcw, Shield, ShieldOff, Trash2, Unlink, X } from "lucide-react";
-import { RepoFailure, asRepoFailure } from "../hermes/repo";
+import { RepoFailure, asRepoFailure, lostAnswer } from "../hermes/repo";
 import {
   STATE_LABEL,
   asCreated,
@@ -17,7 +17,6 @@ import {
   dirtyText,
   inside,
   newWorktreeId,
-  plural,
   worktreeChats,
   type AttachedChat,
   type HermesChatIn,
@@ -35,12 +34,10 @@ import {
 import { Spinner } from "./bits";
 import { useModal } from "./modal";
 import { Failure } from "./Repository";
+import { errorText, plural } from "../hermes/values";
 
 type Load<T> = { state: "idle" } | { state: "loading"; last?: T } | { state: "ready"; data: T } | { state: "failed"; error: RepoFailure; last?: T };
 const lastOf = <T,>(l: Load<T>): T | undefined => (l.state === "ready" ? l.data : l.state === "idle" ? undefined : l.last);
-
-/** A transport failure: whether a write happened isn't known. */
-const lostAnswer = (e: RepoFailure) => e.kind === "timeout" || e.kind === "spawn" || e.kind === "bad-reply" || e.kind.startsWith("ssh");
 
 /** What the screen around the view gives it: who is looking, and how to start a chat or ask Hermes about one. */
 export type WorktreeHooks = {
@@ -916,7 +913,7 @@ function RemoveDialog({
     setHermes({ state: "reading", chats: [] });
     ask(record.path).then(
       (chats) => n === asked.current && alive.current && setHermes({ state: "ready", chats }),
-      (e: unknown) => n === asked.current && alive.current && setHermes({ state: "failed", chats: [], error: e instanceof Error ? e.message : String(e) }),
+      (e: unknown) => n === asked.current && alive.current && setHermes({ state: "failed", chats: [], error: errorText(e) }),
     );
   }, [record.path]);
   const load = useCallback(() => {

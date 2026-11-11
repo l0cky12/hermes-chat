@@ -42,6 +42,7 @@ export function QueuePanel({ chat, queue, status, api }: { chat: Chat; queue?: C
   const [over, setOver] = useState<number | null>(null);
   const [dragging, setDragging] = useState<string>();
   const items = queue?.items ?? [];
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => {
     if (!focus) return;
     setFocus(undefined);
@@ -182,6 +183,7 @@ function QueueRow({
   const rowRef = useRef<HTMLLIElement>(null);
   const files = item.attachments?.length ?? 0;
   // Nothing in the queue goes while its words are being changed.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => (editing === undefined ? undefined : api.hold()), [editing === undefined]);
 
   const close = () => {

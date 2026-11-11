@@ -24,6 +24,9 @@
 // Memory text comes from the agent and whatever it read, so it is shown as plain text, never rendered, and never kept
 // on this computer. The one exception to "never kept": what a save from here replaced, held in this app's memory (never
 // on disk) until sign-out or quit, so the owner can put it back (ADR 0040).
+import { answered } from "./persona";
+import { RestError } from "./pipe";
+import { errorText, isObj } from "./values";
 
 /** Which of the profile's memory files an entry is in, by the name `learning.*` gives it. */
 export type MemorySource = "memory" | "profile";
@@ -158,14 +161,12 @@ const READ_TRIES = 3;
 /** How many replaced texts are kept per profile and file. */
 const KEEP_REPLACED = 10;
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 /** A JSON-RPC error answer: Hermes got the request and answered it. Anything else may not have reached it. */
 const rpcCode = (e: unknown): number | undefined => (isObj(e) && typeof e.code === "number" ? e.code : undefined);
 
 /** What `learning.*` answers when the id names text that's no longer there (`agent/learning_mutations.py`). */
 const isStale = (message: string) => /\bstale\b/i.test(message);
-/** A refusal for lack of permission: the server's file permissions, or a dashboard answer of 403. */
+/** A JSON-RPC refusal for lack of permission: the server's file permissions. */
 const isPermission = (message: string) => /permission denied|errno 13|not writable|\b403\b|forbidden/i.test(message);
 
 /**
@@ -234,20 +235,6 @@ function memoryNodes(answer: unknown): Node[] {
   return [...seen.values()].sort((a, b) => a.index - b.index);
 }
 
-/** The status and Hermes's reason of a dashboard REST answer that isn't 2xx, as the relay words it. */
-function restAnswer(e: unknown): { status: number; detail: string } | undefined {
-  const m = /^The dashboard answered (\d{3}): ?([\s\S]*)$/.exec(messageOf(e));
-  if (!m) return undefined;
-  let detail = m[2];
-  try {
-    const d = (JSON.parse(m[2]) as { detail?: unknown }).detail;
-    if (typeof d === "string") detail = d;
-  } catch {
-    // Not JSON, e.g. a proxy's error page: keep the text.
-  }
-  return { status: Number(m[1]), detail: detail.trim() };
-}
-
 /** A REST answer meaning the server has no such route: `bf0203a`'s `404 No such API endpoint`, FastAPI's `404 Not Found`, or 405. */
 const noRoute = (a: { status: number; detail: string } | undefined) => !!a && ((a.status === 404 && /^(not found$|no such api endpoint\b)/i.test(a.detail)) || a.status === 405);
 
@@ -279,12 +266,16 @@ function classify(e: unknown): Error {
   if (code === NO_SUCH_METHOD)
     return new MemoryUnsupportedError("server", "This Hermes server has no memory editing calls (`learning.detail`, `learning.edit`). Updating Hermes adds them.");
   if (code === BAD_PARAMS)
-    return new MemoryUnsupportedError("server", `This Hermes server's memory calls changed shape, so this app won't use them: ${messageOf(e)}`);
-  const message = messageOf(e);
-  const rest = restAnswer(e);
+    return new MemoryUnsupportedError("server", `This Hermes server's memory calls changed shape, so this app won't use them: ${errorText(e)}`);
+  const message = errorText(e);
+  const rest = answered(e);
   if (rest?.status === 404 && /profile/i.test(rest.detail)) return new Error(`Hermes has no such profile: ${rest.detail}`);
-  if (/signed out|401|unauthori[sz]ed/i.test(message)) return new MemoryPermissionError(`The dashboard no longer accepts this sign-in: ${message}`);
-  if (isPermission(message)) return new MemoryPermissionError(`Hermes isn't allowed to do that on the server: ${message}`);
+  const signedOut = () => new MemoryPermissionError(`The dashboard no longer accepts this sign-in: ${message}`);
+  const refused = () => new MemoryPermissionError(`Hermes isn't allowed to do that on the server: ${message}`);
+  // A dashboard answer is told by its status: its body is server text (#486). Hermes's JSON-RPC answers by its message.
+  if (e instanceof RestError) return e.status === 401 ? signedOut() : e.status === 403 ? refused() : e;
+  if (/signed out|401|unauthori[sz]ed/i.test(message)) return signedOut();
+  if (isPermission(message)) return refused();
   return e instanceof Error ? e : new Error(message);
 }
 
@@ -333,7 +324,7 @@ export function memoryApi(io: MemoryIO, now = () => Date.now()): MemoryApi {
       res = await io.rpc(method, params);
     } catch (e) {
       if (rpcCode(e) === undefined)
-        throw new MemoryUnsureError(`The connection dropped before Hermes answered, so it may or may not have saved the change. Reload once connected to see. (${messageOf(e)})`);
+        throw new MemoryUnsureError(`The connection dropped before Hermes answered, so it may or may not have saved the change. Reload once connected to see. (${errorText(e)})`);
       throw classify(e);
     }
     if (isObj(res) && res.ok === true) return { ok: true };
@@ -358,7 +349,7 @@ export function memoryApi(io: MemoryIO, now = () => Date.now()): MemoryApi {
       try {
         graph = await io.get(learningPath("graph", profile));
       } catch (e) {
-        if (restRoutes === undefined && noRoute(restAnswer(e))) throw new NoRestRoutes();
+        if (restRoutes === undefined && noRoute(answered(e))) throw new NoRestRoutes();
         throw classify(e);
       }
       return memoryNodes(graph);
@@ -370,7 +361,7 @@ export function memoryApi(io: MemoryIO, now = () => Date.now()): MemoryApi {
         return { ok: false, message: "no content" };
       } catch (e) {
         // `get_learning_node` answers 404 with Hermes's reason, such as a stale id.
-        const a = restAnswer(e);
+        const a = answered(e);
         if (a?.status === 404 && !noRoute(a)) return { ok: false, message: a.detail };
         throw classify(e);
       }
@@ -381,12 +372,12 @@ export function memoryApi(io: MemoryIO, now = () => Date.now()): MemoryApi {
         if (isObj(res) && res.ok === true) return { ok: true };
         return { ok: false, message: isObj(res) && typeof res.message === "string" ? res.message : "Hermes didn't say why." };
       } catch (e) {
-        const a = restAnswer(e);
+        const a = answered(e);
         // `_learning_mutation` answers a refusal 400 with Hermes's reason; nothing was written.
         if (a?.status === 400) return { ok: false, message: a.detail };
         if (a && a.status < 500) throw classify(e);
-        if (/^Not connected to Hermes|^The chat connection is closed/.test(messageOf(e))) throw classify(e);
-        throw new MemoryUnsureError(`Hermes didn't answer clearly, so it may or may not have made the change. Reload once connected to see. (${messageOf(e)})`);
+        if (/^Not connected to Hermes|^The chat connection is closed/.test(errorText(e))) throw classify(e);
+        throw new MemoryUnsureError(`Hermes didn't answer clearly, so it may or may not have made the change. Reload once connected to see. (${errorText(e)})`);
       }
     },
   };
@@ -510,7 +501,7 @@ export function memoryApi(io: MemoryIO, now = () => Date.now()): MemoryApi {
           if (e instanceof MemoryUnsureError) {
             dropped = true;
             outcomes.push({ entry, kind: "unsure", problem: e.message });
-          } else outcomes.push({ entry, kind: "failed", problem: messageOf(classify(e)) });
+          } else outcomes.push({ entry, kind: "failed", problem: errorText(classify(e)) });
         }
       }
       let view: MemoryView | undefined;
@@ -518,7 +509,7 @@ export function memoryApi(io: MemoryIO, now = () => Date.now()): MemoryApi {
         view = await read(profile);
       } catch (e) {
         // Without a read-back, a removal Hermes said it made isn't confirmed.
-        return { outcomes: outcomes.map((o) => (o.kind === "removed" ? { ...o, kind: "unsure" as const, problem: `Reading memory back failed: ${messageOf(e)}` } : o)) };
+        return { outcomes: outcomes.map((o) => (o.kind === "removed" ? { ...o, kind: "unsure" as const, problem: `Reading memory back failed: ${errorText(e)}` } : o)) };
       }
       const after = view;
       return {

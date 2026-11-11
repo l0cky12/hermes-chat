@@ -19,6 +19,7 @@
 //! a Hermes dashboard, and the same one the connection signed in to before (ADR 0120).
 
 use crate::connect_steps::{Step, Steps};
+use crate::lock::Locked;
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -30,7 +31,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
@@ -104,6 +105,9 @@ pub enum TransportError {
     NotRelayed(String),
     #[error("it's {:.1} MB now, over the {} MB limit", *.size as f64 / MIB as f64, .max / MIB)]
     FileTooLarge { size: u64, max: u64 },
+    /// An answer past the most `read_body` reads of it; `size`: what was announced or read when it stopped.
+    #[error("The server's answer is over {}, the most Hermes Chat reads of one, so it wasn't read.", size_text(*.max))]
+    AnswerTooLarge { size: u64, max: u64 },
     #[error("{0}")]
     File(String),
     /// The provider turned down an API key the owner typed (`POST /api/providers/validate`).
@@ -229,18 +233,27 @@ pub fn extra_headers(headers: &[ExtraHeader]) -> Result<HeaderMap, TransportErro
 /// attempt, from the route's extra `headers`, and shared by `read_server` and `Dashboard::sign_in`, so the sign-in
 /// and its ticket reuse the connection the status read opened (#271). It carries no credential itself.
 pub fn client(headers: &HeaderMap) -> Result<reqwest::Client, TransportError> {
-    client_kept_to_origin(headers, true)
+    reqwest::Client::builder()
+        .default_headers(headers.clone())
+        .no_proxy()
+        .redirect(redirect::Policy::custom(same_origin_redirects))
+        .connect_timeout(CONNECT_LIMIT)
+        .tcp_keepalive(KEEPALIVE_IDLE)
+        .tcp_keepalive_interval(KEEPALIVE_INTERVAL)
+        .tcp_keepalive_retries(KEEPALIVE_RETRIES)
+        .build()
+        .map_err(unreachable)
 }
 
-/// `client`, with redirects kept to the dashboard's origin even without extra headers when `always` is set, as for a
-/// request that carries a provider key.
-fn client_kept_to_origin(headers: &HeaderMap, always: bool) -> Result<reqwest::Client, TransportError> {
-    let mut http = reqwest::Client::builder().default_headers(headers.clone());
-    if always || !headers.is_empty() {
-        http = http.redirect(redirect::Policy::custom(same_origin_redirects));
-    }
-    http.build().map_err(unreachable)
-}
+/// How long opening a connection to the dashboard may take before the call fails.
+const CONNECT_LIMIT: Duration = Duration::from_secs(15);
+
+/// A kept-alive connection that went half-open, as one does across a suspend, is found by keepalive probes and closed,
+/// so a call on it fails instead of waiting for good (#473): the first probe after 30 s without traffic, then one each
+/// 10 s, given up after 3 unanswered.
+const KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+const KEEPALIVE_RETRIES: u32 = 3;
 
 /// With extra headers set, a redirect is followed only within the dashboard's origin (scheme, host and port), so
 /// the headers never reach another site. reqwest only strips its own credential headers on such a redirect.
@@ -376,7 +389,7 @@ fn refusal_reason(status: StatusCode, body: &str, headers: &HeaderMap) -> String
     // reason, before it is shortened.
     let refused = matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::PROXY_AUTHENTICATION_REQUIRED);
     match text {
-        Some(t) if !(refused && !headers.is_empty()) && !repeats_header(t, headers) => t.chars().take(800).collect(),
+        Some(t) if !(refused && carried_extra(headers)) && !repeats_header(t, headers) => t.chars().take(800).collect(),
         _ => format!("the server answered {status}"),
     }
 }
@@ -557,7 +570,8 @@ async fn read_status(http: &reqwest::Client, base: &Url, headers: &HeaderMap) ->
     let resp = http.get(endpoint(base, "api/status")).send().await.map_err(unreachable)?;
     let status = resp.status();
     if status.is_success() {
-        return resp.text().await.map_err(unreachable);
+        // A dashboard's status is a KB or two, so an answer past the cap isn't one.
+        return small_answer(resp).await.map_err(|e| if matches!(e, TransportError::AnswerTooLarge { .. }) { TransportError::NotHermes } else { e });
     }
     let kept = matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) || status.is_server_error();
     Err(match unexpected(resp, headers).await {
@@ -755,7 +769,7 @@ pub async fn read_methods(base: &Url, headers: &HeaderMap, status: Option<&str>,
             if !resp.status().is_success() {
                 return None;
             }
-            resp.text().await.ok()
+            small_answer(resp).await.ok()
         };
         tokio::time::timeout(wait, read).await.ok().flatten()
     } else {
@@ -841,7 +855,11 @@ fn open_local_text(path: &str) -> Result<std::fs::File, TransportError> {
     if !std::path::Path::new(path).is_absolute() {
         return Err(TransportError::File("it isn't a full path".into()));
     }
-    let file = local_fs::open_no_follow(std::path::Path::new(path)).map_err(|e| TransportError::File(e.to_string()))?;
+    let file = local_fs::open_no_follow(std::path::Path::new(path)).map_err(|e| {
+        // Windows can't open a folder as a file, and says only "Access is denied".
+        let folder = std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir());
+        TransportError::File(if folder { "it's a folder".into() } else { e.to_string() })
+    })?;
     let meta = file.metadata().map_err(|e| TransportError::File(e.to_string()))?;
     if !meta.is_file() {
         return Err(TransportError::File(if meta.is_dir() { "it's a folder" } else { "it isn't a regular file" }.into()));
@@ -849,19 +867,22 @@ fn open_local_text(path: &str) -> Result<std::fs::File, TransportError> {
     Ok(file)
 }
 
+/// The first `max` bytes of `file`, read a chunk at a time, so a small file costs its size and not the limit.
 fn read_file_prefix(file: &std::fs::File, max: u64) -> Result<Vec<u8>, TransportError> {
-    let mut bytes = vec![0; max as usize];
-    let mut len = 0;
+    const CHUNK: u64 = 64 * 1024;
+    let size = file.metadata().map_err(|e| TransportError::File(e.to_string()))?.len();
+    let mut bytes = Vec::with_capacity(size.min(max) as usize);
+    let mut chunk = vec![0; CHUNK.min(max) as usize];
     // Positional reads keep concurrent reloads from sharing or advancing the retained handle's offset.
-    while len < bytes.len() {
-        match local_fs::read_at(file, &mut bytes[len..], len as u64) {
+    while (bytes.len() as u64) < max {
+        let want = CHUNK.min(max - bytes.len() as u64) as usize;
+        match local_fs::read_at(file, &mut chunk[..want], bytes.len() as u64) {
             Ok(0) => break,
-            Ok(n) => len += n,
+            Ok(n) => bytes.extend_from_slice(&chunk[..n]),
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(TransportError::File(e.to_string())),
         }
     }
-    bytes.truncate(len);
     Ok(bytes)
 }
 
@@ -893,12 +914,12 @@ impl PickedFiles {
         let path = std::fs::canonicalize(path).map_err(|e| TransportError::File(e.to_string()))?;
         let path = path.to_str().ok_or_else(|| TransportError::File("the path isn't UTF-8".into()))?.to_owned();
         let file = open_local_text(&path)?;
-        self.0.lock().unwrap().insert(path.clone(), std::sync::Arc::new(file));
+        self.0.locked().insert(path.clone(), std::sync::Arc::new(file));
         Ok(path)
     }
 
     fn file(&self, path: &str) -> Result<std::sync::Arc<std::fs::File>, TransportError> {
-        self.0.lock().unwrap().get(path).cloned().ok_or_else(|| TransportError::File("it wasn't picked in the Open dialog".into()))
+        self.0.locked().get(path).cloned().ok_or_else(|| TransportError::File("it wasn't picked in the Open dialog".into()))
     }
 
     pub async fn read(&self, path: &str) -> Result<LocalText, TransportError> {
@@ -944,19 +965,19 @@ impl Attachable {
             }),
             Err(_) => Vec::new(),
         };
-        *self.paths.lock().unwrap() = kept;
-        *self.file.lock().unwrap() = Some(file);
+        *self.paths.locked() = kept;
+        *self.file.locked() = Some(file);
     }
 
     pub fn add(&self, paths: impl IntoIterator<Item = String>) {
-        let mut kept = self.paths.lock().unwrap();
+        let mut kept = self.paths.locked();
         for path in paths {
             kept.retain(|p| *p != path);
             kept.push(path);
         }
         let over = kept.len().saturating_sub(ATTACHABLE_KEPT);
         kept.drain(..over);
-        if let Some(file) = &*self.file.lock().unwrap() {
+        if let Some(file) = &*self.file.locked() {
             if let Err(e) = write_json(file, &*kept) {
                 eprintln!("hermes-chat: couldn't keep the attached files' paths, so they can't be sent after a restart: {e}");
             }
@@ -964,7 +985,7 @@ impl Attachable {
     }
 
     pub fn check(&self, path: &str) -> Result<(), TransportError> {
-        if self.paths.lock().unwrap().iter().any(|p| p == path) {
+        if self.paths.locked().iter().any(|p| p == path) {
             Ok(())
         } else {
             Err(TransportError::File("it wasn't attached in this app".into()))
@@ -1047,11 +1068,11 @@ mod local_fs {
     }
 }
 
-/// `name` as a plain file name: no folders, control characters or leading dots, a sane length, and its extension
-/// only when it looks like one (Hermes and the previews go by it).
+/// `name` as a plain file name: no folders, control characters, characters Windows refuses in a name (`<>:"|?*`) or
+/// leading dots, a sane length, and its extension only when it looks like one (Hermes and the previews go by it).
 fn safe_name(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
-    let base: String = base.chars().filter(|c| !c.is_control()).collect();
+    let base: String = base.chars().filter(|c| !c.is_control() && !"<>:\"|?*".contains(*c)).collect();
     let base = base.trim().trim_start_matches('.');
     let (stem, ext) = match base.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() && (1..=8).contains(&e.len()) && e.chars().all(|c| c.is_ascii_alphanumeric()) => (s, e),
@@ -1080,7 +1101,7 @@ async fn read_capped(path: &str, max_bytes: u64) -> Result<Vec<u8>, TransportErr
     // Read at most one byte past the limit, so a file that grew can't fill memory.
     let mut bytes = Vec::with_capacity(size as usize);
     let file = tokio::fs::File::open(path).await.map_err(|e| TransportError::File(e.to_string()))?;
-    file.take(max_bytes + 1).read_to_end(&mut bytes).await.map_err(|e| TransportError::File(e.to_string()))?;
+    file.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes).await.map_err(|e| TransportError::File(e.to_string()))?;
     if bytes.len() as u64 > max_bytes {
         return Err(too_large(bytes.len() as u64));
     }
@@ -1103,34 +1124,223 @@ pub enum PipeEvent {
     Closed { reason: String },
 }
 
+/// The most a file attached to a chat message may be, whatever limit the webview names: the most it attaches
+/// (src/hermes/transport.ts `LIMITS.file.bytes`).
+const ATTACHMENT_MAX_BYTES: u64 = 256 * MIB;
+
+/// How many frames wait behind the one being written. Only a slow write fills it (a big file frame on a slow uplink,
+/// #469), and no frame can go before that write ends anyway, so a bigger queue would only hold more memory. A JSON-RPC
+/// frame can't be dropped: past it, `PipeSender::send` waits.
+const PIPE_QUEUE: usize = 16;
+
+/// A frame for the pipe task to write, and who hears once it has been written. `file`: a file frame's turn
+/// (`PipeSender::send_file`), given back once it has been written.
+struct Outgoing {
+    text: String,
+    written: Option<oneshot::Sender<Result<(), String>>>,
+    file: Option<tokio::sync::OwnedSemaphorePermit>,
+}
+
 /// An open `/api/ws` connection. Dropping it closes the socket.
 pub struct Pipe {
-    outgoing: mpsc::UnboundedSender<String>,
+    sender: PipeSender,
     task: JoinHandle<()>,
 }
 
+/// What sends on a `Pipe`. A clone doesn't keep the socket open: once the `Pipe` is dropped, a send still waiting for
+/// its turn fails with `Closed`, so nothing queued for one connection goes out after it is replaced or signed out of.
+#[derive(Clone)]
+pub struct PipeSender {
+    outgoing: mpsc::Sender<Outgoing>,
+    /// One permit: a file frame is the whole file as base64, up to about 341 MiB, so one is read and held at a time.
+    files: std::sync::Arc<tokio::sync::Semaphore>,
+}
+
 impl Pipe {
-    pub fn send(&self, text: String) -> Result<(), TransportError> {
-        self.outgoing.send(text).map_err(|_| TransportError::Closed)
+    pub fn sender(&self) -> PipeSender {
+        self.sender.clone()
+    }
+}
+
+impl PipeSender {
+    /// Queue one frame, waiting while `PIPE_QUEUE` frames already wait.
+    pub async fn send(&self, text: String) -> Result<(), TransportError> {
+        self.outgoing.send(Outgoing { text, written: None, file: None }).await.map_err(|_| TransportError::Closed)
     }
 
-    /// Send one frame: `head`, the file at `path` as base64, then `tail`. Refuses a file over
-    /// `max_bytes` without sending anything; the size is checked again after reading, in case it grew.
-    pub async fn send_file(&self, head: &str, path: &str, tail: &str, max_bytes: u64) -> Result<(), TransportError> {
-        let bytes = read_capped(path, max_bytes).await?;
-        let mut frame = String::with_capacity(head.len() + bytes.len().div_ceil(3) * 4 + tail.len());
-        frame.push_str(head);
-        base64::engine::general_purpose::STANDARD.encode_string(&bytes, &mut frame);
-        frame.push_str(tail);
-        self.send(frame)
+    /// Queue one frame: `head`, the file at `path` as base64, then `tail`. Refuses a file over `max_bytes` (at most
+    /// `ATTACHMENT_MAX_BYTES`) without
+    /// sending anything; the size is checked again after reading, in case it grew. The frame may take minutes to write
+    /// on a slow uplink, so `Written` says when it has gone, and the webview can tell a long upload from a silent
+    /// Hermes (#469).
+    pub async fn send_file(&self, head: &str, path: &str, tail: &str, max_bytes: u64) -> Result<Written, TransportError> {
+        let file = self.files.clone().acquire_owned().await.map_err(|_| TransportError::Closed)?;
+        if self.outgoing.is_closed() {
+            return Err(TransportError::Closed);
+        }
+        let bytes = read_capped(path, max_bytes.min(ATTACHMENT_MAX_BYTES)).await?;
+        let mut text = String::with_capacity(head.len() + bytes.len().div_ceil(3) * 4 + tail.len());
+        text.push_str(head);
+        base64::engine::general_purpose::STANDARD.encode_string(&bytes, &mut text);
+        drop(bytes);
+        text.push_str(tail);
+        let (written, sent) = oneshot::channel();
+        self.outgoing.send(Outgoing { text, written: Some(written), file: Some(file) }).await.map_err(|_| TransportError::Closed)?;
+        Ok(Written(sent))
     }
+}
+
+/// A frame `Pipe::send_file` queued, until it has been written to the socket.
+pub struct Written(oneshot::Receiver<Result<(), String>>);
+
+impl Written {
+    /// Resolves once the frame has been written. `Closed` when the pipe was dropped or its socket ended first.
+    pub async fn wait(self) -> Result<(), TransportError> {
+        match self.0.await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(TransportError::WebSocket(e)),
+            Err(_) => Err(TransportError::Closed),
+        }
+    }
+}
+
+/// What the pipe does with one thing read from the socket: frames go to `on_event`. `Some(reason)`: the socket is done.
+fn heard(msg: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>, on_event: &impl Fn(PipeEvent), hide: &HeaderMap) -> Option<String> {
+    match msg {
+        // The server writes newline-delimited JSON-RPC; one WS message may carry several.
+        Some(Ok(Message::Text(text))) => {
+            for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                on_event(PipeEvent::Frame { text: line.to_owned() });
+            }
+            None
+        }
+        Some(Ok(Message::Close(frame))) => Some(frame.map_or("closed by the server".into(), |f| {
+            // A gateway in front of the dashboard may close with the header values it turned down.
+            let why = if repeats_header(&f.reason, hide) { HIDDEN } else { f.reason.as_str() };
+            format!("closed by the server ({} {why})", f.code)
+        })),
+        Some(Ok(_)) => None,
+        Some(Err(e)) => Some(e.to_string()),
+        None => Some("closed by the server".into()),
+    }
+}
+
+/// Runs an open `/api/ws` socket: writes what `Pipe` queues, one frame at a time, and hands every frame Hermes sends
+/// to `on_event`, also while a big frame is still being written (an attachment can take minutes on a slow uplink,
+/// #469). `hide`: what a close reason mustn't repeat.
+fn run_pipe<S>(ws: tokio_tungstenite::WebSocketStream<S>, on_event: impl Fn(PipeEvent) + Send + 'static, hide: HeaderMap) -> Pipe
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (outgoing, mut to_server) = mpsc::channel::<Outgoing>(PIPE_QUEUE);
+    let task = tokio::spawn(async move {
+        let (mut sink, mut stream) = ws.split();
+        let reason = 'socket: loop {
+            tokio::select! {
+                out = to_server.recv() => match out {
+                    Some(Outgoing { text, written, file }) => {
+                        let mut write = std::pin::pin!(sink.send(Message::text(text)));
+                        let wrote = loop {
+                            tokio::select! {
+                                wrote = &mut write => break wrote.map_err(|e| e.to_string()),
+                                msg = stream.next() => if let Some(reason) = heard(msg, &on_event, &hide) {
+                                    if let Some(written) = written {
+                                        let _ = written.send(Err(reason.clone()));
+                                    }
+                                    break 'socket reason;
+                                },
+                            }
+                        };
+                        drop(file);
+                        let failed = wrote.as_ref().err().cloned();
+                        if let Some(written) = written {
+                            let _ = written.send(wrote);
+                        }
+                        if let Some(e) = failed {
+                            break e;
+                        }
+                    }
+                    None => {
+                        let _ = sink.close().await;
+                        break "closed by the app".into();
+                    }
+                },
+                msg = stream.next() => if let Some(reason) = heard(msg, &on_event, &hide) {
+                    break reason;
+                },
+            }
+        };
+        on_event(PipeEvent::Closed { reason });
+    });
+    Pipe { sender: PipeSender { outgoing, files: std::sync::Arc::new(tokio::sync::Semaphore::new(1)) }, task }
 }
 
 impl Drop for Pipe {
     fn drop(&mut self) {
         self.task.abort();
+        self.sender.files.close();
     }
 }
+
+/// The most one write hands the socket. Windows takes a write of any size whole while its send buffer isn't full, and
+/// tungstenite writes a frame in one call, so a big file frame counted as written at once while it still waited to go
+/// out, and the silence check started over during the upload (#469). Capped, a write backs up there as it does on Linux.
+/// Not smaller: tungstenite moves the rest of the frame down after each write, so a 256 MiB file over loopback takes
+/// 6.5 s at 1 MiB (1.9 s uncapped, 24 s at 256 KiB). What is left when the frame counts as written, about this much,
+/// goes in the 45 s silence limit down to about 256 kbit/s.
+const WRITE_CAP: usize = 1024 * 1024;
+
+/// A socket whose writes take at most `WRITE_CAP` bytes each.
+struct CappedWrites<S>(S);
+
+impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for CappedWrites<S> {
+    fn poll_read(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &mut tokio::io::ReadBuf<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
+    }
+}
+
+impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for CappedWrites<S> {
+    fn poll_write(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_write(cx, &buf[..buf.len().min(WRITE_CAP)])
+    }
+    fn poll_flush(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_flush(cx)
+    }
+    fn poll_shutdown(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_shutdown(cx)
+    }
+}
+
+type PipeSocket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<CappedWrites<tokio::net::TcpStream>>>;
+
+/// Opens `/api/ws` as `connect_async` does, over a socket with capped writes.
+async fn open_pipe_socket(handshake: tokio_tungstenite::tungstenite::handshake::client::Request) -> Result<PipeSocket, tokio_tungstenite::tungstenite::Error> {
+    use tokio_tungstenite::tungstenite::error::{Error, UrlError};
+    let uri = handshake.uri();
+    let host = uri.host().ok_or(Error::Url(UrlError::NoHostName))?.trim_start_matches('[').trim_end_matches(']').to_owned();
+    let port = uri
+        .port_u16()
+        .or(match uri.scheme_str() {
+            Some("wss") => Some(443),
+            Some("ws") => Some(80),
+            _ => None,
+        })
+        .ok_or(Error::Url(UrlError::UnsupportedUrlScheme))?;
+    let tcp = tokio::net::TcpStream::connect((host.as_str(), port)).await.map_err(Error::Io)?;
+    Ok(tokio_tungstenite::client_async_tls(handshake, CappedWrites(tcp)).await?.0)
+}
+
+/// The session cookies, and the values most recently replaced or removed: a request may have sent one of those just
+/// before, and its error page may repeat it (`Dashboard::hidden`).
+#[derive(Default)]
+struct Jar {
+    live: Vec<(String, String)>,
+    replaced: std::collections::VecDeque<String>,
+}
+
+/// How many replaced values the jar keeps hidden. The dashboard rotates its access and refresh cookies together, once
+/// an access token expires, so this covers requests still in flight across eight rotations.
+const REPLACED_COOKIES_KEPT: usize = 16;
 
 /// A signed-in dashboard session. It keeps the session cookies up to date: the dashboard rotates an
 /// expired access token through the refresh cookie on any request and sends the new ones back. A token sign-in has
@@ -1138,12 +1348,12 @@ impl Drop for Pipe {
 pub struct Dashboard {
     http: reqwest::Client,
     base: Url,
-    cookies: Mutex<Vec<(String, String)>>,
+    cookies: Mutex<Jar>,
     /// The owner's extra request headers, and a token sign-in's `Authorization`; `http` sends them all itself, the
     /// WebSocket handshake adds the extra headers.
     headers: HeaderMap,
     /// What an error or close reason mustn't repeat to be shown: `headers`, and a token on its own, however short.
-    /// Never sent.
+    /// Never sent. An error mustn't repeat the session cookies either (`hidden`).
     hide: HeaderMap,
     /// Signed in with a token: `headers` holds its `Authorization`, which `signed` adds to each request (`http` is
     /// the route's shared client, which doesn't carry it) and the WebSocket handshake leaves out, as the socket is let
@@ -1215,7 +1425,7 @@ impl Dashboard {
                     StatusCode::TOO_MANY_REQUESTS => return Err(TransportError::RateLimited),
                     _ => return Err(unexpected(me, &dashboard.hide).await),
                 }
-                let me: serde_json::Value = me.json().await.map_err(unreachable)?;
+                let me = small_json(me).await?;
                 // Only a provider Hermes ships is named: anything else the server put there could be the token itself.
                 match me["provider"].as_str() {
                     Some(TOKEN_PROVIDER) => Ok(dashboard),
@@ -1250,52 +1460,12 @@ impl Dashboard {
             )
             .await?;
         let handshake = self.ws_handshake("api/ws", &[("ticket", &ticket), ("profile", profile)])?;
-        let connecting = async { tokio_tungstenite::connect_async(handshake).await.map_err(|e| TransportError::WebSocket(e.to_string())) };
-        let (ws, _) = steps
+        let connecting = async { open_pipe_socket(handshake).await.map_err(|e| TransportError::WebSocket(e.to_string())) };
+        let ws = steps
             .run(Step::WebSocket, within(limits.map(|l| l.socket), connecting, |s| TransportError::WebSocket(format!("it didn't open within {s}s."))))
             .await?;
 
-        let (outgoing, mut to_server) = mpsc::unbounded_channel::<String>();
-        let headers = self.hide.clone();
-        let task = tokio::spawn(async move {
-            let (mut sink, mut stream) = ws.split();
-            let reason = loop {
-                tokio::select! {
-                    out = to_server.recv() => match out {
-                        Some(text) => {
-                            if let Err(e) = sink.send(Message::text(text)).await {
-                                break e.to_string();
-                            }
-                        }
-                        None => {
-                            let _ = sink.close().await;
-                            break "closed by the app".into();
-                        }
-                    },
-                    msg = stream.next() => match msg {
-                        // The server writes newline-delimited JSON-RPC; one WS message may carry several.
-                        Some(Ok(Message::Text(text))) => {
-                            for line in text.lines().filter(|l| !l.trim().is_empty()) {
-                                on_event(PipeEvent::Frame { text: line.to_owned() });
-                            }
-                        }
-                        Some(Ok(Message::Close(frame))) => {
-                            break frame.map_or("closed by the server".into(), |f| {
-                                // A gateway in front of the dashboard may close with the header values it turned down.
-                                let why = if repeats_header(&f.reason, &headers) { HIDDEN } else { f.reason.as_str() };
-                                format!("closed by the server ({} {why})", f.code)
-                            });
-                        }
-                        Some(Ok(_)) => {}
-                        Some(Err(e)) => break e.to_string(),
-                        None => break "closed by the server".into(),
-                    },
-                }
-            };
-            on_event(PipeEvent::Closed { reason });
-        });
-
-        Ok(Pipe { outgoing, task })
+        Ok(run_pipe(ws, on_event, self.hide.clone()))
     }
 
     /// A single-use ticket for `/api/ws`.
@@ -1303,9 +1473,9 @@ impl Dashboard {
         let ticket = self.signed(Method::POST, endpoint(&self.base, "api/auth/ws-ticket")).send().await.map_err(unreachable)?;
         self.keep_cookies(&ticket);
         if !ticket.status().is_success() {
-            return Err(unexpected(ticket, &self.hide).await);
+            return Err(unexpected(ticket, &self.hidden()).await);
         }
-        let ticket: serde_json::Value = ticket.json().await.map_err(unreachable)?;
+        let ticket = small_json(ticket).await?;
         ticket["ticket"].as_str().map(str::to_owned).ok_or_else(|| TransportError::Unexpected { status: 200, body: "ws-ticket response has no ticket".into() })
     }
 
@@ -1334,6 +1504,8 @@ impl Dashboard {
     /// JSON body. `POST` and `PUT` reach only Settings → Model's two writes (`POST api/model/set`,
     /// `PUT api/config`), the scheduled-job writes (`cron_write`), Settings → Persona's
     /// `PUT api/profiles/{name}/soul`, the Clone profile dialog's `POST api/profiles` (`profile_create_allowed`, ADR 0074),
+    /// Settings → Profiles' description, model and written-for-me description (`profile_field_write`,
+    /// `profile_describe_auto`, ADR 0144),
     /// and Settings → Toolsets' switch, `PUT api/tools/toolsets/<name>` with exactly
     /// `{"enabled": true|false}` (`toolset_toggle_allowed`), Settings → Skills' two writes, `PUT api/skills/toggle` and
     /// `PUT api/skills/content` with exactly their fields (`skill_write_allowed`), Settings → Skills' copy to another
@@ -1348,6 +1520,8 @@ impl Dashboard {
     /// (`provider_account_write`, ADR 0133).
     /// `DELETE api/env` is refused whatever the body: a key leaves the server only through
     /// `Dashboard::remove_provider_key`, which checks that it is a model provider's (ADR 0095).
+    /// `GET api/config` comes back without its credentials, and `GET` on the raw config and on the sign-in and endpoint
+    /// lists is refused (ADR 0138).
     /// Returns the response body on 2xx.
     pub async fn request(&self, method: &str, path_and_query: &str, body: Option<String>) -> Result<String, TransportError> {
         let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
@@ -1370,6 +1544,8 @@ impl Dashboard {
             ("PUT", _) if webhook_write("PUT", path, body.as_deref()) => Method::PUT,
             ("PUT", p) if is_profile_soul(p) => Method::PUT,
             ("POST", "api/profiles") if profile_create_allowed(body.as_deref()) => Method::POST,
+            ("PUT", p) if profile_field_write(p, body.as_deref()) => Method::PUT,
+            ("POST", p) if profile_describe_auto(p, body.as_deref()) => Method::POST,
             ("POST", "api/sessions/import") if import_body_allowed(body.as_deref()) => Method::POST,
             ("POST", _) if crate::mcp::relayed("POST", path, body.as_deref()) => Method::POST,
             ("PUT", _) if crate::mcp::relayed("PUT", path, body.as_deref()) => Method::PUT,
@@ -1388,22 +1564,27 @@ impl Dashboard {
         if method == Method::DELETE && is_env_route(&routed) {
             return Err(TransportError::NotRelayed(format!("{method} {path}")));
         }
-        let list = method == Method::GET && is_session_list(&routed);
+        let segments: Vec<&str> = routed.split('/').filter(|seg| !seg.is_empty()).collect();
+        // The config as written, and the two lists Rust reads without their previews (ADR 0133, ADR 0138).
+        if method == Method::GET && matches!(segments.as_slice(), ["api", "config", "raw"] | ["api", "providers", "oauth" | "custom-endpoints"]) {
+            return Err(TransportError::NotRelayed(format!("{method} {path}")));
+        }
+        let config = method == Method::GET && segments == ["api", "config"];
+        let idle = if method == Method::GET && is_session_list(&routed) { SESSION_LIST_IDLE_LIMIT } else { ANSWER_IDLE_LIMIT };
         // Hermes answers removing an endpoint with the endpoints left, each with its key's preview (ADR 0133).
         let answer_unread = method == Method::DELETE && routed.starts_with("api/providers/custom-endpoints/");
         let mut req = self.signed(method, url);
         if let Some(body) = body {
             req = req.header(header::CONTENT_TYPE, "application/json").body(body);
         }
-        let resp = if list { unless_stalled(SESSION_LIST_IDLE_LIMIT, req.send()).await? } else { req.send().await.map_err(unreachable)? };
+        let resp = unless_stalled(idle, req.send()).await?;
         self.keep_cookies(&resp);
         match resp.status() {
-            s if s.is_success() && list => text_unless_stalled(resp, SESSION_LIST_IDLE_LIMIT).await,
             s if s.is_success() && answer_unread => Ok(r#"{"ok":true}"#.to_owned()),
-            s if s.is_success() => resp.text().await.map_err(unreachable),
+            s if s.is_success() && config => config_without_credentials(&text_unless_stalled(resp, idle).await?),
+            s if s.is_success() => text_unless_stalled(resp, idle).await,
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
-            _ if list => Err(unexpected_sent(resp, &self.hide, "", Some(SESSION_LIST_IDLE_LIMIT)).await),
-            _ => Err(unexpected(resp, &self.hide).await),
+            _ => Err(unexpected_sent(resp, &self.hidden(), "", Some(idle)).await),
         }
     }
 
@@ -1510,22 +1691,22 @@ impl Dashboard {
     async fn post_audio(&self, path: &str, profile: &str, body: &serde_json::Value) -> Result<AudioAnswer, TransportError> {
         let mut url = endpoint(&self.base, path);
         url.query_pairs_mut().append_pair("profile", profile);
-        let resp = self.signed(Method::POST, url).json(body).send().await.map_err(unreachable)?;
+        let resp = unless_stalled(ANSWER_IDLE_LIMIT, self.signed(Method::POST, url).json(body).send()).await?;
         self.keep_cookies(&resp);
         let status = resp.status();
         if status == StatusCode::UNAUTHORIZED {
             return Err(TransportError::SignedOut);
         }
         if status.is_redirection() {
-            return Err(unexpected(resp, &self.hide).await);
+            return Err(unexpected(resp, &self.hidden()).await);
         }
-        let text = resp.text().await.map_err(unreachable)?;
+        let text = text_unless_stalled(resp, ANSWER_IDLE_LIMIT).await?;
         if status.is_success() {
             return serde_json::from_str(&text)
                 .map(AudioAnswer::Done)
-                .map_err(|_| TransportError::Unexpected { status: status.as_u16(), body: shown_body(status, &text, &self.hide) });
+                .map_err(|_| TransportError::Unexpected { status: status.as_u16(), body: shown_body(status, &text, &self.hidden()) });
         }
-        let reason = refusal_reason(status, &text, &self.hide);
+        let reason = refusal_reason(status, &text, &self.hidden());
         // FastAPI's own "no such route" (and the headless backend's catch-all) differ from a refusal by the route
         // itself, such as an unknown profile, which also answers 404 but with its own reason.
         let no_route = match status {
@@ -1537,30 +1718,42 @@ impl Dashboard {
     }
 
     /// A dashboard REST `GET` under `api/` whose answer may be big, such as a server file's contents from
-    /// `api/files/read`. It stops reading, and refuses the answer, once it passes `max_bytes`, so a file that grew
-    /// since it was listed can't fill memory. Returns the response body on 2xx.
+    /// `api/files/read`. It stops reading, and refuses the answer, once it passes `max_bytes` (at most
+    /// `RELAY_MAX_BYTES`), so a file that grew since it was listed can't fill memory. Returns the response body on 2xx.
     pub async fn get_limited(&self, path_and_query: &str, max_bytes: u64) -> Result<String, TransportError> {
         let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
+        let body = self.send_limited(Method::GET, path, query, None, max_bytes.min(RELAY_MAX_BYTES)).await?;
+        String::from_utf8(body).map_err(|_| TransportError::Unexpected { status: 200, body: "the answer isn't UTF-8 text".into() })
+    }
+
+    /// One request with an optional JSON body, whose answer is read only up to `max_bytes`, as `get_limited` reads.
+    /// Unlike `request`, it sends writes to the file routes: it is only for commands that check their own paths first,
+    /// such as a project's context files (`project_context.rs`, ADR 0135). Returns the answer's bytes on 2xx.
+    pub(crate) async fn send_limited(
+        &self,
+        method: Method,
+        path: &str,
+        query: &str,
+        json: Option<&serde_json::Value>,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, TransportError> {
         let (url, _) = relay_url(&self.base, path, query)?;
-        let mut resp = self.signed(Method::GET, url).send().await.map_err(unreachable)?;
+        let mut req = self.signed(method, url);
+        if let Some(json) = json {
+            req = req.json(json);
+        }
+        let resp = unless_stalled(ANSWER_IDLE_LIMIT, req.send()).await?;
         self.keep_cookies(&resp);
         match resp.status() {
             s if s.is_success() => {}
             StatusCode::UNAUTHORIZED => return Err(TransportError::SignedOut),
-            _ => return Err(unexpected(resp, &self.hide).await),
+            _ => return Err(unexpected(resp, &self.hidden()).await),
         }
-        let too_large = |size| TransportError::FileTooLarge { size, max: max_bytes };
-        if let Some(size) = resp.content_length().filter(|&n| n > max_bytes) {
-            return Err(too_large(size));
-        }
-        let mut body = Vec::new();
-        while let Some(chunk) = resp.chunk().await.map_err(unreachable)? {
-            body.extend_from_slice(&chunk);
-            if body.len() as u64 > max_bytes {
-                return Err(too_large(body.len() as u64));
-            }
-        }
-        String::from_utf8(body).map_err(|_| TransportError::Unexpected { status: 200, body: "the answer isn't UTF-8 text".into() })
+        read_body(resp, max_bytes, ANSWER_IDLE_LIMIT).await.map_err(|e| match e {
+            // These answers are files, and Outputs tells one over its limit by `FileTooLarge`'s text.
+            TransportError::AnswerTooLarge { size, max } => TransportError::FileTooLarge { size, max },
+            e => e,
+        })
     }
 
     /// Downloads the Server file at `server_path` through the managed-files route `GET api/files/download` (ADR 0023)
@@ -1582,7 +1775,7 @@ impl Dashboard {
         match resp.status() {
             s if s.is_success() => {}
             StatusCode::UNAUTHORIZED => return Err(TransportError::SignedOut),
-            _ => return Err(unexpected(resp, &self.hide).await),
+            _ => return Err(unexpected(resp, &self.hidden()).await),
         }
         let total = resp.content_length();
         let io = |e: std::io::Error| TransportError::File(format!("couldn't write it on this computer: {e}"));
@@ -1681,9 +1874,9 @@ impl Dashboard {
         let resp = self.signed(Method::POST, url).multipart(form).send().await.map_err(unreachable)?;
         self.keep_cookies(&resp);
         match resp.status() {
-            s if s.is_success() => resp.text().await.map_err(unreachable),
+            s if s.is_success() => small_answer(resp).await,
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
-            _ => Err(unexpected(resp, &self.hide).await),
+            _ => Err(unexpected(resp, &self.hidden()).await),
         }
     }
 
@@ -1712,29 +1905,56 @@ impl Dashboard {
         let body = agent_text_body(path, text, session)?;
         let query = url::form_urlencoded::Serializer::new(String::new()).append_pair("profile", profile).finish();
         let (url, _) = relay_url(&self.base, "api/fs/write-text", &query)?;
-        let resp = self.signed(Method::POST, url).json(&body).send().await.map_err(unreachable)?;
+        let resp = unless_stalled(ANSWER_IDLE_LIMIT, self.signed(Method::POST, url).json(&body).send()).await?;
         self.keep_cookies(&resp);
         match resp.status() {
-            s if s.is_success() => resp.text().await.map_err(unreachable),
+            s if s.is_success() => text_unless_stalled(resp, ANSWER_IDLE_LIMIT).await,
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
-            _ => Err(unexpected(resp, &self.hide).await),
+            _ => Err(unexpected(resp, &self.hidden()).await),
         }
     }
 
-    /// Take in every Set-Cookie: a new value replaces the old one, an empty one deletes it. Only
-    /// `name=value` is kept; the dashboard is the only site this jar talks to.
+    /// Take in every Set-Cookie: a new value replaces the old one, and an empty one or one set to expire (`expired`)
+    /// deletes it. Only `name=value` is kept; the dashboard is the only site this jar talks to.
     fn keep_cookies(&self, resp: &reqwest::Response) {
-        let mut jar = self.cookies.lock().unwrap();
+        let mut jar = self.cookies.locked();
         for v in resp.headers().get_all(header::SET_COOKIE) {
-            let Some((name, value)) = v.to_str().ok().and_then(|v| v.split(';').next()?.split_once('=')) else {
+            let Some((pair, attributes)) = v.to_str().ok().map(|v| v.split_once(';').unwrap_or((v, ""))) else {
+                continue;
+            };
+            let Some((name, value)) = pair.split_once('=') else {
                 continue;
             };
             let (name, value) = (name.trim(), value.trim());
-            jar.retain(|(n, _)| n != name);
-            if !value.is_empty() {
-                jar.push((name.to_owned(), value.to_owned()));
+            let kept = !value.is_empty() && !expired(attributes);
+            if let Some(at) = jar.live.iter().position(|(n, _)| n == name) {
+                let (_, old) = jar.live.remove(at);
+                if !(kept && old == value) {
+                    if jar.replaced.len() == REPLACED_COOKIES_KEPT {
+                        jar.replaced.pop_front();
+                    }
+                    jar.replaced.push_back(old);
+                }
+            }
+            if kept {
+                jar.live.push((name.to_owned(), value.to_owned()));
             }
         }
+    }
+
+    /// What an error mustn't repeat to be shown: `hide`, and the value of each session cookie, held or lately replaced
+    /// (`Jar`), as a `cookie` entry that `shown_body` doesn't count as an extra request header. A value shorter than
+    /// `HEADER_PIECE` is left out: no session cookie is that short, and one such as `1` would hide nearly every error.
+    fn hidden(&self) -> HeaderMap {
+        let mut hide = self.hide.clone();
+        let jar = self.cookies.locked();
+        for value in jar.live.iter().map(|(_, v)| v).chain(&jar.replaced).filter(|v| v.len() >= HEADER_PIECE) {
+            if let Ok(mut value) = HeaderValue::from_str(value) {
+                value.set_sensitive(true);
+                hide.append(header::COOKIE, value);
+            }
+        }
+        hide
     }
 
     /// A request on the shared client with what the sign-in holds: the session cookies, or a token sign-in's
@@ -1752,9 +1972,79 @@ impl Dashboard {
     }
 
     fn cookie_header(&self) -> String {
-        let jar = self.cookies.lock().unwrap();
-        jar.iter().map(|(n, v)| format!("{n}={v}")).collect::<Vec<_>>().join("; ")
+        let jar = self.cookies.locked();
+        jar.live.iter().map(|(n, v)| format!("{n}={v}")).collect::<Vec<_>>().join("; ")
     }
+}
+
+/// Whether a Set-Cookie's attributes (what follows `name=value`) end the cookie now: a `Max-Age` of zero or less, or
+/// else an `Expires` already past. The last of each counts, and `Max-Age` wins (RFC 6265 §5.3).
+fn expired(attributes: &str) -> bool {
+    let (mut max_age, mut expires) = (None, None);
+    for attribute in attributes.split(';') {
+        let (name, value) = attribute.split_once('=').unwrap_or((attribute, ""));
+        let value = value.trim();
+        match name.trim().to_ascii_lowercase().as_str() {
+            "max-age" if value.starts_with(|c: char| c.is_ascii_digit() || c == '-') => max_age = value.parse::<i64>().ok().or(max_age),
+            "expires" => expires = cookie_date(value).or(expires),
+            _ => {}
+        }
+    }
+    let now = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    match max_age {
+        Some(seconds) => seconds <= 0,
+        None => expires.is_some_and(|at| at <= now()),
+    }
+}
+
+/// A Set-Cookie date in seconds since 1970, read as RFC 6265 §5.1.1 reads one, so each form servers send counts:
+/// `Sun, 06 Nov 1994 08:49:37 GMT`, `Sunday, 06-Nov-94 08:49:37 GMT` and `Sun Nov  6 08:49:37 1994`.
+fn cookie_date(date: &str) -> Option<i64> {
+    // `least` to `most` digits at the start of `token`, followed by no digit.
+    fn number(token: &str, least: usize, most: usize) -> Option<i64> {
+        let n = token.bytes().take_while(u8::is_ascii_digit).count();
+        if !(least..=most).contains(&n) {
+            return None;
+        }
+        token[..n].parse().ok()
+    }
+    const MONTHS: [&str; 12] = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+    let (mut time, mut day, mut month, mut year) = (None, None, None, None);
+    for token in date.split(|c: char| !c.is_ascii_alphanumeric() && c != ':').filter(|t| !t.is_empty()) {
+        let hms = || {
+            let mut parts = token.splitn(3, ':');
+            let (h, m, s) = (parts.next()?, parts.next()?, parts.next()?);
+            let whole = |p: &str| number(p, 1, 2).filter(|_| p.len() <= 2);
+            Some((whole(h)?, whole(m)?, number(s, 1, 2)?))
+        };
+        let named_month = || MONTHS.iter().position(|m| token.get(..3).is_some_and(|t| t.eq_ignore_ascii_case(m))).map(|i| i as i64 + 1);
+        if time.is_none() && hms().is_some() {
+            time = hms();
+        } else if day.is_none() && number(token, 1, 2).is_some() {
+            day = number(token, 1, 2);
+        } else if month.is_none() && named_month().is_some() {
+            month = named_month();
+        } else if year.is_none() && number(token, 2, 4).is_some() {
+            year = number(token, 2, 4);
+        }
+    }
+    let ((hour, minute, second), day, month, year) = (time?, day?, month?, year?);
+    let year = match year {
+        70..=99 => year + 1900,
+        0..=69 => year + 2000,
+        _ => year,
+    };
+    if !(1..=31).contains(&day) || year < 1601 || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    // Days since 1970 of a proleptic Gregorian date, counted from March so the leap day falls at the end of a year.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let year_of_era = y - era * 400;
+    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    Some(days * 86_400 + hour * 3600 + minute * 60 + second)
 }
 
 /// Runs blocking file work in place, telling a multi-threaded runtime (the app's) to move its other work elsewhere
@@ -1797,12 +2087,23 @@ pub fn protected_server_path(path: &str) -> bool {
         "bws_cache.enc.json",
         ".git-credentials",
     ];
-    let name = path.rsplit('/').next().unwrap_or_default().to_lowercase();
+    // The path as the server resolves it: `/x/.env/.` is `.env`.
+    let mut parts: Vec<String> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(part.to_lowercase()),
+        }
+    }
+    let name = parts.last().map(String::as_str).unwrap_or_default();
     name == ".env"
         || name.starts_with(".env.")
         || name == ".envrc"
-        || NAMES.contains(&name.as_str())
-        || path.split('/').any(|part| matches!(part.to_lowercase().as_str(), "mcp-tokens" | "pairing"))
+        || NAMES.contains(&name)
+        || parts.iter().any(|part| matches!(part.as_str(), "mcp-tokens" | "pairing"))
 }
 
 /// A download's hidden part file beside its destination, removed when dropped unless `keep` was called: a failed,
@@ -2004,7 +2305,10 @@ pub fn import_body_allowed(body: Option<&str>) -> bool {
 /// for and the routed one must stay under `api/` without `.` or `..` segments.
 fn relay_url(base: &Url, path: &str, query: &str) -> Result<(Url, String), TransportError> {
     let refused = || TransportError::NotRelayed(path.to_owned());
-    let under_api = |p: &str| p.starts_with("api/") && !p.split('/').any(|seg| seg == ".." || seg == ".");
+    // The allow-lists judge the path as given, so the URL parser mustn't change it: it resolves `.` and `..` spelled
+    // as `%2e` too, and reads `\` as `/`.
+    let dot = |seg: &str| matches!(percent_encoding::percent_decode_str(seg).decode_utf8_lossy().as_ref(), "." | "..");
+    let under_api = |p: &str| p.starts_with("api/") && !p.split(['/', '\\']).any(dot);
     if !under_api(path) {
         return Err(refused());
     }
@@ -2018,6 +2322,50 @@ fn relay_url(base: &Url, path: &str, query: &str) -> Result<(Url, String), Trans
         return Err(refused());
     }
     Ok((url, routed))
+}
+
+/// `GET api/config`'s answer without the values Hermes treats as credentials (`_is_secret_config_key` in
+/// `hermes_cli/config.py`): Hermes sends the config as written, provider keys and all (ADR 0138).
+fn config_without_credentials(text: &str) -> Result<String, TransportError> {
+    fn drop_credentials(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.retain(|key, v| v.is_object() || v.is_array() || !credential_key(key));
+                map.values_mut().for_each(drop_credentials);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(drop_credentials),
+            _ => {}
+        }
+    }
+    let mut config: serde_json::Value =
+        serde_json::from_str(text).map_err(|_| TransportError::Unexpected { status: 200, body: "the profile's config isn't JSON".into() })?;
+    drop_credentials(&mut config);
+    Ok(config.to_string())
+}
+
+/// A config key whose value Hermes treats as a credential: one of its names, or ending in one of its suffixes, with
+/// `-` read as `_` (`X-API-Key`).
+fn credential_key(key: &str) -> bool {
+    const NAMES: [&str; 15] = [
+        "api_key",
+        "apikey",
+        "key",
+        "token",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "secret",
+        "client_secret",
+        "password",
+        "passwd",
+        "authorization",
+        "private_key",
+        "bearer",
+        "jwt",
+    ];
+    const SUFFIXES: [&str; 6] = ["_api_key", "_token", "_secret", "_password", "_key", "_access_key"];
+    let key = key.to_lowercase().replace('-', "_");
+    NAMES.contains(&key.as_str()) || SUFFIXES.iter().any(|suffix| key.ends_with(suffix))
 }
 
 /// The dashboard's routes that write or delete files on the server: managed files (`api/files...`) and the agent's
@@ -2375,6 +2723,41 @@ pub fn profile_create_allowed(body: Option<&str>) -> bool {
     name_ok && source_ok && known
 }
 
+/// Whether a `PUT` is Settings → Profiles' description or model write for one profile (ADR 0144):
+/// `api/profiles/{id}/description` with exactly `{"description": string}`, or `api/profiles/{id}/model` with exactly
+/// `{"provider", "model"}`, both non-empty strings. `{id}` is a profile id, `default` included.
+pub fn profile_field_write(path: &str, body: Option<&str>) -> bool {
+    let Some((name, field)) = path.strip_prefix("api/profiles/").and_then(|p| p.split_once('/')) else {
+        return false;
+    };
+    let Some(fields) = body.and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok()) else {
+        return false;
+    };
+    let Some(fields) = fields.as_object() else {
+        return false;
+    };
+    let text = |k: &str| fields.get(k).and_then(|v| v.as_str());
+    let filled = |k: &str| text(k).is_some_and(|v| !v.trim().is_empty() && v.len() <= 512);
+    profile_id(name)
+        && match field {
+            "description" => fields.len() == 1 && text("description").is_some_and(|d| d.len() <= 4096),
+            "model" => fields.len() == 2 && filled("provider") && filled("model"),
+            _ => false,
+        }
+}
+
+/// Whether a `POST` is Settings → Profiles' "Write for me": `api/profiles/{id}/describe-auto` with exactly
+/// `{"overwrite": bool}` (ADR 0144). Hermes writes the description with an LLM; nothing else is sent.
+pub fn profile_describe_auto(path: &str, body: Option<&str>) -> bool {
+    let Some(name) = path.strip_prefix("api/profiles/").and_then(|p| p.strip_suffix("/describe-auto")) else {
+        return false;
+    };
+    let Some(fields) = body.and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok()) else {
+        return false;
+    };
+    profile_id(name) && fields.as_object().is_some_and(|f| f.len() == 1 && f.get("overwrite").is_some_and(|v| v.is_boolean()))
+}
+
 /// Said in place of an error body that can't be shown.
 const HIDDEN: &str = "(not shown, as it may repeat your password or a request header)";
 
@@ -2386,6 +2769,12 @@ const HEADER_PIECE: usize = 8;
 /// `HEADER_PIECE` bytes of a value count, so a value cut short, as in a WebSocket close reason, still does.
 fn repeats_header(text: &str, headers: &HeaderMap) -> bool {
     repeats_any(text.as_bytes(), headers.values().map(HeaderValue::as_bytes))
+}
+
+/// Whether a request that carried `headers` (what its error mustn't repeat) carried more than session cookies
+/// (`Dashboard::hidden`): extra request headers, or a token. The owner can't add a `cookie` header (`reserved`).
+fn carried_extra(headers: &HeaderMap) -> bool {
+    headers.keys().any(|name| name != header::COOKIE)
 }
 
 /// `repeats_header` for an address, whose host the URL parser lowercased.
@@ -2419,13 +2808,13 @@ fn strings_in(v: &serde_json::Value, out: &mut String) {
     }
 }
 
-/// An error body as it may be shown, for a request that carried `headers`: its extra request headers, and a token it
-/// sent. With none, its start as sent. Otherwise only the dashboard's own JSON `detail`, whole and repeating none of
-/// their values: a refusal (401, 403, 407) or any other page could come from a gateway in front, which can echo a value
-/// it turned down.
+/// An error body as it may be shown, for a request that carried `headers`: its extra request headers, a token it
+/// sent, and its session cookies. With only cookies, its start as sent, unless it repeats one of them. Otherwise only
+/// the dashboard's own JSON `detail`, whole and repeating none of their values: a refusal (401, 403, 407) or any other
+/// page could come from a gateway in front, which can echo a value it turned down.
 fn shown_body(status: StatusCode, text: &str, headers: &HeaderMap) -> String {
-    if headers.is_empty() {
-        return text.chars().take(300).collect();
+    if !carried_extra(headers) {
+        return if repeats_header(text, headers) { HIDDEN.into() } else { text.chars().take(300).collect() };
     }
     if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::PROXY_AUTHENTICATION_REQUIRED) {
         return HIDDEN.into();
@@ -2443,7 +2832,7 @@ fn shown_body(status: StatusCode, text: &str, headers: &HeaderMap) -> String {
 /// A failed answer as an error, with the start of its body. Reads only the first few KB, so a huge or endless error
 /// body can't fill memory. `headers`: what the request carried that mustn't be shown (`shown_body`).
 async fn unexpected(resp: reqwest::Response, headers: &HeaderMap) -> TransportError {
-    unexpected_sent(resp, headers, "", None).await
+    unexpected_sent(resp, headers, "", Some(ANSWER_IDLE_LIMIT)).await
 }
 
 /// `unexpected` for a request whose body carried `secret`, such as a password: an error that repeats it anywhere, as
@@ -2592,7 +2981,7 @@ pub async fn probe_expecting(
     let pipe = match tokio::time::timeout(
         step,
         dashboard.open_pipe(profile, move |e| {
-            if let Some(tx) = tx.lock().unwrap().take() {
+            if let Some(tx) = tx.locked().take() {
                 let _ = tx.send(e);
             }
         }),
@@ -2623,25 +3012,74 @@ fn unreachable(e: reqwest::Error) -> TransportError {
 
 /// Hermes serves `api/sessions` from a read-only query of at most 100 rows, each SQLite read waiting at most 5 s for a
 /// lock (hermes_cli/web_routers/sessions.py; `_READ_BUSY_TIMEOUT_S` in hermes_state.py), so a minute without a byte is a
-/// stall. Other routes may stay silent for minutes and still answer: memory provider setup runs installs of up to
-/// 300 s each (hermes_cli/web_routers/memory_providers.py).
+/// stall.
 const SESSION_LIST_IDLE_LIMIT: Duration = Duration::from_secs(60);
+
+/// How long any other dashboard call may go without a byte from Hermes before it is given up as `Stalled` (#473). Other
+/// routes may stay silent for minutes and still answer: memory provider setup runs an install of up to 300 s
+/// (hermes_cli/web_routers/memory_providers.py), so this is twice that. A call still sending its body counts as silent:
+/// at this limit a 25 MB recording needs about 45 KB/s.
+const ANSWER_IDLE_LIMIT: Duration = Duration::from_secs(600);
 
 fn is_session_list(path: &str) -> bool {
     let mut segs = path.split('/').filter(|seg| !seg.is_empty());
     segs.next() == Some("api") && segs.next() == Some("sessions") && segs.next().is_none()
 }
 
+/// The most read of one relayed answer: the most Outputs reads of one chat in all (src/hermes/outputs.ts
+/// `CHAT_MAX_BYTES`). The biggest the webview asks of `get_limited` is about 13.4 MiB, a 10 MiB image preview as
+/// base64 JSON (src/hermes/remoteFiles.ts).
+const RELAY_MAX_BYTES: u64 = 64 * MIB;
+
+/// `n` bytes as an error names a limit: in whole MB, or whole KB under one MB.
+fn size_text(n: u64) -> String {
+    if n >= MIB {
+        format!("{} MB", n / MIB)
+    } else {
+        format!("{} KB", n.div_ceil(1024))
+    }
+}
+
 async fn unless_stalled<T>(limit: Duration, step: impl std::future::Future<Output = reqwest::Result<T>>) -> Result<T, TransportError> {
     tokio::time::timeout(limit, step).await.map_err(|_| TransportError::Stalled(limit.as_secs()))?.map_err(unreachable)
 }
 
-async fn text_unless_stalled(mut resp: reqwest::Response, limit: Duration) -> Result<String, TransportError> {
-    let mut body = Vec::new();
-    while let Some(part) = unless_stalled(limit, resp.chunk()).await? {
-        body.extend_from_slice(&part);
+/// A whole answer's body, at most `max` bytes: refused as `AnswerTooLarge` once its announced length or the bytes read
+/// pass `max`, so a huge or endless body can't fill memory, and as `Stalled` once `idle` passes without a part of it.
+async fn read_body(mut resp: reqwest::Response, max: u64, idle: Duration) -> Result<Vec<u8>, TransportError> {
+    let too_large = |size| TransportError::AnswerTooLarge { size, max };
+    if let Some(size) = resp.content_length().filter(|&n| n > max) {
+        return Err(too_large(size));
     }
-    Ok(String::from_utf8_lossy(&body).into_owned())
+    let mut body = Vec::new();
+    while let Some(part) = unless_stalled(idle, resp.chunk()).await? {
+        body.extend_from_slice(&part);
+        if body.len() as u64 > max {
+            return Err(too_large(body.len() as u64));
+        }
+    }
+    Ok(body)
+}
+
+/// A relayed answer's text, up to `RELAY_MAX_BYTES`.
+async fn text_unless_stalled(resp: reqwest::Response, limit: Duration) -> Result<String, TransportError> {
+    Ok(String::from_utf8_lossy(&read_body(resp, RELAY_MAX_BYTES, limit).await?).into_owned())
+}
+
+/// The most read of an answer that is only ever a little JSON: `/api/status`, about a KB or two from a real dashboard
+/// and read before anything is known about the server, the sign-in providers, the token check, a socket ticket and an
+/// upload's answer.
+const SMALL_ANSWER_MAX_BYTES: u64 = 64 * 1024;
+
+/// A small answer's text (`SMALL_ANSWER_MAX_BYTES`).
+async fn small_answer(resp: reqwest::Response) -> Result<String, TransportError> {
+    Ok(String::from_utf8_lossy(&read_body(resp, SMALL_ANSWER_MAX_BYTES, ANSWER_IDLE_LIMIT).await?).into_owned())
+}
+
+/// A small answer as JSON.
+async fn small_json(resp: reqwest::Response) -> Result<serde_json::Value, TransportError> {
+    let status = resp.status().as_u16();
+    serde_json::from_str(&small_answer(resp).await?).map_err(|_| TransportError::Unexpected { status, body: "the answer isn't JSON".into() })
 }
 
 fn describe(e: &reqwest::Error) -> String {
@@ -2729,7 +3167,7 @@ impl Dashboard {
             return Err(TransportError::KeyRejected("Paste the key on one line, without spaces around it.".into()));
         }
         // The key never follows a redirect to another site, extra headers or not.
-        let http = client_kept_to_origin(&self.headers, true)?;
+        let http = client(&self.headers)?;
         require_provider_secret(&self.read_env(&http, profile).await?, key)?;
 
         let body = json!({"key": key, "value": value}).to_string();
@@ -2767,7 +3205,7 @@ impl Dashboard {
         if !provider_key_name(key) {
             return Err(TransportError::NotRelayed(format!("{key}: not a model provider's key")));
         }
-        let http = client_kept_to_origin(&self.headers, true)?;
+        let http = client(&self.headers)?;
         require_provider_secret(&self.read_env(&http, profile).await?, key)?;
 
         let body = json!({"key": key}).to_string();
@@ -2799,12 +3237,12 @@ impl Dashboard {
         if let Some(body) = body {
             req = req.header(header::CONTENT_TYPE, "application/json").body(body);
         }
-        let resp = req.send().await.map_err(unreachable)?;
+        let resp = unless_stalled(ANSWER_IDLE_LIMIT, req.send()).await?;
         self.keep_cookies(&resp);
         match resp.status() {
-            s if s.is_success() => resp.text().await.map_err(unreachable),
+            s if s.is_success() => text_unless_stalled(resp, ANSWER_IDLE_LIMIT).await,
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
-            _ if show_failure => Err(unexpected(resp, &self.hide).await),
+            _ if show_failure => Err(unexpected(resp, &self.hidden()).await),
             s => Err(TransportError::Unexpected { status: s.as_u16(), body: "(not shown, as it may hold the key)".into() }),
         }
     }
@@ -2823,7 +3261,7 @@ impl Dashboard {
     ///
     /// Nothing read goes back to the webview, and no error quotes a secret the map or the token held.
     pub async fn mcp_edit(&self, profile: &str, edit: &crate::mcp::Edit) -> Result<(), TransportError> {
-        let http = client_kept_to_origin(&self.headers, true)?;
+        let http = client(&self.headers)?;
         let scoped = |path: &str, raw: bool| {
             let mut url = endpoint(&self.base, path);
             url.query_pairs_mut().append_pair("profile", profile);
@@ -2880,22 +3318,16 @@ impl Dashboard {
     /// `PUT /api/mcp/servers` with the whole map; a refusal is shown without any secret the map held.
     async fn write_mcp_map(&self, http: &reqwest::Client, url: Url, edited: &crate::mcp::Edited) -> Result<(), TransportError> {
         let body = json!({ "servers": edited.servers }).to_string();
-        let resp = http
-            .put(url)
-            .header(header::COOKIE, self.cookie_header())
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(body)
-            .send()
-            .await
-            .map_err(unreachable)?;
+        let put = http.put(url).header(header::COOKIE, self.cookie_header()).header(header::CONTENT_TYPE, "application/json").body(body);
+        let resp = unless_stalled(ANSWER_IDLE_LIMIT, put.send()).await?;
         self.keep_cookies(&resp);
         match resp.status() {
             s if s.is_success() => Ok(()),
             StatusCode::UNAUTHORIZED => Err(TransportError::SignedOut),
             s => {
-                let answer = resp.text().await.unwrap_or_default();
+                let answer = text_unless_stalled(resp, ANSWER_IDLE_LIMIT).await.unwrap_or_default();
                 // Neither a secret the map held nor a value of the owner's extra request headers is shown.
-                let body = shown_body(s, &crate::mcp::scrubbed(&answer, &edited.secrets), &self.hide);
+                let body = shown_body(s, &crate::mcp::scrubbed(&answer, &edited.secrets), &self.hidden());
                 Err(TransportError::Unexpected { status: s.as_u16(), body })
             }
         }
@@ -2919,8 +3351,8 @@ fn agent_text_body(path: &str, text: &str, session: Option<&str>) -> Result<serd
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_text_body, memory_entry_edit_allowed, memory_provider_write, profile_create_allowed, provider_key_name, skill_create_allowed,
-        text_unless_stalled, unless_stalled, webhook_write, TransportError,
+        agent_text_body, memory_entry_edit_allowed, memory_provider_write, profile_create_allowed, profile_describe_auto, profile_field_write,
+        provider_key_name, skill_create_allowed, text_unless_stalled, unless_stalled, webhook_write, TransportError,
     };
     use std::time::Duration;
 
@@ -3005,6 +3437,46 @@ mod tests {
         }
         assert!(!profile_create_allowed(Some(&format!(r#"{{"name":"{}"}}"#, "a".repeat(65)))));
         assert!(!profile_create_allowed(None));
+    }
+
+    #[test]
+    fn settings_profiles_writes_carry_only_their_own_field() {
+        for (path, body) in [
+            ("api/profiles/work/description", r#"{"description":"Writes code"}"#),
+            ("api/profiles/default/description", r#"{"description":""}"#),
+            ("api/profiles/work/model", r#"{"provider":"openrouter","model":"x/y"}"#),
+        ] {
+            assert!(profile_field_write(path, Some(body)), "{path} {body}");
+        }
+        for (path, body) in [
+            ("api/profiles/work/description", r#"{"description":"x","display_name":"y"}"#),
+            ("api/profiles/work/description", r#"{"description":1}"#),
+            ("api/profiles/work/model", r#"{"provider":"openrouter"}"#),
+            ("api/profiles/work/model", r#"{"provider":"","model":"x"}"#),
+            ("api/profiles/work/model", r#"{"provider":"p","model":"m","base_url":"http://x"}"#),
+            ("api/profiles/Work/description", r#"{"description":"x"}"#),
+            ("api/profiles/../description", r#"{"description":"x"}"#),
+            ("api/profiles/work/soul2", r#"{"description":"x"}"#),
+            ("api/profiles/work/description/x", r#"{"description":"x"}"#),
+            ("api/profiles/work/description", "not json"),
+        ] {
+            assert!(!profile_field_write(path, Some(body)), "{path} {body}");
+        }
+        assert!(!profile_field_write("api/profiles/work/description", None));
+        assert!(!profile_field_write("api/profiles/work/description", Some(&format!(r#"{{"description":"{}"}}"#, "a".repeat(4097)))));
+
+        assert!(profile_describe_auto("api/profiles/work/describe-auto", Some(r#"{"overwrite":true}"#)));
+        assert!(profile_describe_auto("api/profiles/default/describe-auto", Some(r#"{"overwrite":false}"#)));
+        for (path, body) in [
+            ("api/profiles/work/describe-auto", r#"{"overwrite":"yes"}"#),
+            ("api/profiles/work/describe-auto", r#"{"overwrite":true,"model":"x"}"#),
+            ("api/profiles/work/describe-auto", "{}"),
+            ("api/profiles/../describe-auto", r#"{"overwrite":true}"#),
+            ("api/profiles/work/export", r#"{"overwrite":true}"#),
+        ] {
+            assert!(!profile_describe_auto(path, Some(body)), "{path} {body}");
+        }
+        assert!(!profile_describe_auto("api/profiles/work/describe-auto", None));
     }
 
     #[test]
@@ -3178,5 +3650,484 @@ mod tests {
         let err = text_unless_stalled(resp, limit).await.unwrap_err();
         assert!(matches!(err, TransportError::Stalled(_)), "{err:?}");
         assert!(started.elapsed() >= limit + Duration::from_millis(50), "{:?}", started.elapsed());
+    }
+
+    /// A listener whose accepted sockets take little before the test reads them, so the client's write backs up soon.
+    fn small_buffered_listener() -> tokio::net::TcpListener {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.set_recv_buffer_size(64 * 1024).unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        socket.listen(1).unwrap()
+    }
+
+    /// Windows takes one write of any size whole while its send buffer isn't full, so a frame written in one call
+    /// counted as gone at once (#469). The pipe's socket hands it at most `WRITE_CAP` a write, and loses nothing.
+    #[tokio::test]
+    async fn the_pipe_socket_takes_a_big_frame_a_capped_piece_at_a_time() {
+        use tokio::io::AsyncWriteExt;
+        let frame: Vec<u8> = (0..3 * super::WRITE_CAP + 5).map(|i| i as u8).collect();
+        let mut socket = super::CappedWrites(Vec::new());
+        assert_eq!(socket.write(&frame).await.unwrap(), super::WRITE_CAP);
+        socket.write_all(&frame[super::WRITE_CAP..]).await.unwrap();
+        assert_eq!(socket.0, frame);
+    }
+
+    /// #469: a file frame big enough to fill the socket's buffers is still being written when Hermes speaks. The pipe
+    /// hands that frame to the webview at once, and `send_file` resolves only once the whole file has gone.
+    #[tokio::test]
+    async fn the_pipe_keeps_hearing_hermes_while_a_big_file_is_still_being_written() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+
+        let listener = small_buffered_listener();
+        let addr = listener.local_addr().unwrap();
+        let (speak, spoken) = tokio::sync::oneshot::channel::<()>();
+        let (read, reading) = tokio::sync::oneshot::channel::<()>();
+        let (got, received) = tokio::sync::oneshot::channel::<usize>();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            // Hermes takes frames this big; tungstenite's own default stops at 16 MiB.
+            let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default().max_frame_size(None).max_message_size(None);
+            let (mut sink, mut stream) = tokio_tungstenite::accept_async_with_config(sock, Some(config)).await.unwrap().split();
+            // Nothing is read until the test says so, so the client's write backs up.
+            spoken.await.unwrap();
+            sink.send(Message::text("{\"jsonrpc\":\"2.0\",\"method\":\"event\"}")).await.unwrap();
+            reading.await.unwrap();
+            while let Some(Ok(msg)) = stream.next().await {
+                if let Message::Text(text) = msg {
+                    let _ = got.send(text.len());
+                    break;
+                }
+            }
+            std::future::pending::<()>().await;
+        });
+
+        let path = std::env::temp_dir().join(format!("hermes-pipe-469-{}.bin", std::process::id()));
+        let size = 24 * 1024 * 1024;
+        std::fs::write(&path, vec![7u8; size]).unwrap();
+        let ws = super::open_pipe_socket(super::IntoClientRequest::into_client_request(format!("ws://{addr}/api/ws")).unwrap()).await.unwrap();
+        let (events, mut heard) = tokio::sync::mpsc::unbounded_channel();
+        let pipe = super::run_pipe(ws, move |e| drop(events.send(e)), super::HeaderMap::new());
+
+        let sending = {
+            let (pipe, path) = (pipe.sender(), path.to_string_lossy().into_owned());
+            tokio::spawn(async move { pipe.send_file("{\"f\":\"", &path, "\"}", 64 * 1024 * 1024).await?.wait().await })
+        };
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!sending.is_finished(), "send_file resolved before Hermes read the file");
+        speak.send(()).unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(5), heard.recv()).await.expect("nothing heard while the file was being written");
+        assert!(matches!(event, Some(super::PipeEvent::Frame { .. })), "{event:?}");
+        assert!(!sending.is_finished(), "send_file resolved before Hermes read the file");
+
+        read.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(20), sending).await.unwrap().unwrap().unwrap();
+        assert_eq!(received.await.unwrap(), "{\"f\":\"".len() + size.div_ceil(3) * 4 + "\"}".len());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Replacing the connection drops its pipe, and that stops a file frame still being written: the wait ends with
+    /// `Closed` instead of the old socket writing on (#469).
+    #[tokio::test]
+    async fn dropping_the_pipe_stops_a_file_frame_still_being_written() {
+        let listener = small_buffered_listener();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            // Accepted and never read, so the client's write backs up.
+            let _ws = tokio_tungstenite::accept_async(sock).await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let path = std::env::temp_dir().join(format!("hermes-pipe-469-drop-{}.bin", std::process::id()));
+        std::fs::write(&path, vec![7u8; 24 * 1024 * 1024]).unwrap();
+        let ws = super::open_pipe_socket(super::IntoClientRequest::into_client_request(format!("ws://{addr}/api/ws")).unwrap()).await.unwrap();
+        let pipe = super::run_pipe(ws, |_| {}, super::HeaderMap::new());
+
+        let written = pipe.sender().send_file("{\"f\":\"", &path.to_string_lossy(), "\"}", 64 * 1024 * 1024).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        drop(pipe);
+        let ended = tokio::time::timeout(Duration::from_secs(5), written.wait()).await.expect("the write went on after the pipe was dropped");
+        assert!(matches!(ended, Err(TransportError::Closed)), "{ended:?}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn temp_file(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("hermes-transport-{name}-{}", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// A picked image is read up to the 25 MiB preview limit; a small one mustn't cost the whole limit in memory.
+    #[test]
+    fn reading_the_start_of_a_small_file_holds_only_what_it_read() {
+        let path = temp_file("prefix-small", b"hello");
+        let bytes = super::read_file_prefix(&std::fs::File::open(&path).unwrap(), super::PREVIEW_MAX_BYTES + 1).unwrap();
+        assert_eq!(bytes, b"hello");
+        assert!(bytes.capacity() < 64 * 1024, "{} bytes held for a 5-byte file", bytes.capacity());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reading_the_start_of_a_file_stops_at_the_limit() {
+        let whole: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+        let path = temp_file("prefix-cut", &whole);
+        let file = std::fs::File::open(&path).unwrap();
+        assert_eq!(super::read_file_prefix(&file, 150_001).unwrap(), &whole[..150_001]);
+        assert_eq!(super::read_file_prefix(&file, 1 << 20).unwrap(), whole);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A pipe to a WebSocket server that reads every frame and hands its text to the returned channel.
+    async fn reading_pipe() -> (super::Pipe, tokio::sync::mpsc::UnboundedReceiver<String>) {
+        use futures_util::StreamExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (frames, heard) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default().max_frame_size(None).max_message_size(None);
+            let mut ws = tokio_tungstenite::accept_async_with_config(sock, Some(config)).await.unwrap();
+            while let Some(Ok(msg)) = ws.next().await {
+                if let super::Message::Text(text) = msg {
+                    let _ = frames.send(text.to_string());
+                }
+            }
+        });
+        let ws = super::open_pipe_socket(super::IntoClientRequest::into_client_request(format!("ws://{addr}/api/ws")).unwrap()).await.unwrap();
+        (super::run_pipe(ws, |_| {}, super::HeaderMap::new()), heard)
+    }
+
+    /// The webview names the most a file may be. Rust holds it to the most the webview ever attaches, 256 MiB
+    /// (src/hermes/transport.ts `LIMITS.file.bytes`), and a limit past any size can't wrap round to nothing.
+    #[tokio::test]
+    async fn an_attachment_limit_past_any_size_is_held_to_the_attachment_limit() {
+        let (pipe, mut frames) = reading_pipe().await;
+        let path = temp_file("attach-unlimited", b"abc");
+        match pipe.sender().send_file("[", &path.to_string_lossy(), "]", u64::MAX).await {
+            Ok(written) => written.wait().await.unwrap(),
+            Err(e) => panic!("{e:?}"),
+        }
+        assert_eq!(tokio::time::timeout(Duration::from_secs(5), frames.recv()).await.unwrap().unwrap(), "[YWJj]");
+
+        let big = temp_file("attach-too-big", b"");
+        std::fs::File::options().write(true).open(&big).unwrap().set_len(256 * 1024 * 1024 + 1).unwrap();
+        match pipe.sender().send_file("[", &big.to_string_lossy(), "]", u64::MAX).await {
+            Err(TransportError::FileTooLarge { max, .. }) => assert_eq!(max, 256 * 1024 * 1024),
+            Err(e) => panic!("{e:?}"),
+            Ok(_) => panic!("a file over 256 MiB was sent"),
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&big);
+    }
+
+    /// A server that answers one request with `head` and then sends nothing more, keeping the connection open.
+    async fn answers_then_waits(head: String) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 4096];
+            let _ = sock.read(&mut request).await;
+            sock.write_all(head.as_bytes()).await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        url
+    }
+
+    fn dashboard_at(base: &str) -> super::Dashboard {
+        super::Dashboard {
+            http: reqwest::Client::new(),
+            base: url::Url::parse(base).unwrap(),
+            cookies: Default::default(),
+            headers: super::HeaderMap::new(),
+            hide: super::HeaderMap::new(),
+            token: false,
+        }
+    }
+
+    /// The webview's limit for a big answer is held to the relay's 64 MiB, the most Outputs reads of one chat in all
+    /// (src/hermes/outputs.ts `CHAT_MAX_BYTES`): an answer announcing more is refused before any of it is read.
+    #[tokio::test]
+    async fn a_limited_get_past_any_size_is_held_to_the_relay_limit() {
+        let relay_max: u64 = 64 * 1024 * 1024;
+        let url = answers_then_waits(format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n", relay_max + 1)).await;
+        let dashboard = dashboard_at(&url);
+        match tokio::time::timeout(Duration::from_secs(5), dashboard.get_limited("api/files/read?path=/big", u64::MAX)).await {
+            Ok(Err(TransportError::FileTooLarge { size, max })) => assert_eq!((size, max), (relay_max + 1, relay_max)),
+            Ok(other) => panic!("{other:?}"),
+            Err(_) => panic!("still reading an answer announced past the relay limit"),
+        }
+    }
+
+    /// A server that answers every request 200 with a body that never ends.
+    async fn endless() -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let mut request = [0u8; 4096];
+                    let _ = sock.read(&mut request).await;
+                    sock.write_all(b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n").await.unwrap();
+                    let chunk = format!("4000\r\n{}\r\n", "x".repeat(0x4000));
+                    while sock.write_all(chunk.as_bytes()).await.is_ok() {}
+                });
+            }
+        });
+        url
+    }
+
+    /// `/api/status` is read before anything is known about the server, so whatever answers at a mistyped address
+    /// mustn't fill memory: a real status is a KB or two, and past 64 KiB it is given up as not a Hermes dashboard.
+    #[tokio::test]
+    async fn a_status_that_never_ends_is_given_up_past_64_kib() {
+        let base = url::Url::parse(&endless().await).unwrap();
+        let headers = super::HeaderMap::new();
+        let read = super::read_server(&super::client(&headers).unwrap(), &base, &headers, None, Duration::from_secs(5)).await;
+        assert!(matches!(read, Err(TransportError::NotHermes)), "{read:?}");
+    }
+
+    /// The socket ticket's answer is a few words of JSON; one that never ends is given up past 64 KiB.
+    #[tokio::test]
+    async fn a_ticket_that_never_ends_is_given_up_past_64_kib() {
+        let dashboard = dashboard_at(&endless().await);
+        match tokio::time::timeout(Duration::from_secs(5), dashboard.ws_ticket()).await {
+            Ok(Err(TransportError::AnswerTooLarge { max, .. })) => assert_eq!(max, 64 * 1024),
+            Ok(other) => panic!("{other:?}"),
+            Err(_) => panic!("still reading a ticket that never ends"),
+        }
+    }
+
+    /// A pipe to a WebSocket server that reads nothing until `read` is sent, then hands each frame's text on.
+    async fn held_pipe() -> (super::Pipe, tokio::sync::oneshot::Sender<()>, tokio::sync::mpsc::UnboundedReceiver<String>) {
+        use futures_util::StreamExt;
+        let listener = small_buffered_listener();
+        let addr = listener.local_addr().unwrap();
+        let (read, reading) = tokio::sync::oneshot::channel::<()>();
+        let (frames, heard) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default().max_frame_size(None).max_message_size(None);
+            let mut ws = tokio_tungstenite::accept_async_with_config(sock, Some(config)).await.unwrap();
+            reading.await.unwrap();
+            while let Some(Ok(msg)) = ws.next().await {
+                if let super::Message::Text(text) = msg {
+                    let _ = frames.send(text.to_string());
+                }
+            }
+        });
+        let ws = super::open_pipe_socket(super::IntoClientRequest::into_client_request(format!("ws://{addr}/api/ws")).unwrap()).await.unwrap();
+        (super::run_pipe(ws, |_| {}, super::HeaderMap::new()), read, heard)
+    }
+
+    /// A JSON-RPC frame can't be dropped, so behind a write Hermes isn't reading, frames wait rather than pile up:
+    /// 16 queue, and the next `send` waits until Hermes reads again. Nothing is lost.
+    #[tokio::test]
+    async fn sending_waits_once_16_frames_are_queued_behind_a_slow_write() {
+        let (pipe, read, mut frames) = held_pipe().await;
+        let sender = pipe.sender();
+        let big = "x".repeat(24 * 1024 * 1024);
+        sender.send(big.clone()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        for i in 0..16 {
+            tokio::time::timeout(Duration::from_secs(1), sender.send(format!("{i}"))).await.expect("queued").unwrap();
+        }
+        let mut waiting = std::pin::pin!(sender.send("16".into()));
+        assert!(tokio::time::timeout(Duration::from_millis(300), &mut waiting).await.is_err(), "a 17th frame queued behind the write");
+        read.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(20), waiting).await.expect("still waiting once Hermes read").unwrap();
+        assert_eq!(frames.recv().await.unwrap().len(), big.len());
+        for i in 0..=16 {
+            assert_eq!(frames.recv().await.unwrap(), i.to_string());
+        }
+    }
+
+    /// A file frame is the file whole as base64, up to about 341 MiB, so only one is held at a time: a second
+    /// attachment's file isn't read until the first frame has been written.
+    #[tokio::test]
+    async fn a_second_attachment_isnt_read_until_the_first_has_been_written() {
+        let (pipe, read, mut frames) = held_pipe().await;
+        let first = temp_file("attach-first", &vec![7u8; 24 * 1024 * 1024]);
+        let second = std::env::temp_dir().join(format!("hermes-transport-attach-second-{}", std::process::id()));
+        let _ = std::fs::remove_file(&second);
+        let send = |path: &std::path::Path| {
+            let (pipe, path) = (pipe.sender(), path.to_string_lossy().into_owned());
+            tokio::spawn(async move { pipe.send_file("[", &path, "]", u64::MAX).await?.wait().await })
+        };
+        let sending_first = send(&first);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let sending_second = send(&second);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!sending_second.is_finished(), "the second file was read while the first frame was being written: {:?}", sending_second.await);
+        std::fs::write(&second, b"later").unwrap();
+        read.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(20), sending_first).await.unwrap().unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(20), sending_second).await.unwrap().unwrap().unwrap();
+        assert_eq!(frames.recv().await.unwrap().len(), 2 + (24 * 1024 * 1024usize).div_ceil(3) * 4);
+        assert_eq!(frames.recv().await.unwrap(), "[bGF0ZXI=]");
+        let _ = std::fs::remove_file(&first);
+        let _ = std::fs::remove_file(&second);
+    }
+
+    /// Signing out or connecting again drops the connection's pipe. A frame still waiting for room in the queue then
+    /// fails, rather than keeping the old socket open and going out on it once Hermes reads again.
+    #[tokio::test]
+    async fn a_send_waiting_for_room_fails_once_the_pipe_is_dropped() {
+        let (pipe, _read, _frames) = held_pipe().await;
+        let sender = pipe.sender();
+        sender.send("x".repeat(24 * 1024 * 1024)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        for i in 0..16 {
+            tokio::time::timeout(Duration::from_secs(1), sender.send(format!("{i}"))).await.expect("queued").unwrap();
+        }
+        let waiting = tokio::spawn(async move { sender.send("after sign-out".into()).await });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!waiting.is_finished(), "the 17th frame didn't wait");
+        drop(pipe);
+        let sent = tokio::time::timeout(Duration::from_secs(2), waiting).await.expect("still waiting after the pipe was dropped").unwrap();
+        assert!(matches!(sent, Err(TransportError::Closed)), "{sent:?}");
+    }
+
+    /// The same for an attachment waiting for the one being written: it fails without its file being read, and the
+    /// one being written stops too.
+    #[tokio::test]
+    async fn an_attachment_waiting_its_turn_fails_once_the_pipe_is_dropped() {
+        let (pipe, _read, _frames) = held_pipe().await;
+        let first = temp_file("attach-dropped-first", &vec![7u8; 24 * 1024 * 1024]);
+        let second = temp_file("attach-dropped-second", b"later");
+        let send = |path: &std::path::Path| {
+            let (pipe, path) = (pipe.sender(), path.to_string_lossy().into_owned());
+            tokio::spawn(async move { pipe.send_file("[", &path, "]", u64::MAX).await?.wait().await })
+        };
+        let sending_first = send(&first);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let sending_second = send(&second);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!sending_second.is_finished(), "the second attachment didn't wait its turn");
+        drop(pipe);
+        for sending in [sending_first, sending_second] {
+            let sent = tokio::time::timeout(Duration::from_secs(2), sending).await.expect("still sending after the pipe was dropped").unwrap();
+            assert!(matches!(sent, Err(TransportError::Closed)), "{sent:?}");
+        }
+        let _ = std::fs::remove_file(&first);
+        let _ = std::fs::remove_file(&second);
+    }
+
+    async fn serve(app: axum::Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        url
+    }
+
+    fn cookie_of(headers: &axum::http::HeaderMap) -> String {
+        headers.get("cookie").and_then(|v| v.to_str().ok()).unwrap_or("").to_owned()
+    }
+
+    /// A server removes a cookie by setting it to expire: `Max-Age` of zero or less, or an `Expires` already past.
+    /// `Max-Age` wins over `Expires` (RFC 6265 §5.3).
+    #[tokio::test]
+    async fn a_cookie_set_to_expire_is_no_longer_sent() {
+        use axum::response::AppendHeaders;
+        let set = |cookies: &'static [&'static str]| move || async move { AppendHeaders(cookies.iter().map(|c| ("set-cookie", *c)).collect::<Vec<_>>()) };
+        let app = axum::Router::new()
+            .route("/api/set", axum::routing::get(set(&["a=A1; Path=/", "b=B1", "c=C1", "d=D1", "e=E1", "f=F1"])))
+            .route(
+                "/api/expire",
+                axum::routing::get(set(&[
+                    "a=A1; Max-Age=0; Path=/",
+                    "b=B1; max-age=-1",
+                    "c=C1; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+                    "d=D1; expires=Sunday, 06-Nov-94 08:49:37 GMT",
+                    "e=E2; Expires=Fri, 01 Jan 2100 00:00:00 GMT",
+                    "f=F2; Max-Age=3600; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+                ])),
+            )
+            .route("/api/echo", axum::routing::get(|headers: axum::http::HeaderMap| async move { cookie_of(&headers) }));
+        let dashboard = dashboard_at(&serve(app).await);
+        dashboard.request("GET", "api/set", None).await.unwrap();
+        dashboard.request("GET", "api/expire", None).await.unwrap();
+        assert_eq!(dashboard.request("GET", "api/echo", None).await.unwrap(), "e=E2; f=F2");
+    }
+
+    #[test]
+    fn a_cookie_date_is_read_in_each_form_servers_send() {
+        // RFC 9110's example date, 784111777 s after 1970.
+        for date in ["Sun, 06 Nov 1994 08:49:37 GMT", "Sunday, 06-Nov-94 08:49:37 GMT", "Sun Nov  6 08:49:37 1994"] {
+            assert_eq!(super::cookie_date(date), Some(784111777), "{date}");
+        }
+        for bad in ["", "yesterday", "Sun, 32 Nov 1994 08:49:37 GMT", "Sun, 06 Nov 1994 24:49:37 GMT", "Sun, 06 Nov 1994"] {
+            assert_eq!(super::cookie_date(bad), None, "{bad}");
+        }
+    }
+
+    /// An error page that repeats a session cookie, as a proxy's or a debug page can, isn't shown; other errors are.
+    #[tokio::test]
+    async fn an_error_repeating_a_session_cookie_is_not_shown() {
+        use axum::http::StatusCode;
+        use axum::response::AppendHeaders;
+        let app = axum::Router::new()
+            .route("/api/set", axum::routing::get(|| async { AppendHeaders([("set-cookie", "hermes_session_at=at-0123456789abcdef; Path=/")]) }))
+            .route(
+                "/api/leak",
+                axum::routing::get(|headers: axum::http::HeaderMap| async move {
+                    (StatusCode::INTERNAL_SERVER_ERROR, format!("no session for {}", cookie_of(&headers)))
+                }),
+            )
+            .route("/api/fail", axum::routing::get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error") }));
+        let dashboard = dashboard_at(&serve(app).await);
+        dashboard.request("GET", "api/set", None).await.unwrap();
+        match dashboard.request("GET", "api/leak", None).await {
+            Err(TransportError::Unexpected { status: 500, body }) => assert_eq!(body, super::HIDDEN),
+            other => panic!("{other:?}"),
+        }
+        match dashboard.request("GET", "api/fail", None).await {
+            Err(TransportError::Unexpected { status: 500, body }) => assert_eq!(body, "Internal Server Error"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// An error page answering a request with a cookie it replaces or removes in the same answer still doesn't show
+    /// the value that request sent.
+    #[tokio::test]
+    async fn an_error_repeating_a_cookie_it_replaces_is_not_shown() {
+        use axum::http::StatusCode;
+        use axum::response::AppendHeaders;
+        let leak = |set: &'static str| {
+            move |headers: axum::http::HeaderMap| async move {
+                (StatusCode::INTERNAL_SERVER_ERROR, AppendHeaders([("set-cookie", set)]), format!("no session for {}", cookie_of(&headers)))
+            }
+        };
+        let app = axum::Router::new()
+            .route("/api/set", axum::routing::get(|| async { AppendHeaders([("set-cookie", "hermes_session_at=at-0123456789abcdef; Path=/")]) }))
+            .route("/api/rotate", axum::routing::get(leak("hermes_session_at=at-fedcba9876543210; Path=/")))
+            .route("/api/remove", axum::routing::get(leak("hermes_session_at=; Max-Age=0; Path=/")))
+            .route("/api/expire", axum::routing::get(leak("hermes_session_at=at-0123456789abcdef; Max-Age=0; Path=/")))
+            .route("/api/expired", axum::routing::get(leak("hermes_session_at=at-0123456789abcdef; Expires=Thu, 01 Jan 1970 00:00:00 GMT")));
+        let url = serve(app).await;
+        for path in ["api/rotate", "api/remove", "api/expire", "api/expired"] {
+            let dashboard = dashboard_at(&url);
+            dashboard.request("GET", "api/set", None).await.unwrap();
+            match dashboard.request("GET", path, None).await {
+                Err(TransportError::Unexpected { status: 500, body }) => assert_eq!(body, super::HIDDEN, "{path}"),
+                other => panic!("{path}: {other:?}"),
+            }
+        }
+    }
+
+    /// A relayed answer is read up to the relay's 64 MiB: one announced past it is refused before any of it is read.
+    #[tokio::test]
+    async fn a_relayed_answer_announced_past_64_mib_is_refused_unread() {
+        let relay_max: u64 = 64 * 1024 * 1024;
+        let url = answers_then_waits(format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n", relay_max + 1)).await;
+        let limit = Duration::from_secs(2);
+        let resp = unless_stalled(limit, reqwest::Client::new().get(url).send()).await.unwrap();
+        match text_unless_stalled(resp, limit).await {
+            Err(TransportError::AnswerTooLarge { size, max }) => assert_eq!((size, max), (relay_max + 1, relay_max)),
+            other => panic!("{other:?}"),
+        }
     }
 }

@@ -20,6 +20,7 @@ import {
 import { chatImage, type ImagePage } from "../hermes/exportImage";
 import { composing } from "./bits";
 import { useModal } from "./modal";
+import { errorText } from "../hermes/values";
 
 const WHO: Record<string, string> = { user: "You", assistant: "Hermes", thinking: "Hermes, thinking" };
 
@@ -79,6 +80,7 @@ export function ExportChatDialog({
   const [note, setNote] = useState<string>();
   const [saving, setSaving] = useState(false);
   const pre = useRef<HTMLPreElement>(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   const preview = useMemo(() => exportPreview(shot, draft, at, format), [draft, format]);
   const messages = shot.items.filter(isMessage);
   const tools = shot.items.filter((i) => i.kind === "tool" || i.kind === "approval").length;
@@ -95,11 +97,12 @@ export function ExportChatDialog({
     const of = preview.text;
     draw(JSON.parse(of) as ImagePage).then(
       (png) => live && setDrawn({ of, png }),
-      (e: unknown) => live && setDrawn({ of, problem: e instanceof Error ? e.message : String(e) }),
+      (e: unknown) => live && setDrawn({ of, problem: errorText(e) }),
     );
     return () => {
       live = false;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [isImage, preview.text]);
 
   // Text selected in the preview goes in Text to redact, which can also be typed or pasted into from the keyboard.
@@ -141,7 +144,7 @@ export function ExportChatDialog({
         onClose();
       }
     } catch (e) {
-      setNote(`Couldn't save: ${e instanceof Error ? e.message : String(e)}`);
+      setNote(`Couldn't save: ${errorText(e)}`);
     } finally {
       setSaving(false);
     }

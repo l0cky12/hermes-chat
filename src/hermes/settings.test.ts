@@ -6,6 +6,7 @@ import { FakeHermes, row } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
 import type { SignInDetails } from "./tauriPipe";
 import { connect, readSaved } from "./transport";
+import { RestError } from "./pipe";
 
 const details: SignInDetails = { mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam", password: "hunter2" };
 
@@ -457,7 +458,7 @@ describe("Pull older history", () => {
   it("reports a failure and leaves the list a month long", async () => {
     const { server, hermes, cache } = await withOlderChats();
     server.rest["GET /api/sessions"] = () => {
-      throw new Error("The dashboard answered 503: store busy");
+      throw new RestError(503, "store busy");
     };
     await expect(hermes.pullOlderHistory()).rejects.toThrow("The dashboard answered 503: store busy");
     expect(hermes.getSnapshot().olderPulled).toBe(false);

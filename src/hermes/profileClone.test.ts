@@ -5,7 +5,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeHermes } from "./fakeHermes";
 import { connect, type Hermes } from "./transport";
-import { nameProblem, preview, type OnStage, type Outcome, type Part, type Plan, type Stage, type StageState } from "./profileClone";
+import { nameProblem } from "./profiles";
+import { preview, type OnStage, type Outcome, type Part, type Plan, type Stage, type StageState } from "./profileClone";
+import { RestError } from "./pipe";
 
 const running: Hermes[] = [];
 afterEach(async () => {
@@ -175,7 +177,7 @@ describe("cloning a profile", () => {
   it("shows Hermes's own refusal when the name is taken between the check and the create, and nothing changes", async () => {
     const { server, api } = await signedIn();
     const source = await api.source("work", api.profiles());
-    server.profileCreateError = `The dashboard answered 400: {"detail":"A profile named 'work-2' already exists."}`;
+    server.profileCreateError = new RestError(400, `{"detail":"A profile named 'work-2' already exists."}`);
     const out = await api.clone(fresh(["persona"]), source, () => {});
     expect(out).toEqual({ kind: "refused", problem: "Hermes didn't create work-2. Hermes said: A profile named 'work-2' already exists." });
     expect(server.otherProfiles["work-2"]).toBeUndefined();
@@ -184,7 +186,7 @@ describe("cloning a profile", () => {
   it("settles a server failure by reading the list: nothing made is said as unsure, and Check again finds it later", async () => {
     const { server, api } = await signedIn();
     const source = await api.source("work", api.profiles());
-    server.profileCreateError = `The dashboard answered 502: Bad Gateway`;
+    server.profileCreateError = new RestError(502, `Bad Gateway`);
     const plan = fresh(["persona"]);
     const out = await api.clone(plan, source, () => {});
     expect(out.kind).toBe("unsure");

@@ -9,6 +9,8 @@
 // the preview pane reads it through. Audio and images Hermes saves itself are on the dashboard's own machine, read with
 // the managed files routes Server files uses (`host`). The index is metadata only (paths, sizes the tool reported, which message made each file), kept on this computer per
 // connection and profile; no file's contents are copied.
+import { RestError, statusOf } from "./pipe";
+import { errorText, isObj } from "./values";
 
 /** A stored row of `GET /api/sessions/{id}/messages` (`SELECT *` from `messages`), as far as Outputs reads it. */
 export type StoredRow = {
@@ -85,7 +87,6 @@ export const MAX_FOLDERS_PER_CHECK = 40;
 /** The most files one check reads again, naming their chat, after their folder's listing didn't find them. */
 export const MAX_CONFIRMS_PER_CHECK = 40;
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
 /** A path a tool on the server wrote: absolute, or under its home. Anything else is ambiguous and isn't listed. */
 export const isOutputPath = (p: unknown): p is string => typeof p === "string" && /^(\/|~\/)./.test(p) && !p.includes("\0") && p.length <= 4096;
@@ -330,7 +331,8 @@ export type OutputsIo = {
 };
 
 const TOO_BIG = /over the .* MB limit/;
-const NO_ROUTE = /answered 404: \{"detail":"Not Found"\}/;
+/** FastAPI's own 404 for a route the server doesn't have. */
+const noRoute = (e: unknown) => e instanceof RestError && e.status === 404 && e.detail === "Not Found";
 
 /** The routes Outputs needs aren't on this server. */
 export class OutputsUnsupported extends Error {}
@@ -358,9 +360,9 @@ export async function readRows(io: OutputsIo, chatId: string, stillWanted: () =>
       page = answer.rows;
       read += answer.bytes;
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      if (NO_ROUTE.test(message)) throw new OutputsUnsupported("This Hermes server can't list a chat's stored messages (GET /api/sessions/{id}/messages).");
-      if (!TOO_BIG.test(message)) throw e;
+      const message = errorText(e);
+      if (noRoute(e)) throw new OutputsUnsupported("This Hermes server can't list a chat's stored messages (GET /api/sessions/{id}/messages).");
+      if (e instanceof RestError || !TOO_BIG.test(message)) throw e;
       // A refused page was read up to its limit before Rust stopped, so it spends that much of the budget.
       read += max;
       if (read >= CHAT_MAX_BYTES) {
@@ -432,9 +434,9 @@ export async function checkPaths(io: OutputsIo, files: { path: string; host?: bo
     try {
       listing = await io.listDir(dir, host);
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      if (NO_ROUTE.test(message) && !host) throw new OutputsUnsupported("This Hermes server can't list folders for the preview (GET /api/fs/list).");
-      const forbidden = /answered 403/.test(message);
+      const message = errorText(e);
+      if (noRoute(e) && !host) throw new OutputsUnsupported("This Hermes server can't list folders for the preview (GET /api/fs/list).");
+      const forbidden = statusOf(e) === 403;
       for (const p of inDir) out.set(placeOf(p), forbidden ? { state: "forbidden", checkedAt: now, why: "The server refused to list its folder." } : { state: "unknown", checkedAt: now, why: message });
       continue;
     }
@@ -664,10 +666,10 @@ export class OutputsIndex {
         read = await readRows(this.io, chat.id, live);
       } catch (e) {
         if (!live()) return;
-        const message = e instanceof Error ? e.message : String(e);
+        const message = errorText(e);
         if (e instanceof OutputsUnsupported) return this.set({ indexing: undefined, unsupported: message });
         // A chat deleted meanwhile has no rows to read; the rest go on.
-        if (/answered 404/.test(message)) continue;
+        if (statusOf(e) === 404) continue;
         return this.set({ indexing: undefined, error: `Couldn't read a chat's messages: ${message}` });
       }
       if (!live()) return;
@@ -716,7 +718,7 @@ export class OutputsIndex {
       found = await checkPaths(this.io, [...places.values()], this.now());
     } catch (e) {
       if (seq !== this.checkSeq) return;
-      const message = e instanceof Error ? e.message : String(e);
+      const message = errorText(e);
       return this.set(e instanceof OutputsUnsupported ? { checking: false, unsupported: message } : { checking: false, error: `Couldn't check the files: ${message}` });
     }
     if (seq !== this.checkSeq) return;
@@ -730,7 +732,7 @@ export class OutputsIndex {
       try {
         answer = await this.io.confirm(o.path, sessionOf(o) as string);
       } catch (e) {
-        answer = { state: "unknown", why: e instanceof Error ? e.message : String(e) };
+        answer = { state: "unknown", why: errorText(e) };
       }
       if (seq !== this.checkSeq) return;
       if (answer) confirmed.set(o.key, { ...answer, checkedAt: this.now() });

@@ -7,6 +7,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import type { Chat } from "../hermes/model";
+import { CheckTimesStore } from "../hermes/otherProfiles";
 import { CLEARED_KEY, PINS_KEY, type Pins, type Snoozes } from "../hermes/snooze";
 import { UI_PREFS_KEY, getUIPrefs, setUIPrefs } from "../hermes/uiPrefs";
 import { connect, type Hermes } from "../hermes/transport";
@@ -17,7 +18,6 @@ import { TAB_DRAG } from "./Tabs";
 import { ChatSectionSettings } from "./ChatSectionSettings";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -57,6 +57,7 @@ function List({
       profile="default"
       status="connected"
       others={{ byName: {} }}
+      checkTimes={new CheckTimesStore()}
       chats={chats}
       selectedId={selectedId}
       onOpen={() => {}}

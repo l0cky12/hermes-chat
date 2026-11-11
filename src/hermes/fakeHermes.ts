@@ -1,6 +1,6 @@
 // A fake Hermes dashboard for tests: it sits where the Rust pipe does and speaks wire-shaped legacy
 // JSON-RPC frames and dashboard REST bodies (shapes from the deployed contracts, see the research doc).
-import type { LocalFile, OpenPipe, PipeEvent, RestMethod, Route, Speech, ToolsetGuards, VoiceSetup } from "./pipe";
+import { RestError, type LocalFile, type OpenPipe, type PipeEvent, type RestMethod, type Route, type Speech, type ToolsetGuards, type VoiceSetup } from "./pipe";
 import type { SavedKey } from "./setup";
 import type { ApprovalMode } from "./model";
 import { FakeMemoryProviders } from "./fakeMemoryProviders";
@@ -10,6 +10,7 @@ import { FakeGateways } from "./fakeGateways";
 import { FakeVoiceProviders } from "./fakeVoiceProviders";
 import { FakeSkills } from "./fakeSkills";
 import { FakeServerFiles } from "./fakeServerFiles";
+import { FakeProjectContext } from "./fakeProjectContext";
 import { ScheduleError, isoIn, parseSchedule, upcomingRuns } from "./schedule";
 import { skillInvocationText } from "./skillCommands";
 
@@ -199,6 +200,8 @@ export function fakeEnv(): Record<string, Record<string, unknown>> {
 const DAY = 86_400;
 const MiB = 1024 * 1024;
 const now = () => Date.now() / 1000;
+/** A faked failure: a dashboard answer is a `RestError` already, anything else the text Rust rejects with. */
+const thrown = (e: string | Error) => (typeof e === "string" ? new Error(e) : e);
 
 /**
  * A memory entry's fingerprint in its node id. Hermes's is the first 12 hex digits of the SHA-256 of the text
@@ -255,6 +258,13 @@ export function row(id: string, daysAgo: number, over: Partial<SessionRow> = {})
   return { id, source: "gui", title: `Chat ${id}`, preview: "", started_at: at, last_active: at, message_count: 2, pinned: false, archived: false, last_read_at: null, ...over };
 }
 
+/** `row`, read up to its own last activity. A read mark taken from the clock separately could land a millisecond before
+ * that activity, and leave the chat unread. */
+export function readRow(id: string, daysAgo: number, over: Partial<SessionRow> = {}): SessionRow {
+  const r = row(id, daysAgo, over);
+  return { ...r, last_read_at: r.last_active };
+}
+
 /** A session edit's body without the request id and revision every edit carries. */
 export function editFlags(body: Record<string, unknown> | undefined) {
   const { request_id: _id, expected_revision: _revision, ...flags } = body ?? {};
@@ -295,7 +305,7 @@ export class FakeHermes {
    */
   botMode: "full" | "no-canonical" | "none" = "full";
   /** What each profile's `profile.yaml` says about it, for `profiles.list`. */
-  profileMeta: Record<string, { description?: string; display_name?: string; ui_meta?: Record<string, unknown> }> = {};
+  profileMeta: Record<string, { description?: string; description_auto?: boolean; display_name?: string; ui_meta?: Record<string, unknown> }> = {};
   /** Each profile's avatar, as a data URL (`profiles.get_asset`). */
   botAvatars: Record<string, string> = {};
   /** Runs as each `session.list` arrives, with its profile, e.g. to make a Bot Chat as another client would meanwhile. */
@@ -310,11 +320,11 @@ export class FakeHermes {
   /** False: the server is older than the persona routes, and answers them as `bf0203a` answers a path it hasn't. */
   soulRoutes = true;
   /** While set, `GET …/soul` fails with this message (e.g. a 500 for a file Hermes may not read). */
-  soulReadError?: string;
+  soulReadError?: string | Error;
   /** While set, `PUT …/soul` fails with this message and writes nothing. */
-  soulWriteError?: string;
+  soulWriteError?: string | Error;
   /** While set, `PUT …/soul` writes the file, then fails with this message, as a connection lost before the answer. */
-  soulWriteLost?: string;
+  soulWriteLost?: string | Error;
   /** Runs as a `PUT …/soul` arrives, before it writes: another client's write in the middle of a Save. */
   beforeSoulWrite?: () => void;
   /** Runs after a `PUT …/soul` wrote: another client writing again before the read-back. */
@@ -327,13 +337,32 @@ export class FakeHermes {
    */
   profileEnv: Record<string, Record<string, string>> = {};
   /** While set, `POST /api/profiles` fails with this message and makes nothing (a refusal, or a 500 before the rename). */
-  profileCreateError?: string;
+  profileCreateError?: string | Error;
   /** Runs as a `POST /api/profiles` arrives, before anything else: another client making a profile meanwhile. */
   beforeProfileCreate?: () => void;
   /** While set, `POST /api/profiles` makes the profile, then fails with this message, as a connection lost before the answer. */
   profileCreateLost?: string;
   /** While set, `POST /api/profiles` makes the profile but not its model, and answers `model_error` with this. */
   profileModelError?: string;
+  /** The profiles whose gateway runs, as `GET /api/profiles` reports them (`gateway_running`). */
+  gatewaysRunning = new Set<string>();
+  /**
+   * Settings → Profiles' routes this server lacks, each answering FastAPI's own 404 (`Not Found`) or, for a path that
+   * has another method, a 405: an older Hermes (ADR 0144).
+   */
+  profileRoutesMissing = new Set<"rename" | "describe" | "describeAuto" | "setModel" | "remove">();
+  /** While set, `DELETE /api/profiles/{name}` removes the folder and answers `settlement_pending` with this `retry_command`. */
+  profileSettlementPending?: string;
+  /** While set, `PATCH`/`DELETE /api/profiles/{name}` wait for it before answering, as Hermes does stopping a gateway. */
+  profileGatewayStop?: Promise<void>;
+  /** What `POST /api/profiles/{name}/describe-auto` answers: a description it writes, or a failure's reason. */
+  describeAuto: { ok: true; description: string } | { ok: false; reason: string } = { ok: true, description: "Writes and reviews code." };
+  /** While set, `POST /api/profiles/{name}/describe-auto` waits for it before answering, as Hermes's LLM call does. */
+  describeAutoGate?: Promise<void>;
+  /** While set, `PATCH /api/profiles/{name}` fails with this, as a 500 or a lost answer, renaming nothing. */
+  profileRenameError?: string | Error;
+  /** While set, `PATCH /api/profiles/{name}` renames, then fails with this message, as a connection lost before the answer. */
+  profileRenameLost?: string;
   /**
    * Scheduled jobs by profile, as `cron/jobs.json` holds them, and how the cron routes behave
    * (`hermes_cli/web_routers/cron.py` at the deployed `bf0203a`, as probed with a throwaway HERMES_HOME).
@@ -405,7 +434,7 @@ export class FakeHermes {
   /** What `session.compress` answers; undefined answers "method not found". */
   compressResult?: Record<string, unknown> = { status: "compressed", removed: 0, before_messages: 0, after_messages: 0, before_tokens: 0, after_tokens: 0, summary: { noop: true, headline: "Nothing to compress" } };
   /** Set to make `GET /api/sessions/{id}/messages` fail with this. */
-  messagesFailure?: string;
+  messagesFailure?: string | Error;
   oneshotFailure?: string;
   /** The owner's local disk, by path, for attachments. */
   files: Record<string, FakeFile> = {};
@@ -444,13 +473,23 @@ export class FakeHermes {
   /** While set, an artifact save waits for it before Hermes writes. */
   fsWriteGate?: Promise<void>;
   /** Hermes's answer to the next artifact saves instead of writing: the Rust side's error text. */
-  fsWriteFailure?: string;
+  fsWriteFailure?: string | Error;
   /** Set: a read of that path through the agent fs routes fails with this error, as Rust reports it. */
-  fsReadFailure?: (path: string) => string | undefined;
+  fsReadFailure?: (path: string) => string | Error | undefined;
   /** Runs right after an artifact save is written, before Hermes answers: to change the file meanwhile, say. */
   afterFsWrite?: (path: string) => void;
   /** The server's own disk, for the Server files screen (managed files: `GET /api/files`, `GET /api/files/read`). */
   readonly managedFiles = new FakeServerFiles();
+  /** The Rust commands for a project's context files, over this server's disks (fakeProjectContext.ts, ADR 0135). */
+  readonly context = new FakeProjectContext({
+    managed: this.managedFiles,
+    local: () => this.files,
+    agentFiles: () => this.serverFiles,
+    agentDirs: () => this.serverDirs,
+    repos: () => this.repos,
+  });
+  /** Where each profile's tools run (`terminal.backend` in its config): `local` unless set, `ssh` for an SSH machine. */
+  terminalBackend: Record<string, string> = {};
   /** The profiles' skills, as Settings → Skills reads and writes them (fakeSkills.ts). */
   readonly skills = new FakeSkills(this.managedFiles);
   /** The profiles' external memory providers, as Settings → Memory → External memory reads and writes them. */
@@ -525,6 +564,8 @@ export class FakeHermes {
   /** The subagents `subagent.interrupt` stopped. */
   readonly interrupted: string[] = [];
   private created = new Map<string, { source: string; profile?: string; hidden?: boolean; title?: string }>(); // runtime id, until the first prompt stores it
+  /** Every stored key `session.create` minted, for a resume of one that never got a row. */
+  private minted = new Map<string, { source: string; profile?: string }>();
 
   /**
    * The profile's `.env` rows as `GET /api/env` lists them (`hermes_cli/web_routers/config_env.py` at the deployed
@@ -721,6 +762,7 @@ export class FakeHermes {
       const stored = `20261031_12000${n}_abc123`;
       this.runtime.set(runtimeId, stored);
       this.runtimeProfile.set(runtimeId, (r.params.profile as string | undefined) || "default");
+      this.minted.set(stored, { source: String(r.params.source ?? "tui"), profile: r.params.profile as string | undefined });
       this.created.set(runtimeId, {
         source: String(r.params.source ?? "tui"),
         profile: r.params.profile as string | undefined,
@@ -744,6 +786,13 @@ export class FakeHermes {
     },
     "session.resume": (r) => {
       const stored = String(r.params.session_id);
+      // A key `session.create` minted that never got a row (its first prompt never went in) gets one now, and resumes
+      // with no history (`_resume_materialize_minted` at the deployed `bf0203a`).
+      const minted = this.minted.get(stored);
+      if (minted && /^\d{8}_\d{6}_[0-9a-f]{6}$/.test(stored) && !this.store(minted.profile)?.some((s) => s.id === stored)) {
+        this.minted.delete(stored);
+        this.store(minted.profile)?.push(row(stored, 0, { source: minted.source, title: null, preview: "", message_count: 0 }));
+      }
       if (!this.store(r.params.profile as string | undefined)?.some((s) => s.id === stored)) return this.fail(r.id, 4007, `session not found: ${stored}`);
       // A session waiting on the owner is still live after its connection dropped: the resume reattaches it, with
       // the requests still open (`_resume_reuse_live`, `_live_session_payload` at the deployed `bf0203a`).
@@ -1269,7 +1318,7 @@ export class FakeHermes {
     // `_get_usage_analytics` (`hermes_cli/web_routers/analytics.py` at the deployed `bf0203a`): sums over every stored
     // session started in the last `days` days, unlisted ones too, and the helper tasks' usage, which no session carries.
     "GET /api/analytics/usage": ({ query }) => {
-      if (this.analyticsRefused) throw new Error(`The dashboard answered ${this.analyticsRefused.status}: ${JSON.stringify({ detail: this.analyticsRefused.detail })}`);
+      if (this.analyticsRefused) throw new RestError(this.analyticsRefused.status, JSON.stringify({ detail: this.analyticsRefused.detail }));
       const days = Number(query.get("days") ?? 30);
       const cutoff = now() - days * DAY;
       const rows = this.storeOrFail(query.get("profile")).filter((s) => s.started_at > cutoff);
@@ -1343,12 +1392,12 @@ export class FakeHermes {
     // `fs_read_data_url`: any regular file as a data URL, up to 16 MB; the MIME type goes by its extension.
     "GET /api/fs/read-data-url": ({ query }) => {
       const { path, data } = this.serverFile(query);
-      if (data.length > 16 * 1024 * 1024) throw new Error(`The dashboard answered 413: {"detail":"File too large"}`);
+      if (data.length > 16 * 1024 * 1024) throw new RestError(413, `{"detail":"File too large"}`);
       const ext = /\.([a-z0-9]+)$/i.exec(path)?.[1].toLowerCase() ?? "";
       return { dataUrl: `data:${FS_MIME[ext] ?? "application/octet-stream"};base64,${btoa(data)}` };
     },
     "GET /api/env": () => {
-      if (!this.env) throw new Error(`The dashboard answered 404: {"detail":"Not Found"}`);
+      if (!this.env) throw new RestError(404, `{"detail":"Not Found"}`);
       return this.env;
     },
     // `get_active_profile_endpoint`: the sticky profile, and the one this dashboard process runs as.
@@ -1357,10 +1406,10 @@ export class FakeHermes {
     "GET /api/memory": ({ query }) => {
       const profile = query.get("profile") || this.servedProfile;
       if (profile !== "default" && !(profile in this.otherProfiles) && !(profile in this.memory))
-        throw new Error(`The dashboard answered 404: {"detail":"Profile '${profile}' does not exist."}`);
+        throw new RestError(404, `{"detail":"Profile '${profile}' does not exist."}`);
       const m = this.memory[profile] ?? { memory: [], profile: [] };
       const bytes = (entries: string[]) => new TextEncoder().encode(entries.join("\n§\n")).length;
-      if (!this.memoryProviders.routes) throw new Error(`The dashboard answered 404: {"detail":"Not Found"}`);
+      if (!this.memoryProviders.routes) throw new RestError(404, `{"detail":"Not Found"}`);
       return { ...this.memoryProviders.memory(profile, this.memoryProvider), builtin_files: { memory: bytes(m.memory), user: bytes(m.profile) } };
     },
     "GET /api/files": ({ query }) => this.managedFiles.list(query),
@@ -1374,14 +1423,18 @@ export class FakeHermes {
         model: this.profileModel[name]?.model ?? null,
         provider: this.profileModel[name]?.provider ?? null,
         description: this.profileMeta[name]?.description ?? "",
-        display_name: "",
+        description_auto: this.profileMeta[name]?.description_auto ?? false,
+        display_name: this.profileMeta[name]?.display_name ?? "",
+        skill_count: (this.skills.folders[name] ?? []).length,
+        gateway_running: this.gatewaysRunning.has(name),
+        has_env: name in this.profileEnv,
         distribution_name: this.distributions[name] ?? null,
       })),
     }),
     // Settings → Model (hermes_cli/web_routers/models.py, config_env.py, delegation.py at the deployed `bf0203a`).
     // `get_model_options` is also the REST twin of `model.options`, which the composer's picker falls back to.
     "GET /api/model/options": () => {
-      if (this.restModelOptions === null) throw new Error(`The dashboard answered 404: {"detail":"Not Found"}`);
+      if (this.restModelOptions === null) throw new RestError(404, `{"detail":"Not Found"}`);
       return (
         this.restModelOptions ?? {
           model: this.modelConfig.model.default,
@@ -1406,6 +1459,7 @@ export class FakeHermes {
       skills: this.skills.config(query.get("profile") || "default"),
       agent: { ...this.modelConfig.agent },
       delegation: { ...this.modelConfig.delegation },
+      terminal: { backend: this.terminalBackend[query.get("profile") || "default"] ?? "local" },
       ...(this.cron.zoneSetting(query.get("profile") || "default") && { timezone: this.cron.zoneSetting(query.get("profile") || "default") }),
       // The raw map, as `include_defaults=false` reads it: what Rust's MCP edit starts from (fakeMcp.ts).
       ...(this.mcp.servers[query.get("profile") || "default"] && { mcp_servers: this.mcp.servers[query.get("profile") || "default"] }),
@@ -1426,7 +1480,7 @@ export class FakeHermes {
       // `ConfigUpdate` needs `config`; the rest deep-merges over the stored file (`update_config`).
       const config = body?.config;
       if (!config || typeof config !== "object")
-        throw new Error(`The dashboard answered 422: {"detail":[{"type":"missing","loc":["body","config"],"msg":"Field required"}]}`);
+        throw new RestError(422, `{"detail":[{"type":"missing","loc":["body","config"],"msg":"Field required"}]}`);
       const c = config as { agent?: Record<string, string>; delegation?: Record<string, unknown> };
       Object.assign(this.modelConfig.agent, c.agent ?? {});
       Object.assign(this.modelConfig.delegation, c.delegation ?? {});
@@ -1479,7 +1533,7 @@ export class FakeHermes {
   /** `agent.disabled_toolsets` saved in a form Rust can't read for certain, per profile. */
   toolsetDisabledUnclear: Record<string, boolean> = {};
   /** While set, reading the config for the toolset guards fails with this. */
-  toolsetGuardsFailure?: string;
+  toolsetGuardsFailure?: string | Error;
   /**
    * Each toolset's provider rows, as `GET /api/tools/toolsets/{name}/config` answers them (`provider_readiness_status`).
    * A toolset not here has no provider category. Checked live: web's keyless Exa row is ready and its ddgs row isn't.
@@ -1497,7 +1551,7 @@ export class FakeHermes {
   /** While set, `GET /api/tools/toolsets/{name}/config` for that name waits for it. */
   toolsetConfigGate: Record<string, Promise<void>> = {};
   /** While set, `GET /api/tools/toolsets/{name}/config` fails with this. */
-  toolsetConfigFailure?: string;
+  toolsetConfigFailure?: string | Error;
   /** The next toggle writes, then answers with this error anyway (a failure after the save, such as a 500). */
   failAfterToolsetWrite?: { status: number; detail: string };
   /** After the next toggle, every toolset list read fails with a 500. */
@@ -1648,9 +1702,10 @@ export class FakeHermes {
       saveText: (id, path, text, overwrite) => this.managedFiles.saveText(path, text, overwrite),
       fsSaveText: (_id, profile, path, text, session) => this.fsWriteText(profile, path, text, session),
       cancelTransfer: async (id) => this.managedFiles.cancel(id),
+      context: this.context.pipe(),
       // Mirrors `Dashboard::toolset_guards`: only these two facts of the config.
       toolsetGuards: async (profile): Promise<ToolsetGuards> => {
-        if (this.toolsetGuardsFailure) throw new Error(this.toolsetGuardsFailure);
+        if (this.toolsetGuardsFailure) throw thrown(this.toolsetGuardsFailure);
         return {
           noMcp: [...(this.toolsetNoMcp[profile] ?? [])].sort(),
           noMcpUnclear: [...(this.toolsetNoMcpUnclear[profile] ?? [])],
@@ -1694,6 +1749,7 @@ export class FakeHermes {
     const messages = /^\/api\/sessions\/([^/]+)\/messages$/.exec(req.path);
     const soul = /^\/api\/profiles\/([^/]+)\/soul$/.exec(req.path);
     const profilePath = /^\/api\/profiles\/([^/]+)$/.exec(req.path);
+    const profileField = /^\/api\/profiles\/([^/]+)\/(description|model|describe-auto)$/.exec(req.path);
     const handler =
       this.rest[`${method} ${req.path}`] ??
       (method === "POST" && req.path === "/api/sessions/import" ? () => this.importSessions(req.body!) : undefined) ??
@@ -1703,7 +1759,9 @@ export class FakeHermes {
       (method === "GET" && snapshot ? () => this.mutationSnapshot(snapshot[1], req.query.get("profile")) : undefined) ??
       (method === "GET" && messages ? () => this.storedMessages(decodeURIComponent(messages[1]), req.query) : undefined) ??
       (soul && this.soulRoutes && (method === "GET" || method === "PUT") ? () => this.soul(method, decodeURIComponent(soul[1]), req.body) : undefined) ??
-      (method === "DELETE" && profilePath ? () => this.deleteProfile(decodeURIComponent(profilePath[1])) : undefined) ??
+      (method === "DELETE" && profilePath && !this.profileRoutesMissing.has("remove") ? () => this.deleteProfile(decodeURIComponent(profilePath[1])) : undefined) ??
+      (method === "PATCH" && profilePath && !this.profileRoutesMissing.has("rename") ? () => this.renameProfile(decodeURIComponent(profilePath[1]), req.body ?? {}) : undefined) ??
+      (profileField ? this.profileFieldRoute(method, decodeURIComponent(profileField[1]), profileField[2], req.body ?? {}) : undefined) ??
       this.webhooks.route(req) ??
       this.cron.route(req) ??
       this.kanban.route(req) ??
@@ -1716,9 +1774,12 @@ export class FakeHermes {
       this.voiceProviders.route(req);
     const toolset = /^\/api\/tools\/toolsets(?:\/([^/]+)(\/config)?)?$/.exec(req.path);
     if (!handler && toolset) return JSON.stringify(await this.toolsetRoute(req, toolset[1], !!toolset[2]));
-    if (soul && this.soulRoutes && method !== "GET" && method !== "PUT") throw new Error(`The dashboard answered 405: {"detail":"Method Not Allowed"}`);
-    if (soul && !this.soulRoutes) throw new Error(`The dashboard answered 404: {"detail":"No such API endpoint: ${req.path}"}`);
-    if (!handler) throw new Error(`The dashboard answered 404: {"detail":"Not Found"}`);
+    if (soul && this.soulRoutes && method !== "GET" && method !== "PUT") throw new RestError(405, `{"detail":"Method Not Allowed"}`);
+    // A path Hermes routes for another method: FastAPI answers 405.
+    if (!handler && profilePath && (method === "PATCH" || method === "DELETE") && !(this.profileRoutesMissing.has("rename") && this.profileRoutesMissing.has("remove")))
+      throw new RestError(405, `{"detail":"Method Not Allowed"}`);
+    if (soul && !this.soulRoutes) throw new RestError(404, `{"detail":"No such API endpoint: ${req.path}"}`);
+    if (!handler) throw new RestError(404, `{"detail":"Not Found"}`);
     return JSON.stringify(await handler(req));
   }
 
@@ -1729,11 +1790,11 @@ export class FakeHermes {
 
   /** `hermes_cli/web_routers/tools.py` at the deployed `bf0203a`: the list, one toolset's config, and the toggle. */
   private async toolsetRoute(req: RestRequest, rawName: string | undefined, config: boolean): Promise<unknown> {
-    const notFound = () => new Error(`The dashboard answered 404: {"detail":"Not Found"}`);
+    const notFound = () => new RestError(404, `{"detail":"Not Found"}`);
     if (this.toolsetRoutes === "none") throw notFound();
     const profile = req.query.get("profile") ?? "default";
     if (profile !== "default" && !(profile in this.otherProfiles))
-      throw new Error(`The dashboard answered 404: {"detail":"Profile '${profile}' does not exist"}`);
+      throw new RestError(404, `{"detail":"Profile '${profile}' does not exist"}`);
     const name = rawName === undefined ? undefined : decodeURIComponent(rawName);
     const on = this.enabledToolsets(profile);
     const known = (n: string) => this.toolsetCatalog.find((t) => t.name === n);
@@ -1743,7 +1804,7 @@ export class FakeHermes {
       await gate;
     }
     if (req.method === "GET" && name === undefined && this.toolsetReadsFailing)
-      throw new Error(`The dashboard answered 500: {"detail":"Internal Server Error"}`);
+      throw new RestError(500, `{"detail":"Internal Server Error"}`);
     if (req.method === "GET" && name === undefined)
       return this.toolsetCatalog.map(({ installs: _i, ...t }) => {
         const enabled = on.has(t.name) && !this.toolsetSuppressed.has(t.name) && !this.toolsetDisabledEverywhere[profile]?.includes(t.name);
@@ -1753,8 +1814,8 @@ export class FakeHermes {
       // `stt` and `tts` answer from the speech providers' fake unless a test set their rows here.
       const voiceNow = name in this.toolsetProviders ? undefined : await this.voiceProviders.configRoute(profile, name);
       const t = voiceNow ? true : known(name);
-      if (!t) throw new Error(`The dashboard answered 400: {"detail":"Unknown toolset: ${name}"}`);
-      if (this.toolsetConfigFailure) throw new Error(this.toolsetConfigFailure);
+      if (!t) throw new RestError(400, `{"detail":"Unknown toolset: ${name}"}`);
+      if (this.toolsetConfigFailure) throw thrown(this.toolsetConfigFailure);
       const gate = this.toolsetConfigGate[name];
       const providersNow = (this.toolsetProviders[name] ?? []).map((p) => ({ ...p }));
       if (gate) {
@@ -1773,9 +1834,9 @@ export class FakeHermes {
       if (this.toolsetRoutes === "read-only") throw notFound();
       // `ToolsetToggle`: FastAPI checks the body before the route runs.
       if (typeof req.body?.enabled !== "boolean")
-        throw new Error(`The dashboard answered 422: {"detail":[{"type":"bool_parsing","loc":["body","enabled"],"msg":"Input should be a valid boolean"}]}`);
-      if (!known(name)) throw new Error(`The dashboard answered 400: {"detail":"Unknown toolset: ${name}"}`);
-      if (this.toolsetRefusal) throw new Error(`The dashboard answered ${this.toolsetRefusal.status}: ${JSON.stringify({ detail: this.toolsetRefusal.detail })}`);
+        throw new RestError(422, `{"detail":[{"type":"bool_parsing","loc":["body","enabled"],"msg":"Input should be a valid boolean"}]}`);
+      if (!known(name)) throw new RestError(400, `{"detail":"Unknown toolset: ${name}"}`);
+      if (this.toolsetRefusal) throw new RestError(this.toolsetRefusal.status, JSON.stringify({ detail: this.toolsetRefusal.detail }));
       await this.toolsetGateBeforeWrite;
       const drop = this.dropOnToolsetWrite;
       this.dropOnToolsetWrite = undefined;
@@ -1795,7 +1856,7 @@ export class FakeHermes {
       if (this.toolsetReadsFailAfterWrite) this.toolsetReadsFailing = true;
       const late = this.failAfterToolsetWrite;
       this.failAfterToolsetWrite = undefined;
-      if (late) throw new Error(`The dashboard answered ${late.status}: ${JSON.stringify({ detail: late.detail })}`);
+      if (late) throw new RestError(late.status, JSON.stringify({ detail: late.detail }));
       await this.toolsetGate;
       const installs = enabled && this.toolsetProviders[name]?.some((p) => p.post_setup === known(name)?.installs && p.status === "needs_setup") ? known(name)?.installs : undefined;
       return { ok: true, name, platform: known(name)!.platform, enabled, post_setup_started: installs ?? null };
@@ -1912,7 +1973,7 @@ export class FakeHermes {
   private knownProfile(profile: string | null): string {
     const p = profile || this.servedProfile;
     if (p === "default" || p in this.otherProfiles || p in this.memory || this.skills.profiles.has(p)) return p;
-    throw new Error(`The dashboard answered 404: ${JSON.stringify({ detail: `Profile '${p}' does not exist.` })}`);
+    throw new RestError(404, JSON.stringify({ detail: `Profile '${p}' does not exist.` }));
   }
 
   /**
@@ -1923,9 +1984,9 @@ export class FakeHermes {
    */
   private learningRoute(req: RestRequest): (() => unknown) | undefined {
     if (req.path !== "/api/learning/graph" && req.path !== "/api/learning/node") return undefined;
-    const notHere = () => Promise.reject(new Error(`The dashboard answered 404: ${JSON.stringify({ detail: `No such API endpoint: ${req.path}` })}`));
+    const notHere = () => Promise.reject(new RestError(404, JSON.stringify({ detail: `No such API endpoint: ${req.path}` })));
     if (!this.learningRoutes) return notHere;
-    const refuse = (status: number, detail: string) => new Error(`The dashboard answered ${status}: ${JSON.stringify({ detail })}`);
+    const refuse = (status: number, detail: string) => new RestError(status, JSON.stringify({ detail }));
     const at = `${req.method} ${req.path}`;
     if (at === "GET /api/learning/graph")
       return () => {
@@ -1975,9 +2036,9 @@ export class FakeHermes {
    * `.env` without bot tokens, SOUL.md, model, skill folders and memory. Chats and scheduled jobs are never copied.
    */
   private createProfile(body: Record<string, unknown>): unknown {
-    const refuse = (detail: string) => new Error(`The dashboard answered 400: ${JSON.stringify({ detail })}`);
+    const refuse = (detail: string) => new RestError(400, JSON.stringify({ detail }));
     this.beforeProfileCreate?.();
-    if (this.profileCreateError) throw new Error(this.profileCreateError);
+    if (this.profileCreateError) throw thrown(this.profileCreateError);
     const name = typeof body.name === "string" ? body.name.trim().toLowerCase() : "";
     const known = (p: string) => p === "default" || p in this.otherProfiles;
     if (name === "default") throw refuse("Cannot create a profile named 'default' — it is the built-in profile (~/.hermes).");
@@ -2029,9 +2090,88 @@ export class FakeHermes {
   }
 
   /** `DELETE /api/profiles/{name}` at `f0d94882`: removes the profile's folder; the default profile can't be deleted. */
-  private deleteProfile(name: string): unknown {
-    if (name === "default") throw new Error(`The dashboard answered 400: ${JSON.stringify({ detail: "Cannot delete the default profile." })}`);
-    if (!(name in this.otherProfiles)) throw new Error(`The dashboard answered 404: ${JSON.stringify({ detail: `Profile '${name}' does not exist.` })}`);
+  /**
+   * `PATCH /api/profiles/{name}` `{new_name}` at `f0d94882` (`rename_profile`): for `default`, a display name only
+   * (empty or over 64 characters refused); otherwise the new id is lowercased and checked as a create checks it, the
+   * gateway stopped, and the profile's folder moved with everything in it.
+   */
+  private async renameProfile(name: string, body: Record<string, unknown>): Promise<unknown> {
+    const refuse = (detail: string) => new RestError(400, JSON.stringify({ detail }));
+    const known = (p: string) => p === "default" || p in this.otherProfiles;
+    if (typeof body.new_name !== "string")
+      throw new RestError(422, `{"detail":[{"type":"missing","loc":["body","new_name"],"msg":"Field required"}]}`);
+    if (name !== "default" && !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) throw refuse(`'${name}' is not a valid profile name.`);
+    if (!known(name)) throw new RestError(404, JSON.stringify({ detail: `Profile '${name}' does not exist.` }));
+    if (name === "default") {
+      const display = body.new_name.trim();
+      if (!display) throw refuse("Display name cannot be empty.");
+      if (display.length > 64) throw refuse(`Display name too long (${display.length} chars, max 64).`);
+      this.profileMeta.default = { ...this.profileMeta.default, display_name: display };
+      return { ok: true, name: "default", display_name: display, path: "/home/liam/.hermes" };
+    }
+    const to = body.new_name.trim().toLowerCase();
+    if (to === "default") throw refuse("Cannot rename to 'default' — it is reserved.");
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(to)) throw refuse(`'${to}' is not a valid profile name.`);
+    if (["hermes", "test", "tmp", "root", "sudo"].includes(to)) throw refuse(`Profile name '${to}' is reserved.`);
+    if (known(to)) throw refuse(`Profile '${to}' already exists.`);
+    if (this.profileGatewayStop) await this.profileGatewayStop;
+    if (this.profileRenameError) throw thrown(this.profileRenameError);
+    const move = <T,>(m: Record<string, T>) => {
+      if (name in m) {
+        m[to] = m[name];
+        delete m[name];
+      }
+    };
+    move(this.otherProfiles);
+    move(this.souls);
+    move(this.profileEnv);
+    move(this.profileModel);
+    move(this.profileMeta);
+    move(this.memory);
+    move(this.distributions);
+    move(this.skills.folders);
+    if (this.skills.profiles.delete(name)) this.skills.profiles.add(to);
+    if (this.gatewaysRunning.delete(name)) this.gatewaysRunning.add(to);
+    if (this.profileRenameLost) throw new Error(this.profileRenameLost);
+    return { ok: true, name: to, path: `/home/liam/.hermes/profiles/${to}` };
+  }
+
+  /** `PUT …/description`, `PUT …/model` and `POST …/describe-auto` at `f0d94882`, each after `_resolve_profile_dir`. */
+  private profileFieldRoute(method: string, name: string, field: string, body: Record<string, unknown>): ((req: RestRequest) => unknown) | undefined {
+    const route = field === "description" ? "describe" : field === "model" ? "setModel" : "describeAuto";
+    if (this.profileRoutesMissing.has(route)) return undefined;
+    if ((field === "describe-auto") !== (method === "POST") || (field !== "describe-auto" && method !== "PUT")) return undefined;
+    return () => {
+      if (name !== "default" && !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) throw new RestError(400, JSON.stringify({ detail: `'${name}' is not a valid profile name.` }));
+      if (name !== "default" && !(name in this.otherProfiles)) throw new RestError(404, JSON.stringify({ detail: `Profile '${name}' does not exist.` }));
+      if (field === "description") {
+        const text = typeof body.description === "string" ? body.description.trim() : "";
+        this.profileMeta[name] = { ...this.profileMeta[name], description: text, description_auto: false };
+        return { ok: true, description: text, description_auto: false };
+      }
+      if (field === "model") {
+        const provider = typeof body.provider === "string" ? body.provider.trim() : "";
+        const model = typeof body.model === "string" ? body.model.trim() : "";
+        if (!provider || !model) throw new RestError(400, JSON.stringify({ detail: "provider and model are required" }));
+        this.profileModel[name] = { ...(this.profileModel[name] ?? { reasoning_effort: "medium", fast: false }), model, provider };
+        return { ok: true, provider, model };
+      }
+      if (this.describeAutoGate) return this.describeAutoGate.then(() => this.describeAutoAnswer(name));
+      return this.describeAutoAnswer(name);
+    };
+  }
+
+  private describeAutoAnswer(name: string): unknown {
+    const outcome = this.describeAuto;
+    if (outcome.ok) this.profileMeta[name] = { ...this.profileMeta[name], description: outcome.description, description_auto: true };
+    return { ok: outcome.ok, reason: outcome.ok ? "" : outcome.reason, description: outcome.ok ? outcome.description : "", description_auto: outcome.ok };
+  }
+
+  private async deleteProfile(name: string): Promise<unknown> {
+    if (name === "default") throw new RestError(400, JSON.stringify({ detail: "Cannot delete the default profile." }));
+    if (!(name in this.otherProfiles)) throw new RestError(404, JSON.stringify({ detail: `Profile '${name}' does not exist.` }));
+    if (this.profileGatewayStop) await this.profileGatewayStop;
+    this.gatewaysRunning.delete(name);
     delete this.otherProfiles[name];
     delete this.souls[name];
     delete this.profileEnv[name];
@@ -2040,6 +2180,8 @@ export class FakeHermes {
     delete this.memory[name];
     delete this.skills.folders[name];
     this.skills.profiles.delete(name);
+    if (this.profileSettlementPending !== undefined)
+      return { ok: true, path: `/home/liam/.hermes/profiles/${name}`, identity_settled: false, settlement_pending: true, retry_command: this.profileSettlementPending };
     return { ok: true, path: `/home/liam/.hermes/profiles/${name}` };
   }
 
@@ -2048,20 +2190,20 @@ export class FakeHermes {
    * read with `encoding="utf-8-sig"` and universal newlines, or an unconditional whole-file write that creates it.
    */
   private soul(method: string, name: string, body?: Record<string, unknown>): unknown {
-    if (name !== "default" && !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) throw new Error(`The dashboard answered 400: {"detail":"Invalid profile name '${name}'"}`);
-    if (name !== "default" && !(name in this.otherProfiles)) throw new Error(`The dashboard answered 404: {"detail":"Profile '${name}' does not exist."}`);
+    if (name !== "default" && !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) throw new RestError(400, `{"detail":"Invalid profile name '${name}'"}`);
+    if (name !== "default" && !(name in this.otherProfiles)) throw new RestError(404, `{"detail":"Profile '${name}' does not exist."}`);
     if (method === "GET") {
-      if (this.soulReadError) throw new Error(this.soulReadError);
+      if (this.soulReadError) throw thrown(this.soulReadError);
       const file = this.souls[name];
       return file === undefined ? { content: "", exists: false } : { content: file.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n"), exists: true };
     }
     if (typeof body?.content !== "string")
-      throw new Error(`The dashboard answered 422: {"detail":[{"type":"missing","loc":["body","content"],"msg":"Field required"}]}`);
+      throw new RestError(422, `{"detail":[{"type":"missing","loc":["body","content"],"msg":"Field required"}]}`);
     this.beforeSoulWrite?.();
-    if (this.soulWriteError) throw new Error(this.soulWriteError);
+    if (this.soulWriteError) throw thrown(this.soulWriteError);
     this.souls[name] = body.content;
     this.afterSoulWrite?.();
-    if (this.soulWriteLost) throw new Error(this.soulWriteLost);
+    if (this.soulWriteLost) throw thrown(this.soulWriteLost);
     return { ok: true };
   }
 
@@ -2074,15 +2216,15 @@ export class FakeHermes {
   private async fsWriteText(profile: string, asked: string, text: string, session?: string): Promise<string> {
     if (/(^|\/)(\.env(\..*)?|auth\.json|config\.yaml)$/i.test(asked)) throw new Error(`Hermes Chat doesn't relay writes to ${asked}, a credential file Hermes keeps out of reach`);
     await this.fsWriteGate;
-    if (this.fsWriteFailure !== undefined) throw new Error(this.fsWriteFailure);
+    if (this.fsWriteFailure !== undefined) throw thrown(this.fsWriteFailure);
     this.ownedSession(profile, session);
     // `fs_write_text` resolves the target as `read-text` does, `session_id` included.
     const path = this.sandboxPath(asked, session) ?? asked;
     const parent = path.slice(0, path.lastIndexOf("/")) || "/";
     const all = [...this.serverDirs, ...Object.keys(this.serverFiles)];
     const parentIsDir = this.serverDirs.has(parent) || typeof this.serverFiles[parent] === "object" || all.some((p) => p.startsWith(`${parent}/`));
-    if (typeof this.serverFiles[path] === "object") throw new Error(`The dashboard answered 400: {"detail":"Path points to a directory"}`);
-    if (!parentIsDir) throw new Error(`The dashboard answered 400: {"detail":"Parent directory does not exist"}`);
+    if (typeof this.serverFiles[path] === "object") throw new RestError(400, `{"detail":"Path points to a directory"}`);
+    if (!parentIsDir) throw new RestError(400, `{"detail":"Parent directory does not exist"}`);
     const bytes = new TextEncoder().encode(text);
     this.serverFiles[path] = Array.from(bytes, (b) => String.fromCharCode(b)).join("");
     this.fsWrites.push({ profile, path: asked, text, ...(session && { session }) });
@@ -2093,23 +2235,23 @@ export class FakeHermes {
     private serverFile(query: URLSearchParams): { path: string; data: string } {
     const profile = query.get("profile");
     if (profile && profile !== "default" && !(profile in this.otherProfiles))
-      throw new Error(`The dashboard answered 404: {"detail":"Profile '${profile}' does not exist."}`);
+      throw new RestError(404, `{"detail":"Profile '${profile}' does not exist."}`);
     const asked = query.get("path") ?? "";
     const failure = this.fsReadFailure?.(asked);
-    if (failure) throw new Error(failure);
+    if (failure) throw thrown(failure);
     const session = query.get("session_id") ?? undefined;
     this.ownedSession(profile, session);
     const mapped = this.sandboxPath(asked, session);
     // A container path that maps to no file in the sandbox it names (`_fs_sandbox_not_found_detail`).
     if (mapped !== undefined && typeof this.serverFiles[mapped] !== "string" && this.serverFiles[mapped] === undefined)
-      throw new Error(`The dashboard answered 404: {"detail":"${SANDBOX_NOT_FOUND}"}`);
+      throw new RestError(404, `{"detail":"${SANDBOX_NOT_FOUND}"}`);
     const path = mapped ?? asked;
     const name = path.split("/").pop() ?? "";
     if (/^\.env(\..*)?$|^auth\.json$|^config\.yaml$/i.test(name))
-      throw new Error(`The dashboard answered 403: {"detail":"Access to sensitive files is not allowed"}`);
+      throw new RestError(403, `{"detail":"Access to sensitive files is not allowed"}`);
     const f = this.serverFiles[path];
-    if (f === undefined) throw new Error(`The dashboard answered 404: {"detail":"File not found"}`);
-    if (typeof f !== "string") throw new Error(`The dashboard answered 400: {"detail":"Path points to a directory"}`);
+    if (f === undefined) throw new RestError(404, `{"detail":"File not found"}`);
+    if (typeof f !== "string") throw new RestError(400, `{"detail":"Path points to a directory"}`);
     return { path, data: f };
   }
 
@@ -2126,7 +2268,7 @@ export class FakeHermes {
   /** `_fs_owned_session`: a `session_id` the profile doesn't own (or a blank one) is 404 before anything is read. */
   private ownedSession(profile: string | null | undefined, session: string | undefined) {
     if (session === undefined) return;
-    if (!session.trim() || !(this.store(profile) ?? []).some((s) => s.id === session)) throw new Error(`The dashboard answered 404: {"detail":"Session not found"}`);
+    if (!session.trim() || !(this.store(profile) ?? []).some((s) => s.id === session)) throw new RestError(404, `{"detail":"Session not found"}`);
   }
 
   /** The subagent a control names, if the session asking started it; null when the session isn't open. */
@@ -2409,7 +2551,7 @@ export class FakeHermes {
 
   private storeOrFail(profile?: string | null): SessionRow[] {
     const store = this.store(profile);
-    if (!store) throw new Error(`The dashboard answered 404: {"detail":"Profile '${profile}' not found"}`);
+    if (!store) throw new RestError(404, `{"detail":"Profile '${profile}' not found"}`);
     return store;
   }
 
@@ -2419,7 +2561,7 @@ export class FakeHermes {
    * with a stored id are there: a live session's unstored tail isn't.
    */
   private storedMessages(id: string, query: URLSearchParams) {
-    if (this.messagesFailure) throw new Error(this.messagesFailure);
+    if (this.messagesFailure) throw thrown(this.messagesFailure);
     const rows = (this.transcripts[id] ?? [])
       .filter((m) => m.row_id !== undefined && (!m.compacted || query.get("include_compacted") === "true"))
       .map((m) => ({
@@ -2452,7 +2594,7 @@ export class FakeHermes {
   /** `GET /api/sessions/{id}` (`get_session_detail` at the deployed `bf0203a`): the raw row, its flags stored as 0/1. */
   private sessionDetail(id: string, profile: string | null) {
     const s = this.storeOrFail(profile).find((r) => r.id === id);
-    if (!s) throw new Error(`The dashboard answered 404: {"detail":"Session not found"}`);
+    if (!s) throw new RestError(404, `{"detail":"Session not found"}`);
     return { ...s, archived: s.archived ? 1 : 0, pinned: s.pinned ? 1 : 0, runtime_revision: s.runtime_revision ?? 0, profile: profile ?? "default" };
   }
 
@@ -2462,14 +2604,12 @@ export class FakeHermes {
    */
   private patchSession(id: string, body: Record<string, unknown>) {
     if (body.request_id === undefined && body.expected_revision === undefined)
-      throw new Error(
-        `The dashboard answered 409: {"detail":"client_upgrade_required: this app is out of sync (different versions) with the Hermes backend; update the app to edit sessions"}`,
-      );
+      throw new RestError(409, `{"detail":"client_upgrade_required: this app is out of sync (different versions) with the Hermes backend; update the app to edit sessions"}`);
     if (body.request_id === undefined || body.expected_revision === undefined)
-      throw new Error(`The dashboard answered 409: {"detail":"mutation_identity_required"}`);
+      throw new RestError(409, `{"detail":"mutation_identity_required"}`);
     const s = this.storeOrFail(body.profile as string | undefined).find((r) => r.id === id);
-    if (!s || !EDITABLE_SOURCES.has(s.source)) throw new Error(`The dashboard answered 404: {"detail":"not_found"}`);
-    if (body.expected_revision !== (s.runtime_revision ?? 0)) throw new Error(`The dashboard answered 409: {"detail":"revision_conflict"}`);
+    if (!s || !EDITABLE_SOURCES.has(s.source)) throw new RestError(404, `{"detail":"not_found"}`);
+    if (body.expected_revision !== (s.runtime_revision ?? 0)) throw new RestError(409, `{"detail":"revision_conflict"}`);
     s.runtime_revision = (s.runtime_revision ?? 0) + 1;
     if (typeof body.pinned === "boolean") s.pinned = body.pinned;
     if (typeof body.archived === "boolean") s.archived = body.archived;
@@ -2478,7 +2618,7 @@ export class FakeHermes {
       // `set_session_title`: titles are unique in a profile, and a clash is a 400 (`_mutate_session_request`).
       const title = body.title.trim();
       if (title && this.storeOrFail(body.profile as string | undefined).some((r) => r !== s && r.title === title))
-        throw new Error(`The dashboard answered 400: {"detail":"Title '${title}' is already in use by session ${id}"}`);
+        throw new RestError(400, `{"detail":"Title '${title}' is already in use by session ${id}"}`);
       s.title = title || null;
     }
     return { ok: true };
@@ -2495,8 +2635,8 @@ export class FakeHermes {
   private importReceipts = new Map<string, unknown>();
   private importSessions(body: Record<string, unknown>) {
     if (body.request_id === undefined && body.expected_revision === undefined)
-      throw new Error(`The dashboard answered 409: {"detail":"client_upgrade_required: this app is out of sync (different versions) with the Hermes backend; update the app to edit sessions"}`);
-    if (body.request_id === undefined || body.expected_revision === undefined) throw new Error(`The dashboard answered 409: {"detail":"mutation_identity_required"}`);
+      throw new RestError(409, `{"detail":"client_upgrade_required: this app is out of sync (different versions) with the Hermes backend; update the app to edit sessions"}`);
+    if (body.request_id === undefined || body.expected_revision === undefined) throw new RestError(409, `{"detail":"mutation_identity_required"}`);
     const store = this.storeOrFail(body.profile as string | undefined);
     const lose = () => {
       if (!this.loseImportAnswer) return;
@@ -2513,16 +2653,16 @@ export class FakeHermes {
       const bad = (raw.messages as Record<string, unknown>[]).findIndex((m) => typeof m.role !== "string" || !m.role);
       return bad < 0 ? [] : [{ index, error: `messages[${bad}].role must be a non-empty string`, session_id: raw.id }];
     });
-    if (errors.length) throw new Error(`The dashboard answered 400: ${JSON.stringify({ detail: { errors } })}`);
+    if (errors.length) throw new RestError(400, JSON.stringify({ detail: { errors } }));
     const anchor = store.find((r) => r.id === sessions[0]?.id);
-    if (body.expected_revision !== (anchor?.runtime_revision ?? 0)) throw new Error(`The dashboard answered 409: {"detail":"revision_conflict"}`);
+    if (body.expected_revision !== (anchor?.runtime_revision ?? 0)) throw new RestError(409, `{"detail":"revision_conflict"}`);
     const imported: string[] = [];
     const skipped: string[] = [];
     // Titles are UNIQUE in a profile; an insert that breaks it rolls the whole import back as 503 (probed live).
     const fresh = sessions.filter((raw) => !store.some((r) => r.id === raw.id));
     const titles = fresh.map((raw) => raw.title).filter((t): t is string => typeof t === "string" && !!t);
     if (titles.some((t, i) => titles.indexOf(t) !== i || store.some((r) => r.title === t)))
-      throw new Error(`The dashboard answered 503: {"detail":"storage_unavailable"}`);
+      throw new RestError(503, `{"detail":"storage_unavailable"}`);
     for (const raw of sessions) {
       const id = String(raw.id);
       if (store.some((r) => r.id === id)) {
@@ -2576,17 +2716,15 @@ export class FakeHermes {
   private deleteSession(id: string, query: URLSearchParams) {
     const [requestId, revision, generation] = ["request_id", "expected_revision", "expected_generation"].map((k) => query.get(k));
     if (requestId === null && revision === null && generation === null)
-      throw new Error(
-        `The dashboard answered 409: {"detail":"client_upgrade_required: this app is out of sync (different versions) with the Hermes backend; update the app to edit sessions"}`,
-      );
-    if (requestId === null || revision === null) throw new Error(`The dashboard answered 409: {"detail":"mutation_identity_required"}`);
-    if (generation === null) throw new Error(`The dashboard answered 400: {"detail":"invalid_params"}`);
+      throw new RestError(409, `{"detail":"client_upgrade_required: this app is out of sync (different versions) with the Hermes backend; update the app to edit sessions"}`);
+    if (requestId === null || revision === null) throw new RestError(409, `{"detail":"mutation_identity_required"}`);
+    if (generation === null) throw new RestError(400, `{"detail":"invalid_params"}`);
     const profile = query.get("profile");
     const store = this.storeOrFail(profile);
     const i = store.findIndex((r) => r.id === id);
     if (i < 0) return { ok: true, already_absent: true };
-    if (Number(revision) !== (store[i].runtime_revision ?? 0)) throw new Error(`The dashboard answered 409: {"detail":"revision_conflict"}`);
-    if (Number(generation) !== (store[i].runtime_generation ?? 0)) throw new Error(`The dashboard answered 409: {"detail":"stale_generation"}`);
+    if (Number(revision) !== (store[i].runtime_revision ?? 0)) throw new RestError(409, `{"detail":"revision_conflict"}`);
+    if (Number(generation) !== (store[i].runtime_generation ?? 0)) throw new RestError(409, `{"detail":"stale_generation"}`);
     store.splice(i, 1);
     delete this.transcripts[id];
     // The contract removes a deleted chat's project links with it.
@@ -2603,7 +2741,7 @@ export class FakeHermes {
   private setModel(body: Record<string, unknown>) {
     const text = (k: string) => (typeof body[k] === "string" ? (body[k] as string).trim() : "");
     const [scope, provider, model, task] = [text("scope").toLowerCase(), text("provider"), text("model"), text("task")];
-    if (scope !== "main" && scope !== "auxiliary") throw new Error(`The dashboard answered 400: {"detail":"scope must be 'main' or 'auxiliary'"}`);
+    if (scope !== "main" && scope !== "auxiliary") throw new RestError(400, `{"detail":"scope must be 'main' or 'auxiliary'"}`);
     const priced = this.modelConfig.expensive[`${provider}/${model}`];
     if (model && priced && body.confirm_expensive_model !== true)
       return {
@@ -2615,16 +2753,16 @@ export class FakeHermes {
         confirm_message: [`${model} has known pricing above Hermes' safety threshold.`, `Input tokens: $${priced[0].toFixed(2)}/M`, `Output tokens: $${priced[1].toFixed(2)}/M`, "Pricing source: models.dev."].join("\n"),
       };
     if (scope === "main") {
-      if (!provider || !model) throw new Error(`The dashboard answered 400: {"detail":"provider and model required for main"}`);
+      if (!provider || !model) throw new RestError(400, `{"detail":"provider and model required for main"}`);
       this.modelConfig.model = { provider, default: model };
       return { ok: true, scope, provider, model, base_url: "", gateway_tools: [], stale_aux: [] };
     }
-    if (!provider) throw new Error(`The dashboard answered 400: {"detail":"provider required for auxiliary"}`);
+    if (!provider) throw new RestError(400, `{"detail":"provider required for auxiliary"}`);
     const slot = this.modelConfig.auxiliary[task];
-    if (!slot) throw new Error(`The dashboard answered 400: {"detail":"unknown auxiliary task: ${task}"}`);
+    if (!slot) throw new RestError(400, `{"detail":"unknown auxiliary task: ${task}"}`);
     const effort = body.reasoning_effort;
     if (typeof effort === "string" && !["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(effort))
-      throw new Error(`The dashboard answered 400: {"detail":"reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max, ultra"}`);
+      throw new RestError(400, `{"detail":"reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max, ultra"}`);
     if (provider.toLowerCase() !== slot.provider.toLowerCase()) delete slot.base_url;
     slot.provider = provider;
     slot.model = model;
@@ -2634,7 +2772,12 @@ export class FakeHermes {
   }
 
   private frame(f: unknown) {
-    this.onEvent?.({ kind: "frame", text: JSON.stringify(f) });
+    this.raw(JSON.stringify(f));
+  }
+
+  /** Sends the client one frame as it is, so a test can send a malformed or out-of-spec one. */
+  raw(text: string) {
+    this.onEvent?.({ kind: "frame", text });
   }
 }
 
@@ -2752,7 +2895,7 @@ export class FakeCron {
   missing = false;
   now = () => Date.now();
   /** The next write whose "METHOD /path" matches fails: `before` it reaches Hermes, or `after` Hermes saved it. */
-  failNext?: { match: RegExp; when: "before" | "after"; message?: string };
+  failNext?: { match: RegExp; when: "before" | "after"; message?: string | Error };
   /** Reads of the job list that fail from now on, as a dropped connection does. */
   failLists = 0;
   /** Calls the next write waits for before it is handled. */
@@ -2826,7 +2969,7 @@ export class FakeCron {
   }
 
   private refuse(status: number, detail: unknown): never {
-    throw new Error(`The dashboard answered ${status}: ${JSON.stringify({ detail })}`);
+    throw new RestError(status, JSON.stringify({ detail }));
   }
 
   private profile(query: URLSearchParams): string {
@@ -2858,13 +3001,13 @@ export class FakeCron {
       if (!write && what === "jobs" && !id) await this.listGate;
       const fail = write && this.failNext?.match.test(`${req.method} ${req.path}`) ? this.failNext : undefined;
       if (fail) this.failNext = undefined;
-      if (fail?.when === "before") throw new Error(fail.message ?? "Can't reach the Hermes dashboard: error sending request");
+      if (fail?.when === "before") throw thrown(fail.message ?? "Can't reach the Hermes dashboard: error sending request");
       if (!write && what === "jobs" && !id && this.failLists > 0) {
         this.failLists--;
         throw new Error("Can't reach the Hermes dashboard: connection reset");
       }
       const answer = this.handle(key, req, id);
-      if (fail) throw new Error(fail.message ?? "Can't reach the Hermes dashboard: connection closed before message completed");
+      if (fail) throw thrown(fail.message ?? "Can't reach the Hermes dashboard: connection closed before message completed");
       return answer;
     };
   }
@@ -2958,14 +3101,14 @@ export class FakeWebhooks {
   /** Every retry Hermes took: the key and whether side effects were confirmed. */
   retries: { profile: string; name: string; deliveryId: string; key: string; confirmed: boolean }[] = [];
   /** The next write whose "METHOD /path" matches fails: `before` it reaches Hermes, or `after` Hermes did it. */
-  failNext?: { match: RegExp; when: "before" | "after"; message?: string };
+  failNext?: { match: RegExp; when: "before" | "after"; message?: string | Error };
   /** Answers waiting on this before a write is handled. */
   gate?: Promise<void>;
   private secrets = 0;
   private now = () => Date.now() / 1000;
 
   private refuse(status: number, detail: unknown): never {
-    throw new Error(`The dashboard answered ${status}: ${JSON.stringify({ detail })}`);
+    throw new RestError(status, JSON.stringify({ detail }));
   }
 
   revision(r: WebhookRoute): string {
@@ -3014,9 +3157,9 @@ export class FakeWebhooks {
       if (write) await this.gate;
       const fail = write && this.failNext?.match.test(`${req.method} ${req.path}`) ? this.failNext : undefined;
       if (fail) this.failNext = undefined;
-      if (fail?.when === "before") throw new Error(fail.message ?? "Can't reach the Hermes dashboard: error sending request");
+      if (fail?.when === "before") throw thrown(fail.message ?? "Can't reach the Hermes dashboard: error sending request");
       const answer = this.handle(req, profile, name, sub, delivery);
-      if (fail) throw new Error(fail.message ?? "Can't reach the Hermes dashboard: connection closed before message completed");
+      if (fail) throw thrown(fail.message ?? "Can't reach the Hermes dashboard: connection closed before message completed");
       return answer;
     };
   }
@@ -3244,7 +3387,7 @@ export class FakeKanban {
   }
 
   private refuse(status: number, detail: unknown): never {
-    throw new Error(`The dashboard answered ${status}: ${JSON.stringify({ detail })}`);
+    throw new RestError(status, JSON.stringify({ detail }));
   }
 }
 

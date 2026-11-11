@@ -1,8 +1,12 @@
+pub mod annotate;
+mod backlog;
 pub mod backup;
 #[cfg(target_os = "linux")]
 pub mod browser;
 pub mod connect_steps;
 pub mod connection_attempts;
+#[cfg(target_os = "linux")]
+pub mod copied_files;
 pub mod defaults_file;
 pub mod dev_servers;
 pub mod display;
@@ -11,12 +15,16 @@ pub mod fonts;
 pub mod gtk_clipboard;
 pub mod links;
 pub mod local_stt;
+pub mod lock;
+mod loopback_owner;
 mod loopback_peer;
 pub mod main_window;
+pub mod markdown_image;
 pub mod mcp;
 pub mod media;
 pub mod notify;
 pub mod page_view;
+pub mod project_context;
 pub mod remote;
 pub mod repo_git;
 pub mod saved_password;
@@ -31,6 +39,7 @@ pub mod tunnel;
 pub mod update;
 pub mod web_page;
 
+use crate::lock::Locked;
 use connect_steps::{Step, Steps};
 use saved_password::{Address, TokenEntry};
 use serde::{Deserialize, Serialize};
@@ -45,11 +54,13 @@ use tunnel::Tunnel;
 
 /// The owner's `hermes dashboard` port on the server's loopback (research doc, "SSH tunnel, Host header
 /// and protocol generation").
-const DASHBOARD_PORT: u16 = 9119;
+pub(crate) const DASHBOARD_PORT: u16 = 9119;
 
 struct Connection {
+    /// The webview's name for the attempt that opened it (`hermes_connect`'s `attempt`): every command names it (`held`).
+    attempt: String,
     dashboard: Arc<Dashboard>,
-    pipe: Arc<Pipe>,
+    pipe: Pipe,
     _tunnel: Option<Tunnel>,
     /// The SSH target the sign-in went through, if it did: where the Preview's server pages go (server_page.rs).
     ssh_target: Option<String>,
@@ -169,8 +180,11 @@ struct AppState(Mutex<Option<Connection>>, std::sync::Mutex<Option<tokio::task::
 #[derive(Default)]
 struct Connecting {
     now: Option<(String, tokio::task::AbortHandle)>,
-    stopped: std::collections::HashSet<String>,
+    stopped: std::collections::VecDeque<String>,
 }
+
+/// The most attempts stopped before they began kept.
+const STOPPED_KEPT: usize = 256;
 
 /// How long opening a connection may take, all steps together, so a server that stops answering midway can't keep
 /// the app, or Sign out, waiting for good.
@@ -220,7 +234,7 @@ struct Screenshots {
 
 impl Screenshots {
     fn captures(&self) -> Result<Arc<screenshot::Captures>, screenshot::CaptureError> {
-        let mut slot = self.captures.lock().unwrap();
+        let mut slot = self.captures.locked();
         if let Some(c) = &*slot {
             return Ok(c.clone());
         }
@@ -248,10 +262,13 @@ async fn hermes_connect(
     on_step: Channel<connect_steps::Started>,
 ) -> Result<Route, String> {
     let mut slot = state.0.lock().await;
-    *slot = None;
-    transfers.stop_all();
-    displays.close_all();
-    let (connection, route) = as_attempt(&state, attempt.unwrap_or_default(), async move {
+    let leave = || {
+        *slot = None;
+        transfers.stop_all();
+        displays.close_all();
+    };
+    let name = attempt.unwrap_or_default();
+    let opened = as_attempt(&state, name.clone(), leave, async move {
         // Which step it is on, for the record of connection attempts (#270).
         let steps = Steps::reporting(move |s| drop(on_step.send(s)));
         let opening = open_connection(target, credential, profile, on_event, expect_server, quick.unwrap_or(false), ssh_route, steps);
@@ -259,82 +276,153 @@ async fn hermes_connect(
             .await
             .unwrap_or_else(|_| Err(format!("Hermes didn't finish connecting within {}s.", CONNECT_TIMEOUT.as_secs())))
     })
-    .await?;
-    // Server pages opened through another SSH target, or for a URL sign-in none, belong to the server left behind.
-    pages.close_other_targets(connection.ssh_target.as_deref(), SIGNED_IN_ELSEWHERE);
-    *slot = Some(connection);
-    Ok(route)
+    .await;
+    match opened {
+        Attempt::StoppedFirst => Err(CONNECT_STOPPED.into()),
+        Attempt::Ran(Ok((connection, route))) => {
+            // Server pages opened through another SSH target, or for a URL sign-in none, belong to the server left behind.
+            pages.close_other_targets(connection.ssh_target.as_deref(), SIGNED_IN_ELSEWHERE);
+            *slot = Some(Connection { attempt: name, ..connection });
+            Ok(route)
+        }
+        Attempt::Ran(Err(e)) => {
+            pages.close_all(SIGNED_OUT);
+            Err(e)
+        }
+    }
+}
+
+/// The connection the webview opened as `attempt`, while it is still the one held. A command for a connection replaced
+/// or closed since is refused as `Closed`, so one sent while switching servers never reaches the new server, however
+/// long it waited for the lock (#474).
+fn held<'a>(slot: &'a Option<Connection>, attempt: &str) -> Result<&'a Connection, String> {
+    slot.as_ref().filter(|c| !c.attempt.is_empty() && c.attempt == attempt).ok_or_else(|| transport::TransportError::Closed.to_string())
+}
+
+/// How a command that calls the dashboard fails, as the webview gets it: the text to show, and, when the dashboard
+/// answered, its HTTP status and the start of its body. The webview tells failures apart by those two, never by the
+/// text, which repeats the body, server text and all (#486).
+#[derive(Debug, Serialize)]
+struct RelayError {
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<String>,
+}
+
+impl From<transport::TransportError> for RelayError {
+    fn from(e: transport::TransportError) -> Self {
+        let (status, body) = match &e {
+            transport::TransportError::Unexpected { status, body } => (Some(*status), Some(body.clone())),
+            transport::TransportError::SignedOut => (Some(401), None),
+            _ => (None, None),
+        };
+        RelayError { message: e.to_string(), status, body }
+    }
+}
+
+impl From<String> for RelayError {
+    fn from(message: String) -> Self {
+        RelayError { message, status: None, body: None }
+    }
+}
+
+impl From<&str> for RelayError {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
 }
 
 /// How long a reopen's ticket and socket may each take: a closed socket usually means the rest of the connection still
 /// answers, and when it doesn't, opening it all again soon beats waiting.
 const REOPEN_LIMITS: transport::StepLimits = transport::StepLimits { ticket: QUICK_REACH, socket: QUICK_REACH, ..transport::StepLimits::ROUTES };
 
-/// Opens `/api/ws` for `profile` again on the connection held now, after its socket closed. The SSH tunnel and the
+/// Opens `/api/ws` for `profile` again on the connection the webview opened as `connection`, after its socket closed. The SSH tunnel and the
 /// sign-in are kept, so this mints a ticket and opens the socket, nothing more. Transfers stop as on any reconnect (ADR
 /// 0023), and so do Screens, whose lease came over the closed socket. Any failure, a stop included, closes the whole
-/// connection, so the webview opens it again from the start with `hermes_connect`.
+/// connection and its server pages, so the webview opens it again from the start with `hermes_connect`. `attempt`
+/// names this reopen, for `hermes_connect_cancel`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn hermes_reopen(
     state: State<'_, AppState>,
     transfers: State<'_, Transfers>,
     displays: State<'_, display::Displays>,
+    pages: State<'_, Arc<server_page::ServerPages>>,
     profile: String,
+    connection: String,
     attempt: String,
     on_event: Channel<PipeEvent>,
     on_step: Channel<connect_steps::Started>,
 ) -> Result<(), String> {
     let mut slot = state.0.lock().await;
-    transfers.stop_all();
-    displays.close_all();
+    // Only the connection whose socket closed reopens: one replaced meanwhile isn't touched (`held`, #474).
+    held(&slot, &connection)?;
     let Some(conn) = slot.as_mut() else {
         return Err(transport::TransportError::Closed.to_string());
     };
+    transfers.stop_all();
+    displays.close_all();
     let dashboard = conn.dashboard.clone();
-    let opened = as_attempt(&state, attempt, async move {
+    let opened = as_attempt(&state, attempt, || {}, async move {
         let steps = Steps::reporting(move |s| drop(on_step.send(s)));
         dashboard.open_pipe_within(&profile, move |e| drop(on_event.send(e)), Some(REOPEN_LIMITS), &steps).await.map_err(|e| e.to_string())
     })
     .await;
+    let opened = match opened {
+        Attempt::StoppedFirst => Err(CONNECT_STOPPED.into()),
+        Attempt::Ran(opened) => opened,
+    };
     match opened {
         Ok(pipe) => {
-            conn.pipe = Arc::new(pipe);
+            conn.pipe = pipe;
             Ok(())
         }
         Err(e) => {
             *slot = None;
+            pages.close_all(SIGNED_OUT);
             Err(e)
         }
     }
 }
 
-/// Runs `opening` apart as the attempt the webview names `attempt`, so `hermes_connect_cancel` can stop it.
+/// How an attempt `as_attempt` was given went: stopped by `hermes_connect_cancel` before it began, or run.
+enum Attempt<T> {
+    StoppedFirst,
+    Ran(Result<T, String>),
+}
+
+/// Runs `begin`, then `opening` apart, as the attempt the webview names `attempt`, so `hermes_connect_cancel` can stop it.
 async fn as_attempt<T: Send + 'static>(
     state: &AppState,
     attempt: String,
+    begin: impl FnOnce(),
     opening: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
-) -> Result<T, String> {
+) -> Attempt<T> {
     let task = {
-        let mut connecting = state.2.lock().unwrap();
-        if connecting.stopped.remove(&attempt) {
-            return Err(CONNECT_STOPPED.into());
+        let mut connecting = state.2.locked();
+        if let Some(i) = connecting.stopped.iter().position(|a| *a == attempt) {
+            connecting.stopped.remove(i);
+            return Attempt::StoppedFirst;
         }
+        begin();
         let task = tokio::spawn(opening);
         connecting.now = Some((attempt.clone(), task.abort_handle()));
         task
     };
     let opened = task.await;
     {
-        let mut connecting = state.2.lock().unwrap();
+        let mut connecting = state.2.locked();
         if connecting.now.as_ref().is_some_and(|(a, _)| *a == attempt) {
             connecting.now = None;
         }
     }
-    match opened {
+    Attempt::Ran(match opened {
         Ok(opened) => opened,
         Err(e) if e.is_cancelled() => Err(CONNECT_STOPPED.into()),
         Err(e) => Err(e.to_string()),
-    }
+    })
 }
 
 /// Opens the tunnel or resolves the URL, checks the dashboard there is Hermes, and the one `expect_server` names, then
@@ -367,18 +455,21 @@ async fn open_connection(
         Route::Url { .. } => ssh_route.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty() && !t.starts_with('-')),
     };
     let typed_token = typed_token.map(|t| (t, address));
-    Ok((Connection { dashboard: Arc::new(dashboard), pipe: Arc::new(pipe), _tunnel: tunnel, ssh_target, typed_token }, route))
+    Ok((Connection { attempt: String::new(), dashboard: Arc::new(dashboard), pipe, _tunnel: tunnel, ssh_target, typed_token }, route))
 }
 
 /// Stops the connection `hermes_connect` is opening for `attempt`, or, if it hasn't begun, stops it before it does.
 /// Another attempt's is left alone.
 #[tauri::command]
 fn hermes_connect_cancel(state: State<'_, AppState>, attempt: String) {
-    let mut connecting = state.2.lock().unwrap();
+    let mut connecting = state.2.locked();
     match &connecting.now {
         Some((now, task)) if *now == attempt => task.abort(),
         _ => {
-            connecting.stopped.insert(attempt);
+            if connecting.stopped.len() >= STOPPED_KEPT {
+                connecting.stopped.pop_front();
+            }
+            connecting.stopped.push_back(attempt);
         }
     }
 }
@@ -411,7 +502,7 @@ async fn hermes_probe(
             transport::probe_expecting(&base, &sign_in, &profile, transport::PROBE_STEP_TIMEOUT, reach_within(quick), expect_server.as_deref()).await?;
         Ok(ProbeResult { route: route.with_server(probed.server.clone()), probed })
     });
-    if let Some(before) = state.1.lock().unwrap().replace(task.abort_handle()) {
+    if let Some(before) = state.1.locked().replace(task.abort_handle()) {
         before.abort();
     }
     match task.await {
@@ -450,7 +541,7 @@ async fn hermes_reach(target: Target, expect_server: Option<String>, quick: Opti
 
 #[tauri::command]
 fn hermes_probe_cancel(state: State<'_, AppState>) {
-    if let Some(task) = state.1.lock().unwrap().take() {
+    if let Some(task) = state.1.locked().take() {
         task.abort();
     }
 }
@@ -458,43 +549,29 @@ fn hermes_probe_cancel(state: State<'_, AppState>) {
 /// Gives the signed-in Hermes a model provider's API key for `profile` (`Dashboard::save_provider_key`). The key
 /// goes to the server and isn't kept on this computer.
 #[tauri::command]
-async fn hermes_save_provider_key(state: State<'_, AppState>, profile: String, key: String, value: String) -> Result<SavedKey, String> {
-    let dashboard = match &*state.0.lock().await {
-        Some(conn) => conn.dashboard.clone(),
-        None => return Err(transport::TransportError::Closed.to_string()),
-    };
-    dashboard.save_provider_key(&profile, &key, &value).await.map_err(|e| e.to_string())
+async fn hermes_save_provider_key(state: State<'_, AppState>, attempt: String, profile: String, key: String, value: String) -> Result<SavedKey, RelayError> {
+    let dashboard = dashboard(&state, &attempt).await?;
+    dashboard.save_provider_key(&profile, &key, &value).await.map_err(RelayError::from)
 }
 
 /// Takes a model provider's API key out of the signed-in Hermes for `profile` (`Dashboard::remove_provider_key`). The
 /// window's REST relay refuses `DELETE api/env`, so this is the only way (ADR 0095).
 #[tauri::command]
-async fn hermes_remove_provider_key(state: State<'_, AppState>, profile: String, key: String) -> Result<(), String> {
-    let dashboard = match &*state.0.lock().await {
-        Some(conn) => conn.dashboard.clone(),
-        None => return Err(transport::TransportError::Closed.to_string()),
-    };
-    dashboard.remove_provider_key(&profile, &key).await.map_err(|e| e.to_string())
-}
-
-/// The signed-in Hermes's dashboard, or the error a closed connection gives.
-async fn signed_in_dashboard(state: &State<'_, AppState>) -> Result<Arc<Dashboard>, String> {
-    match &*state.0.lock().await {
-        Some(conn) => Ok(conn.dashboard.clone()),
-        None => Err(transport::TransportError::Closed.to_string()),
-    }
+async fn hermes_remove_provider_key(state: State<'_, AppState>, attempt: String, profile: String, key: String) -> Result<(), RelayError> {
+    let dashboard = dashboard(&state, &attempt).await?;
+    dashboard.remove_provider_key(&profile, &key).await.map_err(RelayError::from)
 }
 
 /// `profile`'s subscription providers and whether each is signed in, without token previews (ADR 0133).
 #[tauri::command]
-async fn hermes_provider_sign_ins(state: State<'_, AppState>, profile: String) -> Result<Vec<transport::ProviderSignIn>, String> {
-    signed_in_dashboard(&state).await?.provider_sign_ins(&profile).await.map_err(|e| e.to_string())
+async fn hermes_provider_sign_ins(state: State<'_, AppState>, attempt: String, profile: String) -> Result<Vec<transport::ProviderSignIn>, RelayError> {
+    dashboard(&state, &attempt).await?.provider_sign_ins(&profile).await.map_err(RelayError::from)
 }
 
 /// `profile`'s OpenAI-compatible endpoints, without key previews (ADR 0133).
 #[tauri::command]
-async fn hermes_custom_endpoints(state: State<'_, AppState>, profile: String) -> Result<Vec<transport::CustomEndpoint>, String> {
-    signed_in_dashboard(&state).await?.custom_endpoints(&profile).await.map_err(|e| e.to_string())
+async fn hermes_custom_endpoints(state: State<'_, AppState>, attempt: String, profile: String) -> Result<Vec<transport::CustomEndpoint>, RelayError> {
+    dashboard(&state, &attempt).await?.custom_endpoints(&profile).await.map_err(RelayError::from)
 }
 
 /// Checks an OpenAI-compatible endpoint and adds it to `profile` (`Dashboard::save_endpoint`, ADR 0133). Its key goes
@@ -502,19 +579,19 @@ async fn hermes_custom_endpoints(state: State<'_, AppState>, profile: String) ->
 #[tauri::command]
 async fn hermes_save_endpoint(
     state: State<'_, AppState>,
+    attempt: String,
     profile: String,
     form: transport::EndpointForm,
     anyway: bool,
-) -> Result<transport::EndpointSave, String> {
-    signed_in_dashboard(&state).await?.save_endpoint(&profile, &form, anyway).await.map_err(|e| e.to_string())
+) -> Result<transport::EndpointSave, RelayError> {
+    dashboard(&state, &attempt).await?.save_endpoint(&profile, &form, anyway).await.map_err(RelayError::from)
 }
 
 #[tauri::command]
-async fn hermes_send(state: State<'_, AppState>, frame: String) -> Result<(), String> {
-    match &*state.0.lock().await {
-        Some(conn) => conn.pipe.send(frame).map_err(|e| e.to_string()),
-        None => Err(transport::TransportError::Closed.to_string()),
-    }
+async fn hermes_send(state: State<'_, AppState>, attempt: String, frame: String) -> Result<(), String> {
+    // The send waits while the pipe's queue is full; don't hold the lock meanwhile.
+    let pipe = held(&*state.0.lock().await, &attempt)?.pipe.sender();
+    pipe.send(frame).await.map_err(|e| e.to_string())
 }
 
 /// Sends a frame with a file the owner attached (`Attachable`) in it.
@@ -522,6 +599,7 @@ async fn hermes_send(state: State<'_, AppState>, frame: String) -> Result<(), St
 async fn hermes_send_file(
     state: State<'_, AppState>,
     attachable: State<'_, Attachable>,
+    attempt: String,
     head: String,
     path: String,
     tail: String,
@@ -529,11 +607,9 @@ async fn hermes_send_file(
 ) -> Result<(), String> {
     attachable.check(&path).map_err(|e| e.to_string())?;
     // Reading a big file takes a while; don't hold the lock, so a Stop can still go out.
-    let pipe = match &*state.0.lock().await {
-        Some(conn) => conn.pipe.clone(),
-        None => return Err(transport::TransportError::Closed.to_string()),
-    };
-    pipe.send_file(&head, &path, &tail, max_bytes).await.map_err(|e| e.to_string())
+    let pipe = held(&*state.0.lock().await, &attempt)?.pipe.sender();
+    let written = pipe.send_file(&head, &path, &tail, max_bytes).await.map_err(|e| e.to_string())?;
+    written.wait().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -567,6 +643,21 @@ async fn attach_picked_files(app: tauri::AppHandle, attachable: State<'_, Attach
     Ok(paths)
 }
 
+/// Attaches the files the owner copied in a file manager and pasted into the composer, by path, as a drop does (ADR
+/// 0143). `[]`: the clipboard holds no local files. Elsewhere than Linux the webview's paste event carries the files.
+#[tauri::command]
+async fn attach_copied_files(app: tauri::AppHandle, attachable: State<'_, Attachable>) -> Result<Vec<String>, String> {
+    #[cfg(target_os = "linux")]
+    let paths = copied_files::read(&app).await?;
+    #[cfg(not(target_os = "linux"))]
+    let paths = {
+        let _ = app;
+        Vec::new()
+    };
+    attachable.add(paths.clone());
+    Ok(paths)
+}
+
 /// Takes a screenshot of a region or window the owner picks, staged privately as `<name>.png` for the composer.
 #[tauri::command]
 async fn screenshot_capture(
@@ -580,12 +671,16 @@ async fn screenshot_capture(
     Ok(capture)
 }
 
-/// Deletes a staged screenshot: removed from the composer, or its message sent. Paths that aren't one are ignored.
+/// Deletes a staged screenshot: removed from the composer, or its message sent. Paths that aren't one are ignored. The
+/// folder is deleted off the main thread.
 #[tauri::command]
-fn screenshot_discard(state: State<'_, Screenshots>, path: String) {
-    if let Some(c) = &*state.captures.lock().unwrap() {
-        c.discard(std::path::Path::new(&path));
-    }
+async fn screenshot_discard(app: tauri::AppHandle, path: String) {
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Some(c) = &*app.state::<Screenshots>().captures.locked() {
+            c.discard(std::path::Path::new(&path));
+        }
+    })
+    .await;
 }
 
 /// How screenshots are taken on this desktop, for Settings.
@@ -594,13 +689,17 @@ async fn screenshot_support() -> screenshot::Support {
     tokio::task::spawn_blocking(screenshot::support).await.unwrap_or_else(|e| screenshot::Support { ok: false, summary: e.to_string() })
 }
 
-/// The renderer supplies all persisted outboxes at startup and whenever they change, before cleanup.
+/// The renderer supplies all persisted outboxes at startup and whenever they change, before cleanup. The folders are
+/// swept off the main thread.
 #[tauri::command]
-fn screenshot_sync_outbox(app: tauri::AppHandle, state: State<'_, Screenshots>, paths: Vec<String>) -> Result<(), screenshot::CaptureError> {
-    // Also those of drafts an update's restart couldn't put back (update.rs).
-    let saved = update::saved_attachment_paths(&app);
-    state.captures()?.retain_outbox(paths.into_iter().map(std::path::PathBuf::from).chain(saved));
-    Ok(())
+async fn screenshot_sync_outbox(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), screenshot::CaptureError> {
+    let sync = move || {
+        // Also those of drafts an update's restart couldn't put back (update.rs).
+        let saved = update::saved_attachment_paths(&app);
+        app.state::<Screenshots>().captures()?.retain_outbox(paths.into_iter().map(std::path::PathBuf::from).chain(saved));
+        Ok(())
+    };
+    tokio::task::spawn_blocking(sync).await.map_err(|e| screenshot::CaptureError::Failed(e.to_string()))?
 }
 
 /// Peeking leaves the request pending if the signed-in window goes away before handling it.
@@ -648,21 +747,15 @@ async fn stage_clipboard_file(
 }
 
 #[tauri::command]
-async fn hermes_request(state: State<'_, AppState>, method: String, path: String, body: Option<String>) -> Result<String, String> {
-    // Don't hold the lock across the request, so frames keep flowing while it runs.
-    let dashboard = match &*state.0.lock().await {
-        Some(conn) => conn.dashboard.clone(),
-        None => return Err(transport::TransportError::Closed.to_string()),
-    };
-    dashboard.request(&method, &path, body).await.map_err(|e| e.to_string())
+async fn hermes_request(state: State<'_, AppState>, attempt: String, method: String, path: String, body: Option<String>) -> Result<String, RelayError> {
+    let dashboard = dashboard(&state, &attempt).await?;
+    dashboard.request(&method, &path, body).await.map_err(RelayError::from)
 }
 
-/// The signed-in dashboard, without holding the lock across a request, so frames keep flowing while it runs.
-async fn dashboard(state: &State<'_, AppState>) -> Result<Arc<Dashboard>, String> {
-    match &*state.0.lock().await {
-        Some(conn) => Ok(conn.dashboard.clone()),
-        None => Err(transport::TransportError::Closed.to_string()),
-    }
+/// The dashboard of the connection opened as `attempt` (`held`), without holding the lock across a request, so
+/// frames keep flowing while it runs.
+async fn dashboard(state: &AppState, attempt: &str) -> Result<Arc<Dashboard>, String> {
+    Ok(held(&*state.0.lock().await, attempt)?.dashboard.clone())
 }
 
 /// A header the webview set on a raw-body command, URI-decoded.
@@ -688,9 +781,10 @@ async fn hermes_transcribe(app: tauri::AppHandle, state: State<'_, AppState>, re
     };
     let run = header_value(&request, "x-stt-run");
     let profile = header_value(&request, "x-profile");
+    let attempt = header_value(&request, "x-attempt");
     let server = async {
         let profile = profile.ok_or("The recording didn't name a profile.")?;
-        let dashboard = dashboard(&state).await?;
+        let dashboard = dashboard(&state, attempt.as_deref().unwrap_or_default()).await?;
         dashboard.transcribe(&profile, &mime, audio).await.map_err(|e| e.to_string())
     };
     local_stt::transcribe_routed(&app, &mime, audio, only, run, server).await
@@ -706,40 +800,40 @@ struct SpeechOut {
 }
 
 #[tauri::command]
-async fn hermes_speak(state: State<'_, AppState>, profile: String, text: String) -> Result<SpeechOut, String> {
+async fn hermes_speak(state: State<'_, AppState>, attempt: String, profile: String, text: String) -> Result<SpeechOut, RelayError> {
     use base64::Engine;
-    let dashboard = dashboard(&state).await?;
-    let speech = dashboard.speak(&profile, &text).await.map_err(|e| e.to_string())?;
+    let dashboard = dashboard(&state, &attempt).await?;
+    let speech = dashboard.speak(&profile, &text).await.map_err(RelayError::from)?;
     let audio = base64::engine::general_purpose::STANDARD.encode(&speech.audio);
     Ok(SpeechOut { mime: speech.mime, audio, provider: speech.provider })
 }
 
 #[tauri::command]
-async fn hermes_voice_setup(state: State<'_, AppState>, profile: String) -> Result<transport::VoiceSetup, String> {
-    let dashboard = dashboard(&state).await?;
-    dashboard.voice_setup(&profile).await.map_err(|e| e.to_string())
+async fn hermes_voice_setup(state: State<'_, AppState>, attempt: String, profile: String) -> Result<transport::VoiceSetup, RelayError> {
+    let dashboard = dashboard(&state, &attempt).await?;
+    dashboard.voice_setup(&profile).await.map_err(RelayError::from)
 }
 
 /// A read-only dashboard GET whose answer may be big, e.g. a server file for the Server files screen's preview: refused
 /// once it passes `max_bytes`.
 #[tauri::command]
-async fn hermes_get_limited(state: State<'_, AppState>, path: String, max_bytes: u64) -> Result<String, String> {
-    let dashboard = dashboard(&state).await?;
-    dashboard.get_limited(&path, max_bytes).await.map_err(|e| e.to_string())
+async fn hermes_get_limited(state: State<'_, AppState>, attempt: String, path: String, max_bytes: u64) -> Result<String, RelayError> {
+    let dashboard = dashboard(&state, &attempt).await?;
+    dashboard.get_limited(&path, max_bytes).await.map_err(RelayError::from)
 }
 
 #[tauri::command]
-async fn hermes_toolset_guards(state: State<'_, AppState>, profile: String) -> Result<transport::ToolsetGuards, String> {
-    let dashboard = dashboard(&state).await?;
-    dashboard.toolset_guards(&profile).await.map_err(|e| e.to_string())
+async fn hermes_toolset_guards(state: State<'_, AppState>, attempt: String, profile: String) -> Result<transport::ToolsetGuards, RelayError> {
+    let dashboard = dashboard(&state, &attempt).await?;
+    dashboard.toolset_guards(&profile).await.map_err(RelayError::from)
 }
 
 /// Settings → MCP servers' edit of one server for `profile` (`Dashboard::mcp_edit`, ADR 0121). The webview sends
 /// only that server's fields, secrets it didn't retype left out; Rust reads and writes Hermes's whole map.
 #[tauri::command]
-async fn hermes_mcp_edit(state: State<'_, AppState>, profile: String, edit: mcp::Edit) -> Result<(), String> {
-    let dashboard = dashboard(&state).await?;
-    dashboard.mcp_edit(&profile, &edit).await.map_err(|e| e.to_string())
+async fn hermes_mcp_edit(state: State<'_, AppState>, attempt: String, profile: String, edit: mcp::Edit) -> Result<(), RelayError> {
+    let dashboard = dashboard(&state, &attempt).await?;
+    dashboard.mcp_edit(&profile, &edit).await.map_err(RelayError::from)
 }
 
 #[tauri::command]
@@ -825,7 +919,7 @@ struct Transfers {
 impl Transfers {
     fn stop_all(&self) {
         use std::sync::atomic::Ordering;
-        let mut tasks = self.tasks.lock().unwrap();
+        let mut tasks = self.tasks.locked();
         self.epoch.fetch_add(1, Ordering::SeqCst);
         for (_, (_, task)) in tasks.drain() {
             task.abort();
@@ -836,20 +930,29 @@ impl Transfers {
         self.epoch.load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// Refuses work asked for at `epoch` once the connection was closed or replaced since.
+    fn still(&self, epoch: u64) -> Result<(), String> {
+        if self.epoch() == epoch {
+            Ok(())
+        } else {
+            Err(TRANSFER_STOPPED.into())
+        }
+    }
+
     /// Runs `work` as transfer `id` until it ends or `files_cancel` or `stop_all` stops it, if no stop came since
     /// `epoch` (checked under the same lock `stop_all` takes, so a stop either reaches the work or keeps it from
     /// starting). Given an `id` still running, the older transfer is stopped; each run removes only its own entry.
-    async fn run<T: Send + 'static>(
+    async fn run<T: Send + 'static, E: From<String> + Send + 'static>(
         &self,
         id: u64,
         epoch: u64,
-        work: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
-    ) -> Result<T, String> {
+        work: impl std::future::Future<Output = Result<T, E>> + Send + 'static,
+    ) -> Result<T, E> {
         let run = self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let task = {
-            let mut tasks = self.tasks.lock().unwrap();
+            let mut tasks = self.tasks.locked();
             if self.epoch() != epoch {
-                return Err(TRANSFER_STOPPED.into());
+                return Err(TRANSFER_STOPPED.to_owned().into());
             }
             let task = tokio::spawn(work);
             if let Some((_, old)) = tasks.insert(id, (run, task.abort_handle())) {
@@ -858,15 +961,15 @@ impl Transfers {
             task
         };
         let ended = task.await;
-        let mut tasks = self.tasks.lock().unwrap();
+        let mut tasks = self.tasks.locked();
         if tasks.get(&id).is_some_and(|(r, _)| *r == run) {
             tasks.remove(&id);
         }
         drop(tasks);
         match ended {
             Ok(result) => result,
-            Err(e) if e.is_cancelled() => Err(TRANSFER_STOPPED.into()),
-            Err(e) => Err(e.to_string()),
+            Err(e) if e.is_cancelled() => Err(TRANSFER_STOPPED.to_owned().into()),
+            Err(e) => Err(e.to_string().into()),
         }
     }
 }
@@ -889,14 +992,12 @@ struct Downloaded {
     bytes: u64,
 }
 
-/// The signed-in dashboard, if the connection is still the one that was current at `epoch`. Waiting for the connection
-/// lock can outlast a reconnect, so this checks again after.
-async fn dashboard_since(app: &tauri::AppHandle, epoch: u64) -> Result<Arc<Dashboard>, String> {
-    let transfers = app.state::<Transfers>();
-    let dashboard = dashboard(&app.state::<AppState>()).await?;
-    if transfers.epoch() != epoch {
-        return Err(TRANSFER_STOPPED.into());
-    }
+/// The dashboard of the connection opened as `attempt`, if no transfer stop came since `epoch` either: a reopen
+/// keeps the connection but stops its transfers. Waiting for the connection lock can outlast a reconnect, so this
+/// checks again after.
+async fn dashboard_since(app: &tauri::AppHandle, attempt: &str, epoch: u64) -> Result<Arc<Dashboard>, String> {
+    let dashboard = dashboard(&app.state::<AppState>(), attempt).await?;
+    app.state::<Transfers>().still(epoch)?;
     Ok(dashboard)
 }
 
@@ -909,15 +1010,16 @@ async fn dashboard_since(app: &tauri::AppHandle, epoch: u64) -> Result<Arc<Dashb
 #[tauri::command]
 async fn files_download(
     app: tauri::AppHandle,
+    attempt: String,
     transfers: State<'_, Transfers>,
     id: u64,
     path: String,
     name: String,
     on_progress: Channel<TransferProgress>,
-) -> Result<Option<Downloaded>, String> {
+) -> Result<Option<Downloaded>, RelayError> {
     let epoch = transfers.epoch();
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let mut dialog = app.dialog().file().set_title("Download from the Hermes server").set_file_name(name);
+    let mut dialog = app.dialog().file().set_title("Download from the Hermes server").set_file_name(suggested_name(&name, "download"));
     if let Some(window) = app.get_webview_window("main") {
         dialog = dialog.set_parent(&window);
     }
@@ -927,14 +1029,14 @@ async fn files_download(
     let Some(dest) = rx.await.map_err(|e| e.to_string())? else { return Ok(None) };
     let dest = dest.into_path().map_err(|e| e.to_string())?;
     let work = async move {
-        let dashboard = dashboard_since(&app, epoch).await?;
+        let dashboard = dashboard_since(&app, &attempt, epoch).await?;
         let shown = dest.display().to_string();
         // Picked: from here on it is a running download, which Cancel can stop.
         let _ = on_progress.send(TransferProgress { done: 0, total: None, dest: shown.clone() });
         let report = |done, total| {
             let _ = on_progress.send(TransferProgress { done, total, dest: shown.clone() });
         };
-        let bytes = dashboard.download(&path, &dest, report).await.map_err(|e| e.to_string())?;
+        let bytes = dashboard.download(&path, &dest, report).await.map_err(RelayError::from)?;
         Ok(Some(Downloaded { dest: shown, bytes }))
     };
     transfers.run(id, epoch, work).await
@@ -977,7 +1079,7 @@ async fn files_pick_upload(app: tauri::AppHandle, picks: State<'_, UploadPicks>,
         return Err("That isn't a file.".into());
     }
     let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
-    let mut picks = picks.0.lock().unwrap();
+    let mut picks = picks.0.locked();
     picks.0 += 1;
     let token = picks.0;
     // Picks never sent are let go once the connection they were picked in is gone.
@@ -990,7 +1092,7 @@ async fn files_pick_upload(app: tauri::AppHandle, picks: State<'_, UploadPicks>,
 /// Lets go of a pick that won't be sent: the owner cancelled the upload dialog. A token already taken or let go is fine.
 #[tauri::command]
 fn files_discard_pick(picks: State<'_, UploadPicks>, token: u64) {
-    picks.0.lock().unwrap().1.remove(&token);
+    picks.0.locked().1.remove(&token);
 }
 
 /// Uploads the file picked as `token` to the server path `path` (`Dashboard::upload`, ADR 0023). `overwrite` false:
@@ -999,6 +1101,7 @@ fn files_discard_pick(picks: State<'_, UploadPicks>, token: u64) {
 #[allow(clippy::too_many_arguments)]
 async fn files_upload(
     app: tauri::AppHandle,
+    attempt: String,
     transfers: State<'_, Transfers>,
     picks: State<'_, UploadPicks>,
     id: u64,
@@ -1006,18 +1109,18 @@ async fn files_upload(
     path: String,
     overwrite: bool,
     on_progress: Channel<TransferProgress>,
-) -> Result<String, String> {
+) -> Result<String, RelayError> {
     // Taken, not looked up: a pick is good for one upload.
-    let (local, epoch) = picks.0.lock().unwrap().1.remove(&token).ok_or("That file wasn't picked in the Open dialog, or was already sent.")?;
+    let (local, epoch) = picks.0.locked().1.remove(&token).ok_or("That file wasn't picked in the Open dialog, or was already sent.")?;
     let dest = path.clone();
     // Registered before it waits for the connection, so a stop meanwhile reaches it; and only the connection that was
     // current when it was asked for is used.
     let work = async move {
-        let dashboard = dashboard_since(&app, epoch).await?;
+        let dashboard = dashboard_since(&app, &attempt, epoch).await?;
         let report = move |done, total| {
             let _ = on_progress.send(TransferProgress { done, total, dest: dest.clone() });
         };
-        dashboard.upload(&path, transport::UploadSource::File(local), overwrite, report).await.map_err(|e| e.to_string())
+        dashboard.upload(&path, transport::UploadSource::File(local), overwrite, report).await.map_err(RelayError::from)
     };
     transfers.run(id, epoch, work).await
 }
@@ -1028,16 +1131,17 @@ async fn files_upload(
 #[tauri::command]
 async fn files_save_text(
     app: tauri::AppHandle,
+    attempt: String,
     transfers: State<'_, Transfers>,
     id: u64,
     path: String,
     text: String,
     overwrite: bool,
-) -> Result<String, String> {
+) -> Result<String, RelayError> {
     let epoch = transfers.epoch();
     let work = async move {
-        let dashboard = dashboard_since(&app, epoch).await?;
-        dashboard.upload(&path, transport::UploadSource::Bytes(text.into_bytes()), overwrite, |_, _| {}).await.map_err(|e| e.to_string())
+        let dashboard = dashboard_since(&app, &attempt, epoch).await?;
+        dashboard.upload(&path, transport::UploadSource::Bytes(text.into_bytes()), overwrite, |_, _| {}).await.map_err(RelayError::from)
     };
     transfers.run(id, epoch, work).await
 }
@@ -1047,27 +1151,145 @@ async fn files_save_text(
 /// `files_cancel` stops it and a closed or replaced connection never sends it. `session`: the chat whose sandbox the
 /// path is in, named as the read named it, so the save lands where the read did (ADR 0062).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn fs_save_text(
     app: tauri::AppHandle,
+    attempt: String,
     transfers: State<'_, Transfers>,
     id: u64,
     profile: String,
     path: String,
     text: String,
     session: Option<String>,
-) -> Result<String, String> {
+) -> Result<String, RelayError> {
     let epoch = transfers.epoch();
     let work = async move {
-        let dashboard = dashboard_since(&app, epoch).await?;
-        dashboard.write_agent_text(&profile, &path, &text, session.as_deref()).await.map_err(|e| e.to_string())
+        let dashboard = dashboard_since(&app, &attempt, epoch).await?;
+        dashboard.write_agent_text(&profile, &path, &text, session.as_deref()).await.map_err(RelayError::from)
     };
     transfers.run(id, epoch, work).await
+}
+
+/// Opens the native Open dialog for files to add to a project's context (ADR 0135). The picked files become attachable
+/// (ADR 0129), so `context_upload` may send them. `[]`: the owner cancelled.
+#[tauri::command]
+async fn context_pick(app: tauri::AppHandle, attachable: State<'_, Attachable>) -> Result<Vec<LocalFile>, String> {
+    let paths = attach_picked_files(app, attachable.clone()).await?;
+    Ok(transport::stat_files(&attachable, &paths).await)
+}
+
+/// Names and sizes of files dropped on a project's Context card (ADR 0135). A path that isn't attachable (ADR 0129)
+/// comes back with an `error` and no size.
+#[tauri::command]
+async fn context_local_files(attachable: State<'_, Attachable>, paths: Vec<String>) -> Result<Vec<LocalFile>, String> {
+    Ok(transport::stat_files(&attachable, &paths).await)
+}
+
+/// Uploads the attached file `local` (up to 30 MB) to `server_path` in a project's context folder (ADR 0135), as
+/// transfer `id`, so `files_cancel` stops it and a closed or replaced connection never sends it (ADR 0023).
+/// `ssh_profile`: the profile's tools run over SSH, so only UTF-8 text up to 8 MiB goes.
+/// `overwrite` false: rejects with `exists` when a file is already there.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn context_upload(
+    app: tauri::AppHandle,
+    attempt: String,
+    transfers: State<'_, Transfers>,
+    attachable: State<'_, Attachable>,
+    id: u64,
+    local: String,
+    server_path: String,
+    overwrite: bool,
+    ssh_profile: Option<String>,
+    on_progress: Channel<TransferProgress>,
+) -> Result<(), String> {
+    let epoch = transfers.epoch();
+    let file = project_context::AttachedFile::check(&attachable, &local)?;
+    let to = project_context::ContextPath::parse(&server_path)?;
+    let work = async move {
+        let dashboard = dashboard_since(&app, &attempt, epoch).await?;
+        let report = move |done, total| {
+            let _ = on_progress.send(TransferProgress { done, total, dest: server_path.clone() });
+        };
+        project_context::upload(&dashboard, file, &to, overwrite, ssh_profile.as_deref(), report).await
+    };
+    transfers.run(id, epoch, work).await
+}
+
+/// Writes `text` as `server_path` in a project's context folder (ADR 0135). `overwrite` false: rejects with `exists`
+/// when a file is already there.
+#[tauri::command]
+async fn context_write_text(
+    app: tauri::AppHandle,
+    attempt: String,
+    server_path: String,
+    text: String,
+    overwrite: bool,
+    ssh_profile: Option<String>,
+) -> Result<(), String> {
+    let epoch = app.state::<Transfers>().epoch();
+    let to = project_context::ContextPath::parse(&server_path)?;
+    project_context::write_text(&*dashboard_since(&app, &attempt, epoch).await?, &to, text, overwrite, ssh_profile.as_deref()).await
+}
+
+/// Creates a project's context folder `path`, and any missing parents, in managed files (ADR 0135). Returns the path
+/// Hermes created.
+#[tauri::command]
+async fn context_mkdir(app: tauri::AppHandle, attempt: String, path: String) -> Result<String, String> {
+    let epoch = app.state::<Transfers>().epoch();
+    let dir = project_context::ContextDir::parse(&path)?;
+    project_context::mkdir(&*dashboard_since(&app, &attempt, epoch).await?, &dir).await
+}
+
+/// Deletes the file `server_path` from a project's context folder in managed files (ADR 0135).
+#[tauri::command]
+async fn context_remove(app: tauri::AppHandle, attempt: String, server_path: String) -> Result<(), String> {
+    let epoch = app.state::<Transfers>().epoch();
+    let file = project_context::ContextPath::parse(&server_path)?;
+    project_context::remove(&*dashboard_since(&app, &attempt, epoch).await?, &file).await
+}
+
+/// The text of `server_path` in a project's context folder, `size` bytes as listed, for full-text mode (ADR 0135).
+/// `None`: it holds no text Hermes Chat can read.
+#[tauri::command]
+async fn context_read_text(
+    app: tauri::AppHandle,
+    attempt: String,
+    server_path: String,
+    size: u64,
+    ssh_profile: Option<String>,
+) -> Result<Option<String>, String> {
+    let epoch = app.state::<Transfers>().epoch();
+    let file = project_context::ContextPath::parse(&server_path)?;
+    project_context::read_text(&*dashboard_since(&app, &attempt, epoch).await?, &file, size, ssh_profile.as_deref()).await
+}
+
+/// A context file where `ssh_profile`'s tools run: its size there, and its text when it is plain text up to 512 KiB
+/// (ADR 0135).
+#[tauri::command]
+async fn context_ssh_file(app: tauri::AppHandle, attempt: String, server_path: String, ssh_profile: String) -> Result<project_context::SshFile, String> {
+    let epoch = app.state::<Transfers>().epoch();
+    let file = project_context::ContextPath::parse(&server_path)?;
+    project_context::ssh_file(&*dashboard_since(&app, &attempt, epoch).await?, &file, &ssh_profile).await
+}
+
+/// Keeps `<main_folder>/context/` out of the Git repository it is in, through that repository's `info/exclude`, the
+/// only file it writes (ADR 0135). `none`: not in a repository.
+#[tauri::command]
+async fn context_git_exclude(
+    app: tauri::AppHandle,
+    attempt: String,
+    main_folder: String,
+    ssh_profile: Option<String>,
+) -> Result<project_context::GitExclude, String> {
+    let epoch = app.state::<Transfers>().epoch();
+    project_context::git_exclude(&*dashboard_since(&app, &attempt, epoch).await?, &main_folder, ssh_profile.as_deref()).await
 }
 
 /// Stops transfer `id`, if it is still running. A download's part file is removed; `dest` is left as it was.
 #[tauri::command]
 fn files_cancel(transfers: State<'_, Transfers>, id: u64) {
-    if let Some((_, task)) = transfers.tasks.lock().unwrap().remove(&id) {
+    if let Some((_, task)) = transfers.tasks.locked().remove(&id) {
         task.abort();
     }
 }
@@ -1105,16 +1327,13 @@ async fn headers_delete(connection: Option<String>) -> Result<(), String> {
     saved_password::delete(saved_password::account(saved_password::HEADERS, connection.as_deref())?).await
 }
 
-/// Saves the token the connection in use signed in with, when it was typed for this sign-in, in the keyring as
+/// Saves the token the connection the webview opened as `attempt` signed in with, when it was typed for this sign-in, in the keyring as
 /// `dashboard-token/<id>` for `addresses`: the routes it was entered for, which must include the one it signed in at.
 /// Nothing typed: nothing to save. The webview never reads the token back (ADR 0058).
 #[tauri::command]
-async fn token_keep(state: State<'_, AppState>, connection: Option<String>, addresses: Vec<Address>) -> Result<(), String> {
+async fn token_keep(state: State<'_, AppState>, connection: Option<String>, attempt: String, addresses: Vec<Address>) -> Result<(), String> {
     let account = saved_password::account(saved_password::TOKEN, connection.as_deref())?;
-    let typed = match &*state.0.lock().await {
-        Some(conn) => conn.typed_token.clone(),
-        None => return Err(transport::TransportError::Closed.to_string()),
-    };
+    let typed = held(&*state.0.lock().await, &attempt)?.typed_token.clone();
     let Some((token, at)) = typed else { return Ok(()) };
     let mut keep: Vec<Address> = Vec::new();
     for a in addresses.into_iter().map(|[mode, target]| [mode, target.trim().to_owned()]) {
@@ -1141,6 +1360,29 @@ async fn token_delete(connection: Option<String>) -> Result<(), String> {
     saved_password::delete(saved_password::account(saved_password::TOKEN, connection.as_deref())?).await
 }
 
+/// A file name the webview or the server suggests, made fit to show in a Save dialog (#481): only its last part on
+/// either separator, so it names no folder; without control, invisible or direction-changing characters, which can make
+/// `invoice\u{202E}fdp.exe` read `invoiceexe.pdf`; and without `:` or the other characters Windows refuses, where `:`
+/// would name a drive or a stream. Leading and trailing spaces and dots go too. `fallback` when nothing is left.
+fn suggested_name(name: &str, fallback: &str) -> String {
+    let hidden = |c: char| {
+        c.is_control()
+            || matches!(c, '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}')
+    };
+    let last = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let kept: String = last.chars().filter(|&c| !hidden(c) && !matches!(c, ':' | '<' | '>' | '"' | '|' | '?' | '*')).collect();
+    let mut kept = kept.trim_matches(|c: char| c.is_whitespace() || c == '.').to_owned();
+    if kept.len() > 200 {
+        let end = (0..=200).rev().find(|&i| kept.is_char_boundary(i)).unwrap_or(0);
+        kept.truncate(end);
+    }
+    if kept.is_empty() {
+        fallback.to_owned()
+    } else {
+        kept
+    }
+}
+
 /// Writes `contents` where the owner picks in the native Save dialog, which asks before replacing a file. The webview
 /// never names the path. `None`: the owner cancelled, and nothing was written.
 async fn save_with_dialog(
@@ -1151,6 +1393,7 @@ async fn save_with_dialog(
     contents: impl AsRef<[u8]>,
 ) -> Result<Option<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
+    let file_name = suggested_name(&file_name, filter.1.first().map_or("export".to_owned(), |ext| format!("export.{ext}")).as_str());
     let mut dialog = app.dialog().file().set_title(title).set_file_name(file_name).add_filter(filter.0, filter.1);
     if let Some(window) = app.get_webview_window("main") {
         dialog = dialog.set_parent(&window);
@@ -1214,7 +1457,7 @@ fn read_transcript(path: &std::path::Path, max_bytes: u64) -> Result<String, Str
         return Err(too_big());
     }
     let mut bytes = Vec::new();
-    file.take(max_bytes + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    file.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     if bytes.len() as u64 > max_bytes {
         return Err(too_big());
     }
@@ -1262,12 +1505,6 @@ fn png_bytes(base64: &str) -> Result<Vec<u8>, String> {
 async fn chat_export_image(app: tauri::AppHandle, png_base64: String, file_name: String) -> Result<Option<String>, String> {
     let png = png_bytes(&png_base64)?;
     save_with_dialog(&app, EXPORT_TITLE, file_name, ("PNG image", &["png"]), png).await
-}
-
-/// Saves the owner's message templates (src/hermes/templates.ts `exportFile`) where the owner picks.
-#[tauri::command]
-async fn templates_export(app: tauri::AppHandle, json: String) -> Result<Option<String>, String> {
-    save_with_dialog(&app, "Export templates", "hermes-chat-templates.json".into(), ("JSON", &["json"]), json).await
 }
 
 /// Saves Usage analytics' CSV where the owner picks in the native Save dialog (ADR 0026). `None`: cancelled.
@@ -1327,6 +1564,18 @@ async fn preview_check_web(url: String, user_agent: String) -> Result<web_page::
     web_page::check(&url, &user_agent).await
 }
 
+/// Whether a typed address's https:// form answers, so the address box opens it rather than http:// (ADR 0103).
+#[tauri::command]
+async fn preview_https_answers(url: String) -> Result<bool, String> {
+    web_page::https_answers(&url).await
+}
+
+/// A Markdown image the owner clicked to load, as a `data:` URL (`markdown_image::load`, ADR 0136).
+#[tauri::command]
+async fn markdown_image_load(url: String) -> Result<String, String> {
+    markdown_image::load(&url).await
+}
+
 /// Opens an http(s) page in the owner's default browser, and gives the browser's name where it is known.
 #[tauri::command]
 async fn preview_open_in_browser(app: tauri::AppHandle, url: String) -> Result<Option<String>, String> {
@@ -1360,6 +1609,52 @@ fn preview_page_place(app: tauri::AppHandle, key: String, placement: Option<page
 #[tauri::command]
 fn preview_page_close(app: tauri::AppHandle, key: String) {
     page_view::close(&app, key)
+}
+
+/// Takes a still of the page in the Preview to annotate (ADR 0094), kept in the captures folder until it is staged or
+/// discarded (`screenshot_discard`).
+#[tauri::command]
+async fn preview_annotate_still(app: tauri::AppHandle, state: State<'_, Screenshots>, key: String) -> Result<annotate::Still, annotate::AnnotateError> {
+    let captures = state.captures().map_err(|e| annotate::AnnotateError::Failed(e.to_string()))?;
+    page_view::annotate_still(&app, key, captures).await
+}
+
+/// What the page says is under a point of its still, for the outline while the owner points.
+#[tauri::command]
+async fn preview_annotate_query(
+    app: tauri::AppHandle,
+    key: String,
+    still: u64,
+    x: f64,
+    y: f64,
+    up: u32,
+) -> Result<Option<annotate::Answer>, annotate::AnnotateError> {
+    page_view::annotate_query(&app, key, still, x, y, up).await
+}
+
+/// The element the owner picked on the still, or its box as a region when the page changed there since.
+#[tauri::command]
+async fn preview_annotate_pick(app: tauri::AppHandle, key: String, still: u64, x: f64, y: f64, up: u32) -> Result<annotate::Pick, annotate::AnnotateError> {
+    page_view::annotate_pick(&app, key, still, x, y, up).await
+}
+
+/// Stages a still as annotation `n`, marked at `rect`, as a Screenshot the composer can send, and deletes the still.
+#[tauri::command]
+async fn preview_annotate_stage(
+    state: State<'_, Screenshots>,
+    attachable: State<'_, Attachable>,
+    still_path: String,
+    n: u32,
+    rect: annotate::Rect,
+    scale: f64,
+) -> Result<screenshot::Capture, screenshot::CaptureError> {
+    let captures = state.captures()?;
+    let staged = tokio::task::spawn_blocking(move || annotate::stage(&captures, std::path::Path::new(&still_path), n, rect, scale))
+        .await
+        .map_err(|e| screenshot::CaptureError::Failed(e.to_string()))??;
+    let path = staged.to_string_lossy().into_owned();
+    attachable.add([path.clone()]);
+    Ok(screenshot::Capture { path, note: None })
 }
 
 #[tauri::command]
@@ -1408,7 +1703,8 @@ async fn terminal_open(
     })
 }
 
-/// Async, so a terminal that isn't reading can't hold up the window.
+/// Hands what the owner typed to terminal `id`'s writing thread (terminal.rs), so a program that isn't reading holds
+/// up neither the window nor the runtime.
 #[tauri::command]
 async fn terminal_write(terminals: State<'_, terminal::Terminals>, id: u64, data: String) -> Result<(), terminal::TerminalError> {
     terminals.write(id, data.as_bytes())
@@ -1454,11 +1750,12 @@ fn display_event(e: display::DisplayEvent) -> tauri::ipc::InvokeResponseBody {
 async fn display_open(
     state: State<'_, AppState>,
     displays: State<'_, display::Displays>,
+    attempt: String,
     ticket: String,
     on_event: Channel<tauri::ipc::InvokeResponseBody>,
 ) -> Result<u64, String> {
     let epoch = displays.epoch();
-    let dashboard = dashboard(&state).await?;
+    let dashboard = dashboard(&state, &attempt).await?;
     let socket = display::open(dashboard, &ticket, move |e| {
         let _ = on_event.send(display_event(e));
     })
@@ -1520,6 +1817,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
     if screenshot {
         screenshots.requests.ask();
     }
+    std::thread::spawn(local_stt::sweep_scratch);
     let context = tauri::generate_context!();
     let mut builder = tauri::Builder::default();
     // The updater needs a public key to start, so it is there only in a build given one (README, "Updates").
@@ -1602,6 +1900,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             hermes_stat_files,
             hermes_read_preview,
             attach_picked_files,
+            attach_copied_files,
             stage_clipboard_file,
             hermes_request,
             hermes_transcribe,
@@ -1628,6 +1927,15 @@ pub fn run(screenshot: bool, link: Option<String>) {
             files_save_text,
             fs_save_text,
             files_cancel,
+            context_pick,
+            context_local_files,
+            context_upload,
+            context_write_text,
+            context_mkdir,
+            context_remove,
+            context_read_text,
+            context_ssh_file,
+            context_git_exclude,
             hermes_connect_cancel,
             hermes_probe,
             hermes_probe_cancel,
@@ -1649,19 +1957,24 @@ pub fn run(screenshot: bool, link: Option<String>) {
             chat_export,
             chat_export_image,
             import_pick_file,
-            templates_export,
             usage_export,
             logs_export,
             preview_pick_local,
             preview_read_local,
             preview_read_local_image,
             preview_check_web,
+            preview_https_answers,
+            markdown_image_load,
             preview_open_in_browser,
             preview_page_open,
             preview_page_go,
             preview_page_reload,
             preview_page_place,
             preview_page_close,
+            preview_annotate_still,
+            preview_annotate_query,
+            preview_annotate_pick,
+            preview_annotate_stage,
             preview_server_open,
             preview_server_close,
             preview_dev_servers,
@@ -1728,7 +2041,26 @@ mod test_common;
 #[cfg(test)]
 mod tests {
     use super::Transfers;
+    use crate::lock::Locked;
     use std::time::Duration;
+
+    #[test]
+    fn a_suggested_save_name_is_one_plain_file_name() {
+        let name = |s: &str| super::suggested_name(s, "download");
+        assert_eq!(name("invoice\u{202E}fdp.exe"), "invoicefdp.exe");
+        assert_eq!(name("a\u{2066}b\u{2069}c\u{200F}d\u{FEFF}e\u{0007}f\nġ.txt"), "abcdefġ.txt");
+        assert_eq!(name(r"..\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\x.bat"), "x.bat");
+        assert_eq!(name("../../etc/passwd"), "passwd");
+        assert_eq!(name("C:x.txt"), "Cx.txt");
+        assert_eq!(name("report.txt:stream"), "report.txtstream");
+        assert_eq!(name(r#"a<b>c"d|e?f*g.md"#), "abcdefg.md");
+        assert_eq!(name("  .hidden. "), "hidden");
+        for nothing in ["", "..", "/", r"dir\", "\u{202E}", " . "] {
+            assert_eq!(name(nothing), "download", "{nothing:?}");
+        }
+        assert_eq!(name("Chat — notes 2026.md"), "Chat — notes 2026.md");
+        assert_eq!(name(&"é".repeat(150)).len(), 200);
+    }
 
     #[test]
     fn a_chat_exports_only_as_markdown_or_json_each_with_its_own_extension() {
@@ -1768,6 +2100,16 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[test]
+    fn work_asked_for_before_the_connection_was_replaced_is_refused() {
+        let transfers = super::Transfers::default();
+        let asked = transfers.epoch();
+        assert_eq!(transfers.still(asked), Ok(()));
+        transfers.stop_all();
+        assert_eq!(transfers.still(asked), Err(super::TRANSFER_STOPPED.to_owned()));
+        assert_eq!(transfers.still(transfers.epoch()), Ok(()));
+    }
+
     #[tokio::test]
     async fn a_replaced_transfer_leaves_its_replacements_cancel_in_place() {
         let transfers = std::sync::Arc::new(Transfers::default());
@@ -1790,12 +2132,12 @@ mod tests {
         });
         assert_eq!(old.await.unwrap(), Err(super::TRANSFER_STOPPED.to_owned()));
         // The old run ended after the new one registered; the new one must still be reachable.
-        assert!(transfers.tasks.lock().unwrap().contains_key(&7));
+        assert!(transfers.tasks.locked().contains_key(&7));
         let epoch = transfers.epoch();
         transfers.stop_all();
         assert_eq!(new.await.unwrap(), Err(super::TRANSFER_STOPPED.to_owned()));
         assert_eq!(transfers.epoch(), epoch + 1);
-        assert!(transfers.tasks.lock().unwrap().is_empty());
+        assert!(transfers.tasks.locked().is_empty());
         // Asked for before that stop: it never starts.
         let started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let s = started.clone();
@@ -1846,7 +2188,7 @@ mod tests {
                         let _ = ws.send(Message::text(ready)).await;
                         while let Some(Ok(message)) = ws.recv().await {
                             if let Message::Text(text) = message {
-                                got.lock().unwrap().push(text.to_string());
+                                got.locked().push(text.to_string());
                             }
                         }
                     })
@@ -1855,7 +2197,7 @@ mod tests {
             )
             .layer(axum::middleware::from_fn(move |req: axum::extract::Request, next: axum::middleware::Next| {
                 let auth = req.headers().get(axum::http::header::AUTHORIZATION).and_then(|v| v.to_str().ok()).map(str::to_owned);
-                note.lock().unwrap().push((req.uri().path().to_owned(), auth));
+                note.locked().push((req.uri().path().to_owned(), auth));
                 next.run(req)
             }));
         let count = accepted.clone();
@@ -1887,24 +2229,137 @@ mod tests {
             let _connection = connect(&base, credential).await;
             let want = [("/api/status", None), (sign_in, auth.clone()), ("/api/auth/ws-ticket", auth), ("/api/ws", None)];
             // The shared client never carries the token: the status read and the socket go without it.
-            assert_eq!(*heard.lock().unwrap(), want.map(|(p, a)| (p.to_owned(), a)));
+            assert_eq!(*heard.locked(), want.map(|(p, a)| (p.to_owned(), a)));
             assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2, "one HTTP connection plus the WebSocket, for {sign_in}");
         }
     }
 
+    fn connecting_app() -> tauri::App<tauri::test::MockRuntime> {
+        tauri::test::mock_builder()
+            .manage(super::AppState::default())
+            .manage(super::Transfers::default())
+            .manage(super::display::Displays::default())
+            .manage(std::sync::Arc::new(super::server_page::ServerPages::default()))
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap()
+    }
+
+    async fn connect_command(app: &tauri::App<tauri::test::MockRuntime>, base: &url::Url, attempt: &str) -> Result<super::Route, String> {
+        use tauri::Manager;
+        let password = super::SignInWith::Password { username: "liam".into(), password: "hunter2".into(), provider: None };
+        super::hermes_connect(
+            app.state(),
+            app.state(),
+            app.state(),
+            app.state(),
+            super::Target::Url { url: base.to_string(), headers: Vec::new() },
+            password,
+            "default".into(),
+            Some(attempt.into()),
+            tauri::ipc::Channel::new(|_| Ok(())),
+            None,
+            None,
+            None,
+            tauri::ipc::Channel::new(|_| Ok(())),
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_connect_stopped_before_it_began_leaves_the_live_connection_alone() {
+        use tauri::Manager;
+        let (base, _, _, _) = counting_dashboard().await;
+        let app = connecting_app();
+        connect_command(&app, &base, "a").await.expect("a signs in");
+        let pages = app.state::<std::sync::Arc<super::server_page::ServerPages>>();
+        let _page = pages.begin("page", "me@hermes").unwrap();
+
+        super::hermes_connect_cancel(app.state(), "b".into());
+        assert_eq!(connect_command(&app, &base, "b").await.err().as_deref(), Some(super::CONNECT_STOPPED));
+
+        assert!(app.state::<super::AppState>().0.lock().await.is_some(), "a's connection is still there");
+        assert_eq!(pages.len(), 1, "the server page is still open");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_connect_closes_the_server_pages() {
+        use tauri::Manager;
+        let (base, _, _, _) = counting_dashboard().await;
+        let app = connecting_app();
+        connect_command(&app, &base, "a").await.expect("a signs in");
+        let pages = app.state::<std::sync::Arc<super::server_page::ServerPages>>();
+        let _page = pages.begin("page", "me@hermes").unwrap();
+
+        let refused = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let nowhere = url::Url::parse(&format!("http://{}/", refused.local_addr().unwrap())).unwrap();
+        drop(refused);
+        assert!(connect_command(&app, &nowhere, "b").await.is_err(), "nothing answers there");
+
+        assert!(app.state::<super::AppState>().0.lock().await.is_none());
+        assert!(pages.is_empty(), "the server pages closed with the sign-in");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_reopen_closes_the_server_pages() {
+        use tauri::Manager;
+        let (base, _, _, _) = counting_dashboard().await;
+        let app = connecting_app();
+        connect_command(&app, &base, "a").await.expect("a signs in");
+        let pages = app.state::<std::sync::Arc<super::server_page::ServerPages>>();
+        let _page = pages.begin("page", "me@hermes").unwrap();
+
+        super::hermes_connect_cancel(app.state(), "r".into());
+        let reopened = super::hermes_reopen(
+            app.state(),
+            app.state(),
+            app.state(),
+            app.state(),
+            "default".into(),
+            "a".into(),
+            "r".into(),
+            tauri::ipc::Channel::new(|_| Ok(())),
+            tauri::ipc::Channel::new(|_| Ok(())),
+        )
+        .await;
+
+        assert_eq!(reopened.unwrap_err(), super::CONNECT_STOPPED);
+        assert!(app.state::<super::AppState>().0.lock().await.is_none());
+        assert!(pages.is_empty(), "the server pages closed with the connection");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stops_that_came_too_late_are_not_kept_without_end() {
+        use tauri::Manager;
+        let app = connecting_app();
+        for i in 0..10_000 {
+            super::hermes_connect_cancel(app.state(), format!("finished-{i}"));
+        }
+        let kept = app.state::<super::AppState>().2.locked().stopped.len();
+        assert!(kept < 1000, "{kept} stops kept");
+    }
+
     fn send_through_ipc(webview: &tauri::WebviewWindow<tauri::test::MockRuntime>, path: &std::path::Path) -> Result<(), String> {
-        let request = tauri::webview::InvokeRequest {
-            cmd: "hermes_send_file".into(),
-            callback: tauri::ipc::CallbackFn(0),
-            error: tauri::ipc::CallbackFn(1),
-            // The app's own page, where Tauri's permissions let it call the app's commands.
-            url: if cfg!(windows) { "http://tauri.localhost" } else { "tauri://localhost" }.parse().unwrap(),
-            body: tauri::ipc::InvokeBody::Json(serde_json::json!({
+        invoke_through_ipc(
+            webview,
+            "hermes_send_file",
+            serde_json::json!({
+                "attempt": "A",
                 "head": r#"{"jsonrpc":"2.0","id":1,"method":"prompt.submit","params":{"text":""#,
                 "path": path,
                 "tail": r#""}}"#,
                 "maxBytes": 1000,
-            })),
+            }),
+        )
+    }
+
+    fn invoke_through_ipc(webview: &tauri::WebviewWindow<tauri::test::MockRuntime>, cmd: &str, body: serde_json::Value) -> Result<(), String> {
+        let request = tauri::webview::InvokeRequest {
+            cmd: cmd.into(),
+            callback: tauri::ipc::CallbackFn(0),
+            error: tauri::ipc::CallbackFn(1),
+            // The app's own page, where Tauri's permissions let it call the app's commands.
+            url: if cfg!(windows) { "http://tauri.localhost" } else { "tauri://localhost" }.parse().unwrap(),
+            body: tauri::ipc::InvokeBody::Json(body),
             headers: Default::default(),
             invoke_key: tauri::test::INVOKE_KEY.into(),
         };
@@ -1924,7 +2379,7 @@ mod tests {
             .unwrap();
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
         let password = super::SignInWith::Password { username: "liam".into(), password: "hunter2".into(), provider: None };
-        *app.state::<super::AppState>().0.lock().await = Some(connect(&base, password).await);
+        *app.state::<super::AppState>().0.lock().await = Some(super::Connection { attempt: "A".into(), ..connect(&base, password).await });
 
         let dir = std::env::temp_dir().join(format!("hermes-chat-344-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1934,7 +2389,7 @@ mod tests {
         let attached = dir.join("notes.txt");
         std::fs::write(&attached, "MEETING NOTES").unwrap();
         app.state::<super::Attachable>().add([attached.to_string_lossy().into_owned()]);
-        let heard = |bytes: &str| frames.lock().unwrap().iter().any(|f| f.contains(&base64::engine::general_purpose::STANDARD.encode(bytes)));
+        let heard = |bytes: &str| frames.locked().iter().any(|f| f.contains(&base64::engine::general_purpose::STANDARD.encode(bytes)));
 
         let sent = send_through_ipc(&webview, &secret);
         send_through_ipc(&webview, &attached).expect("an attached file is sent");
@@ -1950,5 +2405,86 @@ mod tests {
         let refused = sent.expect_err("hermes_send_file answered Ok for a file nobody attached");
         assert!(refused.contains("wasn't attached in this app"), "refused for another reason: {refused}");
         assert!(delivered, "the stub dashboard didn't get the attached file");
+    }
+
+    /// Issue #474: a frame sent for server A while a switch to server B holds the connection never reaches B.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_frame_sent_while_switching_servers_never_reaches_the_new_server() {
+        use tauri::Manager;
+        let password = || super::SignInWith::Password { username: "liam".into(), password: "hunter2".into(), provider: None };
+        let (a, _, _, to_a) = counting_dashboard().await;
+        let (b, _, _, to_b) = counting_dashboard().await;
+        let app = tauri::test::mock_builder()
+            .manage(super::AppState::default())
+            .invoke_handler(tauri::generate_handler![super::hermes_send])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
+        let state = app.state::<super::AppState>();
+        *state.0.lock().await = Some(super::Connection { attempt: "A".into(), ..connect(&a, password()).await });
+        let to_b_now = connect(&b, password()).await;
+
+        // As `hermes_connect` does: the lock is held, and the old connection let go, for the whole switch.
+        let mut switching = state.0.lock().await;
+        *switching = None;
+        let send = |attempt: &str, text: &str| {
+            let webview = webview.clone();
+            let body = serde_json::json!({"attempt": attempt, "frame": text});
+            tokio::task::spawn_blocking(move || invoke_through_ipc(&webview, "hermes_send", body))
+        };
+        let meant_for_a = send("A", "MEANT FOR A");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        *switching = Some(super::Connection { attempt: "B".into(), ..to_b_now });
+        drop(switching);
+
+        let refused = meant_for_a.await.unwrap().expect_err("a frame for the replaced connection was sent");
+        assert!(refused.contains("closed"), "refused for another reason: {refused}");
+        send("B", "MEANT FOR B").await.unwrap().expect("a frame for the connection held is sent");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !to_b.locked().iter().any(|f| f == "MEANT FOR B") && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let heard_by_b = to_b.locked().clone();
+        assert_eq!(heard_by_b, ["MEANT FOR B"], "server B heard a frame meant for server A");
+        assert!(!to_a.locked().iter().any(|f| f == "MEANT FOR A"), "the replaced connection still sent it");
+    }
+
+    /// Issue #474: a reopen, or a token keep, asked for server A after a switch to server B leaves B alone.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_reopen_or_token_keep_for_a_replaced_connection_leaves_the_new_one_alone() {
+        use tauri::Manager;
+        let password = super::SignInWith::Password { username: "liam".into(), password: "hunter2".into(), provider: None };
+        let (b, _, heard_by_b, to_b) = counting_dashboard().await;
+        let app = tauri::test::mock_builder()
+            .manage(super::AppState::default())
+            .manage(super::Transfers::default())
+            .manage(super::display::Displays::default())
+            .manage(std::sync::Arc::new(super::server_page::ServerPages::default()))
+            .invoke_handler(tauri::generate_handler![super::hermes_reopen, super::hermes_send, super::token_keep])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
+        *app.state::<super::AppState>().0.lock().await = Some(super::Connection { attempt: "B".into(), ..connect(&b, password).await });
+        let tickets = || heard_by_b.locked().iter().filter(|(p, _)| p == "/api/auth/ws-ticket").count();
+        let before = tickets();
+
+        let call = |cmd: &'static str, body: serde_json::Value| {
+            let webview = webview.clone();
+            tokio::task::spawn_blocking(move || invoke_through_ipc(&webview, cmd, body))
+        };
+        let reopen = serde_json::json!({"profile": "default", "connection": "A", "attempt": "reopen-1", "onEvent": "__CHANNEL__:1", "onStep": "__CHANNEL__:2"});
+        let refused = call("hermes_reopen", reopen).await.unwrap().expect_err("a reopen for the replaced connection went ahead");
+        assert!(refused.contains("closed"), "refused for another reason: {refused}");
+        let keep = serde_json::json!({"connection": null, "attempt": "A", "addresses": []});
+        let refused = call("token_keep", keep).await.unwrap().expect_err("a token keep for the replaced connection went ahead");
+        assert!(refused.contains("closed"), "refused for another reason: {refused}");
+
+        assert_eq!(tickets(), before, "server B was asked for a ticket for a reopen meant for server A");
+        call("hermes_send", serde_json::json!({"attempt": "B", "frame": "STILL B"})).await.unwrap().expect("server B's connection is still held");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !to_b.locked().iter().any(|f| f == "STILL B") && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(to_b.locked().iter().any(|f| f == "STILL B"), "server B's socket was replaced");
     }
 }

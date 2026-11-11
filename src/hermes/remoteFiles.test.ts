@@ -16,6 +16,7 @@ import {
   previewSupport,
   type RemoteEntry,
 } from "./remoteFiles";
+import { RestError } from "./pipe";
 
 const running: Hermes[] = [];
 afterEach(async () => {
@@ -149,6 +150,13 @@ describe("previewing a server file", () => {
     expect(preview.kind === "image" && preview.dataUrl).toMatch(/^data:image\/png;base64,iVBORw0KGgo/);
   });
 
+  it("refuses an image whose data URL isn't an image's", async () => {
+    const { server, hermes } = await signedIn(homeDisk);
+    const photo = (await hermes.files.list()).entries.find((e) => e.name === "Photo.png")!;
+    server.managedFiles.nodes[photo.path] = { text: "<script>alert(1)</script>", mime: "text/html" };
+    await expect(hermes.files.preview(photo)).rejects.toThrow("The server's answer isn't an image.");
+  });
+
   it("doesn't read a file bigger than the preview takes", async () => {
     const { server, hermes } = await signedIn((s) => {
       s.managedFiles.nodes = { "/srv/huge.log": { size: 5 * MiB }, "/srv/huge.png": { size: 40 * MiB } };
@@ -244,14 +252,14 @@ describe("parsing", () => {
   });
 
   it("turns transport errors into reasons", () => {
-    expect(explain("The chat connection is closed.", "list")).toMatchObject({ offline: true });
-    expect(explain("The dashboard sign-in has expired. Sign in again.", "read")).toMatchObject({ status: 401, offline: true });
-    expect(explain('The dashboard answered 500: {"detail":"Could not read directory: [Errno 5] Input/output error"}', "list").message).toBe(
+    expect(explain(new Error("The chat connection is closed."), "list")).toMatchObject({ offline: true });
+    expect(explain(new RestError(401, "", "The dashboard sign-in has expired. Sign in again."), "read")).toMatchObject({ status: 401, offline: true });
+    expect(explain(new RestError(500, '{"detail":"Could not read directory: [Errno 5] Input/output error"}'), "list").message).toBe(
       "The server couldn't list this folder (500): Could not read directory: [Errno 5] Input/output error",
     );
-    expect(explain("The dashboard answered 502: Bad Gateway", "read").message).toBe("The server couldn't read this file (502): Bad Gateway");
-    expect(explain('The dashboard answered 413: {"detail":"File is too large"}', "read").message).toBe("Hermes won't send files over 100 MB.");
-    expect(explain("something else", "list").message).toBe("something else");
+    expect(explain(new RestError(502, "Bad Gateway"), "read").message).toBe("The server couldn't read this file (502): Bad Gateway");
+    expect(explain(new RestError(413, '{"detail":"File is too large"}'), "read").message).toBe("Hermes won't send files over 100 MB.");
+    expect(explain(new Error("something else"), "list").message).toBe("something else");
   });
 });
 
@@ -436,7 +444,7 @@ describe("editing", () => {
   it("reads back after a gateway's 502, and stops waiting on a save that gets no answer", async () => {
     const { server, hermes } = await signedIn(homeDisk);
     let base = await hermes.files.openForEdit(notes);
-    server.managedFiles.saveLost = { message: `The dashboard answered 502: <html>Bad Gateway</html>`, landed: true };
+    server.managedFiles.saveLost = { message: new RestError(502, `<html>Bad Gateway</html>`), landed: true };
     const got = await hermes.files.saveEdit(base, "via a gateway\n");
     expect(got.kind).toBe("saved");
     base = (got as { base: typeof base }).base;
@@ -474,7 +482,7 @@ describe("editing", () => {
     let base = await hermes.files.openForEdit(notes);
     // Even when the post-write error names a file that reads like a pre-write refusal.
     for (const detail of ["Could not stat path: [Errno 2]", "Could not stat path: [Errno 2] '/x/Could not write file: y'"]) {
-      server.managedFiles.saveLost = { message: `The dashboard answered 500: ${JSON.stringify({ detail })}`, landed: true };
+      server.managedFiles.saveLost = { message: new RestError(500, JSON.stringify({ detail })), landed: true };
       const got = await hermes.files.saveEdit(base, `landed ${detail.length}\n`);
       expect(got.kind).toBe("saved");
       base = (got as { base: typeof base }).base;
@@ -531,7 +539,7 @@ describe("editing", () => {
     const base = await hermes.files.openForEdit(notes);
     await expect(hermes.files.saveEdit(base, "x".repeat(MiB + 1))).rejects.toThrow(/saves files up to 1.0 MB/);
     server.managedFiles.beforeWrite = () => {
-      throw new Error(`The dashboard answered 403: {"detail":"File is not writable"}`);
+      throw new RestError(403, `{"detail":"File is not writable"}`);
     };
     await expect(hermes.files.saveEdit(base, "x\n")).rejects.toThrow("The Hermes server's user isn't allowed to write this file.");
     expect(server.managedFiles.saves).toEqual([]);

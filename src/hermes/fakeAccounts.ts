@@ -6,8 +6,9 @@
 // endpoints.
 import { endpointFormProblem, type CustomEndpoint, type EndpointForm, type EndpointSave, type ProviderSignIn } from "./accounts";
 import type { RestRequest } from "./fakeHermes";
+import { RestError } from "./pipe";
 
-const answered = (status: number, detail: string) => new Error(`The dashboard answered ${status}: ${JSON.stringify({ detail })}`);
+const answered = (status: number, detail: string) => new RestError(status, JSON.stringify({ detail }));
 const NOT_FOUND = () => answered(404, "Not Found");
 
 type Provider = { id: string; name: string; flow: "device_code" | "external"; cli_command: string };

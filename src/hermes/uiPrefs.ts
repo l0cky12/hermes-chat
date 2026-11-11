@@ -31,8 +31,6 @@ export type UIPrefs = {
   checkUpdatesOnLaunch: boolean;
   /** Each profile's chat on screen last, kept as the owner moves between chats; a profile on the New chat pane has none. */
   lastOpenChat: Record<string, string>;
-  /** Show the model's reasoning blocks in transcripts. */
-  reasoningBlocks: boolean;
   /** null: no sticky pick, so Hermes's default model is used. */
   modelPicker: StickyModelPick | null;
   /** Picks kept separately for each connection/profile, including the one not currently on screen. */
@@ -98,7 +96,6 @@ export const DEFAULT_UI_PREFS: Readonly<UIPrefs> = Object.freeze({
   reopenLastChat: true,
   checkUpdatesOnLaunch: true,
   lastOpenChat: Object.freeze({}) as Record<string, string>,
-  reasoningBlocks: true,
   modelPicker: null,
   modelPicks: {},
   modelFavorites: [],
@@ -243,7 +240,6 @@ export function readUIPrefs(doc: UIPrefsDoc, d: Readonly<UIPrefs> = DEFAULT_UI_P
     reopenLastChat: typeof doc.reopenLastChat === "boolean" ? doc.reopenLastChat : d.reopenLastChat,
     checkUpdatesOnLaunch: typeof doc.checkUpdatesOnLaunch === "boolean" ? doc.checkUpdatesOnLaunch : d.checkUpdatesOnLaunch,
     lastOpenChat: toLastOpenChat(doc.lastOpenChat) ?? { ...d.lastOpenChat },
-    reasoningBlocks: typeof doc.reasoningBlocks === "boolean" ? doc.reasoningBlocks : d.reasoningBlocks,
     modelPicker: pick === undefined ? (d.modelPicker && { ...d.modelPicker }) : pick,
     modelPicks: toModelPicks(doc.modelPicks) ?? (pick?.profile ? { ...d.modelPicks, ...toModelPicks({ [pick.profile]: pick }) } : { ...d.modelPicks }),
     modelFavorites: toFavorites(doc.modelFavorites) ?? [...d.modelFavorites],

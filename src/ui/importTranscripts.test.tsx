@@ -14,9 +14,9 @@ import type { Chat } from "../hermes/model";
 import { connect } from "../hermes/transport";
 import { ChatPane } from "./ChatPane";
 import { ImportDialog, type ImportWiring } from "./ImportTranscripts";
+import { RestError } from "../hermes/pipe";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -161,7 +161,7 @@ describe("Import transcripts", () => {
     const t = await setUp([file]);
     // The check of what Hermes has fails, so the chat is sent, and Hermes skips it.
     t.hermes.imports.onServer = async () => {
-      throw new Error("The dashboard answered 503: busy");
+      throw new RestError(503, "busy");
     };
     t.server.sessions.push({ ...t.server.sessions[0], id: "cli_1", source: "cli", title: "Old" } as never);
     await user.click(screen.getByLabelText(/Hermes session export/));
@@ -175,7 +175,7 @@ describe("Import transcripts", () => {
     const user = userEvent.setup();
     const t = await setUp([{ name: "r.md", path: "/r.md", text: md }]);
     t.hermes.imports.onServer = async () => {
-      throw new Error("The dashboard answered 503: busy");
+      throw new RestError(503, "busy");
     };
     await user.click(screen.getByRole("button", { name: "Choose file…" }));
     expect((await screen.findByText(/Couldn't check what Hermes already has/)).textContent).toMatch(/503/);
@@ -193,7 +193,7 @@ describe("Import transcripts", () => {
     // The chat goes from Hermes, so the file has something new; then Hermes refuses it.
     t.server.sessions = [];
     t.server.rest["POST /api/sessions/import"] = () => {
-      throw new Error('The dashboard answered 400: {"detail":"invalid_params"}');
+      throw new RestError(400, '{"detail":"invalid_params"}');
     };
     t.again();
     await user.click(screen.getByRole("button", { name: "Choose file…" }));

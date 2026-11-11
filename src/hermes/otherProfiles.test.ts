@@ -3,6 +3,7 @@ import { FakeHermes, row, type RestRequest } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
 import { totalUnread } from "./otherProfiles";
 import { type ChatCache, connect } from "./transport";
+import { RestError } from "./pipe";
 
 const read = () => Date.now() / 1000 - 60;
 const unreadRow = (id: string, daysAgo = 0, over = {}) => row(id, daysAgo, { last_read_at: 0, ...over });
@@ -75,7 +76,8 @@ describe("Unread in other profiles", () => {
     await hermes.checkOtherProfiles();
 
     expect(unreadOf()).toEqual({ work: 2, aegis: 0 });
-    expect(others().byName.work).toMatchObject({ more: false, checkedAt: expect.any(Number) });
+    expect(others().byName.work).toMatchObject({ more: false });
+    expect(hermes.checkTimes.get().byProfile).toEqual({ work: expect.any(Number), aegis: expect.any(Number) });
     // The profile shown has its own dots in the list, so it isn't among the others.
     expect(others().byName.default).toBeUndefined();
     const reads = server.restRequests.filter((r) => r.path === "/api/sessions" && r.query.get("profile") !== "default");
@@ -144,9 +146,9 @@ describe("Unread in other profiles", () => {
   it("totals the other profiles for the switcher", () => {
     const total = totalUnread({
       byName: {
-        work: { unread: 2, checkedAt: 1 },
-        aegis: { unread: 1, more: true, checkedAt: 1 },
-        anvil: { unread: 0, checkedAt: 1 },
+        work: { unread: 2 },
+        aegis: { unread: 1, more: true },
+        anvil: { unread: 0 },
         argus: { error: "The dashboard answered 500" },
       },
     });
@@ -166,7 +168,7 @@ describe("Unread in other profiles", () => {
       const { server, hermes, others } = await signedIn();
       const list = server.rest["GET /api/sessions"];
       server.rest["GET /api/sessions"] = (req) => {
-        if (req.query.get("profile") === "aegis") throw new Error("The dashboard answered 500: database is locked");
+        if (req.query.get("profile") === "aegis") throw new RestError(500, "database is locked");
         return list(req);
       };
       await hermes.checkOtherProfiles();
@@ -182,7 +184,7 @@ describe("Unread in other profiles", () => {
       const first = others().byName.work;
 
       server.rest["GET /api/sessions"] = () => {
-        throw new Error("The dashboard answered 503");
+        throw new RestError(503, "", "The dashboard answered 503");
       };
       await vi.advanceTimersByTimeAsync(15_000);
       await hermes.checkOtherProfiles();
@@ -195,7 +197,7 @@ describe("Unread in other profiles", () => {
       const { server, hermes, others } = await signedIn();
       await hermes.checkOtherProfiles();
       server.rest["GET /api/profiles"] = () => {
-        throw new Error("The dashboard answered 502");
+        throw new RestError(502, "", "The dashboard answered 502");
       };
       await vi.advanceTimersByTimeAsync(15_000);
       await hermes.checkOtherProfiles();
@@ -260,13 +262,13 @@ describe("Unread in other profiles", () => {
 
     it("reads at most 20 profiles per check, the ones checked longest ago first", async () => {
       vi.useFakeTimers();
-      const { server, hermes, others } = await signedIn();
+      const { server, hermes } = await signedIn();
       const names = Array.from({ length: 25 }, (_, i) => `p${String(i).padStart(2, "0")}`);
       server.otherProfiles = Object.fromEntries(names.map((n) => [n, []]));
       await hermes.checkOtherProfiles();
       const first = listed(server).filter((p) => p !== "default");
       expect(first).toHaveLength(20);
-      expect(Object.values(others().byName).filter((p) => p.checkedAt)).toHaveLength(20);
+      expect(Object.keys(hermes.checkTimes.get().byProfile)).toHaveLength(20);
 
       await vi.advanceTimersByTimeAsync(15_000);
       await hermes.checkOtherProfiles();
@@ -275,6 +277,57 @@ describe("Unread in other profiles", () => {
       // The five left out last time go first.
       expect(second.slice(0, 5).sort()).toEqual(names.filter((n) => !first.includes(n)));
       await hermes.close();
+    });
+  });
+
+  describe("a check that finds nothing new", () => {
+    /** Signed in, with a reply running in `work`, checked once; `later` moves the clock past the gap between checks. */
+    async function checkedOnce() {
+      const signed = await signedIn();
+      signed.server.liveSessions = [{ id: "rt-w", session_key: "work-1", status: "working", last_active: Math.floor(Date.now() / 1000) }];
+      await signed.hermes.checkOtherProfiles();
+      let told = 0;
+      signed.hermes.subscribe(() => told++);
+      return { ...signed, told: () => told, later: () => vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 20_000 }) };
+    }
+
+    it("tells no one, and leaves the snapshot as it was, though it says when it checked", async () => {
+      const { hermes, told, later } = await checkedOnce();
+      const before = hermes.getSnapshot();
+      later();
+      await hermes.checkOtherProfiles();
+      expect(told()).toBe(0);
+      expect(hermes.getSnapshot()).toBe(before);
+      const now = Date.now();
+      expect(hermes.checkTimes.get()).toEqual({ others: now, live: now, byProfile: { work: now, aegis: now } });
+    });
+
+    it("tells no one when only the live check runs, as the office's does", async () => {
+      const { hermes, told, later } = await checkedOnce();
+      const before = hermes.getSnapshot();
+      later();
+      await hermes.checkLive();
+      expect(told()).toBe(0);
+      expect(hermes.getSnapshot()).toBe(before);
+      expect(hermes.checkTimes.get().live).toBe(Date.now());
+    });
+
+    it("tells listeners when a session starts", async () => {
+      const { server, hermes, told, later } = await checkedOnce();
+      server.liveSessions.push({ id: "rt-a", session_key: "aegis-1", status: "waiting", last_active: Math.floor(Date.now() / 1000) });
+      later();
+      await hermes.checkLive();
+      expect(told()).toBeGreaterThan(0);
+      expect(hermes.getSnapshot().live?.sessions.map((s) => s.chatId)).toEqual(["work-1", "aegis-1"]);
+    });
+
+    it("tells listeners when another profile gains an Unread chat", async () => {
+      const { server, hermes, told, later, unreadOf } = await checkedOnce();
+      server.otherProfiles.aegis.push(unreadRow("aegis-2"));
+      later();
+      await hermes.checkOtherProfiles();
+      expect(told()).toBeGreaterThan(0);
+      expect(unreadOf()).toEqual({ work: 2, aegis: 1 });
     });
   });
 
@@ -303,8 +356,9 @@ describe("Unread in other profiles", () => {
       const { hermes, others } = await signedIn();
       await hermes.switchProfile("work");
       expect(others().byName).toEqual({
-        default: { unread: 1, more: false, checkedAt: expect.any(Number), chats: expect.arrayContaining([expect.objectContaining({ id: "home-1", unread: true })]), sends: [] },
+        default: { unread: 1, more: false, chats: expect.arrayContaining([expect.objectContaining({ id: "home-1", unread: true })]), sends: [] },
       });
+      expect(hermes.checkTimes.get().byProfile.default).toEqual(expect.any(Number));
     });
 
     it("shows nothing for a profile switched away from before its list was read", async () => {

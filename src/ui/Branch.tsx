@@ -6,6 +6,7 @@ import type { BranchLink, BranchPreview } from "../hermes/branch";
 import { BranchUnconfirmed } from "../hermes/transport";
 import { Spinner } from "./bits";
 import { useModal } from "./modal";
+import { errorText, plural } from "../hermes/values";
 
 /** Under a message: opens the preview of a branch from it. `blocked`: why no branch can be made now, shown on hover. */
 export function BranchButton({ onBranch, blocked }: { onBranch: () => void; blocked?: string }) {
@@ -43,7 +44,6 @@ type State =
 /** The preview lists this many of the last messages copied. */
 const SHOWN_MESSAGES = 40;
 const whose = (role: "user" | "assistant") => (role === "user" ? "your message" : "Hermes's reply");
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /**
  * The preview of a branch from one message, and the button that makes it. It reads what the branch would hold first:
@@ -77,7 +77,7 @@ export function BranchDialog({
     open.current = true;
     apiRef.current.preview().then(
       (preview) => open.current && setState({ phase: "ready", preview }),
-      (e) => open.current && setState({ phase: "refused", why: messageOf(e) }),
+      (e) => open.current && setState({ phase: "refused", why: errorText(e) }),
     );
     return () => void (open.current = false);
   }, []);
@@ -89,7 +89,7 @@ export function BranchDialog({
       (e) => {
         if (!open.current) return;
         if (e instanceof BranchUnconfirmed) setState({ phase: "unconfirmed", why: e.message });
-        else setState({ phase: "ready", preview, error: messageOf(e) });
+        else setState({ phase: "ready", preview, error: errorText(e) });
       },
     );
   };
@@ -317,4 +317,3 @@ export function BranchedFrom({
   );
 }
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));

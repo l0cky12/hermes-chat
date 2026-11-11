@@ -1,27 +1,29 @@
 // Icon rail beside a chat list (ADR 0001), ported from the prototype's variants C and A, with the profile's tools in one
 // Server group and tips that show at once (ADR 0050, 0116). Server files and the Terminal live in the side panel only. The list's header is the profile switcher. Settings opens from the
 // rail's foot. Right-clicking a chat opens its menu (ChatMenu.tsx).
-import { memo, useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Hourglass, LockOpen, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
+import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Hourglass, LockOpen, PanelLeftClose, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
 import { waitingLabel, type Handoff } from "../hermes/dispatched";
-import type { Chat, ConnectionStatus, OtherProfile, OtherProfiles } from "../hermes/model";
+import type { Chat, CheckTimes, ConnectionStatus, OtherProfile, OtherProfiles } from "../hermes/model";
 import { SOURCE_LABEL, isWaiting } from "../hermes/model";
-import { CHECK_EVERY_MS, totalUnread } from "../hermes/otherProfiles";
+import { CHECK_EVERY_MS, totalUnread, type CheckTimesStore } from "../hermes/otherProfiles";
 import type { Route } from "../hermes/pipe";
 import { RenameConflict, TitleModelUnavailable, type Snapshot } from "../hermes/transport";
 import { SECTION_LABEL, chatSections, inboxSettle, settleByDrop, wakeFull, wakeLabel, type InboxSettle, type Pins, type SectionKey, type Snoozes } from "../hermes/snooze";
 import { getUIPrefs, setUIPrefs, subscribe as subscribeUIPrefs } from "../hermes/uiPrefs";
-import { ChatMenu, type ChatPin, type ChatProjects, type ChatSnooze, type ChatStopWaiting, type ChatTags } from "./ChatMenu";
+import { ChatMenu, type ChatPin, type ChatProjects, type ChatSnooze, type ChatTags } from "./ChatMenu";
 import { SnoozeDialog, useSnoozeClock } from "./Snooze";
 import { DeleteChatDialog } from "./DeleteChat";
 import { SettleAllDialog } from "./SettleAll";
 import { CloneProfileDialog } from "./CloneProfile";
 import type { ProfileCloneApi } from "../hermes/profileClone";
-import { Age, ArchiveButton, STATUS_LABEL, SettleButton, SourceIcon, Spinner, ago, composing, routeLabel, useReturnFocus } from "./bits";
+import { Age, ArchiveButton, Ticking, STATUS_LABEL, SettleButton, SourceIcon, Spinner, ago, composing, routeLabel, useReturnFocus } from "./bits";
+import { en } from "../i18n/en";
 import { useLocale, type Locale } from "../i18n/locale";
 import { viaLabel } from "../hermes/routes";
 import { dragChat, dragChatEnd, rowDragged } from "./Tabs";
+import { errorText } from "../hermes/values";
 
 
 
@@ -313,7 +315,7 @@ function RenameRow({
     setError(undefined);
     onRename(draft, from).then(onDone, (e) => {
       if (e instanceof RenameConflict) setFrom(e.title);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
       setSaving(false);
     });
   };
@@ -379,7 +381,6 @@ const ChatRow = memo(function ChatRow({
   section,
   hidden,
   sleepsUntil,
-  wake,
 }: {
   chat: Chat;
   selected: boolean;
@@ -411,9 +412,8 @@ const ChatRow = memo(function ChatRow({
   section?: string;
   /** In a collapsed section: kept, with its rename box or menu, but out of sight. */
   hidden?: boolean;
+  /** When the snoozed chat wakes; the row shows it. */
   sleepsUntil?: number;
-  /** When the snoozed chat wakes, as the row shows it. */
-  wake?: string;
 }) {
   const l = useLocale();
   const [renaming, setRenaming] = useState(false);
@@ -432,7 +432,7 @@ const ChatRow = memo(function ChatRow({
             ? { text: `This chat was renamed in another Hermes client meanwhile, to "${e.title}". Regenerate again to replace it.` }
             : e instanceof TitleModelUnavailable
               ? { text: `Couldn't regenerate the title: ${e.message}`, detail: e.detail, settings: true }
-              : { text: `Couldn't regenerate the title: ${e instanceof Error ? e.message : String(e)}` },
+              : { text: `Couldn't regenerate the title: ${errorText(e)}` },
         ),
       )
       .finally(() => setRetitling(false));
@@ -499,7 +499,11 @@ const ChatRow = memo(function ChatRow({
           </span>
         )}
         <span className="row-meta">
-          {wake && <span className="row-wake">{wake}</span>}
+          {sleepsUntil !== undefined && (
+            <span className="row-wake">
+              <Ticking>{() => wakeLabel(sleepsUntil, Date.now(), l.tag)}</Ticking>
+            </span>
+          )}
           {handoff?.kind === "needsOwner" && (
             <span className="row-owner" role="img" aria-label={handoff.reason} title={handoff.reason}>
               <CircleAlert size={12} />
@@ -595,24 +599,24 @@ const unreadCount = (p: OtherProfile) => `${p.unread}${p.more ? "+" : ""}`;
 const CHECKED_EVERY = `Other profiles are checked every ${CHECK_EVERY_MS / 60_000} minutes`;
 
 /** What the latest check of another profile found, and when; an earlier answer is kept through a failed check. */
-function otherTip(l: Locale, p?: OtherProfile): string {
+function otherTip(l: Locale, p?: OtherProfile, checkedAt?: number): string {
   const found = (q: OtherProfile) =>
-    q.checkedAt === undefined
+    checkedAt === undefined
       ? undefined
-      : `${q.unread ? `${unreadCount(q)} unread` : "No unread chats"}${q.more ? " in its most recent chats" : ""}, checked ${ago(l, q.checkedAt)}`;
+      : `${q.unread ? `${unreadCount(q)} unread` : "No unread chats"}${q.more ? " in its most recent chats" : ""}, checked ${ago(l, checkedAt)}`;
   if (p?.error) return [`Couldn't check: ${p.error}`, found(p) && `Earlier: ${found(p)}`].filter(Boolean).join(". ");
   return (p && found(p)) ?? "Not checked yet";
 }
 
 /** The switcher's tooltip: which other profiles have Unread chats, which couldn't be checked, and how fresh it is. */
-function switcherTip(l: Locale, others: OtherProfiles): string {
+function switcherTip(l: Locale, others: OtherProfiles, times: CheckTimes): string {
   const { withUnread, failed } = totalUnread(others);
   return [
     "Switch profile",
     withUnread.length && `Unread chats in ${withUnread.map((n) => `${n} (${unreadCount(others.byName[n])})`).join(", ")}`,
     failed.length && `Couldn't check ${failed.join(", ")}`,
     others.error,
-    `${CHECKED_EVERY}${others.checkedAt ? `; last ${ago(l, others.checkedAt)}` : ""}`,
+    `${CHECKED_EVERY}${times.others ? `; last ${ago(l, times.others)}` : ""}`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -641,10 +645,13 @@ function OtherBadge({ info }: { info?: OtherProfile }) {
  * What the owner leaves behind in `profile` by switching away now, if anything: an Approval waiting, or a reply
  * running. Hermes keeps running the reply; an Approval waits only until Hermes stops waiting (its timeout).
  */
-export function leavingNote(profile: string, chats: Chat[]): string | undefined {
-  if (chats.some((c) => c.items.some(isWaiting)))
-    return `An approval is waiting in ${profile}. Hermes waits for your answer only until it times out: switch back and open the chat to answer it.`;
-  if (chats.some((c) => c.running)) return `A reply is still running in ${profile}. Hermes keeps it going, and it shows here when you switch back.`;
+/** A profile's name as the switcher shows it: `default`'s display name first, when Hermes keeps one (ADR 0144). */
+export const profileLabel = (l: Locale, name: string, defaultName?: string) => (name === "default" && defaultName ? l.profiles.named(defaultName, name) : name);
+
+/** What switching away from `profile` leaves behind, in `words` (the catalogue's; English where the screen isn't converted). */
+export function leavingNote(profile: string, chats: Chat[], words: Locale["profiles"]["leaving"] = en.profiles.leaving): string | undefined {
+  if (chats.some((c) => c.items.some(isWaiting))) return words.approval(profile);
+  if (chats.some((c) => c.running)) return words.reply(profile);
 }
 
 /**
@@ -652,11 +659,13 @@ export function leavingNote(profile: string, chats: Chat[]): string | undefined 
  * the first match; Escape or a click outside closes it. A dot on it, and a count on each profile in the menu, show
  * Unread chats in the other profiles, as the latest poll found them. Opening the menu asks for a fresh check.
  * `leaving`: what switching away now leaves behind, which the owner is asked about first. `clone`: the menu's Clone a
- * profile, whose dialog opens the profile it made through the same question.
+ * profile, whose dialog opens the profile it made through the same question. `checkTimes`: when the others were checked.
  */
 function ProfileSwitcher({
   profile,
+  defaultName,
   others,
+  checkTimes,
   leaving,
   onListProfiles,
   onCheckOthers,
@@ -664,7 +673,10 @@ function ProfileSwitcher({
   clone,
 }: {
   profile: string;
+  /** The display name Hermes keeps for `default`, shown before its id (ADR 0144). */
+  defaultName?: string;
   others: OtherProfiles;
+  checkTimes: CheckTimesStore;
   leaving?: string;
   onListProfiles: () => Promise<string[]>;
   onCheckOthers: () => void;
@@ -681,6 +693,9 @@ function ProfileSwitcher({
   const [profiles, setProfiles] = useState<string[]>();
   const [error, setError] = useState<string>();
   const box = useRef<HTMLDivElement>(null);
+  // The button is always drawn, so its tooltip reads the check times as it is about to show rather than subscribing:
+  // a check that finds nothing new mustn't draw it again (#423).
+  const [, freshTip] = useReducer((n: number) => n + 1, 0);
 
   useEffect(() => {
     if (!open) return;
@@ -689,7 +704,7 @@ function ProfileSwitcher({
     onCheckOthers();
     onListProfiles().then(
       (names) => current && setProfiles(names),
-      (e) => current && setError(`Couldn't list profiles: ${e instanceof Error ? e.message : String(e)}`),
+      (e) => current && setError(`Couldn't list profiles: ${errorText(e)}`),
     );
     const onDown = (e: MouseEvent) => box.current?.contains(e.target as Node) || close();
     window.addEventListener("mousedown", onDown);
@@ -697,6 +712,7 @@ function ProfileSwitcher({
       current = false;
       window.removeEventListener("mousedown", onDown);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [open]);
 
   const elsewhere = totalUnread(others).unread > 0;
@@ -722,8 +738,16 @@ function ProfileSwitcher({
 
   return (
     <div className="profile-switch" ref={box}>
-      <button ref={button} className="profile-btn" title={switcherTip(l, others)} aria-expanded={open} onClick={() => (open ? close() : setOpen(true))}>
-        <span className="profile-name">{profile}</span>
+      <button
+        ref={button}
+        className="profile-btn"
+        title={switcherTip(l, others, checkTimes.get())}
+        aria-expanded={open}
+        onPointerEnter={freshTip}
+        onFocus={freshTip}
+        onClick={() => (open ? close() : setOpen(true))}
+      >
+        <span className="profile-name">{profileLabel(l, profile, defaultName)}</span>
         {elsewhere && <span className="dot" aria-label="Unread chats in other profiles" />}
         <ChevronDown size={14} className="profile-chev" />
       </button>
@@ -731,9 +755,11 @@ function ProfileSwitcher({
       {open && !asking && (
         <ProfileMenu
           profile={profile}
+          defaultName={defaultName}
           profiles={profiles}
           error={error}
           others={others}
+          checkTimes={checkTimes}
           onPick={pick}
           onClose={close}
           onClone={
@@ -835,26 +861,31 @@ function SwitchStatus({
 /** The open profile menu. Closing it puts focus back on the profile button. */
 function ProfileMenu({
   profile,
+  defaultName,
   profiles,
   error,
   others,
+  checkTimes,
   onPick,
   onClose,
   onClone,
 }: {
   profile: string;
+  defaultName?: string;
   profiles?: string[];
   error?: string;
   others: OtherProfiles;
+  checkTimes: CheckTimesStore;
   onPick: (name: string) => void;
   onClose: () => void;
   onClone?: () => void;
 }) {
   const l = useLocale();
+  const times = useSyncExternalStore(checkTimes.subscribe, checkTimes.get);
   const [filter, setFilter] = useState("");
   useReturnFocus();
 
-  const shown = (profiles ?? [profile]).filter((p) => p.toLowerCase().includes(filter.trim().toLowerCase()));
+  const shown = (profiles ?? [profile]).filter((p) => profileLabel(l, p, defaultName).toLowerCase().includes(filter.trim().toLowerCase()));
 
   return (
     <div
@@ -878,11 +909,11 @@ function ProfileMenu({
             key={p}
             role="option"
             aria-selected={p === profile}
-            title={p === profile ? undefined : otherTip(l, others.byName[p])}
+            title={p === profile ? undefined : otherTip(l, others.byName[p], times.byProfile[p])}
             className={`profile-option ${p === profile ? "on" : ""}`}
             onClick={() => onPick(p)}
           >
-            <span className="row-title">{p}</span>
+            <span className="row-title">{profileLabel(l, p, defaultName)}</span>
             {p === profile ? <Check size={14} /> : <OtherBadge info={others.byName[p]} />}
           </button>
         ))}
@@ -893,7 +924,7 @@ function ProfileMenu({
       {others.error && <div className="profile-hint err">{others.error}</div>}
       {profiles && profiles.length > 1 && (
         <div className="profile-hint">
-          Unread checked every {CHECK_EVERY_MS / 60_000} min{others.checkedAt ? `, last ${ago(l, others.checkedAt)}` : ""}
+          Unread checked every {CHECK_EVERY_MS / 60_000} min{times.others ? `, last ${ago(l, times.others)}` : ""}
         </div>
       )}
       {onClone && (
@@ -943,9 +974,13 @@ function moveBetweenChats(e: KeyboardEvent<HTMLElement>) {
  * Archived chats are in `chats` only while the Archived section is shown (App.tsx lists them then).
  * `projectSwitcher` sits under the profile's name; `chats` are only the shown project's when one is picked there.
  * `projectsOf`: the projects a chat's menu offers to put it in or take it out of.
+ * `bots`: bot mode, while a Bot Chat is open (ADR 0066): the bots (Bots.tsx `BotList`) under the profile's name, New
+ * chat and Search, in place of the project switcher and the chats.
  */
 export function ChatList({
   profile,
+  defaultName,
+  bots,
   projectSwitcher,
   savedFilters,
   projectsOf,
@@ -953,6 +988,7 @@ export function ChatList({
   switching,
   status,
   others,
+  checkTimes,
   chats,
   syncError,
   selectedId,
@@ -984,8 +1020,10 @@ export function ChatList({
   profileClone,
   onNew,
   onSearch,
+  onHide,
 }: {
   profile: string;
+  bots?: ReactNode;
   projectSwitcher?: ReactNode;
   /** The profile's Saved filters (Tags.tsx), under the project switcher. */
   savedFilters?: ReactNode;
@@ -994,6 +1032,8 @@ export function ChatList({
   switching?: Snapshot["switching"];
   status: ConnectionStatus;
   others: OtherProfiles;
+  /** When the other profiles were checked (`Hermes.checkTimes`). */
+  checkTimes: CheckTimesStore;
   chats: Chat[];
   syncError?: string;
   /** The chat in the active pane. */
@@ -1031,6 +1071,8 @@ export function ChatList({
   onCopyLink?: (chat: Chat) => void;
   /** Opens Settings → Model at the Text generation model, the model titles are made with. */
   onTextGenerationSettings?: () => void;
+  /** The display name Hermes keeps for `default` (ADR 0144). */
+  defaultName?: string;
   onListProfiles: () => Promise<string[]>;
   onCheckOthers: () => void;
   onSwitchProfile: (name: string) => void;
@@ -1040,6 +1082,8 @@ export function ChatList({
   /** The list's own New chat and Search buttons, labeled with their keys; the rail keeps icons for both. */
   onNew?: () => void;
   onSearch?: () => void;
+  /** Hides this panel, as Ctrl+B does. */
+  onHide?: () => void;
 }) {
   const { chatSectionsShown: shown, chatSectionsCollapsed: collapsed } = useSyncExternalStore(subscribeUIPrefs, getUIPrefs);
   const setCollapsed = (key: SectionKey, on: boolean) => {
@@ -1095,11 +1139,15 @@ export function ChatList({
   const selectedIn = shown.find((k) => sections[k].some((c) => c.id === selectedId));
   useEffect(() => {
     if (selectedIn) setCollapsed(selectedIn, false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   }, [selectedId]);
   const l = useLocale();
   const latest = { chats, onOpen, onOpenIn, onOpenTab, onSettle, onArchive, onRename, onRegenTitle, onCopyLink, onTextGenerationSettings, projectsOf, tagsOf, onPin, onStopWaiting, onSnooze, onWake };
   const live = useRef(latest);
-  live.current = latest;
+  // After the commit, not during render: a render React throws away would leave its props here (#436).
+  useLayoutEffect(() => {
+    live.current = latest;
+  });
   const handlersFor = (id: string) => {
     const chat = () => live.current.chats.find((c) => c.id === id);
     return {
@@ -1160,7 +1208,6 @@ export function ChatList({
         tags={tags && { ...tags, onToggle: on.toggleTag, onManage: on.manageTags }}
         snooze={snooze}
         sleepsUntil={sleepsUntil}
-        wake={sleepsUntil === undefined ? undefined : wakeLabel(sleepsUntil, now, l.tag)}
         pin={onPin && !c.archived ? { pinned: pins[c.id] !== undefined, onPin: on.pin } : undefined}
         handoff={handoffs?.get(c.id)}
         onStopWaiting={onStopWaiting && on.stopWaiting}
@@ -1198,13 +1245,31 @@ export function ChatList({
       <div className="sb-head">
         <ProfileSwitcher
           profile={profile}
+          defaultName={defaultName}
           others={others}
-          leaving={leavingNote(profile, chats)}
+          checkTimes={checkTimes}
+          leaving={leavingNote(profile, chats, l.profiles.leaving)}
           onListProfiles={onListProfiles}
           onCheckOthers={onCheckOthers}
           onSwitch={onSwitchProfile}
           clone={profileClone}
         />
+        {onHide && (
+          <button
+            className="icon-btn sb-hide"
+            title="Hide chats (Ctrl+B)"
+            aria-label="Hide chats (Ctrl+B)"
+            aria-keyshortcuts="Control+B"
+            onClick={(e) => {
+              onHide();
+              // The button goes with the panel, so a keyboard press moves focus to the rail's button that brings it
+              // back. A pointer click doesn't: focus there would show the rail's tip away from the pointer.
+              if (e.detail === 0) document.querySelector<HTMLElement>(".rail-brand")?.focus();
+            }}
+          >
+            <PanelLeftClose size={16} />
+          </button>
+        )}
       </div>
       {(onNew || onSearch) && (
         <div className="sb-actions">
@@ -1224,18 +1289,23 @@ export function ChatList({
           )}
         </div>
       )}
-      {projectSwitcher && <div className="sb-project">{projectSwitcher}</div>}
-      <div className="sb-scroll" data-drop={dropOn === "inbox" ? "inbox" : undefined} {...dropHandlers("inbox", overInbox)}>
+      {!bots && projectSwitcher && <div className="sb-project">{projectSwitcher}</div>}
+      <div className={`sb-scroll${bots ? " sb-bots" : ""}`} data-drop={dropOn === "inbox" ? "inbox" : undefined} {...(bots ? {} : dropHandlers("inbox", overInbox))}>
         {switching && (
           <SwitchStatus profile={profile} switching={switching} status={status} onRetry={onRetrySwitch} onBack={() => onSwitchProfile(switching.from)} />
         )}
-        {savedFilters}
+        {!bots && savedFilters}
         {syncError && !switching?.error && (
           <div className="sync-error" role="status">
             {syncError}
           </div>
         )}
-        {
+        {bots ? (
+          <>
+            <h2 className="section-label sb-bots-head">Bots</h2>
+            {bots}
+          </>
+        ) : (
           // One keyed array, so React keeps a row that moves from one section to another.
           shown.flatMap((k) => {
             if (k === "settled") return [];
@@ -1252,9 +1322,9 @@ export function ChatList({
               ),
             ];
           })
-        }
+        )}
       </div>
-      {shown.includes("settled") && (
+      {!bots && shown.includes("settled") && (
         // The drawer at the list's foot (ADR 0090): its header stays at the bottom however long the scroll above is.
         <div className={`settled-drawer ${settledOpen ? "open" : ""} ${dropOn === "settled" ? "drop" : ""}`} {...dropHandlers("settled")}>
           {header("settled", sections.settled, settledOpen)}

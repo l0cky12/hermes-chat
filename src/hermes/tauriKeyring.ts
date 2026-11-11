@@ -22,7 +22,8 @@ function tokenKeyring(c: SavedConnection): TokenKeyring {
   return {
     saved: () =>
       invoke<[string, string][] | null>("token_saved", { connection }).then((v) => v?.map(([mode, target]) => JSON.stringify([mode, target])), asError),
-    keep: (routes) => invoke<void>("token_keep", { connection, addresses: routes.map((k) => JSON.parse(k) as [string, string]) }).catch(asError),
+    keep: (routes, attempt) =>
+      invoke<void>("token_keep", { connection, attempt: attempt ?? "", addresses: routes.map((k) => JSON.parse(k) as [string, string]) }).catch(asError),
     delete: () => invoke<void>("token_delete", { connection }).catch(asError),
   };
 }
