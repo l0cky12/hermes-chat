@@ -92,13 +92,16 @@ function ShowButton({ at }: { at: number }) {
   return <button onClick={() => show?.(at)}>Show in chat</button>;
 }
 
-function pane(chat: Chat, over: { findTarget?: FindTarget; jumpTo?: JumpTarget; showAt?: number } = {}) {
+type Over = { chat?: Chat; findTarget?: FindTarget; jumpTo?: JumpTarget; showAt?: number; reveal?: { itemId?: string; approval: boolean } };
+
+function pane(chat: Chat, over: Over = {}) {
   const onJumpMissed = vi.fn();
-  render(
+  const view = (over: Over) => (
     <ChatPane
-      chat={chat}
+      chat={over.chat ?? chat}
       findTarget={over.findTarget}
       jumpTo={over.jumpTo}
+      reveal={over.reveal}
       onJumpMissed={onJumpMissed}
       footer={over.showAt === undefined ? undefined : <ShowButton at={over.showAt} />}
       status="connected"
@@ -112,9 +115,10 @@ function pane(chat: Chat, over: { findTarget?: FindTarget; jumpTo?: JumpTarget; 
       onSend={() => {}}
       onStop={() => {}}
       onAnswer={() => {}}
-    />,
+    />
   );
-  return { onJumpMissed, scroller: document.querySelector<HTMLElement>(".transcript")! };
+  const { rerender } = render(view(over));
+  return { onJumpMissed, scroller: document.querySelector<HTMLElement>(".transcript")!, again: (over: Over) => rerender(view(over)) };
 }
 
 const item = (id: string) => document.querySelector<HTMLElement>(`[data-item="${id}"]`);
@@ -207,6 +211,35 @@ describe("A long transcript's window", { timeout: 30_000 }, () => {
     expect(target.classList.contains("jumped")).toBe(true);
     expect(inView(target)).toBe(true);
     expect(document.querySelectorAll(".jumped")).toHaveLength(1);
+  });
+
+  it("renders the message an Inbox entry is about, far from the view, while the app goes to it", () => {
+    pane(chatOf(longChat(400)), { reveal: { itemId: "u-3", approval: false } });
+    expect(item("u-3")).not.toBeNull();
+  });
+
+  it("renders the waiting Approval an Inbox entry is about after the owner scrolled away from it", async () => {
+    const items: Item[] = [...longChat(400), { kind: "approval", id: "ap-1", requestId: "req-1", command: "rm -rf build", description: "Delete the build folder", choices: ["once", "deny"], allowSession: false, allowPermanent: false }];
+    const { scroller, again } = pane(chatOf(items));
+    await scrollTo(scroller, 0);
+    expect(item("ap-1")).toBeNull();
+    again({ reveal: { approval: true } });
+    expect(document.querySelector(".approval:not(.answered)")).not.toBeNull();
+  });
+
+  it("follows a reply streaming at the bottom of a long chat", async () => {
+    blockHeight = (id) => (id === "a-live" ? 100 + 40 * reply.length : 100);
+    let reply = "";
+    const items = [...longChat(400), { kind: "user", id: "u-live", text: "Stream something." } as Item];
+    const { scroller, again } = pane(chatOf(items, { running: true }));
+    for (let i = 0; i < 30; i++) {
+      reply += "word ";
+      again({ chat: chatOf([...items, { kind: "assistant", id: "a-live", text: reply }], { running: true }) });
+      await scrollTo(scroller, scroller.scrollTop);
+      expect(scroller.scrollTop).toBe(scroller.scrollHeight - VIEW);
+    }
+    expect(inView(item("a-live")!)).toBe(true);
+    expect(item("u-0")).toBeNull();
   });
 
   it("renders a chat of a few chunks whole, however tall", () => {

@@ -331,6 +331,7 @@ export function ChatPane({
   notLoaded,
   findTarget,
   jumpTo,
+  reveal,
   onJumpMissed,
   status,
   alsoPostsIn,
@@ -385,6 +386,11 @@ export function ChatPane({
   jumpTo?: JumpTarget;
   /** The history loaded without the tool call `jumpTo` names. */
   onJumpMissed?: () => void;
+  /**
+   * A message, or the waiting Approval, that the app scrolls to and focuses in the DOM (an Inbox entry). Its chunk
+   * stays rendered while this is set.
+   */
+  reveal?: { itemId?: string; approval: boolean };
   status: ConnectionStatus;
   alsoPostsIn?: Source;
   draft: string;
@@ -697,8 +703,14 @@ export function ChatPane({
     const at = chunks.findIndex((c) => c.some(has));
     return at < 0 ? undefined : at;
   }, [jumping, chunks, chat.items, turns]);
+  const revealChunk = useMemo(() => {
+    if (!reveal?.itemId && !reveal?.approval) return undefined;
+    const id = reveal.itemId ?? chat.items.find(isWaiting)?.id;
+    const at = chunks.findIndex((c) => c.some((b) => b.id === id || (b.kind === "tools" && b.tools.some((t) => t.id === id))));
+    return at < 0 ? undefined : at;
+  }, [reveal, chunks, chat.items]);
   // Find marks and counts its matches in the DOM, so it renders the whole chat.
-  const shown = useTranscriptWindow({ scroller: scrollRef, chunks, all: !!q, stuck: stickToBottom, target: jumpChunk });
+  const shown = useTranscriptWindow({ scroller: scrollRef, chunks, all: !!q, stuck: stickToBottom, target: jumpChunk ?? revealChunk });
   revealRef.current = (has) => shown.reveal(chunks.findIndex((c) => c.some(has)));
   // Cards ignore clicks for a moment after the transcript changes, since it may have moved them under the pointer.
   const movedAt = useMemo(() => performance.now(), [chat.items, chat.sideQuestions]);
