@@ -1,5 +1,7 @@
 //! The Rust transport against a local stub of the dashboard's sign-in routes, `/api/ws` and REST.
 
+mod common;
+
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, RawQuery};
 use axum::extract::{Request, State};
@@ -676,8 +678,8 @@ async fn rate_limited_sign_in_is_reported() {
 
 #[tokio::test]
 async fn nothing_listening_is_unreachable() {
-    let port = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
-    let base = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+    let closed = common::refusing();
+    let base = Url::parse(&format!("http://{}/", closed.addr)).unwrap();
     let err = sign_in_at(&base, &sign_in("hunter2")).await.err().unwrap();
     assert!(matches!(err, TransportError::Unreachable(_)), "{err:?}");
 }
@@ -1528,8 +1530,8 @@ async fn a_connection_test_says_the_password_was_wrong_and_keeps_the_status() {
 
 #[tokio::test]
 async fn a_connection_test_says_when_nothing_answers() {
-    let free = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();
-    let failed = transport::probe(&Url::parse(&format!("http://{free}/")).unwrap(), &sign_in("hunter2"), "default").await.unwrap_err();
+    let closed = common::refusing();
+    let failed = transport::probe(&Url::parse(&format!("http://{}/", closed.addr)).unwrap(), &sign_in("hunter2"), "default").await.unwrap_err();
     assert_eq!(failed.stage, Stage::Reach);
     assert!(failed.message.contains("Can't reach the Hermes dashboard") && failed.message.to_lowercase().contains("refused"), "{}", failed.message);
 }
