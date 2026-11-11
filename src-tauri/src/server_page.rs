@@ -10,7 +10,8 @@
 //!   Windows' OpenSSH can't listen on a Unix socket, so there ssh listens on a loopback port instead (`LocalEnd`).
 //! - A TCP listener Rust binds on `127.0.0.1:0` and keeps, so the port is ephemeral and never released for another
 //!   program to take before ssh binds it. Each connection the frame makes is copied to and from ssh's socket. On
-//!   Linux, a connection from a program run by another account is closed unanswered (`loopback_peer`, ADR 0105).
+//!   Linux and Windows, a connection from a program run by another account is closed unanswered (`loopback_peer`,
+//!   ADR 0105).
 //!
 //! The webview names only the page's address. Rust parses it again and refuses anything that isn't an http(s) address
 //! on the server's loopback; it never takes an ssh host, option or socket path from the webview.
@@ -1718,16 +1719,24 @@ while True:
         (port, end)
     }
 
-    #[cfg(target_os = "linux")]
+    /// An account this test never runs as.
+    #[cfg(any(target_os = "linux", windows))]
+    fn another_account() -> loopback_peer::Account {
+        #[cfg(target_os = "linux")]
+        return loopback_peer::this_account() + 1;
+        #[cfg(windows)]
+        return loopback_peer::local_system();
+    }
+
+    #[cfg(any(target_os = "linux", windows))]
     #[tokio::test]
     async fn the_relay_answers_this_accounts_programs_and_closes_on_any_other_accounts() {
-        let me = loopback_peer::this_account();
-        let (port, _end) = relay_for("the dashboard", me).await;
+        let (port, _end) = relay_for("the dashboard", loopback_peer::this_account()).await;
         let mine = get(&format!("http://127.0.0.1:{port}/")).await.unwrap();
         assert!(mine.ends_with("the dashboard"), "this account's program is relayed: {mine:?}");
 
         // A relay that serves another account: this program's real connection is then a stranger's.
-        let (port, _end) = relay_for("the dashboard", me + 1).await;
+        let (port, _end) = relay_for("the dashboard", another_account()).await;
         let theirs = get(&format!("http://127.0.0.1:{port}/")).await.unwrap_or_default();
         assert_eq!(theirs, "", "another account's program gets nothing");
     }
