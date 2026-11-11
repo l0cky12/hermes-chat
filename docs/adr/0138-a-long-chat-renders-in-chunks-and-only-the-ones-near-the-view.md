@@ -12,7 +12,16 @@ Grouping the blocks into memoized chunks (#453) brought the frame to 25 to 29 ms
 - **The window is placed again** once a frame while scrolling, when the pane or its content changes size, and when the chat changes. Chunk positions are counted from a chunk that is in the page, so a wrong estimate for a far chunk does not move the window.
 - **The transcript keeps its own place.** WebKitGTK 2.54 does not anchor this scroller (#418). When the window changes, the first chunk in view is put back where it was, in the same commit, before the page is drawn. `.transcript` has `overflow-anchor: none`, so a later WebKitGTK that anchors cannot correct a second time. At the bottom of the chat, following the stream comes first.
 - **Some chats render whole**: a chat of four chunks or fewer, a chat with a find query, and a pane whose scroller has no height yet (a pane mounted hidden, or a test without layout). Find marks and counts its matches in the page, so it needs every message there.
-- **Going to a message looks in the chat, not the page.** Jump-to (a stored row, a turn, a tool call), Show in chat and Go to the Approval find the block's chunk in the chat's data and render it before they look for its element. The window then stays around it. A jump reports a message as missing only when the loaded history does not have it.
+- **Going to a message looks in the chat, not the page.** Jump-to (a stored row, a turn, a tool call), Show in chat and Go to the Approval find the block's chunk in the chat's data and render it before they look for its element. An Inbox or office entry's message or waiting Approval is passed to its pane, which keeps that chunk rendered until the app has scrolled to it. The window then stays around it. A jump reports a message as missing only when the loaded history does not have it.
+
+## Measured
+
+On 2026-11-11, against main `2a7e829e`, each build run in turn with the other:
+
+- The real app with a 1000-turn chat open: the web process holds 225 to 228 MB, down from 692 to 701 MB, and 219 to 221 MB after switching to a short chat, down from 410 to 412 MB. It is 193 MB after sign-in on both (`bench/app-split/memory.sh`).
+- The real app streaming into an 800-turn chat: a frame takes 18 to 20 ms at p50, down from 89 to 97 ms (`bench/app-split/run.sh 800 … single`).
+- The bench page in WebKitGTK at 1000 turns: a streamed frame takes 16 to 20 ms at p50, down from 35 to 73 ms. Opening the chat takes 128 ms, down from about 3 s (`bench/webkit.py`).
+- Wheel steps of 150 and 400 px move the view that far, find counts the same matches as main, and the view holds still above a streaming reply and follows it at the bottom (`bench/app-split/window.mjs`).
 
 ## Considered options
 
