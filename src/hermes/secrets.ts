@@ -223,12 +223,17 @@ export function redactValues(text: string, values: readonly string[], how: { any
   const spans: [number, number][] = [];
   for (const v of values) {
     if (!v) continue;
+    // A place wholly inside a word already taken for `v` would take no more than that word, and walking the word again
+    // for each one is quadratic in a long run of `v`.
+    let taken = -1;
     for (let i = text.indexOf(v); i >= 0; i = text.indexOf(v, i + 1)) {
       let [start, end] = [i, i + v.length];
+      if (how.word && end <= taken) continue;
       if (!how.anywhere && v.length < 4 && (ALNUM.test(text[start - 1] ?? "") || ALNUM.test(text[end] ?? ""))) continue;
       if (how.word) {
         while (start > 0 && !EDGE.test(text[start - 1])) start--;
         while (end < text.length && !EDGE.test(text[end])) end++;
+        taken = end;
       }
       spans.push([start, end]);
     }

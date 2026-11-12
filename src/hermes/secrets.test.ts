@@ -251,4 +251,12 @@ describe("Redacting known values", () => {
   it("takes the whole word around a value when asked", () => {
     expect(redactValues("host-ab1.example said (ab1)", ["ab1"], { word: true }).text).toBe("[redacted] said ([redacted])");
   });
+
+  it("takes a long run of one value as a word in linear time, and still takes a value that runs past the word", () => {
+    const run = "abcd".repeat(10_000);
+    const t0 = performance.now();
+    expect(redactValues(`x ${run} y`, ["abcd"], { word: true })).toEqual({ text: "x [redacted] y", places: 1 });
+    expect(performance.now() - t0).toBeLessThan(100);
+    expect(redactValues("pa:pa:pa end", ["pa:pa"], { word: true }).text).toBe("[redacted] end");
+  });
 });
