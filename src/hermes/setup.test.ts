@@ -167,6 +167,45 @@ describe("Explaining a failed test", () => {
   });
 });
 
+describe("Explaining a failure the dashboard answered (#517)", () => {
+  const answer = (stage: ProbeFailure["stage"], status: number, body: string, extra: Partial<ProbeFailure> = {}): ProbeFailure => ({
+    stage,
+    message: `The dashboard answered ${status}: ${body}`,
+    answered: { status, body },
+    ...extra,
+  });
+  const serverError = "The dashboard at hermes.example.com:9119 answered its status check with a server error. It wasn't sent the password.";
+
+  it("reads a 502 whose body says 'answered 401' as a server error, not a refused sign-in", () => {
+    const gateway = answer("reach", 502, "upstream said: The dashboard answered 401: Unauthorized");
+    expect(explain(gateway, url)).toMatchObject({ problem: serverError, verdict: "unreachable" });
+    expect(explainSignIn(gateway.message, url).problem).toBe(serverError);
+  });
+
+  it("reads a gateway's 525 'SSL handshake failed' page as a server error, not an untrusted certificate", () => {
+    expect(explain(answer("reach", 525, "SSL handshake failed"), url).problem).toBe(serverError);
+  });
+
+  it("gives an answered failure its stage's verdict, whatever its body says", () => {
+    expect(explain(answer("reach", 504, "Gateway timed out: connection refused"), url).verdict).toBe("unreachable");
+    expect(explain(answer("chat", 502, "Wrong server: refused"), url).verdict).toBe("failed");
+  });
+
+  it("never reads a sign-in's server error as a wrong password or a rate limit", () => {
+    const failed = { problem: "The dashboard's sign-in failed.", verdict: "sign-in failed" };
+    expect(explain(answer("sign-in", 500, "Wrong username or password", { status: STATUS }), url)).toMatchObject(failed);
+    expect(explain(answer("sign-in", 502, "Too many sign-in attempts", { status: STATUS }), url)).toMatchObject(failed);
+    expect(explain(answer("sign-in", 500, "answered 503", { status: STATUS }), url).problem).toBe("The dashboard's sign-in failed.");
+  });
+
+  it("points a refusal at the extra request headers by its status alone", () => {
+    const withHeaders = { ...url, headers: [{ name: "CF-Access-Client-Id", value: "id" }] };
+    const turnedAway = "Something in front of the dashboard at hermes.example.com:9119 turned Hermes Chat away.";
+    expect(explain(answer("chat", 407, "(not shown, as it may repeat your password or a request header)"), withHeaders).problem).toBe(turnedAway);
+    expect(explain(answer("chat", 502, "answered 403: (not shown, as it may repeat your password or a request header)"), withHeaders).problem).not.toBe(turnedAway);
+  });
+});
+
 describe("Explaining what the sign-in screen shows", () => {
   it("shows Sign out's keyring note as it is, not as an unreachable server", () => {
     const note = "Signed out, but couldn't delete the saved password from the system keyring: no Secret Service on the bus";
