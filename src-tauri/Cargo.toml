@@ -40,6 +40,9 @@ lopdf = { version = "0.47", default-features = false }
 hmac = "0.12"
 quick-xml = "0.42"
 getrandom = "0.3"
+# Already comes with tauri (`image-png`): cuts the Windows still from its capture, and marks and scales a staged
+# annotation (annotate.rs).
+image = { version = "0.25", default-features = false, features = ["png"] }
 # Verified self-updates for a standalone AppImage built with an update key (update.rs). Never used on a pacman install.
 tauri-plugin-updater = "2"
 
@@ -60,7 +63,7 @@ x11 = { version = "2.21", features = ["xlib"] }
 webkit2gtk = { version = "2.0", features = ["v2_40"] }
 # Already comes with webkit2gtk; reads the string the annotation query returns (page_view.rs).
 javascriptcore-rs = "1.1"
-# Already comes with gtk; `png` writes an annotation's still and its marked image (annotate.rs).
+# Already comes with gtk; `png` writes an annotation's still from the view's snapshot (annotate.rs).
 cairo-rs = { version = "0.18", features = ["png"] }
 
 [target.'cfg(windows)'.dependencies]
@@ -71,8 +74,11 @@ portable-pty = "0.9"
 # tunnel's port (loopback_owner.rs), whether a captures folder's pid is still Hermes Chat (screenshot.rs), the installed
 # fonts (fonts.rs), opening a page in the browser (web_page.rs), and where the touch keyboard is (touch_keyboard.rs).
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
-# Already comes with tauri (tao, wry, webview2-com): WinRT toasts are the desktop notifications on Windows (notify.rs).
-windows = { version = "0.62", features = ["Data_Xml_Dom", "UI_Notifications"] }
+# Already comes with tauri (tao, wry, webview2-com): WinRT toasts are the desktop notifications on Windows (notify.rs),
+# and the memory stream WebView2 writes an annotation's still into (frame_still.rs).
+windows = { version = "0.62", features = ["Data_Xml_Dom", "UI_Notifications", "Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
+# Already comes with wry: WebView2's CapturePreview takes the still of a page to annotate (frame_still.rs).
+webview2-com = "0.39"
 
 [dev-dependencies]
 axum = { version = "0.8", features = ["ws", "multipart"] }

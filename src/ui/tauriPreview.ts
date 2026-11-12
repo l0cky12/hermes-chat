@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { asError } from "../hermes/tauriPipe";
 import { readLocalFile, type FileView, type Framing, type LocalText, type ViewUrl } from "../hermes/preview";
+import type { Answer, Pick, Rect as PageRect, Still } from "../hermes/annotations";
 
 export type LocalFiles = {
   /** Opens the Open dialog; null when the owner cancels. */
@@ -32,6 +33,41 @@ export type WebPages = {
   native?: NativePages;
   /** `attempt`: Rust's name for the connection whose server to look on (`Hermes.connectionId`). */
   devServers(attempt?: string): Promise<DevServers>;
+  /** Annotating the page on screen (ADR 0094). Left out, the Preview offers no Annotate. */
+  annotate?: Annotator;
+};
+
+/**
+ * Where a still comes from: the Preview's own view (`key`, Linux), or the sandboxed frame (Windows): its box in the
+ * window's CSS pixels, the window's CSS size, and the address it shows.
+ */
+export type StillSource =
+  | { kind: "view"; key: string }
+  | { kind: "frame"; url: string; rect: Rect; viewport: { width: number; height: number } };
+
+/**
+ * Rust's annotation commands (src-tauri/src/annotate.rs). Each rejects with an `AnnotateFailure` (`{ kind, message }`).
+ * `query` and `pick` ask the view named `key` about a point of its still `still`, `up` parents above the element there.
+ */
+export type Annotator = {
+  still(source: StillSource): Promise<Still>;
+  query(key: string, still: number, x: number, y: number, up: number): Promise<Answer | null>;
+  pick(key: string, still: number, x: number, y: number, up: number): Promise<Pick>;
+  /** The still's PNG, for the overlay. */
+  read(path: string): Promise<Blob>;
+  /** Marks the still at `rect` and stages it as `annotation-<n>.png`, deleting the still. Gives the staged file's path. */
+  stage(stillPath: string, n: number, rect: PageRect, scale: number): Promise<string>;
+  /** Deletes a still that won't be staged. */
+  discard(path: string): Promise<void>;
+};
+
+export const tauriAnnotator: Annotator = {
+  still: (source) => invoke<Still>("preview_annotate_still", { source }),
+  query: (key, still, x, y, up) => invoke<Answer | null>("preview_annotate_query", { key, still, x, y, up }),
+  pick: (key, still, x, y, up) => invoke<Pick>("preview_annotate_pick", { key, still, x, y, up }),
+  read: async (path) => new Blob([await invoke<ArrayBuffer>("preview_annotate_read", { path })], { type: "image/png" }),
+  stage: async (stillPath, n, rect, scale) => (await invoke<{ path: string }>("preview_annotate_stage", { stillPath, n, rect, scale })).path,
+  discard: (path) => invoke("screenshot_discard", { path }),
 };
 
 export type Listening = { port: number; process?: string };
@@ -45,7 +81,8 @@ export type Rect = { x: number; y: number; width: number; height: number };
 /** Where a native page shows, and the parts of that the app's own layers cover, which the page leaves bare. */
 export type Placement = { rect: Rect; holes: Rect[] };
 export type PageEvent = { kind: "at"; url: ViewUrl; replace: boolean } | { kind: "failed"; message: string; url?: ViewUrl } | { kind: "escaped" };
-export type NativePage = { go(url: ViewUrl): void; reload(): void; place(placement: Placement | null): void; close(): void };
+/** `key`: the view's name in Rust, which annotation queries ask about. */
+export type NativePage = { key: string; go(url: ViewUrl): void; reload(): void; place(placement: Placement | null): void; close(): void };
 export type NativePages = { open(onEvent: (e: PageEvent) => void): NativePage };
 
 /**
@@ -67,6 +104,7 @@ export const tauriNativePages: NativePages = {
     const failed = (e: unknown) => onEvent({ kind: "failed", message: String(e) });
     inOrder(() => invoke("preview_page_open", { key: viewKey, onEvent: events })).catch(failed);
     return {
+      key: viewKey,
       go: (url) => void inOrder(() => invoke("preview_page_go", { key: viewKey, url })).catch(failed),
       reload: () => void inOrder(() => invoke("preview_page_reload", { key: viewKey })).catch(() => {}),
       place: (placement) => void inOrder(() => invoke("preview_page_place", { key: viewKey, placement })).catch(() => {}),
@@ -81,6 +119,7 @@ export const tauriWebPages: WebPages = {
   openInBrowser: (url) => invoke<string | null>("preview_open_in_browser", { url }).catch(asError),
   ...(/\bLinux\b/.test(navigator.userAgent) && { native: tauriNativePages }),
   devServers: (attempt) => invoke<DevServers>("preview_dev_servers", { attempt: attempt ?? "" }).catch(asError),
+  annotate: tauriAnnotator,
 };
 
 /**

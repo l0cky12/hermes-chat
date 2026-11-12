@@ -298,3 +298,142 @@ it("keeps an in-flight capture when its composer unmounts, then releases it afte
   desk.finish(["/c/1/0/a.png"]);
   expect(rust.discarded).toEqual(["/c/1/0/a.png"]);
 });
+
+describe("Annotations on the desk (ADR 0094)", () => {
+  it("stages an annotation in the composer on screen with its words, labels it stale once the page moves, and forgets it when removed", async () => {
+    const rust = fakeApi();
+    const desk = new ScreenshotDesk(rust.api);
+    const inserted: string[] = [];
+    const { s, attached } = sink();
+    desk.attachTo({ ...s, chat: "Fix the app", insert: (t) => void inserted.push(t) });
+    expect(desk.target()).toEqual({ chat: "Fix the app", key: "chat-a" });
+    expect([desk.nextAnnotation(), desk.nextAnnotation()]).toEqual([1, 2]);
+
+    const path = "/c/1/4/annotation-2.png";
+    expect(await desk.annotate(path, "Annotation 2. …", { url: "http://localhost:5173/", takenAtMs: 5 }, { key: "chat-a", live: () => true })).toBe(true);
+    expect(attached).toEqual([[path]]);
+    expect(inserted).toEqual(["Annotation 2. …"]);
+    expect(desk.stagedIn("chat-a").map((a) => a.path)).toEqual([path]);
+    expect(desk.annotationLabels().get(path)).toEqual({ url: "http://localhost:5173/", takenAtMs: 5, stale: false });
+
+    desk.pageMoved();
+    expect(desk.annotationLabels().get(path)?.stale).toBe(true);
+
+    desk.change({ kind: "removed", key: "chat-a", paths: [path] });
+    await tick();
+    expect(rust.discarded).toEqual([path]);
+    expect(desk.annotationLabels().size).toBe(0);
+  });
+
+  it("sends an annotation to the composer last on screen when a covering Preview hides it, and asks for it to show", async () => {
+    const rust = fakeApi();
+    const reveal = vi.fn();
+    const desk = new ScreenshotDesk(rust.api, undefined, reveal);
+    const inserted: string[] = [];
+    const { s } = sink();
+    const stop = desk.attachTo({ ...s, chat: "Fix the app", insert: (t) => void inserted.push(t) });
+    stop();
+    expect(desk.target()).toEqual({ chat: "Fix the app", key: "chat-a" });
+
+    const path = "/c/1/6/annotation-1.png";
+    expect(await desk.annotate(path, "Annotation 1.", { url: "http://x.example/", takenAtMs: 1 }, { key: "chat-a", live: () => true })).toBe(true);
+    await tick();
+    expect(reveal).toHaveBeenCalledTimes(1);
+    expect(inserted).toEqual([]);
+    desk.attachTo({ ...s, chat: "Fix the app", insert: (t) => void inserted.push(t) });
+    await tick();
+    expect(inserted).toEqual(["Annotation 1."]);
+    expect(desk.stagedIn("chat-a").map((a) => a.path)).toEqual([path]);
+    expect(rust.discarded).toEqual([]);
+  });
+
+  it("never puts an annotation in another chat's composer: one that comes first deletes it", async () => {
+    const rust = fakeApi();
+    const desk = new ScreenshotDesk(rust.api, undefined, () => {});
+    const a = sink(undefined, "chat-a");
+    desk.attachTo({ ...a.s, chat: "Fix the app" })();
+    const path = "/c/1/7/annotation-1.png";
+    await desk.annotate(path, "Annotation 1.", { url: "http://x.example/", takenAtMs: 1 }, { key: "chat-a", live: () => true });
+    const inserted: string[] = [];
+    const b = sink(undefined, "chat-b");
+    desk.attachTo({ ...b.s, chat: "Other profile's chat", insert: (t) => void inserted.push(t) });
+    await tick();
+    expect(b.attached).toEqual([]);
+    expect(inserted).toEqual([]);
+    expect(desk.stagedIn("chat-b")).toEqual([]);
+    expect(rust.discarded).toEqual([path]);
+    expect(desk.annotationLabels().size).toBe(0);
+  });
+
+  it("deletes an annotation cancelled before it reached its composer, even while that composer checked it", async () => {
+    const rust = fakeApi();
+    const desk = new ScreenshotDesk(rust.api);
+    let live = true;
+    let checked!: () => void;
+    const inserted: string[] = [];
+    desk.attachTo({
+      key: "chat-a",
+      check: (paths) => new Promise((r) => (checked = () => r(paths.map(file)))),
+      note: () => {},
+      insert: (t) => void inserted.push(t),
+    });
+    const adding = desk.annotate("/c/1/8/annotation-1.png", "words", { url: "http://x.example/", takenAtMs: 1 }, { key: "chat-a", live: () => live });
+    live = false;
+    checked();
+    await adding;
+    await tick();
+    expect(inserted).toEqual([]);
+    expect(desk.stagedIn("chat-a")).toEqual([]);
+    expect(rust.discarded).toEqual(["/c/1/8/annotation-1.png"]);
+  });
+
+  it("reveals a covered chat only once its annotation is handed over, since revealing it ends the Preview's overlay", async () => {
+    const rust = fakeApi();
+    const inserted: string[] = [];
+    const { s } = sink();
+    let added = false;
+    let overlay = true;
+    // As in the app: revealing renders at once, which unmounts the overlay and attaches the chat's composer.
+    const desk: ScreenshotDesk = new ScreenshotDesk(rust.api, undefined, () => {
+      overlay = false;
+      desk.attachTo({ ...s, insert: (t) => void inserted.push(t) });
+    });
+    desk.attachTo(s)();
+    const path = "/c/1/9/annotation-1.png";
+    await desk.annotate(path, "words", { url: "http://x.example/", takenAtMs: 1 }, { key: "chat-a", live: () => added || overlay });
+    added = true;
+    await new Promise((r) => setTimeout(r, 5));
+    expect(inserted).toEqual(["words"]);
+    expect(desk.stagedIn("chat-a").map((a) => a.path)).toEqual([path]);
+    expect(rust.discarded).toEqual([]);
+  });
+
+  it("still delivers an annotation when its composer re-attaches while it is being checked, as a revealed chat's does", async () => {
+    const rust = fakeApi();
+    const desk = new ScreenshotDesk(rust.api);
+    let checked!: () => void;
+    const stop = desk.attachTo({ key: "chat-a", check: (paths) => new Promise((r) => (checked = () => r(paths.map(file)))), note: () => {} });
+    const path = "/c/1/9/annotation-1.png";
+    const adding = desk.annotate(path, "words", { url: "http://x.example/", takenAtMs: 1 }, { key: "chat-a", live: () => true });
+    stop();
+    const inserted: string[] = [];
+    const { s } = sink(undefined, "chat-a");
+    checked();
+    await adding;
+    desk.attachTo({ ...s, insert: (t) => void inserted.push(t) });
+    await tick();
+    expect(inserted).toEqual(["words"]);
+    expect(desk.stagedIn("chat-a").map((a) => a.path)).toEqual([path]);
+    expect(rust.discarded).toEqual([]);
+  });
+
+  it("deletes an annotation at once when it was cancelled before it was handed over", async () => {
+    const rust = fakeApi();
+    const desk = new ScreenshotDesk(rust.api);
+    expect(desk.target()).toBeUndefined();
+    expect(await desk.annotate("/c/1/5/annotation-1.png", "words", { url: "http://x.example/", takenAtMs: 1 }, { key: "chat-a", live: () => false })).toBe(false);
+    await tick();
+    expect(rust.discarded).toEqual(["/c/1/5/annotation-1.png"]);
+    expect(desk.stagedIn("chat-a")).toEqual([]);
+  });
+});

@@ -51,6 +51,11 @@ export type InboxEntry = {
   aliasAt?: number;
   /** Where the chat was started, for a chat the profile's list may not hold, such as one older than a month. */
   source?: Source;
+  /**
+   * The live connection the entry is on, when it isn't the composer target (ADR 0125). Its key and alias then start
+   * with the connection's id, so the same profile and chat ids on two servers stay two entries.
+   */
+  server?: { id: string; name: string };
 };
 
 /** What the inbox is worked out from: the shown profile's chats, and the latest checks of the server. */

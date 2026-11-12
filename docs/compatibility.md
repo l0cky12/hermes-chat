@@ -68,6 +68,15 @@ When no other client answers, the reply keeps running until Hermes stops waiting
 
 Needs `approval.respond` on `/api/ws`. Hermes `bf0203a` and every Hermes that sends `approval` requests (from `ebe8cda8ea`) has it. An answer sent that way settles the Approval in Hermes's queue, and Hermes then withdraws the card from every other app that has the chat open (`request.cancel`). A plain reply to Hermes's request settles it for this app alone, so another app keeps showing the card. Answering is a change, so diagnostics can't check it by reading. The capability is unknown until this app answers an Approval. A Hermes that answers "method not found" gets the plain reply, then and from then on. Another app's card then stays up until Hermes next lists the chat as not waiting (`session.active_list`), and this app closes its own cards the same way when an older app answers in a plain reply. It does that, and reads an `approval.respond` that settled nothing as answered elsewhere, only for a card that Hermes acknowledged as waiting in its own queue (`approval.received`). With turn isolation (`dashboard.turn_isolation`), the request waits in a child process that neither method sees. Hermes then acknowledges nothing, so the card stays up until Hermes withdraws it or the turn ends, and the answer also goes as a plain reply, which Hermes passes on to the child.
 
+## Several live connections
+
+A background connection (ADR 0125) works with the server as it is; it adds no endpoint. What it can show depends on the server:
+
+- **`session.active_list`** gives its running and waiting counts and its last activity. Without it (the call answers `-32601`), the overview shows the connection's status and Unread chats only, and says that this Hermes doesn't report running work.
+- **Approval cards** reach it only for chats it held while it was the target, since a client gets a chat's requests only once it has attached to it. On 0.21.6 and later those chats are shared: the official app sees the same card, and the first answer settles it. The app attaches a background connection to no new chat on any version yet, so another waiting chat shows as an Inbox entry with no card until it is opened. Before 0.21.6, attaching would move the chat from whichever client held it.
+- **Server requests it doesn't show** get no answer at all from a background connection, on every version, so a client that shows them can answer. Only a window-owned request is declined with `4404`, and only when the server says `declines_not_shown: true`.
+- **Without `client.capabilities`** (0.16.0 and older), Hermes sends no Approval cards on any connection, background ones included.
+
 ## Projects
 
 Needs the `projects.*` methods on `/api/ws`. Checked with `projects.list`. Without them, the chat list works, and the project menu says that Hermes doesn't support projects and offers no New project.

@@ -55,8 +55,24 @@ impl<L> Slot<L> {
     }
 }
 
-/// The open connections by saved connection, at most `limit` of them. The map is locked only to look one up, add one
-/// or take one out, never while anything waits, so a slow connect holds up no other connection's commands.
+/// The most connections held open, whatever limit the owner sets (ADR 0125).
+pub(crate) const MAX_LIVE: usize = 8;
+
+/// A connect refused because `held` are open already, as many as the limit allows. Nothing is closed to make room.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct AtLimit {
+    pub(crate) limit: usize,
+}
+
+impl std::fmt::Display for AtLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Hermes Chat already has {} connections open, the most it keeps open. Disconnect one first.", self.limit)
+    }
+}
+
+/// The open connections by saved connection, at most the owner's limit of them. The map is locked only to look one up,
+/// add one or take one out, never while anything waits, so a slow connect holds up no other connection's commands.
+/// `limit` is the one used when a connect names none: 1, as before the webview kept several.
 pub(crate) struct Slots<L = Live> {
     map: std::sync::Mutex<HashMap<ConnectionId, Arc<Slot<L>>>>,
     limit: usize,
@@ -87,14 +103,37 @@ impl<L> Slots<L> {
     }
 
     /// Takes out the connections that give way to a new one for `id`, and names them: every one at a limit of 1, as
-    /// one connection replaces another; above it only `id`'s own, since which other gives way is not decided yet.
-    pub(crate) fn evict_for(&self, id: &ConnectionId) -> Vec<ConnectionId> {
+    /// one connection replaces another; above it only `id`'s own opening. `asked` is the owner's limit, kept within
+    /// 1 to `MAX_LIVE`. Above 1, a connect that would hold more than the limit is refused and nothing is taken out: a
+    /// silent close would drop the Approvals of every chat that connection holds.
+    pub(crate) fn evict_for(&self, id: &ConnectionId, asked: Option<usize>) -> Result<Vec<ConnectionId>, AtLimit> {
+        let limit = self.limit_of(asked);
         let mut map = self.map.locked();
-        if self.limit <= 1 {
-            map.drain().map(|(id, _)| id).collect()
-        } else {
-            map.remove(id).map(|_| id.clone()).into_iter().collect()
+        if limit == 1 {
+            return Ok(map.drain().map(|(id, _)| id).collect());
         }
+        Self::room(&map, id, limit)?;
+        Ok(map.remove(id).map(|_| id.clone()).into_iter().collect())
+    }
+
+    /// Whether `evict_for` would make room for `id`, checked before a connect begins so a refused one opens nothing.
+    pub(crate) fn room_for(&self, id: &ConnectionId, asked: Option<usize>) -> Result<(), AtLimit> {
+        let limit = self.limit_of(asked);
+        if limit == 1 {
+            return Ok(());
+        }
+        Self::room(&self.map.locked(), id, limit)
+    }
+
+    fn limit_of(&self, asked: Option<usize>) -> usize {
+        asked.unwrap_or(self.limit).clamp(1, MAX_LIVE)
+    }
+
+    fn room(map: &HashMap<ConnectionId, Arc<Slot<L>>>, id: &ConnectionId, limit: usize) -> Result<(), AtLimit> {
+        if map.keys().filter(|k| *k != id).count() >= limit {
+            return Err(AtLimit { limit });
+        }
+        Ok(())
     }
 
     pub(crate) fn insert(&self, id: ConnectionId, slot: Arc<Slot<L>>) {
@@ -179,17 +218,47 @@ mod tests {
     fn at_a_limit_of_one_a_new_connection_takes_every_place_and_above_it_only_its_own() {
         let one = Slots::default();
         open(&one, "server-one", "A");
-        assert_eq!(one.evict_for(&id("server-two")), [id("server-one")]);
+        assert_eq!(one.evict_for(&id("server-two"), None), Ok(vec![id("server-one")]));
         assert!(one.ids().is_empty());
         open(&one, "server-one", "A");
-        assert_eq!(one.evict_for(&id("server-one")), [id("server-one")]);
+        assert_eq!(one.evict_for(&id("server-one"), None), Ok(vec![id("server-one")]));
 
         let two = Slots::with_limit(2);
         open(&two, "server-one", "A");
-        assert_eq!(two.evict_for(&id("server-two")), []);
+        assert_eq!(two.evict_for(&id("server-two"), None), Ok(vec![]));
         open(&two, "server-two", "B");
-        assert_eq!(two.evict_for(&id("server-two")), [id("server-two")]);
+        assert_eq!(two.evict_for(&id("server-two"), None), Ok(vec![id("server-two")]));
         assert_eq!(two.ids(), [id("server-one")]);
+    }
+
+    #[test]
+    fn at_the_owners_limit_a_connect_is_refused_and_nothing_is_closed() {
+        let slots = Slots::default();
+        open(&slots, "server-one", "A");
+        open(&slots, "server-two", "B");
+        assert_eq!(slots.room_for(&id("server-three"), Some(2)), Err(AtLimit { limit: 2 }));
+        assert_eq!(slots.evict_for(&id("server-three"), Some(2)), Err(AtLimit { limit: 2 }));
+        assert_eq!(slots.room_for(&id("server-two"), Some(2)), Ok(()));
+        let mut held = slots.ids();
+        held.sort_by_key(|i| i.0.clone());
+        assert_eq!(held, [id("server-one"), id("server-two")], "a refused connect closed one");
+        assert_eq!(slots.evict_for(&id("server-two"), Some(2)), Ok(vec![id("server-two")]), "opening one held again replaces only it");
+        assert_eq!(slots.evict_for(&id("server-three"), Some(3)), Ok(vec![]), "a raised limit makes room");
+        open(&slots, "server-three", "C");
+        let mut replaced = slots.evict_for(&id("server-four"), Some(1)).unwrap();
+        replaced.sort_by_key(|i| i.0.clone());
+        assert_eq!(replaced, [id("server-one"), id("server-three")], "a limit of 1 replaces, as before");
+    }
+
+    #[test]
+    fn no_limit_holds_more_than_eight() {
+        let slots = Slots::default();
+        for n in 0..MAX_LIVE {
+            assert!(slots.evict_for(&id(&format!("server-{n:04}")), Some(100)).is_ok());
+            open(&slots, &format!("server-{n:04}"), &format!("A{n}"));
+        }
+        assert_eq!(slots.evict_for(&id("server-nine"), Some(100)), Err(AtLimit { limit: MAX_LIVE }));
+        assert_eq!(slots.evict_for(&id("server-nine"), Some(0)).map(|v| v.len()), Ok(MAX_LIVE), "a limit below 1 is 1");
     }
 
     #[test]

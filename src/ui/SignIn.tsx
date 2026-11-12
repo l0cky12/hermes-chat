@@ -12,6 +12,7 @@ import { ServerFields, withHeaders } from "./Onboarding";
 import { RouteSummary } from "./Routes";
 import { routesSummary } from "../hermes/connections";
 import { ConnectionPicker } from "./Connections";
+import type { LiveSummary } from "../hermes/liveConnections";
 import { MethodPicker, TokenField } from "./SignInMethods";
 
 export function SignIn({
@@ -19,6 +20,7 @@ export function SignIn({
   error,
   connection,
   connections = [],
+  live = [],
   onSignIn,
   onSetUp,
   onRerunSetup,
@@ -33,6 +35,8 @@ export function SignIn({
   connection?: SavedConnection;
   /** Every saved connection, most recently used first, for the picker. */
   connections?: SavedConnection[];
+  /** The live connections (ADR 0125): picking one makes it the one in use, without signing in again. */
+  live?: LiveSummary[];
   onSignIn: (d: SignInDetails) => Promise<void>;
   /** Opens setup, to test and save a new connection step by step. */
   onSetUp?: () => void;
@@ -123,7 +127,7 @@ export function SignIn({
             "Pick a saved connection, or set up a new one."
           )}
         </p>
-        {picker && onPick && <ConnectionPicker connections={connections} selectedId={connection?.id} onPick={onPick} disabled={busy} />}
+        {picker && onPick && <ConnectionPicker connections={connections} live={live} selectedId={connection?.id} onPick={onPick} disabled={busy} />}
         {connection && (
           <form
             className="conn-form"

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Paperclip, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { staleText, type AnnotationLabel } from "../hermes/annotations";
 import type { Attachment } from "../hermes/model";
 import { asError } from "../hermes/tauriPipe";
 import { errorText, formatBytes } from "../hermes/values";
@@ -72,16 +73,24 @@ export class Previews {
 }
 
 /** A staged attachment: its thumbnail if it is an image that could be read, else a paperclip. */
-export function AttachmentChip({ file, preview, onRemove }: { file: Attachment; preview?: Preview; onRemove: () => void }) {
+/** `annotation`: where an annotation's image came from, and whether the Preview's page has moved since (ADR 0094). */
+export function AttachmentChip({ file, preview, annotation, onRemove }: { file: Attachment; preview?: Preview; annotation?: AnnotationLabel; onRemove: () => void }) {
   // The bytes looked like an image but the webview couldn't draw them.
   const [broken, setBroken] = useState(false);
   const url = preview && "url" in preview && !broken ? preview.url : undefined;
   const why = broken ? "the image couldn't be shown" : preview && "error" in preview ? preview.error : undefined;
+  const from = annotation && staleText(annotation);
+  const title = [file.path, from, why && `No preview: ${why}`].filter(Boolean).join("\n");
   return (
-    <span className="chip" title={why ? `${file.path}\nNo preview: ${why}` : file.path}>
+    <span className={annotation?.stale ? "chip chip-stale" : "chip"} title={title}>
       {url ? <img className="chip-thumb" src={url} alt="" onError={() => setBroken(true)} /> : <Paperclip size={12} />}
       <span className="chip-name">{file.name}</span>
       <span className="chip-size">{formatBytes(file.size)}</span>
+      {annotation?.stale && (
+        <span className="chip-note" aria-label={from}>
+          page changed
+        </span>
+      )}
       <button title="Remove" onClick={onRemove}>
         <X size={12} />
       </button>
