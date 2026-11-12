@@ -26,6 +26,7 @@
 use crate::live::ConnectionId;
 use crate::lock::Locked;
 use crate::loopback_peer::{self, Peers};
+use crate::ssh_guard::{self, ForwardFailure, HostKeys, Kind, Target};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -204,79 +205,42 @@ pub fn server_page(raw: &str) -> Result<ServerPage, ServerPageError> {
     Ok(ServerPage { url, host, port })
 }
 
-/// An SSH target as the sign-in tunnel takes it: no leading '-', which ssh would read as an option, and no whitespace.
-pub fn checked_target(target: &str) -> Option<&str> {
-    let target = target.trim();
-    (!target.is_empty() && !target.starts_with('-') && !target.contains(char::is_whitespace)).then_some(target)
+fn ssh_target(raw: &str) -> Result<Target<'_>, ServerPageError> {
+    Target::parse(raw).ok_or_else(|| ServerPageError::Ssh("The sign-in's SSH target isn't one ssh can take.".into()))
 }
 
-/// ssh's arguments for a tunnel from `socket` to `page` on `target`'s loopback.
+/// ssh's arguments for a tunnel from `socket` to `page` on `target`'s loopback (`ssh_guard::Kind::Forward`).
 ///
-/// - `-N`, `-T`: no command, no terminal; stdin is closed.
-/// - `BatchMode`: nothing to answer a prompt with, so a key that needs one fails rather than waiting.
-/// - No `StrictHostKeyChecking=accept-new`: the sign-in already knows this host's key; a new one is refused.
-/// - `ControlMaster=no`, `ControlPath=none`: with the owner's ControlMaster, the forward would be set up in that
-///   master and outlive this ssh. Now it ends with it.
-/// - `ForkAfterAuthentication=no`: the owner's config can't send ssh to the background, where it would leave this
-///   process (and its death signal) behind. `PermitLocalCommand=no`: nor run a command of its own here.
+/// - Host keys are the owner's config's: the sign-in already knows this host's key.
 /// - `ExitOnForwardFailure=no`: a `LocalForward` in the owner's config for this host is opened by every ssh to it, and
 ///   the sign-in tunnel holds its port already, so with `yes` it would end every tunnel. Whether this tunnel's own
 ///   forward works is seen directly: its socket accepts, or ssh names the socket in an error (`open`).
-/// - `StreamLocalBindMask=0177`: only the owner can connect to the socket (its folder is 0700 as well).
 pub fn ssh_args(target: &str, socket: &Path, page: &ServerPage) -> Result<Vec<OsString>, ServerPageError> {
-    let target = checked_target(target).ok_or_else(|| ServerPageError::Ssh("The sign-in's SSH target isn't one ssh can take.".into()))?;
+    let target = ssh_target(target)?;
     let socket = socket.to_str().filter(|s| socket_path_ok(s)).ok_or_else(|| ServerPageError::Io("The tunnel's socket path isn't usable.".into()))?;
     Ok(forward_args(target, socket, page))
 }
 
 /// `ssh_args` with ssh listening on `127.0.0.1:<port>` of this computer instead of a socket, as on Windows.
 pub fn tcp_ssh_args(target: &str, port: u16, page: &ServerPage) -> Result<Vec<OsString>, ServerPageError> {
-    let target = checked_target(target).ok_or_else(|| ServerPageError::Ssh("The sign-in's SSH target isn't one ssh can take.".into()))?;
+    let target = ssh_target(target)?;
     if port == 0 {
         return Err(ServerPageError::Io("The tunnel's local port isn't usable.".into()));
     }
     Ok(forward_args(target, &format!("127.0.0.1:{port}"), page))
 }
 
-fn forward_args(target: &str, listen: &str, page: &ServerPage) -> Vec<OsString> {
+fn forward_args(target: Target, listen: &str, page: &ServerPage) -> Vec<OsString> {
     let forward = format!("{listen}:{}:{}", page.host.forward_host(), page.port);
-    let mut args: Vec<OsString> = ["-N"].iter().chain(SSH_OPTIONS).chain(&["-L"]).map(OsString::from).collect();
-    args.push(forward.into());
-    args.push("--".into());
-    args.push(target.into());
-    args
+    let kind = Kind::Forward { listen: &forward, host_keys: HostKeys::OwnersConfig, on_failure: ForwardFailure::KeepGoing };
+    ssh_guard::args(target, kind, Some(SSH_CONNECT_TIMEOUT))
 }
 
 pub fn listening_args(target: &str) -> Result<Vec<OsString>, ServerPageError> {
-    let target = checked_target(target).ok_or_else(|| ServerPageError::Ssh("The sign-in's SSH target isn't one ssh can take.".into()))?;
-    Ok(SSH_OPTIONS.iter().copied().chain(["--", target, "ss", "-ltnpH"]).map(OsString::from).collect())
+    Ok(ssh_guard::args(ssh_target(target)?, Kind::Command { remote: &["ss", "-ltnpH"] }, Some(SSH_CONNECT_TIMEOUT)))
 }
 
-const SSH_OPTIONS: &[&str] = &[
-    "-T",
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "ConnectTimeout=15",
-    "-o",
-    "ServerAliveInterval=15",
-    "-o",
-    "ServerAliveCountMax=3",
-    "-o",
-    "ControlMaster=no",
-    "-o",
-    "ControlPath=none",
-    "-o",
-    "ForkAfterAuthentication=no",
-    "-o",
-    "PermitLocalCommand=no",
-    "-o",
-    "ExitOnForwardFailure=no",
-    "-o",
-    "StreamLocalBindMask=0177",
-    "-o",
-    "StreamLocalBindUnlink=yes",
-];
+const SSH_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// ssh said it couldn't listen on `127.0.0.1:<port>`: `bind [127.0.0.1]:<port>: Address already in use`, or
 /// `channel_setup_fwd_listener_tcpip: cannot listen to port: <port>`. With `ExitOnForwardFailure=no` it runs on, and
@@ -806,7 +770,7 @@ impl ServerPages {
         if !key_ok(key) {
             return Err(ServerPageError::Io("That page key isn't one Hermes Chat makes.".into()));
         }
-        let target = checked_target(target).ok_or(ServerPageError::NoSshTarget)?.to_owned();
+        let target = Target::parse(target).ok_or(ServerPageError::NoSshTarget)?.as_str().to_owned();
         let mut open = self.open.locked();
         {
             let mut stopped = self.stopped.locked();
@@ -941,7 +905,7 @@ impl ServerPages {
     /// once it is opened again, those that don't go through `keep_target`, the SSH target it has now. Another
     /// connection's tunnels stay.
     pub fn close_for(&self, connection: &ConnectionId, keep_target: Option<&str>, why: &str) {
-        let keep = keep_target.and_then(checked_target);
+        let keep = keep_target.and_then(Target::parse).map(Target::as_str);
         let mut open = self.open.locked();
         let going: Vec<String> = open.iter().filter(|(_, o)| o.connection == *connection && Some(o.target.as_str()) != keep).map(|(k, _)| k.clone()).collect();
         for key in going {
@@ -1303,9 +1267,13 @@ mod tests {
                 "-o",
                 "ControlPath=none",
                 "-o",
-                "ForkAfterAuthentication=no",
-                "-o",
                 "PermitLocalCommand=no",
+                "-o",
+                "ForwardAgent=no",
+                "-o",
+                "ForwardX11=no",
+                "-o",
+                "ForkAfterAuthentication=no",
                 "-o",
                 "ExitOnForwardFailure=no",
                 "-o",
@@ -1358,7 +1326,9 @@ mod tests {
         let tunnel = ssh_args("liam@hermes", Path::new("/tmp/d/s"), &p).unwrap();
         assert_eq!(listing[listing.len() - 4..], ["--", "liam@hermes", "ss", "-ltnpH"]);
         assert!(!listing.iter().any(|a| a == "-L" || a == "-N"));
-        assert_eq!(listing[..listing.len() - 4], tunnel[1..tunnel.len() - 4]);
+        let forwarding = tunnel.iter().position(|a| a == "ForkAfterAuthentication=no").unwrap() - 1;
+        assert_eq!(listing[..listing.len() - 6], tunnel[1..forwarding], "the tunnel's options up to a tunnel's own");
+        assert_eq!(listing[listing.len() - 6..listing.len() - 4], ["-o", "ClearAllForwardings=yes"], "and no forward from the owner's config");
         assert!(listening_args("-oProxyCommand=x").is_err());
     }
 

@@ -78,13 +78,13 @@ export function SignInSettings({
     setNote(undefined);
     if (connected) void load(scope);
     return () => {
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- `scopes` is a counter, not a DOM node: the cleanup bumps its live value so a late answer for the old profile or connection is dropped
       scopes.current++;
       const s = session.current;
       session.current = undefined;
       if (s) void api.cancelSignIn(profile, s);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- reset and read again only when the api, profile or connection changes; `load` is new every render, so listing it would read again on every render
   }, [api, profile, connected]);
 
   const busy = ui.kind !== "idle" && ui.kind !== "confirmSignOut";

@@ -7,7 +7,7 @@
 // here, `Chat.roster` from Hermes's `subagent.roster` counts (issue #311).
 import type { Chat } from "./model";
 import { hasEnded, tally, type Subagent } from "./subagents";
-import { isObj } from "./values";
+import { isObj, nonEmptyText } from "./values";
 
 export const KANBAN_STATUSES = ["triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done", "archived"] as const;
 export type KanbanStatus = (typeof KANBAN_STATUSES)[number];
@@ -194,7 +194,6 @@ export function nextHandoffChange(chats: readonly Chat[], stops: StopWaiting, no
   return next;
 }
 
-const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
 const isStatus = (v: unknown): v is KanbanStatus => typeof v === "string" && (KANBAN_STATUSES as readonly string[]).includes(v);
 
 /**
@@ -212,15 +211,15 @@ export function parseKanbanCreate(args: unknown, result: unknown, now: number, c
     }
   }
   if (!isObj(r) || r.ok !== true) return undefined;
-  const id = str(r.task_id);
+  const id = nonEmptyText(r.task_id);
   if (!id) return undefined;
   const a = isObj(args) ? args : {};
   return {
     id,
-    board: str(a.board) ?? currentBoard ?? "default",
+    board: nonEmptyText(a.board) ?? currentBoard ?? "default",
     status: isStatus(r.status) ? r.status : "ready",
-    ...(str(a.title) && { title: str(a.title) }),
-    ...(str(a.assignee) && { assignee: str(a.assignee) }),
+    ...(nonEmptyText(a.title) && { title: nonEmptyText(a.title) }),
+    ...(nonEmptyText(a.assignee) && { assignee: nonEmptyText(a.assignee) }),
     createdAt: now,
     picked: false,
   };
@@ -229,13 +228,13 @@ export function parseKanbanCreate(args: unknown, result: unknown, now: number, c
 /** A task as the board or the task route lists it, with the session it was created from; none if it isn't one. */
 export function parseTask(v: unknown, board: string, now: number): { task: DispatchedTask; sessionId?: string } | undefined {
   if (!isObj(v)) return undefined;
-  const id = str(v.id);
+  const id = nonEmptyText(v.id);
   if (!id || !isStatus(v.status)) return undefined;
   const createdAt = typeof v.created_at === "number" && v.created_at > 0 ? v.created_at * 1000 : now;
-  const picked = (typeof v.started_at === "number" && v.started_at > 0) || !!str(v.current_run_id) || (Array.isArray(v.runs) && v.runs.length > 0);
+  const picked = (typeof v.started_at === "number" && v.started_at > 0) || !!nonEmptyText(v.current_run_id) || (Array.isArray(v.runs) && v.runs.length > 0);
   return {
-    task: { id, board, status: v.status, ...(str(v.title) && { title: str(v.title) }), ...(str(v.assignee) && { assignee: str(v.assignee) }), createdAt, picked },
-    sessionId: str(v.session_id),
+    task: { id, board, status: v.status, ...(nonEmptyText(v.title) && { title: nonEmptyText(v.title) }), ...(nonEmptyText(v.assignee) && { assignee: nonEmptyText(v.assignee) }), createdAt, picked },
+    sessionId: nonEmptyText(v.session_id),
   };
 }
 

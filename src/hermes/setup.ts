@@ -6,7 +6,7 @@ import type { Route } from "./pipe";
 import type { Reached, SignInDetails } from "./tauriPipe";
 import { isUnsecure } from "./unsecure";
 import { KIND_LABEL, routeTargetLabel, routesOf, singleRoute, type RouteDetails } from "./routes";
-import { errorText } from "./values";
+import { errorText, textOrEmpty } from "./values";
 
 /**
  * How far a connection test got: the address or SSH tunnel, the dashboard's port, the sign-in, then the chat
@@ -459,8 +459,6 @@ type EnvRow = {
   provider_profiles?: unknown;
 };
 
-const str = (v: unknown) => (typeof v === "string" ? v : "");
-
 /**
  * The provider keys `GET /api/env` lists (`hermes_cli/web_routers/config_env.py` at the deployed `bf0203a`): one per
  * provider, its primary secret. A credential that serves several providers is listed once for each. Messaging
@@ -479,16 +477,16 @@ export function providerKeys(env: unknown): ProviderKey[] {
       label: label || provider,
       envVar,
       isSet,
-      preview: str(row.redacted_value) || undefined,
-      url: str(row.url) || undefined,
+      preview: textOrEmpty(row.redacted_value) || undefined,
+      url: textOrEmpty(row.url) || undefined,
       primary,
     });
   };
   for (const [envVar, row] of rows) {
     if (!row || row.is_password !== true || row.channel_managed === true) continue;
-    offer(str(row.provider), str(row.provider_label), envVar, row, row.provider_primary === true);
+    offer(textOrEmpty(row.provider), textOrEmpty(row.provider_label), envVar, row, row.provider_primary === true);
     for (const p of Array.isArray(row.provider_profiles) ? (row.provider_profiles as Record<string, unknown>[]) : [])
-      offer(str(p?.provider), str(p?.provider_label), envVar, { ...row, url: p?.url ?? row.url }, p?.primary === true);
+      offer(textOrEmpty(p?.provider), textOrEmpty(p?.provider_label), envVar, { ...row, url: p?.url ?? row.url }, p?.primary === true);
   }
   const rank = (p: ProviderKey) => (FEATURED.includes(p.provider) ? FEATURED.indexOf(p.provider) : FEATURED.length);
   return [...byProvider.values()]
@@ -502,6 +500,6 @@ export function readyProviders(options: unknown): string[] {
   if (!Array.isArray(providers)) return [];
   return providers
     .filter((p) => p && typeof p === "object" && (p as { authenticated?: unknown }).authenticated === true)
-    .map((p) => str((p as { name?: unknown }).name) || str((p as { slug?: unknown }).slug))
+    .map((p) => textOrEmpty((p as { name?: unknown }).name) || textOrEmpty((p as { slug?: unknown }).slug))
     .filter(Boolean);
 }

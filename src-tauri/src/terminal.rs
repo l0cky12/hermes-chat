@@ -14,6 +14,7 @@
 
 use crate::backlog::Backlog;
 use crate::lock::Locked;
+use crate::ssh_guard::{self, Kind, Target};
 use base64::Engine;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -86,18 +87,11 @@ pub struct Terminals {
     open: Mutex<HashMap<u64, Session>>,
 }
 
-/// `ssh` to `target` in a terminal of `cols` × `rows`. A leading '-' would be read as an option, and whitespace would
-/// make it more than a target, so both are refused, as the tunnel refuses them.
+/// `ssh` to `target` in a terminal of `cols` × `rows`.
 pub fn ssh_command(target: &str) -> Result<Command, TerminalError> {
-    let target = target.trim();
-    if target.is_empty() || target.starts_with('-') || target.contains(char::is_whitespace) {
-        return Err(TerminalError::BadTarget);
-    }
+    let target = Target::parse(target).ok_or(TerminalError::BadTarget)?;
     let mut command = Command::new("ssh");
-    command.args(crate::tunnel::PLATFORM_SSH_OPTIONS);
-    // `-t`: a login shell in a terminal even if the owner's config sets a RemoteCommand. Host key checking is left to
-    // the owner's config: in a terminal ssh can ask, and the owner answers.
-    command.args(["-t", "-o", "ServerAliveInterval=15", "--", target]);
+    command.args(ssh_guard::args(target, Kind::Terminal, None));
     Ok(command)
 }
 

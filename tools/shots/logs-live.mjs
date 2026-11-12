@@ -37,12 +37,12 @@ async function startDashboard() {
     stdio: ["ignore", "pipe", "pipe"],
   });
   let said = "";
-  await new Promise((resolve, reject) => {
+  await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
     const hear = (d) => ((said += d), said.includes("HERMES_DASHBOARD_READY") && resolve());
     dash.stdout.on("data", hear);
     dash.stderr.on("data", hear);
     dash.once("exit", (c) => reject(new Error(`dashboard exited ${c}:\n${said}`)));
-  });
+  }));
   cookie = undefined;
   log(`dashboard up at ${base} (HERMES_HOME=${home})`);
 }
@@ -84,8 +84,8 @@ const relay = createServer(async (req, res) => {
     res.end(JSON.stringify({ unreachable: `Couldn't reach the dashboard: ${e.cause?.code ?? e.message}` }));
   }
 });
-await new Promise((r) => relay.listen(0, "127.0.0.1", r));
-const relayUrl = `http://127.0.0.1:${relay.address().port}`;
+await /** @type {Promise<void>} */ (new Promise((r) => relay.listen(0, "127.0.0.1", r)));
+const relayUrl = `http://127.0.0.1:${/** @type {import("node:net").AddressInfo} */ (relay.address()).port}`;
 
 // ---------- the writer: gateway.log, as a RotatingFileHandler would write it ----------
 const gatewayLog = join(home, "logs/gateway.log");
@@ -147,7 +147,7 @@ const results = [];
 const check = (what, ok, detail = "") => (results.push({ what, ok }), log(`${ok ? "PASS" : "FAIL"} ${what}${detail ? ` — ${detail}` : ""}`));
 
 try {
-  const target = await (await fetch(`http://127.0.0.1:${cdpPort}/json/new?about:blank`, { method: "PUT" })).json();
+  const target = /** @type {{ webSocketDebuggerUrl: string }} */ (await (await fetch(`http://127.0.0.1:${cdpPort}/json/new?about:blank`, { method: "PUT" })).json());
   const ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((r) => ws.addEventListener("open", r, { once: true }));
   let id = 0;

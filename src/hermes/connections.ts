@@ -12,7 +12,7 @@
 // stay where they are and nothing has to move.
 import type { ExtraHeader, SignInDetails } from "./tauriPipe";
 import { ROUTES_MAX, ROUTE_KINDS, RouteHealth, isRouteId, routeAddress, routesOf, type RouteKind, type SavedRoute } from "./routes";
-import { isObj } from "./values";
+import { isObj, optionalText } from "./values";
 
 export const CONNECTIONS_KEY = "hermes-chat.connections";
 /** Where the one sign-in was kept before there were saved connections. Read once, for the migration. */
@@ -71,7 +71,6 @@ export type Storage_ = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 const ID = /^[a-z0-9-]{8,64}$/;
 export const isConnectionId = (v: unknown): v is string => typeof v === "string" && ID.test(v);
 
-const str = (v: unknown, max = 2000) => (typeof v === "string" && v.length <= max ? v : undefined);
 const time = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined);
 
 /** The address a secret belongs to: the mode, the target or URL as typed (trimmed), and the username. */
@@ -96,7 +95,7 @@ function toRoutes(v: unknown): SavedRoute[] | undefined {
   const routes = v
     .map((r): SavedRoute | undefined => {
       if (!isObj(r) || !isRouteId(r.id) || seen.has(r.id) || !ROUTE_KINDS.includes(r.kind as RouteKind)) return undefined;
-      const target = str(r.target);
+      const target = optionalText(r.target, 2000);
       if (target === undefined) return undefined;
       seen.add(r.id);
       return { id: r.id, kind: r.kind as RouteKind, target, ...(r.off === true && { off: true }) };
@@ -169,9 +168,9 @@ export const isPrefOf = (c: ScopeSource, key: string) => (c.legacy || !c.id ? !k
 function toConnection(v: unknown): SavedConnection | undefined {
   if (!isObj(v) || !isConnectionId(v.id)) return undefined;
   const mode = v.mode === "url" ? "url" : v.mode === "ssh" ? "ssh" : undefined;
-  const name = str(v.name, NAME_MAX);
+  const name = optionalText(v.name, NAME_MAX);
   if (!mode || name === undefined) return undefined;
-  const a: Address = { mode, sshTarget: str(v.sshTarget) ?? "", url: str(v.url) ?? "", username: str(v.username, 400) ?? "" };
+  const a: Address = { mode, sshTarget: optionalText(v.sshTarget, 2000) ?? "", url: optionalText(v.url, 2000) ?? "", username: optionalText(v.username, 400) ?? "" };
   const lastUsedAt = time(v.lastUsedAt);
   const legacy = isObj(v.legacy) && Array.isArray(v.legacy.scope) && v.legacy.scope.every((p) => typeof p === "string") && typeof v.legacy.address === "string"
     ? { scope: v.legacy.scope as string[], address: v.legacy.address }
@@ -189,7 +188,7 @@ function toConnection(v: unknown): SavedConnection | undefined {
     ...(routes && { routes }),
     ...(server && { server }),
     ...(routeFailedAt && { routeFailedAt }),
-    ...wayOf({ method: v.method === "token" ? "token" : undefined, provider: str(v.provider, 64) }),
+    ...wayOf({ method: v.method === "token" ? "token" : undefined, provider: optionalText(v.provider, 64) }),
   });
 }
 
@@ -202,7 +201,7 @@ function readLegacy(storage: Storage_): Address | undefined {
     return undefined;
   }
   if (!isObj(v)) return undefined;
-  const a: Address = { mode: v.mode === "url" ? "url" : "ssh", sshTarget: str(v.sshTarget) ?? "", url: str(v.url) ?? "", username: str(v.username, 400) ?? "" };
+  const a: Address = { mode: v.mode === "url" ? "url" : "ssh", sshTarget: optionalText(v.sshTarget, 2000) ?? "", url: optionalText(v.url, 2000) ?? "", username: optionalText(v.username, 400) ?? "" };
   return a.sshTarget.trim() || a.url.trim() || a.username.trim() ? a : undefined;
 }
 

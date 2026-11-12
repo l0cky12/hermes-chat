@@ -38,7 +38,7 @@ class X:
         if head[0] != 1:
             raise SystemExit(f"X server {display} refused the connection")
         extra = self._read(struct.unpack("<H", head[6:8])[0] * 4)
-        _, self.id_base, self.id_mask, _, vlen, self.max_req, nscreens, nformats = struct.unpack("<IIIIHHBB", extra[:22])
+        _, self.id_base, self.id_mask, _, vlen, self.max_req, _nscreens, nformats = struct.unpack("<IIIIHHBB", extra[:22])
         off = 32 + ((vlen + 3) & ~3)
         self.formats = {}
         for i in range(nformats):
@@ -110,7 +110,7 @@ class X:
 
     def image(self, x, y, w, h):
         self._req(struct.pack("<BBHIhhHHI", 73, 2, 5, self.root, x, y, w, h, 0xFFFFFFFF))
-        head, data = self._reply()
+        _head, data = self._reply()
         return data
 
 
@@ -270,7 +270,6 @@ def run(app_display, xvnc_display, scenario, out_path, spots, count=None, interv
         count, interval = count or 150, interval or 0.1
     drawn = []
     t0 = time.monotonic()
-    small = imgs[0]
     for n in range(1, count + 1):
         due = t0 + n * interval
         while time.monotonic() < due:

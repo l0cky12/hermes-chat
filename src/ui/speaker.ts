@@ -1,7 +1,7 @@
 // Read aloud: plays one reply at a time, on the owner's click. The audio Hermes sends lives in memory as a Blob URL
 // only while it plays; stopping, finishing, failing, starting another reply or closing the chat releases it.
 import type { Speech } from "../hermes/pipe";
-import { messageOf } from "../hermes/voice";
+import { errorText } from "../hermes/values";
 
 /** What the reply `itemId` is doing: fetching its audio, playing, or why it couldn't. */
 export type Speaking = { itemId: string; phase: "loading" | "playing" } | { itemId: string; phase: "failed"; why: string };
@@ -67,7 +67,7 @@ export class Speaker {
     try {
       speech = await this.speak(text);
     } catch (e) {
-      if (turn === this.turn) this.set({ itemId, phase: "failed", why: messageOf(e) });
+      if (turn === this.turn) this.set({ itemId, phase: "failed", why: errorText(e) });
       return;
     }
     if (turn !== this.turn || this.disposed) return;
@@ -87,7 +87,7 @@ export class Speaker {
     try {
       await player.play();
     } catch (e) {
-      fail(`The audio couldn't start: ${messageOf(e)}`);
+      fail(`The audio couldn't start: ${errorText(e)}`);
     }
   }
 

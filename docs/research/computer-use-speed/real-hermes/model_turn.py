@@ -15,8 +15,8 @@ import time
 import urllib.request
 
 sys.path.insert(0, ".")
-from PIL import Image  # noqa: E402
-from tools.computer_use.schema import COMPUTER_USE_SCHEMA as SCHEMA  # noqa: E402
+from PIL import Image
+from tools.computer_use.schema import COMPUTER_USE_SCHEMA as SCHEMA
 
 model, capture, experiment = sys.argv[1:4]
 key = next(line.split("=", 1)[1].strip().strip('"') for line in open(os.path.expanduser("~/.hermes/.env")) if line.startswith("OPENROUTER_API_KEY="))
@@ -59,5 +59,5 @@ for n, width, quality, effort in runs:
     label = f"images={n} {width}px q{quality}" + (f" effort={effort}" if effort else "")
     try:
         print(f"{model} {label}: {turn(n, width, quality, effort)}", flush=True)
-    except Exception as e:  # one failed request shouldn't end the series
+    except Exception as e:  # noqa: BLE001 - one failed request shouldn't end the series
         print(f"{model} {label}: failed {e}", flush=True)

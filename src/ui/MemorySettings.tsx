@@ -29,7 +29,7 @@ import {
   type RemoveOutcome,
 } from "../hermes/memory";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
-import { errorText } from "../hermes/values";
+import { clockTime, errorText } from "../hermes/values";
 
 /**
  * The entry open in the editor: as last read from Hermes, and the owner's text for it. `fromKept`: the kept edit the
@@ -43,7 +43,6 @@ type LoadProblem = { kind: "server" | "profile" | "permission" | "error"; text: 
 const entriesText = (n: number) => `${n} ${n === 1 ? "entry" : "entries"}`;
 /** An entry's first line, for the list; the editor shows all of it. */
 const firstLine = (text: string) => text.split("\n").find((l) => l.trim()) ?? text;
-const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 /** What became of one entry a removal of several asked for, in words. */
 const REMOVED: Record<RemoveOutcome["kind"], string> = {
   removed: "Removed, and gone when read back.",
@@ -107,7 +106,7 @@ export function MemorySettings({
       setConfirmBulk(false);
       setBulkDone(undefined);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- follow the outside pick only when it or `busy` changes; listing `source` would snap a file chosen here back to the outside one
   }, [sourceProp, busy]);
   const [notice, setNotice] = useState<Notice>();
   // The owner's texts that Hermes didn't take (a conflict, or a save that read back differently), each kept to copy or
@@ -128,8 +127,7 @@ export function MemorySettings({
   const openKey = useRef<{ id: string; key: string }>(undefined);
 
   const dirty = memoryDirty(editing, kept);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
-  useEffect(() => onDirtyChange(dirty), [dirty]);
+  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
   const discards = useRef(discardSignal);
   useEffect(() => {
     if (discardSignal === discards.current) return;
@@ -147,7 +145,7 @@ export function MemorySettings({
       alive.current = false;
       onDirtyChange(false);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount: on unmount it reports clean; running again for a new `onDirtyChange` would report clean while an edit is open
   }, []);
 
   /** Puts a fresh read on screen, keeping the open edit if its entry is still there as it was. */
@@ -252,7 +250,7 @@ export function MemorySettings({
   // Read once connected; after a drop, the screen keeps what it read, and the owner's edit, until Reload.
   useEffect(() => {
     if (connected && !view && !problem && !loading) void load("first");
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- first read when the connection comes up; `view`, `problem` and `loading` are checked, not triggers, and `load` is new every render
   }, [connected]);
 
   /** Runs `go` now, or once the owner agrees to drop the open entry's unsaved edit. A kept edit stays either way. */
@@ -400,7 +398,7 @@ export function MemorySettings({
       setEditing((cur) => (cur?.entry.id === at.id ? { ...cur, draft: r.text, fromKept: undefined } : cur));
       // The Restore button goes once its text is in the editor, so focus moves there rather than to the page.
       textArea.current?.focus();
-      setNotice({ kind: "ok", text: `The text your save at ${clock(r.savedAt)} replaced is in the editor. Save to put it back on Hermes; nothing has changed there yet.` });
+      setNotice({ kind: "ok", text: `The text your save at ${clockTime(r.savedAt)} replaced is in the editor. Save to put it back on Hermes; nothing has changed there yet.` });
     });
 
   /** What a save, removal or read came to; `note`: as a line across the card, rather than in the open entry's editor. */
@@ -494,7 +492,7 @@ export function MemorySettings({
               <Trash2 size={14} /> {busy === "delete" ? "Removing…" : "Delete"}
             </button>
             {restorable && (
-              <button className="btn" disabled={!!busy} onClick={() => restore(restorable, editing.entry)} title={`The text your save at ${clock(restorable.savedAt)} replaced.`}>
+              <button className="btn" disabled={!!busy} onClick={() => restore(restorable, editing.entry)} title={`The text your save at ${clockTime(restorable.savedAt)} replaced.`}>
                 <History size={14} /> Restore previous version
               </button>
             )}

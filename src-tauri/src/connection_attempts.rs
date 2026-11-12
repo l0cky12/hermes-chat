@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::connect_steps::Step;
-use crate::defaults_file::{owner_only, replace};
+use crate::private_file::{self, owner_only};
 
 /// The most attempts the file keeps.
 pub const CAP: usize = 50;
@@ -202,7 +202,7 @@ pub fn put(dir: &Path, a: Attempt) -> Result<(), String> {
         all.sort_by_key(|x| x.at);
         let drop = all.len().saturating_sub(CAP);
         let text: String = all[drop..].iter().map(|x| serde_json::to_string(x).expect("serializable") + "\n").collect();
-        replace(path, text.as_bytes())
+        private_file::write(path, text.as_bytes())
     })
     .map_err(|e| e.to_string())
 }

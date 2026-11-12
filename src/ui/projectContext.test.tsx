@@ -164,7 +164,7 @@ describe("what Hermes is sent for a chat in a project with context files", () =>
     await app.pick("Budget Tracker");
     await app.send("Hello");
     const LIST = `Context files from the project "Budget Tracker" are too large to include here. They are in ${DIR}. Open the ones you need with your file tools:`;
-    expect(app.seeded()[0]).toEqual([{ role: "user", display_kind: "hidden", content: `${LIST}\n- ${DIR}/big.txt (390.6 KB, TXT)\n- ${DIR}/notes.md (13 B, MD)` }]);
+    expect(app.seeded()[0]).toEqual([{ role: "user", display_kind: "hidden", content: `${LIST}\n- ${DIR}/big.txt (391 KB, TXT)\n- ${DIR}/notes.md (13 B, MD)` }]);
     expect(s.context.reads).toEqual([]);
     await app.reply();
 
@@ -173,7 +173,7 @@ describe("what Hermes is sent for a chat in a project with context files", () =>
     await app.reply();
 
     s.managedFiles.nodes[`${DIR}/big.txt`] = { text: "y".repeat(DEFAULT_LIMIT_TOKENS * 4 + 4) };
-    expect(await app.send("Again?")).toBe(`Again?${MARK}${LIST}\n- ${DIR}/big.txt (390.6 KB, TXT)\n- ${DIR}/notes.md (13 B, MD)`);
+    expect(await app.send("Again?")).toBe(`Again?${MARK}${LIST}\n- ${DIR}/big.txt (391 KB, TXT)\n- ${DIR}/notes.md (13 B, MD)`);
   });
 
   it("follows membership: a chat put in the project gets every file, and one taken out gets no more", async () => {
@@ -370,7 +370,7 @@ describe("the Context card", () => {
     await waitFor(() => expect(cards()).toEqual(["logo.png", "notes.md", "plan.md"]));
     expect(s.managedFiles.nodes[`${DIR}/plan.md`]).toMatchObject({ bytes: "Save more." });
     expect(s.managedFiles.nodes[`${DIR}/movie.mkv`]).toBeUndefined();
-    expect(card.getByRole("alert").textContent).toContain("movie.mkv wasn't added: it's 31.0 MB, over the 30.0 MB a context file can be.");
+    expect(card.getByRole("alert").textContent).toContain("movie.mkv wasn't added: it's 31 MB, over the 30 MB a context file can be.");
   });
 
   it("asks before replacing a file of the same name, and changes it only on Replace", async () => {

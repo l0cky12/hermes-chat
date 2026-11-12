@@ -10,7 +10,7 @@
 // the managed files routes Server files uses (`host`). The index is metadata only (paths, sizes the tool reported, which message made each file), kept on this computer per
 // connection and profile; no file's contents are copied.
 import { RestError, statusOf } from "./pipe";
-import { errorText, isObj } from "./values";
+import { errorText, isObj, nonEmptyText } from "./values";
 
 /** A stored row of `GET /api/sessions/{id}/messages` (`SELECT *` from `messages`), as far as Outputs reads it. */
 export type StoredRow = {
@@ -87,7 +87,6 @@ export const MAX_FOLDERS_PER_CHECK = 40;
 /** The most files one check reads again, naming their chat, after their folder's listing didn't find them. */
 export const MAX_CONFIRMS_PER_CHECK = 40;
 
-const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
 /** A path a tool on the server wrote: absolute, or under its home. Anything else is ambiguous and isn't listed. */
 export const isOutputPath = (p: unknown): p is string => typeof p === "string" && /^(\/|~\/)./.test(p) && !p.includes("\0") && p.length <= 4096;
 const storedMs = (s: unknown) => (typeof s === "number" && s > 0 && s * 1000 <= 8.64e15 ? Math.round(s * 1000) : undefined);
@@ -109,7 +108,7 @@ function callArgs(rows: StoredRow[]): Map<string, Record<string, unknown>> {
     const calls = parseJson(r.tool_calls);
     if (!Array.isArray(calls)) continue;
     for (const c of calls) {
-      if (!isObj(c) || !str(c.id) || !isObj(c.function)) continue;
+      if (!isObj(c) || !nonEmptyText(c.id) || !isObj(c.function)) continue;
       const args = parseJson(c.function.arguments);
       if (isObj(args)) out.set(c.id as string, args);
     }
@@ -167,7 +166,7 @@ export function outputsFromRows(chatId: string, rows: StoredRow[]): { outputs: O
   for (const r of rows) {
     const tool = r.role === "tool" ? (r.tool_name ?? "") : "";
     if (!PRODUCERS.has(tool)) continue;
-    const callId = str(r.tool_call_id);
+    const callId = nonEmptyText(r.tool_call_id);
     const made = producedBy(tool, r.content, callId ? args.get(callId) : undefined);
     if (!made) {
       unlabelled++;
@@ -203,7 +202,7 @@ export function compactRows(rows: StoredRow[]): StoredRow[] {
     const calls = parseJson(r.tool_calls);
     if (!Array.isArray(calls)) return [];
     const kept = calls.flatMap((c) => {
-      if (!isObj(c) || !str(c.id) || !isObj(c.function) || c.function.name !== "write_file") return [];
+      if (!isObj(c) || !nonEmptyText(c.id) || !isObj(c.function) || c.function.name !== "write_file") return [];
       const args = parseJson(c.function.arguments);
       return isObj(args) && isOutputPath(args.path) ? [{ id: c.id, function: { name: "write_file", arguments: { path: args.path } } }] : [];
     });
@@ -484,13 +483,13 @@ function cleanOutput(v: unknown): Output | undefined {
     path: v.path,
     how,
     ...(v.host === true && { host: true }),
-    ...(str(v.chatId) && { chatId: v.chatId as string }),
-    ...(str(v.tool) && { tool: v.tool as string }),
-    ...(str(v.callId) && { callId: v.callId as string }),
+    ...(nonEmptyText(v.chatId) && { chatId: v.chatId as string }),
+    ...(nonEmptyText(v.tool) && { tool: v.tool as string }),
+    ...(nonEmptyText(v.callId) && { callId: v.callId as string }),
     ...(num(v.rowId) !== undefined && { rowId: v.rowId as number }),
     ...(num(v.at) !== undefined && { at: v.at as number }),
     ...(num(v.size) !== undefined && { size: v.size as number }),
-    ...(a && { availability: { state: a.state, checkedAt: a.checkedAt, ...(str(a.why) && { why: a.why }) } }),
+    ...(a && { availability: { state: a.state, checkedAt: a.checkedAt, ...(nonEmptyText(a.why) && { why: a.why }) } }),
   };
 }
 

@@ -82,7 +82,7 @@ export function Bots({
     void read();
     const every = setInterval(() => void read(), BOTS_REFRESH_MS);
     return () => clearInterval(every);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `read` is new every render, so listing it would restart the poll on every render
   }, [connected, load, unsupported]);
 
   useEffect(() => {

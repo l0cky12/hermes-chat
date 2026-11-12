@@ -4,13 +4,14 @@ import { useEffect, useReducer, useRef, useState, useSyncExternalStore } from "r
 import { Check, Mic, RotateCcw, Square, Volume2, X } from "lucide-react";
 import type { Speech, VoiceSetup } from "../hermes/pipe";
 import type { ConnectionStatus } from "../hermes/model";
-import { MAX_RECORDING_SECONDS, clock, dictationBlocked, messageOf, readAloudBlocked, sttProvider, ttsProvider } from "../hermes/voice";
+import { MAX_RECORDING_SECONDS, clock, dictationBlocked, readAloudBlocked, sttProvider, ttsProvider } from "../hermes/voice";
 import { conversationBlocked, turnSettings } from "../hermes/voiceTurns";
 import { DEFAULT_STT_PREFS, fellBackOf, inRoute, sttRoute, type HeardTranscript, type SttPrefs } from "../hermes/sttRoute";
 import { type AudioEnv, type Capture, CaptureAborted, type Recording, startCapture } from "./recorder";
 import type { Speaker } from "./speaker";
 import { Spinner } from "./bits";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { errorText } from "../hermes/values";
 
 /** What the chat pane needs for voice: the profile's set-up, and Hermes's transcribing and speaking. */
 export type VoiceApi = {
@@ -108,7 +109,7 @@ export function useDictation(transcribe: VoiceApi["transcribe"] | undefined, onT
     } catch (e) {
       if (turn !== live.current.turn) return;
       setState({ phase: "idle" });
-      setNote({ text: messageOf(e), retry: recording });
+      setNote({ text: errorText(e), retry: recording });
     }
   };
 
@@ -158,7 +159,7 @@ export function useDictation(transcribe: VoiceApi["transcribe"] | undefined, onT
     } catch (e) {
       if (turn !== live.current.turn || e instanceof CaptureAborted) return;
       setState({ phase: "idle" });
-      setNote({ text: messageOf(e) });
+      setNote({ text: errorText(e) });
     } finally {
       if (live.current.starting === starting) live.current.starting = undefined;
     }
@@ -350,7 +351,7 @@ export function VoiceSettings({
     let live = true;
     setup().then(
       (s) => live && setGot({ setup: s }),
-      (e) => live && setGot({ error: messageOf(e) }),
+      (e) => live && setGot({ error: errorText(e) }),
     );
     return () => {
       live = false;

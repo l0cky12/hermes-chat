@@ -278,7 +278,7 @@ describe("Taking a screenshot for the composer", () => {
     const { rust, user } = await signedIn();
     await user.keyboard("{Control>}{Shift>}s{/Shift}{/Control}");
     const path = await rust.land({ size: 26 * MiB });
-    expect((await screen.findByRole("alert")).textContent).toContain(`${rust.names[0]}.png is 26.0 MB. Hermes takes images up to 25 MB.`);
+    expect((await screen.findByRole("alert")).textContent).toContain(`${rust.names[0]}.png is 26 MB. Hermes takes images up to 25 MB.`);
     expect(chips()).toHaveLength(0);
     expect(rust.discarded).toEqual([path]);
   });

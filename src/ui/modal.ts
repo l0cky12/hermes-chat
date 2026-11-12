@@ -22,11 +22,11 @@ export function useModal(box: RefObject<HTMLElement | null>, returnTo?: RefObjec
     return () => {
       const now = document.activeElement;
       held.current = now instanceof HTMLElement && root?.contains(now) ? now : null;
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- `returnTo` is read at close on purpose: focus goes where it points then, not where it pointed at open
       const back = returnTo?.current ?? before;
       if (back?.isConnected) back.focus();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- set up once per open dialog; running again for a new `box` or `returnTo` would send focus out of the dialog and back
   }, []);
   return (e: KeyboardEvent) => {
     if (!isTextEdit(e)) e.stopPropagation();

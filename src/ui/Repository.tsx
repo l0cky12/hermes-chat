@@ -54,7 +54,7 @@ import {
 import { Spinner } from "./bits";
 import { useModal } from "./modal";
 import { WorktreesPanel, type WorktreeHooks } from "./Worktrees";
-import { errorText } from "../hermes/values";
+import { clockTimeWithSeconds, errorText, formatBytes } from "../hermes/values";
 
 type Load<T> = { state: "idle" } | { state: "loading"; last?: T } | { state: "ready"; data: T } | { state: "failed"; error: RepoFailure; last?: T };
 
@@ -920,7 +920,7 @@ function CommitDialog({
                 </li>
               ))}
             </ul>
-            {p.truncated && <p className="repo-notice warn">The staged diff is over 2 MiB, so only its start is shown. The file list above is complete.</p>}
+            {p.truncated && <p className="repo-notice warn">The staged diff is over 2 MB, so only its start is shown. The file list above is complete.</p>}
             {p.lossy && <p className="repo-notice warn">Some of the diff isn't UTF-8, so a few characters are shown as �.</p>}
             <div className="repo-review-diff">
               {files.map((f, i) => (
@@ -1604,7 +1604,7 @@ function PrStatusView({ api, target, top, remote, pr, openUrl }: { api: RepoApi;
           ))}
         </ul>
       )}
-      {readAt && <p className="small muted">Read from GitHub at {readAt.toLocaleTimeString()}. It doesn't refresh by itself.</p>}
+      {readAt && <p className="small muted">Read from GitHub at {clockTimeWithSeconds(readAt.getTime())}. It doesn't refresh by itself.</p>}
     </div>
   );
 }
@@ -1825,7 +1825,7 @@ function DiffNotices({ change, parsed, reply }: { change: Change; parsed: Return
   if (parsed.newFile && change.side !== "untracked") notes.push({ tone: "info", text: `New file${parsed.newMode ? `, mode ${parsed.newMode}` : ""}.` });
   if (parsed.deletedFile) notes.push({ tone: "info", text: "Deleted file." });
   if (parsed.mode) notes.push({ tone: "info", text: `Mode changed from ${parsed.mode.from} to ${parsed.mode.to}.` });
-  if (reply.truncated) notes.push({ tone: "warn", text: `This diff is ${Math.round(reply.bytes / 1024)} KiB, so only its first 2 MiB is shown.` });
+  if (reply.truncated) notes.push({ tone: "warn", text: `This diff is ${formatBytes(reply.bytes)}, so only its first 2 MB is shown.` });
   if (reply.lossy) notes.push({ tone: "warn", text: "Some of this file isn't UTF-8, so a few characters are shown as �." });
   if (!notes.length) return null;
   return (

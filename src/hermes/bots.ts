@@ -1,4 +1,4 @@
-import { isObj } from "./values";
+import { errorText, isObj } from "./values";
 // Hermes's Bot Mode (ADR 0066, research doc "Bot Mode"). Each bot is a Hermes profile with a persistent identity, and
 // each has one Bot Chat: the profile's session titled exactly "Bot Chat". That title is the chat's only identity. It is
 // looked up by title on every open (`session.list {title, include_hidden: true}`), never by a session id kept here,
@@ -57,10 +57,9 @@ export class BotModeUnsupportedError extends Error {
   }
 }
 
-const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+const trimmedOrEmpty = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 const codeOf = (e: unknown) => (isObj(e) && typeof e.code === "number" ? e.code : undefined);
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : isObj(e) && typeof e.message === "string" ? e.message : String(e));
 
 /**
  * The name a bot shows, in the order Hermes's desktop uses (`labels.ts` `displayName`): its Bot Mode title, then the
@@ -69,9 +68,9 @@ const messageOf = (e: unknown) => (e instanceof Error ? e.message : isObj(e) && 
  */
 export function botName(row: { name: string; display_name?: unknown; is_default?: unknown; ui_meta?: unknown }): string {
   const meta = botMeta(row.ui_meta);
-  const title = str(meta?.title);
+  const title = trimmedOrEmpty(meta?.title);
   if (title) return title;
-  const display = str(row.display_name);
+  const display = trimmedOrEmpty(row.display_name);
   if (display) return display;
   if (row.name.trim().toLowerCase() === "default") return "Hermes";
   return row.name.replace(/[-_]+/g, " ").trim().replace(/\b\w/g, (c) => c.toUpperCase());
@@ -86,12 +85,12 @@ function botMeta(uiMeta: unknown): Record<string, unknown> | undefined {
 /** A `canonical_session`, or null for none or one that doesn't name its row. */
 function botChatOf(v: unknown): BotChatRow | null {
   if (!isObj(v)) return null;
-  const id = str(v.id);
+  const id = trimmedOrEmpty(v.id);
   if (!id) return null;
   return {
     id,
-    resolvedId: str(v.resolved_id) || id,
-    preview: str(v.preview).replace(/\s+/g, " "),
+    resolvedId: trimmedOrEmpty(v.resolved_id) || id,
+    preview: trimmedOrEmpty(v.preview).replace(/\s+/g, " "),
     lastActive: num(v.last_active || v.started_at) * 1000,
     messageCount: num(typeof v.live_message_count === "number" ? v.live_message_count : v.message_count),
   };
@@ -105,18 +104,18 @@ function botChatOf(v: unknown): BotChatRow | null {
 export function rosterOf(result: unknown): Bot[] {
   const rows = isObj(result) && Array.isArray(result.profiles) ? result.profiles : undefined;
   if (!rows) throw new BotModeUnsupportedError("Hermes answered profiles.list without a list of profiles.");
-  const named = rows.filter((r): r is Record<string, unknown> & { name: string } => isObj(r) && !!str(r.name));
+  const named = rows.filter((r): r is Record<string, unknown> & { name: string } => isObj(r) && !!trimmedOrEmpty(r.name));
   if (named.some((r) => !("canonical_session" in r)))
     throw new BotModeUnsupportedError("This Hermes lists its profiles but doesn't report their Bot Chats, so it has no Bot Mode.");
   return named.map((r): Bot => {
     const meta = botMeta(r.ui_meta);
     const botChat = botChatOf(r.canonical_session);
     const last = isObj(r.last_session) ? num(r.last_session.last_active || r.last_session.started_at) * 1000 : 0;
-    const color = str(meta?.color);
+    const color = trimmedOrEmpty(meta?.color);
     return {
       profile: r.name.trim(),
       name: botName(r),
-      description: str(r.description).replace(/\s+/g, " "),
+      description: trimmedOrEmpty(r.description).replace(/\s+/g, " "),
       isDefault: r.is_default === true,
       hasAvatar: r.has_avatar === true,
       ...(/^#[0-9a-f]{3,8}$/i.test(color) && { color }),
@@ -177,16 +176,16 @@ export class BotChats {
       res = await this.rpc("session.list", { profile, title: BOT_CHAT_TITLE, include_hidden: true, limit: BOT_CHAT_LOOKUP_LIMIT });
     } catch (e) {
       if (codeOf(e) === NO_SUCH_METHOD) throw new BotModeUnsupportedError("This Hermes can't look a chat up by its title, so it has no Bot Mode.");
-      throw new Error(`Couldn't look up ${name}'s Bot Chat, so no new one was started: ${messageOf(e)}`);
+      throw new Error(`Couldn't look up ${name}'s Bot Chat, so no new one was started: ${errorText(e)}`);
     }
     // Only an answer that is plainly a title lookup can say there is no Bot Chat: a list of rows, every one of them
     // titled "Bot Chat" with an id. Anything else, such as a Hermes that ignored `title` and listed its newest chats,
     // proves nothing, so nothing is created.
     const rows = isObj(res) && Array.isArray(res.sessions) ? (res.sessions as unknown[]) : undefined;
-    if (!rows || rows.some((r) => !isObj(r) || !str(r.id) || !isBotChatTitle(r.title)))
+    if (!rows || rows.some((r) => !isObj(r) || !trimmedOrEmpty(r.id) || !isBotChatTitle(r.title)))
       throw new Error(`Hermes answered the lookup of ${name}'s Bot Chat in a way this app doesn't read, so no new one was started.`);
     const row = rows[0];
-    if (isObj(row)) return { id: str(row.id), resolvedId: str(row.resolved_id) || str(row.id) };
+    if (isObj(row)) return { id: trimmedOrEmpty(row.id), resolvedId: trimmedOrEmpty(row.resolved_id) || trimmedOrEmpty(row.id) };
     if (expected) throw new Error(`Hermes didn't confirm ${name}'s Bot Chat this time, so no new one was started. Try again.`);
     return null;
   }
@@ -211,15 +210,15 @@ export class BotChats {
     const found = await this.find(profile, name, expected);
     if (found) return { registryId: found.id, openId: found.resolvedId, created: false };
     const made = await this.rpc("session.create", { profile, title: BOT_CHAT_TITLE, hidden: true, follow_profile_config: true, source: this.source });
-    const runtime = isObj(made) ? str(made.session_id) : "";
-    const stored = isObj(made) ? str(made.stored_session_id) : "";
+    const runtime = isObj(made) ? trimmedOrEmpty(made.session_id) : "";
+    const stored = isObj(made) ? trimmedOrEmpty(made.stored_session_id) : "";
     if (!runtime || !stored) throw new Error(`Hermes didn't say which session it started for ${name}'s Bot Chat.`);
     try {
       // A new session has no row until its first message, and the title alone stays pending. Naming it now stores it
       // under the title, so the next lookup finds it and Hermes's own titling can't rename it.
       await this.rpc("session.title", { session_id: runtime, title: BOT_CHAT_TITLE });
     } catch (e) {
-      if (codeOf(e) !== TITLE_IN_USE && !/already in use/i.test(messageOf(e))) throw new Error(`Hermes started ${name}'s Bot Chat but didn't name it: ${messageOf(e)}`);
+      if (codeOf(e) !== TITLE_IN_USE && !/already in use/i.test(errorText(e))) throw new Error(`Hermes started ${name}'s Bot Chat but didn't name it: ${errorText(e)}`);
       // Another client made it between the lookup and now. Open theirs; the session started here holds nothing, and
       // Hermes prunes it.
       const winner = await this.find(profile, name, true);

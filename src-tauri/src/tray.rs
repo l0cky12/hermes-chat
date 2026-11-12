@@ -16,7 +16,7 @@
 
 use crate::lock::Locked;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 use tauri::image::Image;
@@ -156,16 +156,11 @@ fn read_settings(path: &PathBuf) -> Settings {
     }
 }
 
-fn write_settings(path: &PathBuf, settings: &Settings) -> Result<(), String> {
+fn write_settings(path: &Path, settings: &Settings) -> Result<(), String> {
     let dir = path.parent().ok_or("No folder for the window settings.")?;
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
     let text = serde_json::to_string(settings).map_err(|e| e.to_string())?;
-    std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("{}: {e}", path.display())
-    })
+    crate::private_file::write(path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Shows the window, brings it forward and tells the webview, which puts focus back where it was.

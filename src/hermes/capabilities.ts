@@ -18,9 +18,9 @@
 // settles nothing, such as a refusal or an answer of the wrong shape. `unreachable`: no answer came, such as a timeout,
 // a dropped connection or a 5xx, which may pass. Every capability starts `unknown`, and only `unsupported` holds a
 // screen back or refuses a write.
-import { redact as redactSecrets } from "./logs";
+import { redactSecrets } from "./secrets";
 import { RestError, type RestMethod } from "./pipe";
-import { isObj } from "./values";
+import { errorText, isObj } from "./values";
 
 /** The features whose server support is tracked. */
 export type CapabilityId =
@@ -393,13 +393,11 @@ export type CapabilitySnapshot = {
 /** A failed request: the HTTP status and Hermes's reason of a dashboard call, or a JSON-RPC code. */
 export type Failure = { status?: number; reason: string; rpcCode?: number };
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : isObj(e) && typeof e.message === "string" ? e.message : String(e));
-
 /** Reads a REST or JSON-RPC failure: an HTTP status and Hermes's reason, a JSON-RPC code, or neither. */
 export function failureOf(e: unknown): Failure {
-  if (isObj(e) && typeof e.code === "number") return { rpcCode: e.code, reason: messageOf(e) };
+  if (isObj(e) && typeof e.code === "number") return { rpcCode: e.code, reason: errorText(e) };
   if (e instanceof RestError) return { status: e.status, reason: e.detail || e.message };
-  return { reason: messageOf(e) };
+  return { reason: errorText(e) };
 }
 
 /** JSON-RPC "method not found": the server has no such method. */
@@ -433,10 +431,10 @@ export function stateOfFailure(f: Failure): { state: CapabilityState; why: strin
 }
 
 /**
- * Takes anything that looks like a secret out of text the owner may copy, by the Logs screen's rules (logs.ts: cookies,
- * authorization headers, bearer and web tokens, provider keys, user names and passwords in URLs, tickets and keys in URL
- * queries, `secret=` pairs). The webview never has the password or the extra request headers' values, so this is a
- * second line.
+ * Takes anything that looks like a secret out of text the owner may copy, by the rules every redacting surface shares
+ * (secrets.ts: cookies, authorization headers, bearer, web and bot tokens, provider keys, user names and passwords in
+ * URLs, tickets and keys in URL queries, `secret=` pairs). The webview never has the password or the extra request
+ * headers' values, so this is a second line.
  */
 export const redact = (text: string): string => redactSecrets(text).text;
 
@@ -891,7 +889,7 @@ export class CapabilityStore {
   /** The version from `/api/health`, or `/api/status` on a server without it, the sign-in gate, and the feature flags. */
   private async readFacts(): Promise<ServerFacts> {
     const read = (path: string) => within(this.io.get(path, FACTS_MAX_BYTES), this.timeoutMs).then((t) => JSON.parse(t) as unknown);
-    const caught = <T>(p: Promise<T>) => p.catch((e: unknown) => (e instanceof Error ? e : new Error(messageOf(e))));
+    const caught = <T>(p: Promise<T>) => p.catch((e: unknown) => (e instanceof Error ? e : new Error(errorText(e))));
     const [health, status, flags] = await Promise.all([
       caught(read("api/health").then(healthFacts)),
       caught(read("api/status").then(statusFacts)),

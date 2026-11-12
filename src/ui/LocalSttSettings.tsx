@@ -11,7 +11,6 @@ import {
   MODEL_NOTES,
   baseName,
   prefsOf,
-  size,
   type DownloadProgress,
   type FoundEngine,
   type LocalModels,
@@ -20,10 +19,11 @@ import {
   type LocalSttState,
 } from "../hermes/localStt";
 import { STT_TIMEOUTS, inRoute, other, sttRoute, type HeardTranscript, type SttSide } from "../hermes/sttRoute";
-import { messageOf, sttProvider } from "../hermes/voice";
+import { sttProvider } from "../hermes/voice";
 import { arrowSelect, Spinner } from "./bits";
 import { CaptureAborted, startCapture, type AudioEnv, type Capture } from "./recorder";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { errorText, formatBytes } from "../hermes/values";
 
 /** How long the Test records. */
 export const TEST_SECONDS = 5;
@@ -84,7 +84,7 @@ export function LocalSttSettings({
   useEffect(() => {
     const now = live.current;
     now.mounted = true;
-    track(api.state()).catch((e) => setError(messageOf(e)));
+    track(api.state()).catch((e) => setError(errorText(e)));
     return () => {
       now.mounted = false;
       now.run++;
@@ -98,8 +98,8 @@ export function LocalSttSettings({
   const here = !!state && inRoute(route, "local");
   useEffect(() => {
     if (!here) return;
-    if (!found) api.detect().then((f) => live.current.mounted && setFound(f), (e) => setError(messageOf(e)));
-    if (!downloads) api.models().then((m) => live.current.mounted && setDownloads(m), (e) => setError(messageOf(e)));
+    if (!found) api.detect().then((f) => live.current.mounted && setFound(f), (e) => setError(errorText(e)));
+    if (!downloads) api.models().then((m) => live.current.mounted && setDownloads(m), (e) => setError(errorText(e)));
   }, [here, found, downloads, api]);
   // A download this screen didn't start (begun before Settings was left and opened again) reports to the screen that
   // started it, so this one reads Rust's list until it ends.
@@ -145,7 +145,7 @@ export function LocalSttSettings({
   const act = (p: Promise<LocalSttState | undefined>) => {
     setError(undefined);
     stopTest();
-    track(p).catch((e) => live.current.mounted && setError(messageOf(e)));
+    track(p).catch((e) => live.current.mounted && setError(errorText(e)));
   };
   const change = (c: LocalSttChange) => act(api.set(c));
   const actModels = (p: Promise<LocalModels>) => {
@@ -158,7 +158,7 @@ export function LocalSttSettings({
         setFound(undefined);
         track(api.state()).catch(() => {});
       },
-      (e) => live.current.mounted && setError(messageOf(e)),
+      (e) => live.current.mounted && setError(errorText(e)),
     );
   };
   const download = (name: string) => {
@@ -205,14 +205,14 @@ export function LocalSttSettings({
           const got = await transcribe(recording.audio, recording.mime, t.side, sending.signal);
           tried[i] = { side: t.side, text: got.text, ms: performance.now() - started, by: got.provider };
         } catch (e) {
-          tried[i] = { side: t.side, error: messageOf(e), ms: performance.now() - started };
+          tried[i] = { side: t.side, error: errorText(e), ms: performance.now() - started };
         }
         if (run !== live.current.run) return;
         setTest({ phase: "transcribing", tried: [...tried] });
       }
       setTest({ phase: "done", tried: [...tried] });
     } catch (e) {
-      if (!(e instanceof CaptureAborted)) fail(messageOf(e));
+      if (!(e instanceof CaptureAborted)) fail(errorText(e));
     } finally {
       if (live.current.starting === starting) live.current.starting = undefined;
     }
@@ -460,7 +460,7 @@ export function LocalSttSettings({
                         </>
                       }
                       about={`the ${m.name} model`}
-                      hint={`${size(m.bytes)} · ${MODEL_NOTES[m.name] ?? ""} · ${m.downloaded ? "Downloaded" : "Not downloaded"}`}
+                      hint={`${formatBytes(m.bytes)} · ${MODEL_NOTES[m.name] ?? ""} · ${m.downloaded ? "Downloaded" : "Not downloaded"}`}
                       control={
                         <div className="stt-actions">
                           {m.downloaded && !inUse && (
@@ -494,7 +494,7 @@ export function LocalSttSettings({
                         <div className="stt-progress" role="progressbar" aria-label={`Downloading the ${m.name} model`} aria-valuemin={0} aria-valuemax={p.total} aria-valuenow={p.done}>
                           <span style={{ width: `${p.total ? Math.round((p.done / p.total) * 100) : 0}%` }} />
                           <small>
-                            {size(p.done)} of {size(p.total)}
+                            {formatBytes(p.done)} of {formatBytes(p.total)}
                           </small>
                         </div>
                       )}

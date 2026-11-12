@@ -111,7 +111,7 @@ export function Automations({
   useEffect(() => {
     if (connected) void load();
     else setLoading(false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load only as the connection comes or goes; `load` is rebuilt each render, so listing it would refetch on every render
   }, [connected]);
 
   // Each view starts at its heading; back on the list, at the row it came from.
@@ -596,7 +596,7 @@ function Deliveries({
   };
   useEffect(() => {
     if (connected) read();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- reread only when the connection or the automation's name, revision or enabled state changes; `read` is rebuilt each render, so listing it would refetch on every render
   }, [connected, a.name, a.revision, a.enabled]);
 
   const retry = async (d: Delivery, confirmed: boolean) => {
@@ -846,8 +846,7 @@ function Editor({
     });
   const [rows, setRows] = useState<Row[]>(() => rowsOf(start?.filters ?? []));
   /** Filters the editor can't show as rows (all/any/not groups): kept as they are. */
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
-  const kept = useMemo(() => (start?.filters ?? []).filter((s) => !filterRow(s)), [base]);
+  const kept = useMemo(() => (base?.filters ?? []).filter((s) => !filterRow(s)), [base]);
   const [coalesceOn, setCoalesceOn] = useState(!!start?.coalesce);
   const [coalesce, setCoalesce] = useState<Coalesce>(start?.coalesce ?? { key: "{repository.full_name}#{issue.number}", windowSeconds: 30, maxWaitSeconds: 300 });
   const [secretMode, setSecretMode] = useState<"stored" | "env">(start?.secretEnv ? "env" : "stored");
@@ -889,11 +888,11 @@ function Editor({
     deliverChatId: base?.deliverChatId ?? "",
   };
   const tested = useSyncExternalStore(appPatterns.subscribe, appPatterns.version);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on what `fields` and `example` hold, since both are new objects each render; `tested` reruns it when a pattern check lands
   const livePreview = useMemo(() => (example ? preview(fields, example.payload, example.event, appPatterns.test) : undefined), [JSON.stringify(fields), example?.event, example?.payload, tested]);
   const shownPreview = useSettledPreview(livePreview);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
-  const paths = useMemo(() => (example ? fieldPaths(example.payload) : []), [example?.payload]);
+  const examplePayload = example?.payload;
+  const paths = useMemo(() => fieldPaths(examplePayload), [examplePayload]);
 
   const nameProblem = !base && !NAME_RE.test(fields.name) ? "Up to 64 lowercase letters, digits, - and _, starting with a letter or digit." : !base && list.automations.some((a) => a.name === fields.name) ? "There's already an automation with this name." : undefined;
   const envProblem = secretMode === "env" && !SECRET_ENV_RE.test(fields.secretEnv) ? "An environment variable name, like GITHUB_WEBHOOK_SECRET." : undefined;

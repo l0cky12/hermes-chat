@@ -7,7 +7,7 @@
 // update key uses Tauri's updater, which verifies the download's signature. Drafts survive the restart (`restart`).
 
 import { restartHold, sending, unsaved } from "./unsaved";
-import { errorText } from "./values";
+import { clockTime, errorText } from "./values";
 
 export const REPO = "l0cky12/hermes-chat";
 
@@ -97,7 +97,7 @@ async function refusal(res: Response, commit: string, now: number): Promise<stri
   if (res.status === 404) return `GitHub doesn't know commit ${commit} on ${REPO}, so this build can't be compared with main. Was it built from a fork or a local branch?`;
   if ((res.status === 403 || res.status === 429) && res.headers.get("x-ratelimit-remaining") === "0") {
     const reset = Number(res.headers.get("x-ratelimit-reset")) * 1000;
-    const when = reset > now ? ` Try again after ${new Date(reset).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.` : " Try again later.";
+    const when = reset > now ? ` Try again after ${clockTime(reset)}.` : " Try again later.";
     return `GitHub has had too many update checks from this network.${when}`;
   }
   const body = await res.text().catch(() => "");

@@ -13,7 +13,7 @@ import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
 import { ChatList } from "./Sidebar";
 import { useSnoozeClock } from "./Snooze";
-// @ts-expect-error The app has no Node types; the tests run in Node. (Vitest empties a CSS import, ?raw included.)
+// Vitest empties a CSS import, ?raw included.
 import { readFileSync } from "node:fs";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));

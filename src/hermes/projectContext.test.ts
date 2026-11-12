@@ -228,7 +228,7 @@ describe("adding files", () => {
   it("refuses a file over 30 MB by name, and still adds the rest of the batch", () => {
     const p = planAdd([], [local("small.md"), local("movie.mkv", MAX_FILE_BYTES + 1), local("edge.bin", MAX_FILE_BYTES)], "all");
     expect(p.fresh.map((f) => f.name)).toEqual(["small.md", "edge.bin"]);
-    expect(p.refused).toEqual([{ name: "movie.mkv", why: "movie.mkv wasn't added: it's 30.0 MB, over the 30.0 MB a context file can be." }]);
+    expect(p.refused).toEqual([{ name: "movie.mkv", why: "movie.mkv wasn't added: it's 30 MB, over the 30 MB a context file can be." }]);
   });
 
   it("holds a name that is already there until the owner says replace", () => {

@@ -26,9 +26,7 @@ Insert writes the rendered text into the chat's draft through the same path as t
 
 ## Export and import
 
-Export and Import were buttons in the Templates dialog, so no screen offers them now. Commit cff281b7 deleted the parts only they used: the `templates_export` command and the 2 MB import cap. The file format is still in `templates.ts` (`exportFile`, `readImport`, `EXPORT_FORMAT`, `EXPORT_VERSION`), and only `templates.test.ts` calls it. Those functions should either get a screen again or be deleted. That decision belongs to a follow-up, not this ADR.
-
-What the format code does: `exportFile` writes `{"format": "hermes-chat-templates", "version": 1, "templates": [{name, description, body}]}`. Project scopes, ids and anything about the connection are left out: they mean nothing on another connection, and an export shouldn't name a server or user. `readImport` refuses a file whole if it isn't JSON, isn't this format, has no version it can read, or has a newer version. Each entry is checked like a stored template, and a description that isn't text or is too long also makes it invalid. Invalid entries are skipped and counted, and so are entries past the 300-template limit. Names already taken get ` (2)`, ` (3)`…, and everything imported gets new ids and no project.
+Export writes `{"format": "hermes-chat-templates", "version": 1, "templates": [{name, description, body}]}` through the native Save dialog (`templates_export`, which shares chat Export's Rust code). Project scopes, ids and anything about the connection are left out: they mean nothing on another connection, and an export shouldn't name a server or user. Import reads a file the owner picks, up to 2 MB. A file that isn't JSON, isn't this format, or has a newer version is refused whole. Each entry is checked like a stored template, and a description that isn't text or is too long also makes it invalid. Invalid ones are skipped and counted, taken names get ` (2)`, ` (3)`…, and everything imported gets new ids and no project.
 
 ## Verification limits
 

@@ -18,7 +18,7 @@ import gi
 os.environ.setdefault("GDK_BACKEND", "x11")
 gi.require_version("Gtk", "3.0")
 gi.require_version("WebKit2", "4.1")
-from gi.repository import GLib, Gtk, WebKit2  # noqa: E402
+from gi.repository import GLib, Gtk, WebKit2
 
 # BENCH_DIST serves another build of the page, to time two builds in turn.
 dist = os.environ.get("BENCH_DIST") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist")
@@ -79,7 +79,7 @@ def run(i):
         try:
             value = view.call_async_javascript_function_finish(result)
             print(json.dumps({"expr": expressions[i], "value": json.loads(value.to_json(0)), "rssMB": web_rss_mb()}), flush=True)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - reported as that expression's error
             print(json.dumps({"expr": expressions[i], "error": str(e)}), flush=True)
             failed = True
         run(i + 1)

@@ -11,13 +11,13 @@ import { VERSION_LABEL, proposed, type KeptVersion } from "../hermes/artifactEdi
 import { MINE_MARK } from "../hermes/textEdit";
 import { DiffView } from "./FileEditor";
 import { Markdown } from "./Markdown";
-import { Spinner, fmtSize } from "./bits";
+import { Spinner } from "./bits";
 import { editStep } from "./editKeys";
+import { clockTimeWithSeconds, formatBytes } from "../hermes/values";
 
 type Tab = "edit" | "preview" | "changes" | "versions";
 
 const MARKDOWN_NAME = /\.(md|markdown|mdx)$/i;
-const time = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const short = (revision: string) => revision.slice(0, 8);
 
 export function ArtifactEditor({
@@ -34,7 +34,7 @@ export function ArtifactEditor({
 }) {
   const artifactKey = keyOf(artifact);
   // Opening an artifact already open keeps its draft, history and versions.
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- open once per artifact key; `artifact` and `store` arriving anew for the same key must not open it again
   useEffect(() => void store.open(artifact), [artifactKey]);
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const s = snap.get(artifactKey);
@@ -57,7 +57,7 @@ export function ArtifactEditor({
     const el = area.current;
     if (!el || !s || el.value !== s.draft) return;
     if (el.selectionStart !== s.sel.start || el.selectionEnd !== s.sel.end) el.setSelectionRange(s.sel.start, s.sel.end);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- push the store's selection only after its text or history changes; a selection-only change came from the textarea itself
   }, [s?.history, s?.draft]);
   // The webview's own undo (from its context menu) would undo against text React set: ours runs instead. The textarea
   // comes and goes (a proposal, a conflict or another tab replaces it), so the listener follows the element itself.
@@ -91,7 +91,7 @@ export function ArtifactEditor({
     if (id === "draft") return { label: "Your edit", text: s.draft };
     if (id === "saved") return s.base ? { label: `Saved version ${short(s.base.revision)}`, text: s.base.text } : undefined;
     const v = s.versions.find((x) => String(x.id) === id);
-    return v && { label: `${VERSION_LABEL[v.kind]} ${time(v.at)}`, text: v.text };
+    return v && { label: `${VERSION_LABEL[v.kind]} ${clockTimeWithSeconds(v.at)}`, text: v.text };
   };
   const from = versionText(compare.from);
   const to = versionText(compare.to);
@@ -147,11 +147,11 @@ export function ArtifactEditor({
           Editing {s.name}
         </span>
         <span className={`badge ${dirty ? "warn" : ""}`} role="status">
-          {writing ? (busy === "saving" ? "Saving…" : "Saving a copy…") : dirty ? "Unsaved changes" : s.savedAt ? `Saved ${time(s.savedAt)}` : "As on the server"}
+          {writing ? (busy === "saving" ? "Saving…" : "Saving a copy…") : dirty ? "Unsaved changes" : s.savedAt ? `Saved ${clockTimeWithSeconds(s.savedAt)}` : "As on the server"}
         </span>
         <span className="muted small" title={`SHA-256 ${base.revision}`}>
           Based on version {short(base.revision)} · {s.ref.host ? "on the dashboard's machine" : "where the profile's tools run"} · UTF-8{base.bom ? " with BOM" : ""},{" "}
-          {base.eol === "\r\n" ? "CRLF" : "LF"} · {fmtSize(new TextEncoder().encode(s.draft).length)}
+          {base.eol === "\r\n" ? "CRLF" : "LF"} · {formatBytes(new TextEncoder().encode(s.draft).length)}
         </span>
       </div>
 
@@ -412,7 +412,7 @@ function Versions({
   const options = [
     { id: "saved", label: "The saved version" },
     { id: "draft", label: "Your edit" },
-    ...[...versions].reverse().map((v) => ({ id: String(v.id), label: `${VERSION_LABEL[v.kind]}, ${time(v.at)} (${short(v.revision)})` })),
+    ...[...versions].reverse().map((v) => ({ id: String(v.id), label: `${VERSION_LABEL[v.kind]}, ${clockTimeWithSeconds(v.at)} (${short(v.revision)})` })),
   ];
   return (
     <div className="artifact-panel">
@@ -424,7 +424,7 @@ function Versions({
         {[...versions].reverse().map((v) => (
           <li key={v.id}>
             <span>
-              {VERSION_LABEL[v.kind]} <span className="muted small">{time(v.at)}</span> <span className="mono muted small">{short(v.revision)}</span>
+              {VERSION_LABEL[v.kind]} <span className="muted small">{clockTimeWithSeconds(v.at)}</span> <span className="mono muted small">{short(v.revision)}</span>
             </span>
             <span className="confirm-actions">
               <button className="btn" onClick={() => onCompare({ from: String(v.id), to: "draft" })}>

@@ -17,7 +17,7 @@
 
 import { failureOf, type Failure } from "./toolsets";
 import { RestError, type RestMethod } from "./pipe";
-import { errorText } from "./values";
+import { errorText, textOrEmpty } from "./values";
 
 export type Transport = "stdio" | "http";
 export type Auth = "none" | "header" | "oauth";
@@ -106,7 +106,6 @@ export const envNameOk = (k: string) => /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(k)
 
 type Json = Record<string, unknown>;
 const obj = (v: unknown): Json => (v && typeof v === "object" && !Array.isArray(v) ? (v as Json) : {});
-const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 const q = (profile: string) => `profile=${encodeURIComponent(profile)}`;
 
@@ -123,16 +122,16 @@ class NotConfirmed extends Error {}
 
 function serverOf(v: unknown): McpServer | undefined {
   const s = obj(v);
-  const name = str(s.name);
+  const name = textOrEmpty(s.name);
   if (!name) return undefined;
   const transport = s.transport === "stdio" || s.transport === "http" ? s.transport : "unknown";
-  const plugin = s.source === "plugin" ? str(s.plugin) || "a plugin" : undefined;
+  const plugin = s.source === "plugin" ? textOrEmpty(s.plugin) || "a plugin" : undefined;
   const auth: Auth = s.auth === "oauth" ? "oauth" : s.auth === "header" ? "header" : "none";
   return {
     name,
     transport,
-    url: str(s.url) || undefined,
-    command: str(s.command) || undefined,
+    url: textOrEmpty(s.url) || undefined,
+    command: textOrEmpty(s.command) || undefined,
     args: strs(s.args),
     envKeys: Object.keys(obj(s.env)),
     auth,
@@ -145,20 +144,20 @@ function serverOf(v: unknown): McpServer | undefined {
 
 function toolsOf(v: unknown): McpTool[] {
   return (Array.isArray(v) ? v : []).flatMap((t) => {
-    const name = str(obj(t).name);
-    return name ? [{ name, description: str(obj(t).description) }] : [];
+    const name = textOrEmpty(obj(t).name);
+    return name ? [{ name, description: textOrEmpty(obj(t).description) }] : [];
   });
 }
 
 function flowOf(v: unknown): OAuthFlow {
   const f = obj(v);
-  const status = str(f.status);
+  const status = textOrEmpty(f.status);
   return {
-    flowId: str(f.flow_id),
-    server: str(f.server_name),
+    flowId: textOrEmpty(f.flow_id),
+    server: textOrEmpty(f.server_name),
     status: status === "starting" || status === "authorization_required" || status === "approved" ? status : "error",
-    authorizationUrl: str(f.authorization_url) || undefined,
-    error: str(f.error) || (status === "error" || !["starting", "authorization_required", "approved"].includes(status) ? "Hermes didn't say why." : undefined),
+    authorizationUrl: textOrEmpty(f.authorization_url) || undefined,
+    error: textOrEmpty(f.error) || (status === "error" || !["starting", "authorization_required", "approved"].includes(status) ? "Hermes didn't say why." : undefined),
     tools: Array.isArray(f.tools) ? toolsOf(f.tools) : undefined,
   };
 }
@@ -355,7 +354,7 @@ export class McpApi {
     } catch (e) {
       return { ok: false, error: failureOf(e).reason, at: Date.now() };
     }
-    if (res.ok !== true) return { ok: false, error: str(res.error) || "Hermes couldn't connect to it, and didn't say why.", at: Date.now() };
+    if (res.ok !== true) return { ok: false, error: textOrEmpty(res.error) || "Hermes couldn't connect to it, and didn't say why.", at: Date.now() };
     const n = (v: unknown) => (typeof v === "number" ? v : undefined);
     return { ok: true, tools: toolsOf(res.tools), prompts: n(res.prompts), resources: n(res.resources), at: Date.now() };
   }
@@ -390,30 +389,30 @@ export class McpApi {
     }
     const entries = (Array.isArray(res.entries) ? res.entries : []).flatMap((v): CatalogEntry[] => {
       const e = obj(v);
-      const name = str(e.name);
+      const name = textOrEmpty(e.name);
       if (!name) return [];
       return [
         {
           name,
-          description: str(e.description),
-          transport: str(e.transport),
-          authType: str(e.auth_type) || "none",
+          description: textOrEmpty(e.description),
+          transport: textOrEmpty(e.transport),
+          authType: textOrEmpty(e.auth_type) || "none",
           requiredEnv: (Array.isArray(e.required_env) ? e.required_env : []).flatMap((r) => {
             const env = obj(r);
-            return str(env.name) ? [{ name: str(env.name), prompt: str(env.prompt), required: env.required !== false }] : [];
+            return textOrEmpty(env.name) ? [{ name: textOrEmpty(env.name), prompt: textOrEmpty(env.prompt), required: env.required !== false }] : [];
           }),
-          command: str(e.command) || undefined,
+          command: textOrEmpty(e.command) || undefined,
           args: strs(e.args),
-          url: str(e.url) || undefined,
+          url: textOrEmpty(e.url) || undefined,
           needsInstall: e.needs_install === true,
-          installUrl: str(e.install_url) || undefined,
+          installUrl: textOrEmpty(e.install_url) || undefined,
           bootstrap: strs(e.bootstrap),
-          postInstall: str(e.post_install),
+          postInstall: textOrEmpty(e.post_install),
           installed: e.installed === true,
         },
       ];
     });
-    const problems = (Array.isArray(res.diagnostics) ? res.diagnostics : []).map((d) => `${str(obj(d).name)}: ${str(obj(d).message)}`);
+    const problems = (Array.isArray(res.diagnostics) ? res.diagnostics : []).map((d) => `${textOrEmpty(obj(d).name)}: ${textOrEmpty(obj(d).message)}`);
     return { entries, problems };
   }
 

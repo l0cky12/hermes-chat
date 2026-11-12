@@ -1,7 +1,7 @@
 // Context files of a project (GLOSSARY.md "Context file", ADR 0135): the files in `<main folder>/context` on the
 // server, which every chat in the project gets.
 import { previewSupport, type RemoteEntry } from "./remoteFiles";
-import { isObj } from "./values";
+import { formatBytes, isObj } from "./values";
 
 /** How a file's text is had: as it is, by extraction (`pdf`, `docx`), or not at all (`binary`). */
 export type ContextKind = "text" | "pdf" | "docx" | "binary";
@@ -56,19 +56,6 @@ const extensionOf = (name: string) => {
 
 /** The badge on a file's card and in what chats are told: its extension, or FILE. */
 export const typeLabel = (name: string) => extensionOf(name).toUpperCase() || "FILE";
-
-/** A size as chats and the card read it: `1.2 KB`. */
-export function sizeText(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB"];
-  let n = bytes / 1024;
-  let unit = 0;
-  while (n >= 1024 && unit < units.length - 1) {
-    n /= 1024;
-    unit++;
-  }
-  return `${n.toFixed(1)} ${units[unit]}`;
-}
 
 export const tokensOf = (bytes: number) => Math.ceil(bytes / 4);
 const utf8 = new TextEncoder();
@@ -202,7 +189,7 @@ export function planAdd(existing: readonly Pick<ContextFile, "name">[], picked: 
     else if (f.size > max)
       plan.refused.push({
         name: f.name,
-        why: `${f.name} wasn't added: it's ${sizeText(f.size)}, over the ${sizeText(max)} a context file can be${writes === "text-only" ? " on an SSH profile" : ""}.`,
+        why: `${f.name} wasn't added: it's ${formatBytes(f.size)}, over the ${formatBytes(max)} a context file can be${writes === "text-only" ? " on an SSH profile" : ""}.`,
       });
     else if (batch.has(f.name)) plan.refused.push({ name: f.name, why: `${f.name} wasn't added twice: two of the files picked have that name.` });
     else {
@@ -225,7 +212,7 @@ export type ContextTexts = ReadonlyMap<string, string>;
 const neutralize = (text: string) =>
   text.replace(/(?<![\p{L}\p{N}_/])@(?=(?:diff|staged)(?![\p{L}\p{N}_])|(?:file|folder|git|url):\S)/gu, "@\u2060");
 
-const described = (f: ContextFile) => `${f.path} (${f.size === undefined ? "" : `${sizeText(f.size)}, `}${typeLabel(f.name)})`;
+const described = (f: ContextFile) => `${f.path} (${f.size === undefined ? "" : `${formatBytes(f.size)}, `}${typeLabel(f.name)})`;
 const body = (text: string) => text.replace(/\s+$/, "");
 
 function fullStart(set: ContextSet, texts: ContextTexts): string {

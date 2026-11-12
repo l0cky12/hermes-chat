@@ -24,7 +24,7 @@ import {
   envKeyFor,
   formProblem,
 } from "../hermes/mcp";
-import { errorText } from "../hermes/values";
+import { clockTime, errorText } from "../hermes/values";
 
 /** How often a sign-in under way is asked about, and for how long before giving up on it. */
 export const SIGN_IN_POLL_MS = 2000;
@@ -35,7 +35,6 @@ type Busy = "toggle" | "remove" | "test" | "signin";
 type SignIn = { flow: OAuthFlow; startedAt: number };
 type Dialog = { kind: "add" } | { kind: "edit"; server: McpServer } | { kind: "catalog" };
 
-const clock = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 const toolsText = (n: number) => `${n} ${n === 1 ? "tool" : "tools"}`;
 
 /** What a change came to, in words; `what` is what was done, such as "Saved" or "Removed". */
@@ -214,7 +213,7 @@ export function McpSettings({
       }
     }, pollMs);
     return () => clearTimeout(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- each poll is timed from the last change to `signIns`; `load` is new every render, so listing it would restart the timer on every render
   }, [signIns]);
 
   const signIn = async (s: McpServer) => {
@@ -318,7 +317,7 @@ export function McpSettings({
             {t.ok ? (
               <details>
                 <summary>
-                  <CheckCircle2 size={13} aria-hidden /> Connected at {clock(t.at)}: {toolsText(t.tools.length)}
+                  <CheckCircle2 size={13} aria-hidden /> Connected at {clockTime(t.at)}: {toolsText(t.tools.length)}
                   {t.prompts ? `, ${t.prompts} prompts` : ""}
                   {t.resources ? `, ${t.resources} resources` : ""}.
                 </summary>
@@ -333,7 +332,7 @@ export function McpSettings({
               </details>
             ) : (
               <span>
-                <CircleAlert size={13} aria-hidden /> Couldn't connect at {clock(t.at)}: {t.error}
+                <CircleAlert size={13} aria-hidden /> Couldn't connect at {clockTime(t.at)}: {t.error}
               </span>
             )}
           </div>
@@ -453,7 +452,7 @@ export function McpSettings({
             {!connected && (
               <SettingNote tone="warn" role="status">
                 <AlertTriangle size={14} />
-                <span>Not connected to Hermes. This is the list as read at {clock(list.readAt)}; reconnect to change it.</span>
+                <span>Not connected to Hermes. This is the list as read at {clockTime(list.readAt)}; reconnect to change it.</span>
               </SettingNote>
             )}
             {listNote && (
@@ -467,7 +466,7 @@ export function McpSettings({
             {list.servers.length ? list.servers.map(row) : <SettingNote role="status">This profile has no MCP servers yet.</SettingNote>}
             <SettingRow
               name="Read again"
-              hint={`As read at ${clock(list.readAt)}. Another client may have changed it since.`}
+              hint={`As read at ${clockTime(list.readAt)}. Another client may have changed it since.`}
               control={
                 <button className="btn" disabled={!connected || loading} onClick={() => void load()}>
                   <RefreshCw size={13} aria-hidden /> {loading ? "Reading…" : "Read again"}
@@ -817,7 +816,7 @@ function CatalogDialog({
       (e) => open.current && setError(errorText(e)),
     );
     return () => void (open.current = false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- read the catalog once when the dialog opens; a new `api` object from the parent must not read it again
   }, []);
 
   const missing = picked?.requiredEnv.filter((v) => v.required && !env.get(v.name)?.trim()) ?? [];

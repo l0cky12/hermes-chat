@@ -228,30 +228,11 @@ fn drafts_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("restart-drafts.json"))
 }
 
-/// Writes `text` to `path` (mode 0600) whole or not at all: into a file beside it first, flushed to disk, then renamed
-/// over it, and the folder flushed so the rename lasts. A failed write (a full disk, say) leaves no `path` behind for
-/// the next launch to mistake for a restart's drafts.
+/// Writes `text` to `path` whole or not at all (`private_file::write`). A failed write (a full disk, say) leaves no
+/// `path` behind for the next launch to mistake for a restart's drafts.
 fn write_whole(path: &std::path::Path, text: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    let dir = path.parent().expect("a file in a directory");
-    std::fs::create_dir_all(dir)?;
-    let part = path.with_extension("json.part");
-    let written = (|| {
-        let mut file = crate::defaults_file::owner_only(std::fs::OpenOptions::new().write(true).create(true).truncate(true)).open(&part)?;
-        file.write_all(text)?;
-        file.sync_all()?;
-        std::fs::rename(&part, path)
-    })();
-    if written.is_err() {
-        let _ = std::fs::remove_file(&part);
-    }
-    written?;
-    // Best effort: the copy is in place now, and reporting a failure here would leave it behind a restart that didn't
-    // happen, for an ordinary launch later to put back over newer drafts. Windows can't open a folder this way, and
-    // NTFS journals the rename itself.
-    #[cfg(unix)]
-    let _ = std::fs::File::open(dir).and_then(|d| d.sync_all());
-    Ok(())
+    std::fs::create_dir_all(path.parent().expect("a file in a directory"))?;
+    crate::private_file::write(path, text)
 }
 
 /// Restarts the app. `drafts` (every draft, outbox and queue, from localStorage; updates.ts `DRAFT_PREFIXES`) is written to disk first, and nothing
@@ -463,7 +444,7 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         }
-        assert!(!dir.join("restart-drafts.json.part").exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no temporary file is left");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -471,10 +452,10 @@ mod tests {
     fn a_failed_save_leaves_nothing_to_put_back() {
         let dir = scratch("fail");
         let path = dir.join("restart-drafts.json");
-        // The rename can't replace a folder: the write fails after the part file was written.
+        // The rename can't replace a folder: the write fails after the temporary file was written.
         std::fs::create_dir(&path).unwrap();
         assert!(write_whole(&path, b"{}").is_err());
-        assert!(!dir.join("restart-drafts.json.part").exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no temporary file is left");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

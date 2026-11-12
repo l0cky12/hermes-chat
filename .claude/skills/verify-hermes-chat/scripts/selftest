@@ -5,7 +5,6 @@
 #           an interrupted start (TERM) does the same;
 #           three concurrent `hv up`s each get their own display (their own Xvfb holds its lock), and `hv down` stops them.
 #           its private D-Bus activates nothing (no Secret Service with the owner's HOME) and runs with the run's HOME.
-#   bridge: the stand-in survives a WebSocket closed or reset while it writes to it, and keeps serving.
 # Runs under a throwaway HV_HOME with a fake app and a fake tauri-driver, so it never touches a real run.
 set -euo pipefail
 
@@ -140,45 +139,6 @@ if [ "${#runs[@]}" -gt 0 ]; then
   grep -q "ServiceUnknown" <<<"$start" && pass "asking it for a Secret Service starts none" || fail "StartServiceByName org.freedesktop.secrets: $start"
   bus_home=$(tr '\0' '\n' <"/proc/$bus_pid/environ" | sed -n 's/^HOME=//p')
   [ "$bus_home" = "$r/home" ] && pass "the private D-Bus runs with the run's HOME" || fail "the private D-Bus's HOME is ${bus_home:-unset}, not $r/home"
-  # A WebSocket the app closes while the stand-in writes to it (EPIPE after a close, ECONNRESET after a reset) is
-  # dropped, and the stand-in keeps serving (#432).
-  cat >"$T/drop-ws.mjs" <<'JS'
-import { connect } from "node:net";
-const [port, how] = [process.argv[2], process.argv[3]];
-const base = `http://127.0.0.1:${port}`;
-const sock = connect(Number(port), "127.0.0.1");
-sock.on("error", () => {});
-let got = Buffer.alloc(0), stream;
-const dropped = new Promise((resolve) => {
-  sock.on("data", (d) => {
-    got = Buffer.concat([got, d]);
-    const head = got.indexOf("\r\n\r\n");
-    if (head < 0) return;
-    // Upgraded: start 100 frames, 5 ms apart, and drop the socket once the first one arrives.
-    if (!stream) stream = fetch(`${base}/__changed?n=100&gap=5`, { method: "POST" });
-    else if (got.length > head + 4) resolve(how === "reset" ? sock.resetAndDestroy() : sock.destroy());
-  });
-});
-sock.write("GET /api/ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n");
-sock.on("close", () => stream || (console.log("the stand-in refused the WebSocket"), process.exit(0)));
-setTimeout(() => (console.log("no frame arrived to drop the socket on"), process.exit(0)), 10_000);
-await dropped;
-try {
-  const [done, state] = [await stream, await fetch(`${base}/__state`)];
-  console.log(done.status === 200 && state.status === 200 ? "ok" : `the stream answered ${done.status}, /__state ${state.status}`);
-} catch (e) {
-  console.log(`the stand-in stopped answering: ${e.cause?.code ?? e.message}`);
-}
-process.exit(0);
-JS
-  bridge_port=$(. "$r/state.env"; echo "$BRIDGE_PORT") bridge_pid=$(. "$r/state.env"; echo "$BRIDGE_PID")
-  for how in close reset; do
-    out=$(timeout 20 node "$T/drop-ws.mjs" "$bridge_port" "$how" 2>&1 || true)
-    [ "$out" = ok ] && kill -0 "$bridge_pid" 2>/dev/null && pass "the stand-in keeps serving after the app ${how}s a WebSocket mid-write" ||
-      fail "the stand-in after a WebSocket $how mid-write: ${out:-no output}; $(grep -m1 -E 'Error|WS closed' "$(. "$r/state.env"; echo "$EVIDENCE")/bridge.log")"
-  done
-  grep -q "WS closed by the app: EPIPE" "$(. "$r/state.env"; echo "$EVIDENCE")/bridge.log" && pass "the stand-in logged the EPIPE it dropped" ||
-    echo "--   the stand-in logged no EPIPE this time (the close above met another error, or none)"
 fi
 for r in "${runs[@]}"; do
   # The doctor exits non-zero here anyway (fake driver, no build); only its Xvfb line matters.

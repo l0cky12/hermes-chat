@@ -18,10 +18,9 @@ import {
   type PickedTranscript,
   type PlannedChat,
 } from "../hermes/importTranscripts";
-import { fmtSize } from "./bits";
 import { useModal } from "./modal";
 import { SettingRow, SettingsSection } from "./SettingRows";
-import { plural } from "../hermes/values";
+import { formatBytes, plural } from "../hermes/values";
 
 /** What the import needs from the app: Hermes, the profile shown, and where its chats can go. */
 export type ImportWiring = {
@@ -293,7 +292,7 @@ function Preview({
       <dl className="files-meta">
         <dt>File</dt>
         <dd>
-          <span className="mono">{step.path || plan.fileName}</span>, {fmtSize(plan.bytes)}
+          <span className="mono">{step.path || plan.fileName}</span>, {formatBytes(plan.bytes)}
         </dd>
         <dt>Format</dt>
         <dd>{IMPORT_FORMATS[plan.format].label}</dd>

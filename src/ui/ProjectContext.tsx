@@ -10,7 +10,6 @@ import {
   nameProblem,
   percentUsed,
   planAdd,
-  sizeText,
   textFileName,
   typeLabel,
   type Capacity,
@@ -24,7 +23,7 @@ import type { RemoteFiles } from "../hermes/remoteFiles";
 import { PreviewPane, type Preview } from "./FileBrowser";
 import { Spinner, composing, menuArrows, useDismiss } from "./bits";
 import { useModal } from "./modal";
-import { errorText } from "../hermes/values";
+import { errorText, formatBytes } from "../hermes/values";
 
 /** The default model the capacity is measured against: its name, and its context window once a chat has reported one. */
 export type CapacityModel = { name?: string; window?: number };
@@ -125,7 +124,7 @@ export function ContextCard({
   }, [key, connected]);
   useEffect(() => {
     if (connected && state.kind === "ready") void refreshRef.current();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- read again only when the model's context window changes; the connection and load state are checked, not triggers
   }, [model.window]);
 
   useDismiss(adder, doing.kind === "menu", () => setDoing((d) => (d.kind === "menu" ? { kind: "idle" } : d)));
@@ -257,7 +256,7 @@ export function ContextCard({
           all.filter((f) => !tooBig.includes(f)).map(async (f) => invoke<string>("stage_clipboard_file", await f.arrayBuffer(), { headers: { "x-name": encodeURIComponent(f.name) } })),
         );
         const got = await files.dropped(staged);
-        return { files: got.files, refused: [...got.refused, ...tooBig.map((f) => ({ name: f.name, why: `${f.name} wasn't added: it's ${sizeText(f.size)}, over the ${sizeText(MAX_FILE_BYTES)} a context file can be.` }))] };
+        return { files: got.files, refused: [...got.refused, ...tooBig.map((f) => ({ name: f.name, why: `${f.name} wasn't added: it's ${formatBytes(f.size)}, over the ${formatBytes(MAX_FILE_BYTES)} a context file can be.` }))] };
       })(),
     );
   };
@@ -429,7 +428,7 @@ export function ContextCard({
                 {f.tokens === undefined ? <FileIcon size={15} aria-hidden /> : <FileText size={15} aria-hidden />}
                 <span className="pctx-file-name">{f.name}</span>
                 <span className="pctx-file-meta">
-                  {f.size !== undefined && <span>{sizeText(f.size)}</span>}
+                  {f.size !== undefined && <span>{formatBytes(f.size)}</span>}
                   <span className="badge">{typeLabel(f.name)}</span>
                   {f.tokens === undefined && (
                     <span className="badge" title="It has no text Hermes Chat can read, so chats get its path and open it with their own tools.">
@@ -519,9 +518,9 @@ export function ContextCard({
             There's already a <span className="mono">{doing.files[0].name}</span>
             {(() => {
               const there = listed.find((f) => f.name === doing.files[0].name);
-              return there?.size !== undefined ? `, ${sizeText(there.size)},` : "";
+              return there?.size !== undefined ? `, ${formatBytes(there.size)},` : "";
             })()}{" "}
-            in this project's context files. Replace it with the one you picked, {sizeText(doing.files[0].size)}?
+            in this project's context files. Replace it with the one you picked, {formatBytes(doing.files[0].size)}?
           </p>
           <p className="muted small">
             The file at <span className="mono">{joinPath(doing.dir, doing.files[0].name)}</span> on the server is written over. It can't be undone.

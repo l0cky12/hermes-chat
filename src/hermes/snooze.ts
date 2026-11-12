@@ -19,6 +19,7 @@ import type { Chat } from "./model";
 import { isWaiting } from "./model";
 import type { SectionKey } from "./sectionKeys";
 import { migrateUIPrefs as migrateDoc, type UIPrefsDoc, type UIPrefsMigrations } from "./uiPrefs";
+import { clockTime } from "./values";
 
 export const SNOOZE_KEY = "hermes-chat.snoozes";
 export const SNOOZE_VERSION = 1;
@@ -274,7 +275,7 @@ export function customUntil(input: { at: string } | { amount: string; unit: Dura
 /** When a snoozed chat wakes, short enough for a row: "3:00 PM", "Tue 9:00 AM", "Dec 4". `tag` is the locale's. */
 export function wakeLabel(until: number, now: number, tag?: string): string {
   const u = new Date(until);
-  const time = u.toLocaleTimeString(tag, { hour: "numeric", minute: "2-digit" });
+  const time = clockTime(until, tag);
   if (u.toDateString() === new Date(now).toDateString()) return time;
   if (until - now < 6 * DAY) return `${u.toLocaleDateString(tag, { weekday: "short" })} ${time}`;
   return u.toLocaleDateString(tag, { month: "short", day: "numeric" });

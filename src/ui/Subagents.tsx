@@ -16,6 +16,7 @@ import {
 } from "../hermes/subagents";
 import { composing } from "./bits";
 import type { QuestionKind } from "../hermes/model";
+import { clockTimeWithSeconds } from "../hermes/values";
 
 /**
  * What the panel can ask Hermes about its chat's subagents. `refresh` reads the roster again. `blocked`: why Steer and
@@ -44,7 +45,6 @@ const STATE_LABEL: Record<SubagentState, string> = {
 const UNDESCRIBED = "A subagent Hermes hasn't described yet";
 const nameOf = (s: Subagent) => s.goal || UNDESCRIBED;
 const shortId = (id: SubagentId) => (id.length > 12 ? `${id.slice(0, 12)}…` : id);
-const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const isLive = (state: SubagentState) => state === "running" || state === "queued";
 const live = (s: Subagent) => isLive(s.state);
 
@@ -60,7 +60,7 @@ function SyncNote({ tree }: { tree: SubagentTree }) {
   return (
     <div className="subagents-note" role="status">
       {s.kind === "lost"
-        ? `Disconnected since ${clock(s.since)}: these are the states last heard. Hermes is asked again once the chat is open on Hermes.`
+        ? `Disconnected since ${clockTimeWithSeconds(s.since)}: these are the states last heard. Hermes is asked again once the chat is open on Hermes.`
         : `These are the states last heard. ${s.why}`}
     </div>
   );
@@ -150,7 +150,7 @@ function Branch({ tree, parent, onOpen }: { tree: SubagentTree; parent?: Subagen
             <StateBadge state={s.state} />
             <span className="subagent-goal">{nameOf(s)}</span>
             <span className="subagent-meta">
-              {[s.model, s.lastActivity && `${s.lastActivity.text} · ${clock(s.lastActivity.at)}`].filter(Boolean).join(" · ")}
+              {[s.model, s.lastActivity && `${s.lastActivity.text} · ${clockTimeWithSeconds(s.lastActivity.at)}`].filter(Boolean).join(" · ")}
             </span>
           </button>
           <Branch tree={tree} parent={s.id} onOpen={onOpen} />
@@ -234,7 +234,7 @@ function SubagentView({
         {s.startedAt !== undefined && (
           <>
             <dt>Started</dt>
-            <dd>{clock(s.startedAt)}</dd>
+            <dd>{clockTimeWithSeconds(s.startedAt)}</dd>
           </>
         )}
         {s.toolCount !== undefined && (
@@ -279,7 +279,7 @@ function Activity({ s }: { s: Subagent }) {
         <ol>
           {s.activity.map((a, i) => (
             <li key={i}>
-              <span className="subagent-at">{clock(a.at)}</span>
+              <span className="subagent-at">{clockTimeWithSeconds(a.at)}</span>
               {a.kind === "tool" ? (
                 <span>
                   <span className="mono">{a.tool}</span>
@@ -315,7 +315,7 @@ function Output({ id, api }: { id: SubagentId; api: SubagentsApi }) {
   };
   useEffect(() => {
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `asked` is a counter, not a DOM node: the cleanup bumps its live value so a late answer for the old subagent is dropped
     return () => void asked.current++;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -336,7 +336,7 @@ function Output({ id, api }: { id: SubagentId; api: SubagentsApi }) {
         </p>
       ) : read.output.available ? (
         <>
-          {read.output.truncated && <p className="subagent-why">The last 16 KB, as Hermes keeps it, read at {clock(read.at)}.</p>}
+          {read.output.truncated && <p className="subagent-why">The last 16 KB, as Hermes keeps it, read at {clockTimeWithSeconds(read.at)}.</p>}
           <pre className="subagent-tail">{read.output.text || "(nothing yet)"}</pre>
         </>
       ) : (
@@ -358,7 +358,7 @@ function Controls({ s, under, api }: { s: Subagent; under: number; api: Subagent
   const saidRef = useRef<HTMLParagraphElement>(null);
   // Where focus goes once the controls it was on are gone or disabled, as soon as that place is there to take it.
   const [focusNext, setFocusNext] = useState<"box" | "stop" | "said">();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- runs after every render on purpose: focus waits until its target is rendered and enabled, which a later render brings
   useEffect(() => {
     const el = focusNext && { box: boxRef, stop: stopRef, said: saidRef }[focusNext].current;
     if (!el || ("disabled" in el && el.disabled)) return;

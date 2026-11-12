@@ -321,7 +321,7 @@ describe("Pasting into the composer", () => {
     const { staged } = await setUp();
     paste([new File([new Uint8Array(26 * MiB)], "", { type: "image/png" })]);
     const note = await screen.findByRole("alert");
-    expect(note.textContent).toBe(`${staged[0].name} is 26.0 MB. Hermes takes images up to 25 MB.`);
+    expect(note.textContent).toBe(`${staged[0].name} is 26 MB. Hermes takes images up to 25 MB.`);
     expect(chips()).toHaveLength(0);
   });
 });
@@ -375,7 +375,7 @@ describe("Dropping files on the pane (HTML5, as on Windows)", () => {
     const read = vi.spyOn(huge, "arrayBuffer");
     fileDrag("drop", [huge, new File(["sda 92%"], "report.txt")]);
     await waitFor(() => expect(chips()).toHaveLength(1));
-    expect(screen.getByRole("alert").textContent).toBe("disk.img is 300.0 MB. Hermes takes files up to 256 MB.");
+    expect(screen.getByRole("alert").textContent).toBe("disk.img is 300 MB. Hermes takes files up to 256 MB.");
     expect(read).not.toHaveBeenCalled();
     expect(staged.map((s) => s.name)).toEqual(["report.txt"]);
   });
@@ -385,7 +385,7 @@ describe("Dropping files on the pane (HTML5, as on Windows)", () => {
     const huge = new File(["x"], "disk.img");
     Object.defineProperty(huge, "size", { value: 300 * MiB });
     fileDrag("drop", [huge]);
-    expect((await screen.findByRole("alert")).textContent).toBe("disk.img is 300.0 MB. Hermes takes files up to 256 MB.");
+    expect((await screen.findByRole("alert")).textContent).toBe("disk.img is 300 MB. Hermes takes files up to 256 MB.");
     expect(staged).toEqual([]);
     expect(chips()).toHaveLength(0);
   });

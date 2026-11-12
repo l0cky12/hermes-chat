@@ -17,7 +17,6 @@
 # the folder, or the files changed since the owner looked.
 
 import fcntl
-import time
 
 # `git worktree list --porcelain -z` needs Git 2.36.
 WORKTREE_GIT = (2, 36)
@@ -52,7 +51,7 @@ def progress(step, message, **extra):
     try:
         sys.stderr.write(PROGRESS + json.dumps(line) + "\n")
         sys.stderr.flush()
-    except Exception:  # noqa: BLE001 - a screen that stopped listening doesn't stop the work
+    except Exception:  # noqa: BLE001, S110 - a screen that stopped listening doesn't stop the work
         pass
 
 

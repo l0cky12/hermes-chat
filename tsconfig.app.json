@@ -1,0 +1,8 @@
+// The shipped app alone, without Node's types: tsconfig.json gives them to the tests, and this pass fails the build if
+// app code uses a Node-only global or module the webview doesn't have.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "types": [] },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
+}

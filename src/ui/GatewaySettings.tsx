@@ -24,11 +24,10 @@ import {
   changed,
   draftProblem,
 } from "../hermes/gateways";
-import { errorText } from "../hermes/values";
+import { clockTime, errorText } from "../hermes/values";
 
 type Note = { tone: "ok" | "warn" | "bad"; text: string; problem?: Problem };
 
-const clock = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 const fresh = (g: Gateway): Draft => ({ enabled: g.enabled, edits: {} });
 
 /** Where each platform's token comes from, and the Hermes extra that installs its library. */
@@ -182,7 +181,7 @@ export function GatewaySettings({ api, profile, connected, picker, openUrl }: { 
         !connected && (
           <SettingNote tone="warn" role="status">
             <AlertTriangle size={14} />
-            <span>Not connected to Hermes. This is what it had at {clock(list.readAt)}; reconnect to change it.</span>
+            <span>Not connected to Hermes. This is what it had at {clockTime(list.readAt)}; reconnect to change it.</span>
           </SettingNote>
         )
       )}
@@ -358,7 +357,7 @@ export function GatewaySettings({ api, profile, connected, picker, openUrl }: { 
             >
               {check && (
                 <div className={`gw-line ${check.ok ? "ok" : "bad"}`} role="status">
-                  {check.problem ? <ProblemText problem={check.problem} g={g} /> : <span>{check.text}</span>} <span className="muted">({clock(check.at)})</span>
+                  {check.problem ? <ProblemText problem={check.problem} g={g} /> : <span>{check.text}</span>} <span className="muted">({clockTime(check.at)})</span>
                 </div>
               )}
             </SettingRow>

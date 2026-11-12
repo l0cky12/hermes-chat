@@ -21,11 +21,11 @@ import {
   type RemotePreview,
   type Transfer,
 } from "../hermes/remoteFiles";
-import { STATUS_LABEL, Spinner, composing, fmtSize, routeLabel, storedTime } from "./bits";
+import { STATUS_LABEL, Spinner, composing, routeLabel, storedTime } from "./bits";
 import { useModal } from "./modal";
 import { FileEditor } from "./FileEditor";
 import { EDIT_MAX_BYTES } from "../hermes/textEdit";
-import { errorText } from "../hermes/values";
+import { errorText, formatBytes } from "../hermes/values";
 import { shownName, shownPath } from "../hermes/outputs";
 
 /** A file's preview, from the click until its contents are read. `ask`: its type is unknown, and it may be text. */
@@ -158,7 +158,7 @@ export function FileBrowser({
       listed.current = true;
       load(path);
     } else load(listing?.path ?? path, true);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- list on connect and on each reconnect only; `path` and `listing` move as the owner browses, so listing them would reload on every move
   }, [connected]);
 
   const entries = useMemo(() => {
@@ -372,7 +372,7 @@ export function FileBrowser({
                           )}
                         </button>
                       </td>
-                      <td className="num muted">{entry.size !== undefined ? fmtSize(entry.size) : ""}</td>
+                      <td className="num muted">{entry.size !== undefined ? formatBytes(entry.size) : ""}</td>
                       <td className="muted">{entry.modified !== undefined ? modifiedAt(entry.modified) : ""}</td>
                       <td className="muted files-type">{typeLabel(entry)}</td>
                     </tr>
@@ -499,7 +499,7 @@ function UploadDialog({
         <dl className="files-meta">
           <dt>From this computer</dt>
           <dd>
-            <span className="mono">{picked.name}</span>, {fmtSize(picked.size)}
+            <span className="mono">{picked.name}</span>, {formatBytes(picked.size)}
           </dd>
           <dt>To the server</dt>
           <dd className="mono">{dest}</dd>
@@ -513,7 +513,7 @@ function UploadDialog({
             <div className="files-collision" role="radiogroup" aria-labelledby={takenId}>
               <p id={takenId} className="files-collision-note">
                 <CircleAlert size={13} aria-hidden /> There's already a <span className="mono">{picked.name}</span> in this folder
-                {plan.taken.size !== undefined && `, ${fmtSize(plan.taken.size)}`}
+                {plan.taken.size !== undefined && `, ${formatBytes(plan.taken.size)}`}
                 {plan.taken.modified !== undefined && `, modified ${storedTime(plan.taken.modified)}`}.
               </p>
               <label>
@@ -583,14 +583,14 @@ function Transfers({ files }: { files: RemoteFiles }) {
                       ? "Choosing where to save it…"
                       : t.state === "running"
                         ? pct !== undefined
-                          ? `${fmtSize(t.done)} of ${fmtSize(t.total!)} (${pct}%)`
-                          : `${fmtSize(t.done)} so far`
+                          ? `${formatBytes(t.done)} of ${formatBytes(t.total!)} (${pct}%)`
+                          : `${formatBytes(t.done)} so far`
                         : t.state === "checking"
                           ? "Sent. Checking the server has it…"
                           : t.state === "done"
                             ? up
-                              ? `Uploaded, and the server lists it at ${fmtSize(t.done)}`
-                              : `Downloaded, ${fmtSize(t.done)}`
+                              ? `Uploaded, and the server lists it at ${formatBytes(t.done)}`
+                              : `Downloaded, ${formatBytes(t.done)}`
                             : up
                               ? t.state === "stopped"
                                 ? "Stopped. Hermes never keeps part of a file, but if it had already received all of it, it may still save it: the folder shows what it has."
@@ -624,7 +624,7 @@ function Transfers({ files }: { files: RemoteFiles }) {
                   )}
                 </div>
                 {t.state === "running" && (
-                  <progress className="files-progress" max={100} value={pct} aria-label={`${up ? "Uploading" : "Downloading"} ${shownName(t.name)}`} aria-valuetext={pct !== undefined ? `${pct}%` : `${fmtSize(t.done)}`} />
+                  <progress className="files-progress" max={100} value={pct} aria-label={`${up ? "Uploading" : "Downloading"} ${shownName(t.name)}`} aria-valuetext={pct !== undefined ? `${pct}%` : `${formatBytes(t.done)}`} />
                 )}
                 {t.error && (
                   <p className="files-transfer-error" role="alert">
@@ -706,7 +706,7 @@ export function PreviewPane({
           <>
             <dt>Size</dt>
             <dd>
-              {fmtSize(result?.size ?? entry.size!)} ({(result?.size ?? entry.size!).toLocaleString()} bytes)
+              {formatBytes(result?.size ?? entry.size!)} ({(result?.size ?? entry.size!).toLocaleString()} bytes)
             </dd>
           </>
         )}

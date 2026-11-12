@@ -2,7 +2,7 @@
 
 > **Proposed** (#100). Nothing here is built. The owner settles the open questions at the end. Each Delivery step waits only for the open questions it depends on, and step 3's manifest parser needs only questions 1 and 7.
 
-Issue #100 asks for a way to add optional integrations without adding privileged code to the app each time. Today every feature is app code, and app code has every power the app has. The app's webview can call all 127 Rust commands in `invoke_handler` (`src-tauri/src/lib.rs`), and no capability limits which ones. Among them, `password_load` returns the saved password, `terminal_open_local` starts a local shell as the owner (their login shell on Linux, PowerShell or cmd on Windows), which can read any file the owner's account can read, and `hermes_send_file` sends any file the owner attached (ADR 0129). So the question this ADR answers is where an extension's code runs so that it has none of these powers, and what it gets instead.
+Issue #100 asks for a way to add optional integrations without adding privileged code to the app each time. Today every feature is app code, and app code has every power the app has. The app's webview can call all 101 Rust commands in `invoke_handler` (`src-tauri/src/lib.rs`), and no capability limits which ones. Among them, `password_load` returns the saved password, `hermes_send_file` reads any local path the webview names, and `terminal_open_local` starts a shell. So the question this ADR answers is where an extension's code runs so that it has none of these powers, and what it gets instead.
 
 ## Words
 
@@ -32,7 +32,7 @@ The probe's frames also showed that WebKitGTK 2.54.2 shares Cache Storage across
 
 ### 1. The extension's code runs in a worker behind a sandboxed frame
 
-- Each running extension has one host frame: an `<iframe sandbox="allow-scripts">` whose `srcdoc` the app writes. The sandbox has no `allow-same-origin`, so the frame's origin is opaque. The frame can't read the parent's globals. That isn't what keeps it from the app's commands, though. On Windows, WebView2 gives every frame Tauri's IPC bootstrap and invoke key (#466). What stops it is ADR 0138's rule: a request from an opaque-origin frame carries `Origin: null`, which Tauri refuses. ADR 0007's older argument, that the frame can't learn the key, no longer holds.
+- Each running extension has one host frame: an `<iframe sandbox="allow-scripts">` whose `srcdoc` the app writes. The sandbox has no `allow-same-origin`, so the frame's origin is opaque. ADR 0007's argument then holds for it: the frame can't read the parent's globals, so it can't learn the invoke key.
 - The `srcdoc` is the same for every extension. It is T4's CSP, with the shim's SHA-256 hash in place of `'unsafe-inline'`, and a shim of a few lines. No part of a package is ever in it.
 - **The app makes the channel.** Once the frame has loaded, the app creates a `MessageChannel` and posts one port to the frame's window, with the extension's source as a string. The shim takes only the first message whose `source` is `parent`, so another frame in the app's page can't hand it a port first. It makes a `blob:` of a fixed prelude followed by the source, starts one dedicated worker from it, and passes the worker the port. Then it ignores every other message. The prelude replaces `Worker` and `SharedWorker` on the worker's global before the extension's code runs, so the extension can't start a nested worker. T4 shows a nested worker starts under the CSP, and review round 2 showed that the replacement stops it on WebKitGTK 2.54.2. The shim never runs extension code, so nothing in the frame's realm can navigate the frame or hold the main thread.
 - The extension's code runs only in that worker: off the main thread (T2), with no network or `eval` (T4) and no origin storage and no Cache Storage. The prelude replaces `caches` with a non-configurable getter that throws, on the prototype that defines it, so the extension can't reach it. The port is its only channel to the app.
@@ -144,7 +144,7 @@ With no permission, an extension has its command's argument and nothing else.
 
 ## Considered options
 
-- **Extension code in the app's page**, as Obsidian loads plugins. Rejected: the code would have all 127 commands, the password through `password_load` among them.
+- **Extension code in the app's page**, as Obsidian loads plugins. Rejected: the code would have all 101 commands, the password through `password_load` among them.
 - **Extension code in a sandboxed frame's own realm**, as VS Code runs webviews. Rejected by T1 and by T4's last row.
 - **A worker that the app's page starts.** Rejected: the worker would have the app's origin, and the app has no CSP to limit its network. `tauri.conf.json` sets `"csp": null`, and ADR 0007 decided against turning on Tauri's CSP.
 - **A separate process: a plain WebKitGTK view on its own ephemeral context**, as the Preview's page view is (ADR 0081). This option would also contain a memory or crash bomb. Rejected for v1: it works only on Linux, and every message would need a relay in Rust. It is the fallback if open question 6 rules out the shared process.

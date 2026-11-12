@@ -6,7 +6,8 @@
 import { fromMarkdown } from "mdast-util-from-markdown";
 import type { Definition, Nodes, Parents, RootContent } from "mdast";
 import { transcriptSyntax } from "../ui/markdownBlocks";
-import { EXPORT_FORMATS, redactText } from "./exportChat";
+import { EXPORT_FORMATS } from "./exportChat";
+import { redactValues } from "./secrets";
 
 /** The export's Markdown, already redacted, and every text it was redacted for. */
 export type PageSource = { markdown: string; redacted: readonly string[] };
@@ -215,7 +216,7 @@ const SPLIT_REDACTION =
 export function snapshotPage(source: PageSource): PageResult {
   const shown: string[] = [];
   const values: string[] = [];
-  const redact = (s: string) => redactText(s, source.redacted).text;
+  const redact = (s: string) => redactValues(s, source.redacted, { anywhere: true }).text;
   const keep = (into: string[]) => (s: string) => {
     const r = redact(s);
     into.push(r);

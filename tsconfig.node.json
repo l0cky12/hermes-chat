@@ -1,0 +1,19 @@
+// The plain-JS Node scripts, checked for unknown names, properties and wrong calls. Not strict: in JS that would take a
+// JSDoc annotation on nearly every parameter and a cast at every value only control flow proves non-null (about 210).
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": true,
+    "strict": false,
+    "noUnusedLocals": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true
+  },
+  "include": ["bench/**/*.mjs", "tools/shots/*.mjs", "scripts/release/*.mjs", ".claude/skills/verify-hermes-chat/scripts/*.mjs"]
+}

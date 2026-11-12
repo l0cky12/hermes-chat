@@ -1,3 +1,4 @@
+import { textOrEmpty } from "./values";
 // Settings → Model: the main model, the subagent route, the auxiliary (helper task) models, and the two guardrails
 // asked before an Apply. Everything is read from and written to dashboard REST on the deployed `bf0203a` (research doc
 // "Model settings"); the legacy `/api/ws` generation has `config.set` for the main model only, and nothing for
@@ -266,13 +267,12 @@ export type AuxApplied = { applied: true } | { applied: false; expensive: string
 
 type Json = Record<string, unknown>;
 const obj = (v: unknown): Json => (v && typeof v === "object" && !Array.isArray(v) ? (v as Json) : {});
-const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const count = (v: unknown, fallback: number): number => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : fallback);
 
 /** A stored effort as this screen shows it: hand-written `false`/`off`/`disabled` is Off. */
 function effortFromConfig(v: unknown): string {
   if (v === false) return EFFORT_OFF;
-  const s = str(v).trim().toLowerCase();
+  const s = textOrEmpty(v).trim().toLowerCase();
   if (["false", "off", "disabled", EFFORT_OFF].includes(s)) return EFFORT_OFF;
   return (EFFORT_LEVELS as readonly string[]).includes(s) ? s : "";
 }
@@ -282,14 +282,14 @@ function catalogFrom(res: unknown): CatalogProvider[] {
   if (!Array.isArray(rows)) return [];
   return rows.flatMap((r): CatalogProvider[] => {
     const row = obj(r);
-    const slug = str(row.slug);
+    const slug = textOrEmpty(row.slug);
     if (!slug) return [];
     const caps = Object.fromEntries(
       Object.entries(obj(row.capabilities)).map(([m, c]) => [m, { fast: obj(c).fast === true, reasoning: obj(c).reasoning !== false }]),
     );
     const models = Array.isArray(row.models) ? row.models.filter((m): m is string => typeof m === "string") : [];
-    const apiUrl = str(row.api_url);
-    return [{ slug, name: str(row.name) || slug, models, caps, ...(apiUrl ? { apiUrl } : {}) }];
+    const apiUrl = textOrEmpty(row.api_url);
+    return [{ slug, name: textOrEmpty(row.name) || slug, models, caps, ...(apiUrl ? { apiUrl } : {}) }];
   });
 }
 
@@ -298,17 +298,17 @@ function auxFrom(res: unknown): AuxTask[] {
   if (!Array.isArray(rows)) return [];
   return rows.flatMap((r): AuxTask[] => {
     const row = obj(r);
-    const task = str(row.task);
+    const task = textOrEmpty(row.task);
     if (!task) return [];
-    const [label, hint] = AUX_LABELS[task] ?? [str(row.label) || task, str(row.hint)];
-    const effort = str(row.reasoning_effort);
+    const [label, hint] = AUX_LABELS[task] ?? [textOrEmpty(row.label) || task, textOrEmpty(row.hint)];
+    const effort = textOrEmpty(row.reasoning_effort);
     return [
       {
         task,
         label,
         hint,
-        provider: str(row.provider) || AUX_AUTO,
-        model: str(row.model),
+        provider: textOrEmpty(row.provider) || AUX_AUTO,
+        model: textOrEmpty(row.model),
         effort: effort ? effortFromConfig(effort) || effort : AUX_INHERIT,
         localEndpoint: row.local_endpoint === true,
       },
@@ -344,18 +344,18 @@ export class ModelSettingsApi {
     const main = obj(obj(aux).main);
     const agent = obj(obj(config).agent);
     const deleg = obj(obj(config).delegation);
-    const tier = str(agent.service_tier).toLowerCase();
+    const tier = textOrEmpty(agent.service_tier).toLowerCase();
     const routes = obj(obj(routing).model_map).options;
     return {
-      main: { provider: str(main.provider), model: str(main.model), effort: effortFromConfig(agent.reasoning_effort), fast: tier === "fast" || tier === "priority" },
+      main: { provider: textOrEmpty(main.provider), model: textOrEmpty(main.model), effort: effortFromConfig(agent.reasoning_effort), fast: tier === "fast" || tier === "priority" },
       subagent: {
-        provider: str(deleg.provider),
-        model: str(deleg.model),
+        provider: textOrEmpty(deleg.provider),
+        model: textOrEmpty(deleg.model),
         maxIterations: count(deleg.max_iterations, 250),
         maxConcurrent: count(deleg.max_concurrent_children, 10),
         timeoutSeconds: count(deleg.child_timeout_seconds, 0),
         effort: effortFromConfig(deleg.reasoning_effort),
-        directEndpoint: !!str(deleg.base_url).trim(),
+        directEndpoint: !!textOrEmpty(deleg.base_url).trim(),
       },
       namedRoutes: Array.isArray(routes) ? routes.length : 0,
       auxiliary: auxFrom(aux),
@@ -384,8 +384,8 @@ export class ModelSettingsApi {
       );
       if (res.confirm_required === true) {
         // Asked twice means something is wrong; never loop.
-        if (confirmExpensive) throw new Error(str(res.confirm_message) || "Hermes didn't switch the model.");
-        return { applied: false, expensive: str(res.confirm_message) || `${d.main.model} is flagged as expensive.` };
+        if (confirmExpensive) throw new Error(textOrEmpty(res.confirm_message) || "Hermes didn't switch the model.");
+        return { applied: false, expensive: textOrEmpty(res.confirm_message) || `${d.main.model} is flagged as expensive.` };
       }
     }
     const agent: Json = {};
@@ -430,8 +430,8 @@ export class ModelSettingsApi {
         }),
       );
       if (res.confirm_required === true) {
-        if (confirm) throw new Error(str(res.confirm_message) || `Hermes didn't set ${t.label}'s model.`);
-        return { applied: false, expensive: str(res.confirm_message) || `${a.model} is flagged as expensive.`, task: t.task };
+        if (confirm) throw new Error(textOrEmpty(res.confirm_message) || `Hermes didn't set ${t.label}'s model.`);
+        return { applied: false, expensive: textOrEmpty(res.confirm_message) || `${a.model} is flagged as expensive.`, task: t.task };
       }
     }
     return { applied: true };

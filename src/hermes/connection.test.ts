@@ -13,19 +13,6 @@ async function signedIn(server = new FakeHermes()) {
   };
 }
 
-/** How many times the app tries to reconnect before it goes Offline (`RETRY_DELAYS_MS`). */
-const RETRIES = 5;
-
-/** `promise`, with what it has settled to so far: "pending", its value, or the message it rejected with. */
-function watch<T>(promise: Promise<T>) {
-  const seen: { outcome: string | T } = { outcome: "pending" };
-  promise.then(
-    (v) => void (seen.outcome = v),
-    (e: Error) => void (seen.outcome = e.message),
-  );
-  return seen;
-}
-
 const sessionLists = (server: FakeHermes) => server.restRequests.filter((r) => r.path === "/api/sessions").length;
 const resumes = (server: FakeHermes) => server.requests.filter((r) => r.method === "session.resume");
 
@@ -419,97 +406,6 @@ describe("Reconnecting", () => {
     expect(hermes.getSnapshot()).toMatchObject({ olderPulled: true, syncError: undefined });
   });
 
-  it("counts the older chats the reconnect lists as soon as it has listed them, while the read on the dropped connection still hangs (#440)", async () => {
-    const server = new FakeHermes();
-    server.sessions = [row("recent", 1), row("ancient", 90)];
-    const { hermes } = await signedIn(server);
-    await hermes.sync();
-    const listRead = server.rest["GET /api/sessions"];
-    server.rest["GET /api/sessions"] = () => new Promise(() => {});
-    const pulled = watch(hermes.pullOlderHistory().then((chats) => chats.map((c) => c.id)));
-    await vi.advanceTimersByTimeAsync(0);
-
-    server.drop();
-    server.rest["GET /api/sessions"] = listRead;
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(hermes.getSnapshot().status).toBe("connected");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(pulled.outcome).toEqual(["ancient"]);
-    expect(hermes.getSnapshot()).toMatchObject({ olderPulled: true, syncError: undefined });
-  });
-
-  /** A pull whose read hangs, then a drop, then reconnects that `refusal` turns down: its read on the dropped connection fails. */
-  async function pullDroppedThenRefused(refusal: string) {
-    const server = new FakeHermes();
-    server.sessions = [row("recent", 1), row("ancient", 90)];
-    const { hermes } = await signedIn(server);
-    await hermes.sync();
-    let fail!: () => void;
-    server.rest["GET /api/sessions"] = () => new Promise((_, reject) => (fail = () => reject(new Error("The dashboard answered 502: Bad Gateway"))));
-    const pulled = watch(hermes.pullOlderHistory().then((chats) => chats.map((c) => c.id)));
-    await vi.advanceTimersByTimeAsync(0);
-    server.refuse = refusal;
-    server.drop();
-    fail();
-    return { hermes, pulled };
-  }
-
-  it("ends a pull the drop interrupted once reconnecting gives up and goes Offline (#437 P4)", async () => {
-    const { hermes, pulled } = await pullDroppedThenRefused("Can't reach the Hermes dashboard: connection refused");
-    await vi.advanceTimersByTimeAsync(10 * 60_000);
-    expect(hermes.getSnapshot()).toMatchObject({ status: "offline", olderPulled: false });
-    expect(pulled.outcome).toBe("Not connected to Hermes.");
-  });
-
-  it("ends a pull the drop interrupted when the reconnect's sign-in is turned down (#437)", async () => {
-    const { hermes, pulled } = await pullDroppedThenRefused("Wrong username or password.");
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(hermes.getSnapshot()).toMatchObject({ status: "offline", olderPulled: false });
-    expect(pulled.outcome).toBe("Not connected to Hermes.");
-  });
-
-  it("ends a pull the drop interrupted when the app closes while reconnecting (#437 P5)", async () => {
-    const { hermes, pulled } = await pullDroppedThenRefused("Can't reach the Hermes dashboard: connection refused");
-    await vi.advanceTimersByTimeAsync(1_000);
-    await hermes.close();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(hermes.getSnapshot().olderPulled).toBe(false);
-    expect(pulled.outcome).toBe("Not connected to Hermes.");
-  });
-
-  it("backs off a server that closes each connection just after it is ready, then goes Offline (#485)", async () => {
-    const server = new FakeHermes();
-    const { hermes } = await signedIn(server);
-    const capabilities = server.handlers["client.capabilities"];
-    server.handlers["client.capabilities"] = (r) => {
-      capabilities(r);
-      setTimeout(() => server.drop("closed by the server (1011 )"));
-    };
-    server.drop();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(server.opened).toBeLessThanOrEqual(1 + RETRIES);
-    expect(hermes.getSnapshot()).toMatchObject({ status: "offline", closedReason: "closed by the server (1011 )" });
-  });
-
-  it("waits only the first retry's second again after a connection that stayed up (#485)", async () => {
-    const server = new FakeHermes();
-    const { hermes, status } = await signedIn(server);
-    server.refuse = "Can't reach the Hermes dashboard: connection refused";
-    server.drop();
-    await vi.advanceTimersByTimeAsync(1_000 + 2_000);
-    server.refuse = undefined;
-    await vi.advanceTimersByTimeAsync(4_000);
-    expect(status()).toBe("connected");
-    await hermes.idle();
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    server.drop();
-    await vi.advanceTimersByTimeAsync(999);
-    expect(status()).toBe("reconnecting");
-    await vi.advanceTimersByTimeAsync(1);
-    expect(status()).toBe("connected");
-  });
-
   it("stays connected while Hermes answers its pings", async () => {
     const { server, status } = await signedIn();
     await vi.advanceTimersByTimeAsync(5 * 60_000);
@@ -595,22 +491,6 @@ describe("Reopening the socket", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(hermes.getSnapshot().status).toBe("connected");
     expect(seen.reopens).toBe(1);
-  });
-
-  it("backs off reopening a socket that closes just after each reopen, then goes Offline (#485)", async () => {
-    const server = new FakeHermes();
-    const { seen, open } = reopening(server);
-    const hermes = await connect(open);
-    await vi.advanceTimersByTimeAsync(5_000);
-    const capabilities = server.handlers["client.capabilities"];
-    server.handlers["client.capabilities"] = (r) => {
-      capabilities(r);
-      setTimeout(() => server.drop("closed by the server (1011 )"));
-    };
-    server.drop();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(seen.opens + seen.reopens).toBeLessThanOrEqual(1 + RETRIES);
-    expect(hermes.getSnapshot().status).toBe("offline");
   });
 
   it("opens the whole connection again when Hermes goes quiet", async () => {

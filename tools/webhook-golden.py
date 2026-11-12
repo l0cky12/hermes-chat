@@ -17,9 +17,9 @@ import sys
 
 checkout = os.path.expanduser(sys.argv[1])
 sys.path.insert(0, checkout)
-from gateway.config import PlatformConfig  # noqa: E402
-from gateway.platforms.webhook import WebhookAdapter  # noqa: E402
-from gateway.platforms.webhook_filters import WebhookRouteProcessor  # noqa: E402
+from gateway.config import PlatformConfig
+from gateway.platforms.webhook import WebhookAdapter
+from gateway.platforms.webhook_filters import WebhookRouteProcessor
 
 adapter = WebhookAdapter(PlatformConfig(enabled=True, extra={"host": "127.0.0.1", "port": 0, "routes": {}}))
 processor = WebhookRouteProcessor()
@@ -62,7 +62,7 @@ KEYS = ["issue.number", "{repository.full_name}#{issue.number}", "pull_request.n
 HEADERS = {"Content-Type": "application/json", "X-GitHub-Event": "issues", "X-GitHub-Delivery": "00000000-0000-4000-8000-000000000000", "User-Agent": "GitHub-Hookshot/example"}
 
 out = {
-    "hermes": (sys.argv[2] if len(sys.argv) > 2 else subprocess.run(["git", "-C", checkout, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip() or "unknown"),
+    "hermes": (sys.argv[2] if len(sys.argv) > 2 else subprocess.run(["git", "-C", checkout, "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=False).stdout.strip() or "unknown"),
     "payloads": PAYLOADS,
     "renders": [{"payload": p, "template": t, "event": "issues", "route": "golden", "out": adapter._render_prompt(t, PAYLOADS[p], "issues", "golden")}
                 for p in PAYLOADS for t in TEMPLATES],

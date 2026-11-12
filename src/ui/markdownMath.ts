@@ -9,6 +9,8 @@ import type { Parent } from "mdast";
 import type { InlineMath } from "mdast-util-math";
 import type { Code, Construct, Effects, Extension, State, TokenizeContext } from "micromark-util-types";
 import type { Processor } from "unified";
+// Declares the processor data fields remarkMath fills (micromarkExtensions, fromMarkdownExtensions).
+import type {} from "remark-parse";
 
 const DOLLAR = 36;
 const BACKSLASH = 92;

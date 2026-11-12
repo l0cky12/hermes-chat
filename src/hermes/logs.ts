@@ -8,12 +8,13 @@
 //   the one before to find the lines that are new (`since`). When the two don't overlap, lines may have been missed,
 //   and the screen says so rather than guessing.
 //
-// Every line loses its terminal color codes, is redacted (`redact`) and has its other control characters written out
-// (`visible`) before it is kept, so neither
-// the screen nor an export ever holds the raw text. Redaction knows common secret shapes; it can't promise to find
-// every secret in free text, and the screen says that too.
+// Every line loses its terminal color codes, is redacted (secrets.ts `redactSecrets`) and has its other control
+// characters written out (`visible`) before it is kept, so neither the screen nor an export ever holds the raw text.
+// Redaction knows common secret shapes; it can't promise to find every secret in free text, and the screen says that too.
 
+import { REDACTED_KINDS, redactSecrets } from "./secrets";
 import { failureOf } from "./toolsets";
+import { clockTimeWithSeconds } from "./values";
 
 export type Level = "DEBUG" | "INFO" | "WARNING" | "ERROR" | "CRITICAL";
 export const LEVELS: readonly Level[] = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"];
@@ -23,57 +24,6 @@ const RANK: Record<Level, number> = { DEBUG: 0, INFO: 1, WARNING: 2, ERROR: 3, C
 export type Entry =
   | { seq: number; kind: "line"; text: string; level?: Level; at: number; redacted?: string[] }
   | { seq: number; kind: "mark"; text: string; at: number };
-
-// ---------- redaction ----------
-
-type Rule = { kind: string; re: RegExp; to: string };
-/** The shapes of the AI providers', GitHub's, Slack's and cloud API keys, as a RegExp source. Also flags them in an export (secrets.ts). */
-export const PROVIDER_KEY =
-  "(?:sk-(?:ant-|or-|proj-)?[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|hf_[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{20,}|r8_[A-Za-z0-9]{20,}|pplx-[A-Za-z0-9]{20,}|nvapi-[A-Za-z0-9_-]{20,})";
-// Order matters: header-shaped rules go first, so `Authorization: Bearer x` is one redaction, not two. A value already
-// redacted isn't matched again (`(?!\[redacted)`).
-const RULES: Rule[] = [
-  { kind: "private key", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, to: "[redacted private key]" },
-  // A header's whole value: a quoted string (JSON, a Python dict), or the rest of the line (Digest has several parts).
-  { kind: "authorization header", re: /\b((?:proxy-)?authorization["']?\s*[:=]\s*)(?!\[redacted)(?:"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|[^\n]+)/gi, to: "$1[redacted]" },
-  { kind: "cookie", re: /\b((?:set-)?cookie["']?\s*[:=]\s*)(?!\[redacted)(?:"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|[^\n]+)/gi, to: "$1[redacted]" },
-  { kind: "bearer token", re: /\b(bearer\s+)(?!\[redacted)[A-Za-z0-9._~+/=-]{8,}/gi, to: "$1[redacted]" },
-  // A token can be the user name alone (`https://sk_abc@host/`), so any user part counts, up to the last `@` before the
-  // path. An SSH login alone (`ssh://liam@hermes`, how a route is named) is no secret, and support needs to see it.
-  { kind: "URL credentials", re: /(\b(?!ssh:\/\/[^\s/:@]+@)[a-z][a-z0-9+.-]*:\/\/)[^\s/]+@/gi, to: "$1[redacted]@" },
-  { kind: "URL query secret", re: /([?&](?:[a-z0-9]+[_-])*(?:ticket|token|key|auth|sig)=)(?!\[redacted)[^&\s"'#]+/gi, to: "$1[redacted]" },
-  { kind: "JSON web token", re: /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/g, to: "[redacted token]" },
-  {
-    kind: "provider key",
-    re: new RegExp(`\\b${PROVIDER_KEY}`, "g"),
-    to: "[redacted key]",
-  },
-  { kind: "bot token", re: /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/g, to: "[redacted token]" },
-  // A line that is all base64, 16 or more wide: the body of a PEM or OpenSSH key whose start wasn't read (64 and 70 wide,
-  // and a shorter last row). The follower also redacts shorter rows just above an END line it reads.
-  { kind: "key-like base64 line", re: /^[A-Za-z0-9+/]{16,}={0,2}$/gm, to: "[redacted base64]" },
-  {
-    kind: "secret value",
-    re: /(\b(?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|apikey|token|secret|password|passwd|pwd|passphrase|credentials?|private[_-]?key|access[_-]?key|session[_-]?(?:id|token)|signature)["']?\s*[:=]\s*)(?!\[redacted)("[^"]*"|'[^']*'|[^\s,;&"'}\]]+)/gi,
-    to: "$1[redacted]",
-  },
-];
-
-/** The kinds of secret `redact` looks for, as the support bundle lists them. */
-export const REDACTED_KINDS = RULES.map((r) => r.kind);
-
-/** `text` with the secrets it recognizes replaced by `[redacted]`, and the kind of each one replaced. */
-export function redact(text: string): { text: string; kinds: string[] } {
-  const kinds: string[] = [];
-  for (const rule of RULES) {
-    text = text.replace(rule.re, (...m) => {
-      kinds.push(rule.kind);
-      // `$n` in `to`, from the match's groups.
-      return rule.to.replace(/\$(\d)/g, (_, n: string) => (m[Number(n)] as string | undefined) ?? "");
-    });
-  }
-  return { text, kinds };
-}
 
 // C0 and C1 controls but tab and newline, DEL, and the bidi marks and overrides that can make text read in another
 // order than it is.
@@ -92,7 +42,7 @@ const CSI = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 /** What a line keeps: without terminal color and cursor codes, redacted, then with other controls written out. */
 export function clean(raw: string): { text: string; redacted?: string[] } {
-  const r = redact(raw.replace(CSI, ""));
+  const r = redactSecrets(raw.replace(CSI, ""));
   return { text: visible(r.text), ...(r.kinds.length && { redacted: r.kinds }) };
 }
 
@@ -243,7 +193,6 @@ export type ReadState =
   /** This Hermes can't give this log; reading stops. */
   | { kind: "unsupported"; reason: string };
 
-const clock = (at: number) => new Date(at).toLocaleTimeString();
 
 /**
  * A 53-bit fingerprint of a raw line (cyrb53), so overlap matching tells apart lines that redact to the same text
@@ -362,7 +311,7 @@ export class LogFollower {
     const prints = lines.map(fingerprint);
     const marks: { kind: "mark"; text: string; at: number }[] = [];
     if (this.stopped) {
-      marks.push({ kind: "mark", at, text: `Not read from ${clock(this.stopped.at)} to ${clock(at)}: ${this.stopped.reason}` });
+      marks.push({ kind: "mark", at, text: `Not read from ${clockTimeWithSeconds(this.stopped.at)} to ${clockTimeWithSeconds(at)}: ${this.stopped.reason}` });
       this.stopped = undefined;
     }
     const { start, gap } = this.read ? since(this.last, prints, TAIL) : { start: 0 };

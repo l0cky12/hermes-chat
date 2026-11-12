@@ -19,7 +19,7 @@ import {
 import { useOpenPreview } from "./previewContext";
 import { useShowInChat } from "./showInChat";
 import { Spinner } from "./bits";
-import { errorText } from "../hermes/values";
+import { clockTimeWithSeconds, errorText } from "../hermes/values";
 
 /** What the inspector asks Hermes, for the chat on screen. */
 export type ContextApi = {
@@ -35,7 +35,6 @@ export type ContextApi = {
 type Load<T> = { state: "loading" } | { state: "done"; value: T } | { state: "failed"; error: string };
 
 const n = (tokens: number) => tokens.toLocaleString();
-const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const when = (at: number) => new Date(at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 
 /**
@@ -211,7 +210,7 @@ function WindowView({
           </div>
         )}
         <div className="muted small">
-          Read at {clock(r.measuredAt)}
+          Read at {clockTimeWithSeconds(r.measuredAt)}
           {r.model && <> for {r.model}</>}. Hermes doesn't time its measure; this is when it answered.
         </div>
         {r.model && now && now !== r.model && (
@@ -397,7 +396,7 @@ function HistoryList({ history }: { history: CompactionHistory }) {
     return truncated ? (
       <>
         {cut}
-        <p className="muted small">No compaction is stored in the rows read. Read {clock(history.readAt)}.</p>
+        <p className="muted small">No compaction is stored in the rows read. Read {clockTimeWithSeconds(history.readAt)}.</p>
       </>
     ) : (
       <p className="inspector-note">
@@ -429,7 +428,7 @@ function HistoryList({ history }: { history: CompactionHistory }) {
         )}
       </ol>
       <p className="muted small">
-        {!truncated && <>The model reads {n(history.inContext)} stored messages now, besides the summaries. </>}Read {clock(history.readAt)}.
+        {!truncated && <>The model reads {n(history.inContext)} stored messages now, besides the summaries. </>}Read {clockTimeWithSeconds(history.readAt)}.
       </p>
     </>
   );

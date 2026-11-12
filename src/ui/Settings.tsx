@@ -24,7 +24,7 @@ import type { Chat, ConnectionStatus } from "../hermes/model";
 import type { Route } from "../hermes/pipe";
 import { viaLabel } from "../hermes/routes";
 import { TRANSCRIPT_LIMIT_BYTES } from "../hermes/chatCache";
-import { STATUS_LABEL, arrowSelect, composing, fmtSize, routeLabel } from "./bits";
+import { STATUS_LABEL, arrowSelect, composing, routeLabel } from "./bits";
 import type { AppearanceStore, Fonts } from "./appearance";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { KeyboardSettings } from "./KeyboardSettings";
@@ -76,7 +76,7 @@ import { SignInSettings, type SignInApi } from "./SignInSettings";
 import { EndpointSettings, type EndpointApi } from "./EndpointSettings";
 import { useLocale } from "../i18n/locale";
 import { ProfileSettings, type ProfilesWiring } from "./ProfileSettings";
-import { errorText } from "../hermes/values";
+import { errorText, formatBytes } from "../hermes/values";
 
 type Tab = "general" | "appearance" | "keyboard" | "model" | "providers" | "voice" | "toolsets" | "mcp" | "gateways" | "profiles" | "persona" | "memory" | "skills" | "diagnostics";
 /**
@@ -341,14 +341,20 @@ export function SettingsScreen({
   const [query, setQuery] = useState("");
   // The Memory tab's two parts each say whether they hold an unsaved change; the tab has one while either does.
   const memoryParts = useRef({ entries: false, providers: false });
-  const memoryPart = (part: "entries" | "providers") => (dirty: boolean) => {
-    memoryParts.current[part] = dirty;
-    onMemoryDirty(memoryParts.current.entries || memoryParts.current.providers);
-  };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
-  const onEntriesDirty = useCallback(memoryPart("entries"), [onMemoryDirty]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
-  const onProvidersDirty = useCallback(memoryPart("providers"), [onMemoryDirty]);
+  const onEntriesDirty = useCallback(
+    (dirty: boolean) => {
+      memoryParts.current.entries = dirty;
+      onMemoryDirty(memoryParts.current.entries || memoryParts.current.providers);
+    },
+    [onMemoryDirty],
+  );
+  const onProvidersDirty = useCallback(
+    (dirty: boolean) => {
+      memoryParts.current.providers = dirty;
+      onMemoryDirty(memoryParts.current.entries || memoryParts.current.providers);
+    },
+    [onMemoryDirty],
+  );
   const [tab, setTabNow] = useState<Tab>(
     showTextGeneration ? "model" : showMemory && memory ? "memory" : showDiagnostics && capabilities ? "diagnostics" : showVoice ? "voice" : "general",
   );
@@ -408,19 +414,19 @@ export function SettingsScreen({
     if (!showTextGeneration) return;
     setQuery("");
     setTab("model");
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- open the Model tab only when a new `showTextGeneration` arrives; `setTab` is rebuilt each render, so listing it would switch back to Model on every render
   }, [showTextGeneration]);
   useEffect(() => {
     if (!showMemory || !memory) return;
     setQuery("");
     setTab("memory");
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- open the Memory tab only when a new `showMemory` arrives; `setTab` is rebuilt each render, so listing it (or `memory`) would switch back to Memory on later renders
   }, [showMemory]);
   useEffect(() => {
     if (!showVoice) return;
     setQuery("");
     setTab("voice");
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- open the Voice tab only when a new `showVoice` arrives; `setTab` is rebuilt each render, so listing it would switch back to Voice on every render
   }, [showVoice]);
   useEffect(() => {
     if (!showDiagnostics || !capabilities) return;
@@ -428,7 +434,7 @@ export function SettingsScreen({
     setDiagFocus(showDiagnostics.id ? { id: showDiagnostics.id } : undefined);
     setDiagGroup("server");
     setTab("diagnostics");
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- open Diagnostics only when a new `showDiagnostics` arrives; `setTab` is rebuilt each render, so listing it (or `capabilities`) would switch back to Diagnostics on later renders
   }, [showDiagnostics]);
   /** A tab's note about a feature Hermes lacks opens Diagnostics at it. */
   const toDiagnostics = (id: CapabilityId) =>
@@ -683,14 +689,14 @@ export function SettingsScreen({
             more={
               <p>
                 Hermes Chat keeps a copy of each profile's chat list on this computer. It also keeps a Saved copy of the chats you opened most recently,
-                up to {fmtSize(TRANSCRIPT_LIMIT_BYTES)}; the oldest copies are deleted first when that fills up. Clearing the cache keeps your display
+                up to {formatBytes(TRANSCRIPT_LIMIT_BYTES)}; the oldest copies are deleted first when that fills up. Clearing the cache keeps your display
                 settings.
               </p>
             }
             control={
               !confirmClear && (
                 <>
-                  <span className="set-value">{bytes ? `${fmtSize(bytes)} stored` : "Nothing stored"}</span>
+                  <span className="set-value">{bytes ? `${formatBytes(bytes)} stored` : "Nothing stored"}</span>
                   <button className="btn" disabled={!bytes} onClick={() => setConfirmClear(true)}>
                     <Trash2 size={14} /> Clear local cache
                   </button>
@@ -716,7 +722,7 @@ export function SettingsScreen({
                       setConfirmClear(false);
                     }}
                   >
-                    Clear {fmtSize(bytes)}
+                    Clear {formatBytes(bytes)}
                   </button>
                 </div>
               </div>

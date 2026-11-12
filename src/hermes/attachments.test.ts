@@ -40,8 +40,8 @@ describe("Choosing files to attach", () => {
     const got = await hermes.checkAttachments(["/home/liam/big.png", "/home/liam/huge.iso", "/home/liam/Pictures/rack.png"]);
     expect(got.attachments.map((a) => a.name)).toEqual(["rack.png"]);
     expect(got.refused).toEqual([
-      "big.png is 26.0 MB. Hermes takes images up to 25 MB.",
-      "huge.iso is 300.0 MB. Hermes takes files up to 256 MB.",
+      "big.png is 26 MB. Hermes takes images up to 25 MB.",
+      "huge.iso is 300 MB. Hermes takes files up to 256 MB.",
     ]);
   });
 

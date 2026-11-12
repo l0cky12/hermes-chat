@@ -35,7 +35,7 @@ describe("A tool's result as the chat keeps it", () => {
 
   it("swaps data URLs inside text, and keeps the text around them", () => {
     const text = `Saved it. data:image/jpeg;name=x.jpg;base64,${"/9j/".padEnd(4_000, "Q")} Done.`;
-    expect(toolResultText(text)).toBe("Saved it. [image/jpeg, 3 KB, not kept in the chat] Done.");
+    expect(toolResultText(text)).toBe("Saved it. [image/jpeg, 2.9 KB, not kept in the chat] Done.");
   });
 
   it("keeps what is text, or too small to matter", () => {

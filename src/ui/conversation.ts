@@ -15,10 +15,11 @@
 import { fellBackOf, type HeardTranscript } from "../hermes/sttRoute";
 import type { Delivery } from "../hermes/transport";
 import { type Item, isWaiting } from "../hermes/model";
-import { messageOf, toWav } from "../hermes/voice";
+import { toWav } from "../hermes/voice";
 import { TurnDetector, type TurnEnd, type TurnSettings, isEcho, rms16 } from "../hermes/voiceTurns";
 import { type AudioEnv, CaptureAborted, type Microphone, type Recording, browserEnv, openMicrophone } from "./recorder";
 import type { Speaker } from "./speaker";
+import { errorText } from "../hermes/values";
 
 /** Quiet kept before speech starts, so its first syllable isn't cut off. */
 export const PREROLL_SECONDS = 0.5;
@@ -319,7 +320,7 @@ export class VoiceConversation {
       (e) => {
         if (this.opening === opening) this.opening = undefined;
         if (turn !== this.micTurn || e instanceof CaptureAborted) return;
-        this.pause(messageOf(e));
+        this.pause(errorText(e));
       },
     );
   }
@@ -426,7 +427,7 @@ export class VoiceConversation {
     } catch (e) {
       if (session !== this.session) return;
       // The transport's own errors already say what failed; others ("Not connected to Hermes.") get it said.
-      const why = messageOf(e);
+      const why = errorText(e);
       this.pause(/^(Hermes|This computer) couldn't transcribe/.test(why) ? why : `Hermes couldn't transcribe what you said: ${why}`);
       return;
     }
@@ -466,7 +467,7 @@ export class VoiceConversation {
       delivery = sent.delivery;
       awaiting.itemId = sent.itemId;
     } catch (e) {
-      delivery = { delivery: "unsent", reason: messageOf(e) };
+      delivery = { delivery: "unsent", reason: errorText(e) };
     }
     // What became of it shows even after a pause: it is what Hermes got.
     const why = delivery.delivery === "accepted" ? undefined : delivery.reason;

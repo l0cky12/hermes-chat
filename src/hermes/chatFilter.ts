@@ -4,6 +4,7 @@
 // can't narrow by model, date or state, so those are checked here, on what Hermes answered. When Hermes answered as
 // many chats as it would, the outcome says more may match rather than claiming the list is complete.
 import type { Found, Source } from "./model";
+import { optionalText } from "./values";
 
 /** Which chats, by state: Active, Settled, Archived, or all of them; undefined is Active and Settled, as the list. */
 export type ChatState = "active" | "settled" | "archived" | "all";
@@ -55,15 +56,14 @@ export const isEmptyFilter = (f: ChatFilter) => Object.keys(tidyFilter(f)).lengt
 export function toFilter(v: unknown): ChatFilter {
   if (typeof v !== "object" || v === null || Array.isArray(v)) return {};
   const o = v as Record<string, unknown>;
-  const str = (x: unknown, max: number) => (typeof x === "string" && x.length <= max ? x : undefined);
   const list = (x: unknown) => (Array.isArray(x) ? x.filter((i): i is string => typeof i === "string" && i.length > 0 && i.length <= 100) : undefined);
   return tidyFilter({
-    text: str(o.text, 500),
+    text: optionalText(o.text, 500),
     tags: list(o.tags),
     sources: list(o.sources)?.filter((s): s is Source => SOURCES.includes(s as Source)),
-    model: str(o.model, 200),
-    from: str(o.from, 10),
-    to: str(o.to, 10),
+    model: optionalText(o.model, 200),
+    from: optionalText(o.from, 10),
+    to: optionalText(o.to, 10),
     state: STATES.find((s) => s === o.state),
   });
 }

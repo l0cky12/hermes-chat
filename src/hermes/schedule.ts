@@ -262,7 +262,7 @@ const WEEKDAY: Record<string, string> = {
 const DAYSPEC: Record<string, string> = { day: "*", daily: "*", everyday: "*", weekday: "1-5", weekdays: "1-5", weekend: "0,6", weekends: "0,6" };
 
 /** `_parse_clock_time`: `[hour, minute]` in 24 hours, or undefined. */
-function clockTime(text: string): [number, number] | undefined {
+function parseClock(text: string): [number, number] | undefined {
   const t = text.trim().toLowerCase().replace(/ /g, "");
   if (t === "noon" || t === "midday") return [12, 0];
   if (t === "midnight") return [0, 0];
@@ -301,7 +301,7 @@ function naturalCron(rest: string): string | undefined {
   let time = tokens.slice(idx);
   if (time[0] === "at") time = time.slice(1);
   if (!time.length) return undefined;
-  const at = clockTime(time.join(" "));
+  const at = parseClock(time.join(" "));
   return at && `${at[1]} ${at[0]} * * ${dow}`;
 }
 

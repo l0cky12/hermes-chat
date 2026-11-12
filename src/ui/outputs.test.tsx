@@ -3,7 +3,7 @@
 // does: the files Hermes's tools wrote, for a chat, a project or the profile, and where each came from.
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-// @ts-expect-error The app has no Node types; the tests run in Node. (Vitest empties a CSS import, ?raw included.)
+// Vitest empties a CSS import, ?raw included.
 import { readFileSync } from "node:fs";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, SANDBOX_NOT_FOUND, row, type TranscriptMessage } from "../hermes/fakeHermes";
@@ -96,7 +96,7 @@ describe("Outputs", () => {
     expect(document.querySelector(".out-table img")).toBeNull();
     const rows = [...document.querySelectorAll(".out-table tbody tr")];
     expect(rows[1].textContent).toContain("Version 2 of 2");
-    expect(rows[1].textContent).toContain("4 KB");
+    expect(rows[1].textContent).toContain("4.0 KB");
     expect(rows[2].textContent).toContain("Version 1 of 2");
     expect(rows[1].textContent).toContain("Quarterly report");
     expect(rows[1].textContent).toContain("Written by write_file");

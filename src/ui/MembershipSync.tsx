@@ -7,9 +7,8 @@ import type { Link } from "../hermes/membership";
 import type { MembershipSync, Project } from "../hermes/projects";
 import { Spinner } from "./bits";
 import { useModal } from "./modal";
-import { errorText, plural } from "../hermes/values";
+import { clockTime, errorText, plural } from "../hermes/values";
 
-const clock = (at: number) => new Date(at).toLocaleTimeString(undefined, { timeStyle: "short" });
 
 /** The membership sync wants the owner: a move to preview, or a conflict to settle. */
 export function needsOwner(m: MembershipSync): boolean {
@@ -39,7 +38,7 @@ export function membershipLine(m: MembershipSync): string {
     case "syncing":
       return "Syncing which chats are in each project with Hermes…";
     case "synced":
-      return `Hermes keeps which chats are in it, so every computer shows the same.${m.at ? ` Synced ${clock(m.at)}.` : ""}`;
+      return `Hermes keeps which chats are in it, so every computer shows the same.${m.at ? ` Synced ${clockTime(m.at)}.` : ""}`;
     case "pending":
       return `Hermes keeps which chats are in it. ${tail || "Waiting to sync."}`;
     case "stranded":
@@ -202,7 +201,7 @@ export function MembershipDialog({
                 <li key={o.opId}>
                   <span>
                     You {o.member ? "put" : "took"} <b>{chatName(o.chatId)}</b> {o.member ? "in" : "out of"} <b>{projectName(o.projectId)}</b>
-                    {o.at ? ` at ${clock(o.at)}` : ""}. On Hermes it is {o.conflict!.serverMember ? "in" : "out of"} it.
+                    {o.at ? ` at ${clockTime(o.at)}` : ""}. On Hermes it is {o.conflict!.serverMember ? "in" : "out of"} it.
                   </span>
                   <span className="confirm-actions">
                     <button className="btn" onClick={() => onUseHermes(o.opId)}>

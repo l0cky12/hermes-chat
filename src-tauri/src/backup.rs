@@ -3,7 +3,7 @@
 //! the owner picks, or into the app's own recovery folder, and reads a zip the owner picked, refusing anything that
 //! isn't a small, flat archive of JSON files: entries are stored, never compressed, named without folders, and read
 //! no further than the limits below whatever their headers claim. Nothing in an archive is ever run or written out.
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -57,42 +57,24 @@ fn check_entries(entries: &[Entry]) -> Result<(), String> {
     Ok(())
 }
 
-/// A new private temporary file beside `path`, made with O_EXCL (CREATE_NEW on Windows): it never opens a file or symlink already there, so
-/// nothing planted in the folder can redirect the write or keep its own permissions.
-fn create_temp(path: &Path) -> io::Result<(PathBuf, fs::File)> {
-    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let name = path.file_name().map_or("backup".into(), |n| n.to_string_lossy());
-    for n in 0..100 {
-        let tmp = dir.join(format!(".{name}.{}.{n}.tmp", std::process::id()));
-        match crate::defaults_file::owner_only(OpenOptions::new().write(true).create_new(true)).open(&tmp) {
-            Ok(f) => return Ok((tmp, f)),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
-        }
-    }
-    Err(io::Error::new(io::ErrorKind::AlreadyExists, "no free temporary name beside it"))
-}
-
-/// Writes `entries` as a zip at `path`: to a private temporary file beside it, renamed over it once complete, so a
-/// failure leaves whatever was there.
+/// Writes `entries` as a zip at `path`, whole and private (`private_file::write_with`), so a failure leaves whatever
+/// was there.
 pub fn write_zip(path: &Path, entries: &[Entry]) -> Result<(), String> {
     check_entries(entries)?;
-    let (tmp, file) = create_temp(path).map_err(|e| format!("Couldn't write the backup: {e}"))?;
-    let write = move || -> zip::result::ZipResult<()> {
-        let mut zip = zip::ZipWriter::new(file);
-        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored).unix_permissions(0o600);
-        for e in entries {
-            zip.start_file(e.name.as_str(), options)?;
-            zip.write_all(e.text.as_bytes())?;
-        }
-        zip.finish()?.sync_all()?;
-        Ok(())
-    };
-    let done = write().map_err(|e| e.to_string()).and_then(|()| fs::rename(&tmp, path).map_err(|e| e.to_string()));
-    if done.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    done.map_err(|e| format!("Couldn't write the backup: {e}"))
+    crate::private_file::write_with(path, |file| {
+        let write = || -> zip::result::ZipResult<()> {
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored).unix_permissions(0o600);
+            for e in entries {
+                zip.start_file(e.name.as_str(), options)?;
+                zip.write_all(e.text.as_bytes())?;
+            }
+            zip.finish()?;
+            Ok(())
+        };
+        write().map_err(io::Error::other)
+    })
+    .map_err(|e| format!("Couldn't write the backup: {e}"))
 }
 
 /// The JSON files in the zip at `path`, read whole and checked: see the module comment for what is refused.

@@ -68,7 +68,7 @@ def read_update(r, bpp=4):
     seen = {}
     i = 0
     while n == 0xFFFF or i < n:
-        x, y, w, h, enc = struct.unpack(">HHHHi", r.take(12))
+        _x, _y, w, h, enc = struct.unpack(">HHHHi", r.take(12))
         i += 1
         seen[enc] = seen.get(enc, 0) + 1
         if enc == LAST_RECT:

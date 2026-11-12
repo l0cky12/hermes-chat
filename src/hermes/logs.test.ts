@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LogBuffer, LogFollower, TAIL, bundleText, clean, levelOf, note, passes, redact, since, visible, type Entry } from "./logs";
+import { LogBuffer, LogFollower, TAIL, bundleText, clean, levelOf, note, passes, since, visible, type Entry } from "./logs";
 import { RestError } from "./pipe";
 
 afterEach(() => vi.useRealTimers());
@@ -32,57 +32,6 @@ const marks = (b: LogBuffer) => b.getSnapshot().entries.filter((e) => e.kind ===
 async function poll() {
   await vi.advanceTimersByTimeAsync(1000);
 }
-
-describe("redact", () => {
-  // Representative secret shapes, each with the part that must not survive.
-  const seeded: [string, string][] = [
-    ["Authorization: Bearer abcdefgh12345678secret", "abcdefgh12345678secret"],
-    ['headers={"Authorization": "Basic dXNlcjpwYXNz"}', "dXNlcjpwYXNz"],
-    ["sent Bearer eyJhbGciOi.eyJzdWIiOiIx.c2lnbmF0dXJl to the API", "c2lnbmF0dXJl"],
-    ["Cookie: hermes_session=s3cr3tcookie; other=1", "s3cr3tcookie"],
-    ["Set-Cookie: sid=abc123def; HttpOnly", "abc123def"],
-    ["OPENAI_API_KEY=sk-proj-AbCdEfGhIjKlMnOpQrStUv", "AbCdEfGhIjKlMnOpQrStUv"],
-    ["using key sk-ant-api03-ZYXWVUTSRQPONMLKJIHG for anthropic", "ZYXWVUTSRQPONMLKJIHG"],
-    ["openrouter sk-or-v1-0123456789abcdef0123", "0123456789abcdef0123"],
-    ["token ghp_0123456789abcdefghijABCDEFGHIJ", "ghp_0123456789abcdefghijABCDEFGHIJ"],
-    ["aws AKIAIOSFODNN7EXAMPLE in env", "AKIAIOSFODNN7EXAMPLE"],
-    ["google AIzaSyA-0123456789abcdefghijklmnopqrstu", "AIzaSyA-0123456789abcdefghijklmnopqrstu"],
-    ["telegram 123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw0 bot", "AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw0"],
-    ["slack xoxb-1234567890-abcdefghij", "xoxb-1234567890-abcdefghij"],
-    ["hf hf_abcdefghijklmnopqrstuvwxyz", "hf_abcdefghijklmnopqrstuvwxyz"],
-    ["GET https://user:hunter2@example.com/x", "hunter2"],
-    ["GET https://sk_abcdef123456@example.com/x", "sk_abcdef123456"],
-    ["GET https://example.com/x?auth=abc123&y=1", "abc123"],
-    ["GET https://example.com/api/display/ws?display_ticket=tkt456", "tkt456"],
-    ["GET https://user:p@ss@example.com/x", "ss@example"],
-    ["ssh://liam:hunter2@hermes", "hunter2"],
-    ['{"api_key": "plain-value-123", "model": "x"}', "plain-value-123"],
-    ["password=hunter2 user=bob", "hunter2"],
-    ["DISCORD_BOT_TOKEN: 'abc.def.ghi'", "abc.def.ghi"],
-    ["client_secret=xyz789&grant=1", "xyz789"],
-    ["-----BEGIN RSA PRIVATE KEY----- MIIEpAIBAAKCAQEA -----END RSA PRIVATE KEY-----", "MIIEpAIBAAKCAQEA"],
-    ['Authorization: Digest username="alice", nonce="abc123", response="secretDigest"', "secretDigest"],
-    ['{"headers": {"Authorization": "Digest username=\\"alice\\", response=\\"secretDigest\\""}}', "secretDigest"],
-    ["Cookie: a=1; session=\"quoted\"; token=afterQuote", "afterQuote"],
-    ["MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj", "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj"],
-  ];
-  it.each(seeded)("hides the secret in %s", (line, secret) => {
-    const r = redact(line);
-    expect(r.text).not.toContain(secret);
-    expect(r.text).toContain("[redacted");
-    expect(r.kinds.length).toBeGreaterThan(0);
-  });
-
-  it("keeps what isn't a secret, and doesn't redact twice", () => {
-    expect(redact("2026-11-04 10:00:00 INFO agent: 1200 tokens used, max_tokens reached").text).toBe("2026-11-04 10:00:00 INFO agent: 1200 tokens used, max_tokens reached");
-    expect(redact("Connection to ssh://liam@hermes is up").text).toBe("Connection to ssh://liam@hermes is up");
-    expect(redact('h={"Authorization": "Basic dXNlcjpwYXNz", "Host": "x"}').text).toBe('h={"Authorization": [redacted], "Host": "x"}');
-    const r = redact("Authorization: Bearer abcdefgh12345678");
-    expect(r.text).toBe("Authorization: [redacted]");
-    expect(r.kinds).toEqual(["authorization header"]);
-    expect(redact("api_key=sk-proj-AbCdEfGhIjKlMnOpQrStUv").text).toBe("api_key=[redacted key]");
-  });
-});
 
 describe("visible", () => {
   it("writes out terminal escapes, other controls and bidi overrides, and keeps tabs and newlines", () => {

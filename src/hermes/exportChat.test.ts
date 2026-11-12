@@ -312,18 +312,18 @@ describe("Flagging likely secrets in an export", () => {
     const p = preview();
     expect(p.secrets).toEqual([
       { text: key, kind: "API key", times: 2, redacted: true },
-      { text: "Pa55w0rd!", kind: "password in a link", times: 1, redacted: true },
+      { text: "app:Pa55w0rd!", kind: "password in a link", times: 1, redacted: true },
       { text: pem, kind: "private key", times: 1, redacted: true },
     ]);
     for (const s of [key, "Pa55w0rd!", "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ", "BEGIN OPENSSH"]) expect(p.text).not.toContain(s);
-    expect(p.text).toContain("My key is [redacted], and the db is postgres://app:[redacted]@db.internal:5432/app");
+    expect(p.text).toContain("My key is [redacted], and the db is postgres://[redacted]@db.internal:5432/app");
     expect(p.text).toContain("(4 places in this file)");
   });
 
   it("keeps a flagged text the owner says isn't secret", () => {
-    const p = preview({ kept: new Set(["Pa55w0rd!"]) });
+    const p = preview({ kept: new Set(["app:Pa55w0rd!"]) });
     expect(p.text).toContain("postgres://app:Pa55w0rd!@db.internal");
-    expect(p.secrets.find((s) => s.text === "Pa55w0rd!")!.redacted).toBe(false);
+    expect(p.secrets.find((s) => s.text === "app:Pa55w0rd!")!.redacted).toBe(false);
     expect(p.text).not.toContain(key);
   });
 

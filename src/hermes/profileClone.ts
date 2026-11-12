@@ -20,7 +20,7 @@ import type { RestMethod } from "./pipe";
 import { answered, deadline, sameSoul, type PersonaApi, type Soul } from "./persona";
 import { nameProblem, readProfileRows, type ProfileRow } from "./profiles";
 import type { SkillRow, SkillsApi } from "./skills";
-import { errorText, isObj } from "./values";
+import { errorText, isObj, nonEmptyText } from "./values";
 
 /** What the default (fresh) clone can carry over, each picked or not. */
 export type Part = "persona" | "model" | "description" | "skills";
@@ -84,8 +84,6 @@ export type Outcome =
 
 /** How long each call may go unanswered. A create seeds skills in a subprocess and checks the model, so it is slow. */
 export const CLONE_TIMEOUTS = { readMs: 30_000, createMs: 120_000, deleteMs: 60_000 };
-
-const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
 
 const modelOf = (p: ProfileRow) => (p.model && p.provider ? { provider: p.provider, model: p.model } : undefined);
 
@@ -324,7 +322,7 @@ export class ProfileCloneApi {
     const model = modelOf(source.profile);
     if (!go.model) put("model", "left", model ? "Not picked: Hermes's default model setting went in" : "The source names no model of its own");
     else if (!full && answer?.model_set === false)
-      put("model", "failed", `Hermes didn't set it${str(answer.model_error) ? `: ${str(answer.model_error)!.replace(/([^.!?])$/, "$1.")}` : "."} Pick one in Settings → Model on the new profile.`);
+      put("model", "failed", `Hermes didn't set it${nonEmptyText(answer.model_error) ? `: ${nonEmptyText(answer.model_error)!.replace(/([^.!?])$/, "$1.")}` : "."} Pick one in Settings → Model on the new profile.`);
     else if (!row) put("model", "unchecked", problem ?? "");
     else if (row.model === model?.model && row.provider === model?.provider) put("model", "copied", `${row.model} (${row.provider})`);
     else put("model", "failed", `It reads back as ${row.model ?? "none"} (${row.provider ?? "no provider"}). Pick one in Settings → Model on the new profile.`);

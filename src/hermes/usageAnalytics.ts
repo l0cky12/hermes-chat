@@ -13,7 +13,7 @@
 import { chatUsageOf, costLabel, tokens as shortTokens, usd, type ChatUsage, type Cost } from "./usage";
 import { instantsOf, isoIn, knownZone } from "./schedule";
 import { statusOf } from "./pipe";
-import { errorText } from "./values";
+import { errorText, nonEmptyText } from "./values";
 
 const DAY = 86_400_000;
 /** Dashboard REST caps `GET /api/sessions` pages at 100. */
@@ -25,7 +25,6 @@ export const MAX_SEGMENT_READS = 300;
 
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined);
 const obj = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined);
-const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
 
 /** How the app reads Hermes for analytics. Every call names the profile it reads. */
 export type UsageIo = {
@@ -167,20 +166,20 @@ const hasUsageFields = (r: Record<string, unknown>) => "input_tokens" in r || "o
  */
 export function chatOfRow(profile: string, row: unknown, readAt: number): { chat: UsageChat; others: string[] } | undefined {
   const r = obj(row);
-  const id = r && str(r.id);
+  const id = r && nonEmptyText(r.id);
   const started = r && num(r.started_at);
   if (!r || !id || started === undefined) return undefined;
-  const root = str(r._lineage_root_id) ?? id;
+  const root = nonEmptyText(r._lineage_root_id) ?? id;
   const lineage = Array.isArray(r._lineage_ids) ? r._lineage_ids.filter((x): x is string => typeof x === "string") : [];
   const others = lineage.filter((x) => x !== root);
   const chat = withSegments({
     profile,
     id,
-    title: str(r.title) ?? str(r.preview)?.slice(0, 80) ?? id,
-    source: str(r.source) ?? "unknown",
+    title: nonEmptyText(r.title) ?? nonEmptyText(r.preview)?.slice(0, 80) ?? id,
+    source: nonEmptyText(r.source) ?? "unknown",
     startedAt: started * 1000,
-    model: str(r.model),
-    provider: str(r.billing_provider),
+    model: nonEmptyText(r.model),
+    provider: nonEmptyText(r.billing_provider),
     archived: !!r.archived,
     pinned: !!r.pinned,
     segments: [{ id: root, usage: chatUsageOf(r, readAt) }],
@@ -195,7 +194,7 @@ export function hermesTotalsOf(v: unknown, days: number): HermesTotals | undefin
   if (!r || !t) return undefined;
   const helpers = (Array.isArray(r.by_task) ? r.by_task : []).flatMap((h): Helper[] => {
     const o = obj(h);
-    const task = o && str(o.task);
+    const task = o && nonEmptyText(o.task);
     if (!o || !task) return [];
     return [
       {

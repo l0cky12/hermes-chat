@@ -31,7 +31,7 @@
 // and reported as saved only once a read afterwards shows it.
 
 import { RestError, type ToolsetGuards } from "./pipe";
-import { errorText } from "./values";
+import { errorText, textOrEmpty } from "./values";
 
 export type { ToolsetGuards };
 
@@ -132,7 +132,6 @@ export const changeableName = (name: string) => SAFE_NAME.test(name) && name !==
 
 type Json = Record<string, unknown>;
 const obj = (v: unknown): Json => (v && typeof v === "object" && !Array.isArray(v) ? (v as Json) : {});
-const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
 /** `_POST_SETUP_INSTALLED` at `bf0203a`: the installs the toggle route starts itself when they aren't done. */
 const INSTALL_ON_ENABLE = new Set(["cua_driver"]);
@@ -151,7 +150,7 @@ export function failureOf(e: unknown): Failure {
   let reason = e.detail;
   try {
     const d = JSON.parse(e.body).detail;
-    if (Array.isArray(d)) reason = d.map((x) => str(obj(x).msg)).filter(Boolean).join("; ") || reason;
+    if (Array.isArray(d)) reason = d.map((x) => textOrEmpty(obj(x).msg)).filter(Boolean).join("; ") || reason;
   } catch {
     // Not JSON, or cut short by the relay: the text as it came.
   }
@@ -167,16 +166,16 @@ function rowsFrom(res: unknown): Toolset[] {
   if (!Array.isArray(res)) throw new Error("Hermes answered with something other than a toolset list.");
   return res.flatMap((r): Toolset[] => {
     const row = obj(r);
-    const name = str(row.name);
+    const name = textOrEmpty(row.name);
     if (!name || typeof row.enabled !== "boolean") return [];
-    const platform = str(row.platform) || "cli";
+    const platform = textOrEmpty(row.platform) || "cli";
     return [
       {
         name,
-        label: str(row.label) || name,
-        description: str(row.description),
+        label: textOrEmpty(row.label) || name,
+        description: textOrEmpty(row.description),
         platform,
-        platformLabel: str(row.platform_label) || platform,
+        platformLabel: textOrEmpty(row.platform_label) || platform,
         enabled: row.enabled,
         // Older servers may not say; then it isn't claimed to need setup.
         configured: row.configured !== false,
@@ -230,7 +229,7 @@ export class ToolsetsApi {
    */
   async chatTools(profile: string, runtimeId: string): Promise<ChatTools> {
     if (!this.rpc) return { kind: "unsupported", reason: "This app can't ask Hermes about one chat here." };
-    const served = str(obj(await this.rest("GET", "api/profiles/active")).current);
+    const served = textOrEmpty(obj(await this.rest("GET", "api/profiles/active")).current);
     if (served !== profile)
       return {
         kind: "unsupported",
@@ -246,7 +245,7 @@ export class ToolsetsApi {
       throw e;
     }
     if (!Array.isArray(shown.sections)) throw new Error("Hermes answered with something other than a tool list.");
-    const tools = new Set(shown.sections.flatMap((s) => (Array.isArray(obj(s).tools) ? (obj(s).tools as unknown[]) : [])).map((t) => str(obj(t).name)).filter(Boolean));
+    const tools = new Set(shown.sections.flatMap((s) => (Array.isArray(obj(s).tools) ? (obj(s).tools as unknown[]) : [])).map((t) => textOrEmpty(obj(t).name)).filter(Boolean));
     return { kind: "read", tools, readAt: Date.now() };
   }
 
@@ -316,7 +315,7 @@ export class ToolsetsApi {
 
   private async providers(profile: string, name: string): Promise<{ rows: Json[]; active: string }> {
     const res = obj(await this.rest("GET", this.path(profile, name, "/config")));
-    return { rows: Array.isArray(res.providers) ? res.providers.map(obj) : [], active: str(res.active_provider) };
+    return { rows: Array.isArray(res.providers) ? res.providers.map(obj) : [], active: textOrEmpty(res.active_provider) };
   }
 
   /**
@@ -335,11 +334,11 @@ export class ToolsetsApi {
         // Hermes can have several providers active at once (web's search and extract each pick one), so every one
         // in use is checked; the none-ready rule is only for when none is active.
         const flagged = read.rows.filter((p) => p.is_active === true);
-        const active = flagged.length ? flagged : read.rows.filter((p) => read.active && str(p.name) === read.active);
+        const active = flagged.length ? flagged : read.rows.filter((p) => read.active && textOrEmpty(p.name) === read.active);
         if (active.length) {
-          const bad = active.filter((p) => READINESS[str(p.status)]);
-          if (bad.length === 1) out[name] = `Its provider, ${str(bad[0].name)}, ${READINESS[str(bad[0].status)]}.`;
-          else if (bad.length) out[name] = `Its providers in use need setup: ${bad.map((p) => `${str(p.name)} ${READINESS[str(p.status)]}`).join("; ")}.`;
+          const bad = active.filter((p) => READINESS[textOrEmpty(p.status)]);
+          if (bad.length === 1) out[name] = `Its provider, ${textOrEmpty(bad[0].name)}, ${READINESS[textOrEmpty(bad[0].status)]}.`;
+          else if (bad.length) out[name] = `Its providers in use need setup: ${bad.map((p) => `${textOrEmpty(p.name)} ${READINESS[textOrEmpty(p.status)]}`).join("; ")}.`;
         } else if (!read.rows.some((p) => p.status === "ready")) {
           out[name] = "None of its providers is ready on the server.";
         }
@@ -365,7 +364,7 @@ export class ToolsetsApi {
       this.guards(profile),
       enabled
         ? this.providers(profile, t.name).then(
-            ({ rows }) => [...new Set(rows.filter((p) => INSTALL_ON_ENABLE.has(str(p.post_setup)) && p.status === "needs_setup").map((p) => str(p.post_setup)))],
+            ({ rows }) => [...new Set(rows.filter((p) => INSTALL_ON_ENABLE.has(textOrEmpty(p.post_setup)) && p.status === "needs_setup").map((p) => textOrEmpty(p.post_setup)))],
             () => undefined,
           )
         : Promise.resolve([] as string[]),
@@ -455,7 +454,7 @@ export class ToolsetsApi {
     if (after instanceof Error) return { kind: "unknown", reason: `Hermes took the change, but reading it back failed: ${after.message}` };
     const now = after.toolsets.find((t) => t.name === name);
     if (answer.ok !== true || now?.enabled !== enabled) return { kind: "mismatch", list: after };
-    const installing = str(answer.post_setup_started);
+    const installing = textOrEmpty(answer.post_setup_started);
     return { kind: "saved", list: after, ...(installing ? { installing } : {}), ...(await this.clearedBySave(profile, row, had)) };
   }
 

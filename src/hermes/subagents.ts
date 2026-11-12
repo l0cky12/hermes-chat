@@ -1,3 +1,4 @@
+import { nonBlankText } from "./values";
 // The Subagents a chat's reply started (Hermes's `delegate_task`), as one tree per chat on this connection (ADR 0072).
 // Hermes reports them two ways: `subagent.*` events on the chat's session while they run
 // (`tui_gateway/contracts/events.py` SubagentEventPayload), and `subagent.list`, its live roster plus recently failed
@@ -71,7 +72,6 @@ export type SubagentTree = { subagents: Subagent[]; sync: SubagentSync };
 export const ACTIVITY_MAX = 200;
 export const SUBAGENTS_MAX = 100;
 
-const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : undefined);
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 const int = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : undefined);
 const obj = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined);
@@ -86,16 +86,16 @@ const secondsAt = (v: unknown) => {
  * `delegate_task` call and place in it, and can't be steered or stopped, since Hermes has no id to take.
  */
 function idOf(p: Record<string, unknown>): SubagentId | undefined {
-  const id = str(p.subagent_id);
+  const id = nonBlankText(p.subagent_id);
   if (id) return id as SubagentId;
   const index = int(p.task_index);
-  return index === undefined ? undefined : (`task:${str(p.delegation_id) ?? ""}:${index}` as SubagentId);
+  return index === undefined ? undefined : (`task:${nonBlankText(p.delegation_id) ?? ""}:${index}` as SubagentId);
 }
 export const isSteerable = (s: Subagent) => !s.stored && !s.id.startsWith("task:");
 
 /** Hermes's `status`, as this app's state; `fallback` for a status Hermes doesn't define. */
 function stateOf(v: unknown, fallback: SubagentState): SubagentState {
-  const s = str(v)?.toLowerCase();
+  const s = nonBlankText(v)?.toLowerCase();
   return s && HERMES_STATES.has(s) ? (s as SubagentState) : fallback;
 }
 
@@ -103,14 +103,14 @@ function stateOf(v: unknown, fallback: SubagentState): SubagentState {
 type Report = Partial<Omit<Subagent, "id" | "activity">> & { id: SubagentId; activity?: SubagentActivity };
 
 function identity(p: Record<string, unknown>, id: SubagentId): Report {
-  const parent = str(p.parent_id);
+  const parent = nonBlankText(p.parent_id);
   return {
     id,
     ...(parent && { parent: parent as SubagentId }),
     ...(int(p.depth) !== undefined && { depth: int(p.depth) }),
-    ...(str(p.goal) && { goal: str(p.goal)!.trim() }),
-    ...(str(p.model) && { model: str(p.model) }),
-    ...(str(p.delegation_id) && { delegationId: str(p.delegation_id) }),
+    ...(nonBlankText(p.goal) && { goal: nonBlankText(p.goal)!.trim() }),
+    ...(nonBlankText(p.model) && { model: nonBlankText(p.model) }),
+    ...(nonBlankText(p.delegation_id) && { delegationId: nonBlankText(p.delegation_id) }),
     ...(int(p.task_index) !== undefined && { taskIndex: int(p.task_index) }),
     ...(int(p.task_count) !== undefined && { taskCount: int(p.task_count) }),
     ...(int(p.tool_count) !== undefined && { toolCount: int(p.tool_count) }),
@@ -132,8 +132,8 @@ function eventReport(type: string, payload: unknown, at: number): Report | undef
     case "subagent.progress":
       return { ...base, state: "running" };
     case "subagent.tool": {
-      const tool = str(p.tool_name) ?? "tool";
-      const preview = str(p.tool_preview) ?? str(p.text);
+      const tool = nonBlankText(p.tool_name) ?? "tool";
+      const preview = nonBlankText(p.tool_preview) ?? nonBlankText(p.text);
       const seq = int(p.tool_count);
       return {
         ...base,
@@ -150,7 +150,7 @@ function eventReport(type: string, payload: unknown, at: number): Report | undef
       // A completion without a status Hermes defines says it ended, not how.
       const reported = stateOf(p.status, "ended");
       const state = hasEnded(reported) ? reported : "ended";
-      const summary = str(p.summary)?.trim();
+      const summary = nonBlankText(p.summary)?.trim();
       return {
         ...base,
         state,
@@ -283,9 +283,9 @@ export function onRoster(tree: SubagentTree | undefined, result: unknown, at: nu
   const failed = Array.isArray(res?.delegations) ? res.delegations.map(obj).filter((r) => !!r) : [];
   const listed: Report[] = [];
   for (const row of rows) {
-    const id = str(row.subagent_id);
+    const id = nonBlankText(row.subagent_id);
     if (!id) continue;
-    const last = str(row.last_tool);
+    const last = nonBlankText(row.last_tool);
     const was = tree?.subagents.find((s) => s.id === id);
     // Only the tool's name: it replaces what the events said only when it is news, by Hermes's count of its tools.
     const newer = !was?.lastActivity || (int(row.tool_count) ?? 0) > (was.toolCount ?? 0);
@@ -301,11 +301,11 @@ export function onRoster(tree: SubagentTree | undefined, result: unknown, at: nu
   const failures: Report[] = [];
   for (const row of failed) {
     const index = int(row.task_index);
-    const delegationId = str(row.delegation_id);
+    const delegationId = nonBlankText(row.delegation_id);
     // The live subagent this failure was, when both name its place in the call; otherwise it stands on its own. The
     // roster's live rows carry no task index, so a subagent known only from them never matches.
     const match = delegationId && index !== undefined && known.find((s) => s.delegationId === delegationId && s.taskIndex === index);
-    const error = str(row.error)?.trim();
+    const error = nonBlankText(row.error)?.trim();
     const ended = secondsAt(row.completed_at) ?? at;
     failures.push({
       ...(match ? { id: match.id } : { ...identity(row, `task:${delegationId ?? ""}:${index ?? 0}` as SubagentId), stored: true }),

@@ -70,7 +70,7 @@ import type { UsageIo } from "./usageAnalytics";
 import { compactResultOf, compactionsOf, readingOf, type CompactResult, type CompactionHistory, type CompactionRow, type ContextReading } from "./contextInspect";
 import { chatUsageOf, countersOf, newerChatUsage, newerListedUsage, replyUsage, ZERO_COUNTERS, type ReplyUsage, type UsageCounters } from "./usage";
 import { toolResultText } from "./toolResult";
-import { num, str } from "./chatCache";
+import { num } from "./chatCache";
 import { onLost, onRoster, onSubagentEvent, onUnchecked, parseOutput, type SubagentId, type SubagentOutput } from "./subagents";
 import {
   BRANCH_KEY_TTL_MS,
@@ -90,7 +90,7 @@ import {
   type StoredBranchRow,
 } from "./branch";
 import { cannotResend, laterOf, replayBlocked, resendText, replayTarget, splitRefs, turnAt, variantRoot, withRefs, withoutMarkers, type ReplayKind, type ReplayPreview } from "./replay";
-import { errorText } from "./values";
+import { errorText, formatBytes, optionalText } from "./values";
 
 /**
  * The `source` this app stamps on chats it starts. Legacy `session.create` stores any string as-is, but the gateway
@@ -109,9 +109,6 @@ const SCREEN_RELEASE_MS = 1_500;
 /** Waits before each try to reconnect a dropped connection. When the last try fails the app is Offline until the
  * owner asks to reconnect, so a wrong password isn't retried for ever. */
 const RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
-/** A reconnect counts as a failed try until its connection has stayed up this long, so a server that closes each
- * connection just after it is ready is retried ever more slowly, then not at all (ADR 0148). */
-const STEADY_MS = 10_000;
 /** After a launch that couldn't connect, once those tries are spent, how often the app tries again while it is open,
  * Offline in between, until it connects or Hermes turns the password down (#269). */
 const LAUNCH_RETRY_MS = 60_000;
@@ -171,7 +168,7 @@ const MiB = 1024 * 1024;
 export const LIMITS = { image: { bytes: 25 * MiB, what: "images" }, file: { bytes: 256 * MiB, what: "files" } };
 /** What the owner is told about a file over its limit. */
 export const overLimitNote = (name: string, size: number, limit: (typeof LIMITS)[keyof typeof LIMITS]) =>
-  `${name} is ${(size / MiB).toFixed(1)} MB. Hermes takes ${limit.what} up to ${limit.bytes / MiB} MB.`;
+  `${name} is ${formatBytes(size)}. Hermes takes ${limit.what} up to ${formatBytes(limit.bytes)}.`;
 /** The images Hermes looks at (`cli._IMAGE_EXTENSIONS`); anything else is staged as a file. */
 const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp)$/i;
 /** What the official desktop app asks when an image is sent with no text. */
@@ -319,9 +316,9 @@ type TranscriptMessage = {
 const transcriptMessages = (raw: unknown): TranscriptMessage[] =>
   (Array.isArray(raw) ? raw : []).flatMap((v): TranscriptMessage[] => {
     const m = obj(v);
-    const role = str(m?.role);
+    const role = optionalText(m?.role);
     if (!m || role === undefined) return [];
-    const [text, reasoning, name, context, tool_call_id, display_kind] = [m.text, m.reasoning, m.name, m.context, m.tool_call_id, m.display_kind].map(str);
+    const [text, reasoning, name, context, tool_call_id, display_kind] = [m.text, m.reasoning, m.name, m.context, m.tool_call_id, m.display_kind].map((v) => optionalText(v));
     return [{ role, text, reasoning, content: m.content, name, context, args: obj(m.args), tool_call_id, timestamp: num(m.timestamp), row_id: num(m.row_id), display_kind }];
   });
 
@@ -790,10 +787,9 @@ export class Hermes {
   /** The newest stored row each chat is known to have, from its history and the turns sent from here. A message that
    * may have reached Hermes is looked for only past the row its chat had when it went out. */
   private knownRow = new PerProfile<number>();
-  /** The list sync under way, and how it settles `done`. */
-  private syncing?: { done: Promise<Error | undefined>; report: (outcome: Error | undefined | Promise<Error | undefined>) => void };
-  /** Syncs `detach` ended, each waiting to report the outcome of the next sync to begin, or that none can. */
-  private abandonedSyncs: ((next: Error | Promise<Error | undefined>) => void)[] = [];
+  /** The list sync under way. `next`, once `detach` has ended it: the next sync to begin, whose outcome it reports. */
+  private syncing?: { done: Promise<Error | undefined>; next?: Promise<Error | undefined> };
+  private abandonedSyncs: ((next: Promise<Error | undefined>) => void)[] = [];
   private syncAgain = false;
   private background = new Set<Promise<unknown>>();
   /** When the shown profile's list last synced on this connection. */
@@ -3790,12 +3786,8 @@ export class Hermes {
       this.syncAgain = true;
       return this.syncing.done;
     }
-    let report!: (outcome: Error | undefined | Promise<Error | undefined>) => void;
-    const sync = { done: new Promise<Error | undefined>((resolve) => (report = resolve)), report };
     const current = () => this.syncing === sync;
-    this.syncing = sync;
-    for (const reportNext of this.abandonedSyncs.splice(0)) reportNext(sync.done);
-    const passes = (async (): Promise<Error | undefined> => {
+    const passes = async (): Promise<Error | undefined> => {
       let failure: Error | undefined;
       try {
         do {
@@ -3805,30 +3797,19 @@ export class Hermes {
       } finally {
         if (current()) this.syncing = undefined;
       }
-      return failure;
-    })();
-    // Once `detach` has ended the sync, `done` already follows the next one, and this changes nothing.
-    const settled = () => report(passes);
-    passes.then(settled, settled);
-    this.track(passes);
+      return sync.next ?? failure;
+    };
+    const sync: { done: Promise<Error | undefined>; next?: Promise<Error | undefined> } = { done: passes() };
+    this.syncing = sync;
+    for (const report of this.abandonedSyncs.splice(0)) report(sync.done);
+    this.track(sync.done);
     return sync.done;
   }
 
-  /** Ends the sync under way: its outcome becomes the next sync's, while its dropped read runs on unheeded (#440). */
   private abandonListSync() {
-    this.syncing?.report(new Promise((reportNext) => this.abandonedSyncs.push(reportNext)));
+    if (this.syncing) this.syncing.next = new Promise((report) => this.abandonedSyncs.push(report));
     this.syncing = undefined;
     this.syncAgain = false;
-  }
-
-  /** Offline or closed, no list sync follows, so the syncs a drop ended report that they couldn't finish (#437). */
-  private failAbandonedSyncs() {
-    for (const reportNext of this.abandonedSyncs.splice(0)) reportNext(new Error("Not connected to Hermes."));
-  }
-
-  private goOffline() {
-    this.update({ status: "offline" });
-    this.failAbandonedSyncs();
   }
 
   /** Resolves once background work (list syncs, pinning) has finished. Tests wait on it; the app doesn't need to. */
@@ -3847,7 +3828,6 @@ export class Hermes {
     const releasing = this.releaseScreen();
     if (releasing) await releasing;
     this.closing = true;
-    this.failAbandonedSyncs();
     this.abortDial?.(new Error("Closed by the app."));
     this.generation++;
     this.capabilities.disconnected();
@@ -3885,14 +3865,14 @@ export class Hermes {
       if (!p) return;
       this.pending.delete(id);
       const error = obj(frame.error);
-      if (frame.error) p.reject(new RpcError(num(error?.code) ?? 0, str(error?.message) ?? ""));
+      if (frame.error) p.reject(new RpcError(num(error?.code) ?? 0, optionalText(error?.message) ?? ""));
       else p.resolve(frame.result);
       return;
     }
     if (typeof id === "string" && typeof method === "string" && method) return this.onServerRequest({ id, method, params });
-    const type = str(params.type);
+    const type = optionalText(params.type);
     if (method !== "event" || !type) return;
-    const session_id = str(params.session_id);
+    const session_id = optionalText(params.session_id);
     const payload = obj(params.payload) ?? {};
     if (type === "gateway.ready") {
       this.onReady?.(payload);
@@ -4173,14 +4153,12 @@ export class Hermes {
 
   /**
    * The connection has dropped, and reconnecting starts. `socketClosed`: its socket closed, so when its pipe can
-   * reopen, the rest of the connection is kept and the socket opened again at once, though not sooner than the current
-   * try's wait after it connected (ADR 0148).
+   * reopen, the rest of the connection is kept and the socket opened again at once, though not sooner than the first
+   * retry's wait after it connected.
    */
   private dropped(reason: string, socketClosed = false) {
-    if (Date.now() - this.connectedAt >= STEADY_MS) this.failedTries = 0;
     this.detach(reason, socketClosed);
-    const wait = RETRY_DELAYS_MS[this.failedTries];
-    if (this.socketClosed && wait !== undefined) this.retryTimer = setTimeout(() => void this.redial(), Math.max(0, this.connectedAt + wait - Date.now()));
+    if (this.socketClosed) this.retryTimer = setTimeout(() => void this.redial(), Math.max(0, this.connectedAt + RETRY_DELAYS_MS[0] - Date.now()));
     else this.retryLater();
   }
 
@@ -4245,7 +4223,7 @@ export class Hermes {
     const wait = RETRY_DELAYS_MS[this.failedTries];
     if (wait !== undefined) this.retryTimer = setTimeout(() => void this.redial(), wait);
     else {
-      this.goOffline();
+      this.update({ status: "offline" });
       if (this.launchFailed) this.retryTimer = setTimeout(() => void this.redial(), LAUNCH_RETRY_MS);
     }
   }
@@ -4258,10 +4236,9 @@ export class Hermes {
       // The first try at launch stays Connecting until it has failed once (`openSaved`).
       const status = this.snapshot.status === "connecting" ? "connecting" : "reconnecting";
       this.update({ status, ...(switching && { switching: { from: switching.from } }) });
-      // Counted until the connection proves steady (`dropped`).
-      this.failedTries++;
       try {
         await this.dial();
+        this.failedTries = 0;
         this.launchFailed = false;
         this.resumeBusyChats();
         void this.sync();
@@ -4269,12 +4246,13 @@ export class Hermes {
         void this.checkLive();
       } catch (e) {
         if (this.closing) return;
+        this.failedTries++;
         this.update({ status: "reconnecting", closedReason: (e as Error).message, ...this.switchFailed(e as Error) });
         // A server that changed protocol won't change back on its own, nor will a sign-in Hermes turned down (ADR 0058,
         // 0089), and retrying one only spends sign-in attempts (#472). Reconnecting then waits for the owner.
         const refused = signInRefused((e as Error).message);
         if (refused) this.launchFailed = false;
-        if (e instanceof ProtocolMismatchError || refused) this.goOffline();
+        if (e instanceof ProtocolMismatchError || refused) this.update({ status: "offline" });
         else this.retryLater();
       } finally {
         this.redialing = undefined;
@@ -5717,9 +5695,9 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: st
         kind: "tool",
         id: freeId(items, callId),
         callId,
-        name: str(p.name) ?? "tool",
+        name: optionalText(p.name) ?? "tool",
         args: obj(p.args),
-        preview: str(p.preview),
+        preview: optionalText(p.preview),
         status: "running",
       });
       return { ...c, items };
@@ -5729,7 +5707,7 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: st
       const call = items[at];
       if (call?.kind !== "tool") return c;
       // A screenshot inside the result stays on the server (ADR 0061).
-      items[at] = { ...call, status: "done", durationS: num(p.duration_s), result: toolResultText(p.result), summary: str(p.summary) };
+      items[at] = { ...call, status: "done", durationS: num(p.duration_s), result: toolResultText(p.result), summary: optionalText(p.summary) };
       return { ...c, items };
     }
     // Every second or so while a turn runs.

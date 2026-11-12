@@ -4,7 +4,6 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render as renderDom, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-// @ts-expect-error The app has no Node types; the tests run in Node.
 import { readFileSync } from "node:fs";
 import { Markdown } from "./Markdown";
 import { replyMarkdown } from "./CopyMessage";

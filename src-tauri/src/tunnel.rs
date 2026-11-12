@@ -10,6 +10,7 @@
 
 use crate::loopback_peer::Peers;
 use crate::server_page::{self, LocalEnd, Ssh, Stderr};
+use crate::ssh_guard::{self, ForwardFailure, HostKeys, Kind, Target};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -58,52 +59,14 @@ pub async fn open_within(target: &str, remote_port: u16, quick: Option<Duration>
 
 /// `open_within` with `program` as ssh.
 async fn open_through(program: &str, target: &str, remote_port: u16, quick: Option<Duration>) -> Result<Tunnel, TunnelError> {
-    let target = target.trim();
-    // A leading '-' would be read as an ssh option.
-    if target.is_empty() || target.starts_with('-') || target.contains(char::is_whitespace) {
-        return Err(TunnelError::BadTarget);
-    }
+    let target = Target::parse(target).ok_or(TunnelError::BadTarget)?;
     let end = LocalEnd::new().map_err(|e| TunnelError::Spawn(format!("{}: {e}", LocalEnd::COULDNT)))?;
     let ready_within = quick.map_or(READY_TIMEOUT, |q| q * 2);
-    let connect_timeout = quick.map(|q| format!("ConnectTimeout={}", q.as_secs().max(1)));
-    let mut command = background(program);
-    if let Some(option) = &connect_timeout {
-        command.args(["-o", option]);
-    }
-    let mut child = Ssh::start(
-        command
-            .args([
-                "-N",
-                "-o",
-                "BatchMode=yes",
-                // Else the owner's ControlPath joins their shared connection, whose ControlPersist keeps the forward after this ssh.
-                "-o",
-                "ControlMaster=no",
-                "-o",
-                "ControlPath=none",
-                // Nor fork to the background, leaving this process to exit and the forward running.
-                "-o",
-                "ForkAfterAuthentication=no",
-                "-o",
-                "ExitOnForwardFailure=yes",
-                "-o",
-                "ServerAliveInterval=15",
-                "-o",
-                "StrictHostKeyChecking=accept-new",
-                "-o",
-                "StreamLocalBindMask=0177",
-                "-o",
-                "StreamLocalBindUnlink=yes",
-                "-L",
-                &format!("{}:127.0.0.1:{remote_port}", end.listen()),
-                "--",
-                target,
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped()),
-    )
-    .map_err(|e| TunnelError::Spawn(e.to_string()))?;
+    let forward = format!("{}:127.0.0.1:{remote_port}", end.listen());
+    let kind = Kind::Forward { listen: &forward, host_keys: HostKeys::AcceptNew, on_failure: ForwardFailure::Exit };
+    let mut child =
+        Ssh::start(background(program).args(ssh_guard::args(target, kind, quick)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()))
+            .map_err(|e| TunnelError::Spawn(e.to_string()))?;
 
     let address = end.address(&child).map_err(|e| TunnelError::Spawn(e.to_string()))?;
     let stderr = Stderr::default();
@@ -132,23 +95,15 @@ async fn open_through(program: &str, target: &str, remote_port: u16, quick: Opti
     Ok(Tunnel { _ssh: child, _end: end, relay, local_port })
 }
 
-/// Options every `ssh` this app starts gets on this platform. Windows's OpenSSH can't share connections
-/// (ControlMaster needs a Unix socket), so an ~/.ssh/config written for Linux that turns sharing on would make every
-/// connection fail; there each ssh opens its own connection instead.
-#[cfg(windows)]
-pub const PLATFORM_SSH_OPTIONS: &[&str] = &["-o", "ControlMaster=no", "-o", "ControlPath=none"];
-#[cfg(not(windows))]
-pub const PLATFORM_SSH_OPTIONS: &[&str] = &[];
-
-/// `ssh` with `PLATFORM_SSH_OPTIONS`, run in the background: on Windows without a console window of its own, which
-/// the app (a windowed program) would otherwise open for it.
+/// `ssh` run in the background: on Windows without a console window of its own, which the app (a windowed program)
+/// would otherwise open for it.
 pub fn background_ssh() -> Command {
     background("ssh")
 }
 
 fn background(program: &str) -> Command {
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut command = Command::new(program);
-    command.args(PLATFORM_SSH_OPTIONS);
     #[cfg(windows)]
     {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;

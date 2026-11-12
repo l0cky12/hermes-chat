@@ -4,7 +4,7 @@
 // recognisable secrets hidden. Hermes then works on the job with its own cron tools; this app changes nothing itself.
 // Once the chat's reply ends, the Jobs screen reads the job again and shows what changed since the chat started.
 import { type CronApi, type CronJob, type DeliveryTarget, type JobRun, type JobsZone, type RunResult, deliveryProblems, statusLabel } from "./cronJobs";
-import { redact } from "./logs";
+import { redactSecrets } from "./secrets";
 import { explainSchedule, isoIn } from "./schedule";
 import type { Delivery } from "./transport";
 import { errorText } from "./values";
@@ -67,7 +67,7 @@ function stateWords(j: CronJob, safe: (t: string) => string): string {
 
 /**
  * The first message of a troubleshooting chat. Every text from the server (prompt, errors, output, names, settings) goes
- * through `redact` (the support bundle's patterns) and is cut to its limit; what was hidden or cut is listed, and the
+ * through `redactSecrets` (the support bundle's patterns) and is cut to its limit; what was hidden or cut is listed, and the
  * message asks Hermes to read the job itself rather than write a marker back.
  */
 export function troubleshootMessage(input: TroubleshootInput): TroubleshootMessage {
@@ -75,7 +75,7 @@ export function troubleshootMessage(input: TroubleshootInput): TroubleshootMessa
   const cut: string[] = [];
   const hidden = new Set<string>();
   const safe = (t: string) => {
-    const r = redact(t);
+    const r = redactSecrets(t);
     r.kinds.forEach((k) => hidden.add(k));
     return r.text;
   };
