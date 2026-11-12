@@ -390,6 +390,7 @@ export function ChatPane({
   screenshots,
   screenshotKeys,
   projects,
+  server,
   snoozedUntil,
   notice,
   banner,
@@ -458,6 +459,8 @@ export function ChatPane({
   screenshotKeys?: string;
   /** The names of the projects the chat is in, or a new chat will be put in. */
   projects?: string[];
+  /** The server and profile the chat is on, shown while more than one connection is live (ADR 0125). */
+  server?: string;
   /** When the chat wakes, if the owner snoozed it and it hasn't woken yet (snooze.ts). */
   snoozedUntil?: number;
   /** Shown at the top of the transcript: what a new chat starts with. */
@@ -807,6 +810,11 @@ export function ChatPane({
               {name}
             </span>
           ))}
+          {server && (
+            <span className="badge server-badge" title={`On ${server}`}>
+              {server}
+            </span>
+          )}
         </div>
         <div className="chat-head-end">
           {/* Outside the actions, whose dimming would show through its breakdown. */}

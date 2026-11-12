@@ -4,8 +4,11 @@
 // under that id (tauriKeyring.ts), and everything this computer keeps for it (drafts, queues, the outbox, Saved
 // copies, projects, persona edits, inbox dismissals) is keyed by its scope, which comes from the id.
 //
-// One connection is in use at a time. `current` is the one launch signs in to; it is only ever set by the owner
-// connecting to a connection, never picked by name, and nothing is picked when the current one is removed.
+// Several can be live at once (ADR 0125), each with its own socket and sign-in; `live` lists them, the composer
+// target first, so launch opens them again. `current` is the composer target: the one launch signs in to first and
+// the one the composer, Settings and slash commands act on. It is only ever set by the owner connecting to or picking
+// a connection, never picked by name, and nothing is picked when the current one is removed. `liveLimit` is how many
+// may be live at once.
 //
 // The single sign-in kept before (`hermes-chat.sign-in`) becomes the first connection the first time this is read. It
 // keeps the storage scope and keyring entries it already had (`legacy`), so its drafts, queues and saved password
@@ -21,6 +24,9 @@ export const CONNECTIONS_VERSION = 1;
 /** The most connections kept; a document edited by hand can't grow without end. */
 export const CONNECTIONS_MAX = 50;
 export const NAME_MAX = 60;
+/** How many connections may be live at once unless the owner says otherwise, and the most they can say (ADR 0125). */
+export const LIVE_LIMIT_DEFAULT = 3;
+export const LIVE_LIMIT_MAX = 8;
 
 /** How a connection reaches the dashboard, and as whom. Nothing here is secret. */
 export type Address = { mode: "ssh" | "url"; sshTarget: string; url: string; username: string };
@@ -64,7 +70,9 @@ export type SavedConnection = Address & SignInWay & {
   routeFailedAt?: Record<string, number>;
 };
 
-type Doc = { connections: SavedConnection[]; current?: string };
+type Doc = { connections: SavedConnection[]; current?: string; live?: string[]; liveLimit?: number };
+
+const toLimit = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= LIVE_LIMIT_MAX ? v : undefined);
 
 export type Storage_ = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
@@ -252,7 +260,9 @@ export class Connections {
         const seen = new Set<string>();
         const connections = v.connections.map(toConnection).filter((c): c is SavedConnection => !!c && !seen.has(c.id) && !!seen.add(c.id)).slice(0, CONNECTIONS_MAX);
         const current = isConnectionId(v.current) && connections.some((c) => c.id === v.current) ? v.current : undefined;
-        return { connections, ...(current && { current }) };
+        const live = Array.isArray(v.live) ? [...new Set(v.live.filter((id) => isConnectionId(id) && connections.some((c) => c.id === id)))].slice(0, LIVE_LIMIT_MAX) : [];
+        const liveLimit = toLimit(v.liveLimit);
+        return { connections, ...(current && { current }), ...(live.length ? { live } : {}), ...(liveLimit && { liveLimit }) };
       }
     }
     // Nothing saved yet, or a document that can't be read: start from the single sign-in kept before, if any.
@@ -352,19 +362,49 @@ export class Connections {
     if (c) this.save({ ...c, name: cleanName(name, c) });
   }
 
-  /** The owner connected with `id`: it is the one launch signs in to, and the most recently used. */
+  /** The owner connected with `id`: it is the composer target, the one launch signs in to, and the most recently used. */
   use(id: string) {
     const c = this.get(id);
     if (!c) return;
     const connections = this.doc.connections.map((x) => (x.id === id ? { ...x, lastUsedAt: this.now() } : x));
-    this.write({ connections, current: id });
+    this.write({ ...this.doc, connections, current: id });
+  }
+
+  /** The connections live when this was last kept, the composer target first: what launch opens again. */
+  live(): SavedConnection[] {
+    return (this.doc.live ?? []).flatMap((id) => this.get(id) ?? []);
+  }
+
+  /** Keeps which connections are live, in order. Ids no longer saved are left out. */
+  setLive(ids: string[]) {
+    const live = [...new Set(ids.filter((id) => this.get(id)))].slice(0, LIVE_LIMIT_MAX);
+    if (JSON.stringify(live) === JSON.stringify(this.doc.live ?? [])) return;
+    const { live: _, ...rest } = this.doc;
+    this.write({ ...rest, ...(live.length ? { live } : {}) });
+  }
+
+  /** How many connections may be live at once. */
+  liveLimit(): number {
+    return this.doc.liveLimit ?? LIVE_LIMIT_DEFAULT;
+  }
+
+  /** Sets the limit, 1 to `LIVE_LIMIT_MAX`. Lowering it closes nothing: it applies to the next Connect. */
+  setLiveLimit(n: number) {
+    const liveLimit = toLimit(n);
+    if (liveLimit !== undefined) this.write({ ...this.doc, liveLimit });
   }
 
   /** Forgets `id`. If it was the one in use, none is: nothing else is picked in its place. */
   remove(id: string) {
     const connections = this.doc.connections.filter((c) => c.id !== id);
     const removed = this.get(id);
-    this.write({ connections, ...(this.doc.current !== id && this.doc.current && { current: this.doc.current }) });
+    const live = (this.doc.live ?? []).filter((x) => x !== id);
+    this.write({
+      connections,
+      ...(this.doc.current !== id && this.doc.current && { current: this.doc.current }),
+      ...(live.length ? { live } : {}),
+      ...(this.doc.liveLimit && { liveLimit: this.doc.liveLimit }),
+    });
     // The single sign-in it came from is never read again; leaving it would only keep the old address around.
     if (removed?.legacy) {
       try {

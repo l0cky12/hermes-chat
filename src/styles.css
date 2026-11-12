@@ -2866,6 +2866,23 @@ label.memory-pick { cursor: pointer; }
 .sign-in-raw { color: var(--muted); margin-top: 2px; }
 .leave-list { margin: 6px 0 8px; padding-left: 18px; color: var(--text-2); line-height: 1.55; }
 .leave-dialog.conn-remove { width: min(520px, 92vw); }
+/* Live connections (ADR 0125): the rail's summed count and outage mark, the overview's line, the limit, the server badge. */
+.conn-count {
+  position: absolute; top: 2px; right: 1px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px; background: var(--accent);
+  color: var(--bg); font-size: calc(10rem / 14); font-weight: 600; line-height: 15px; text-align: center;
+}
+.conn-down { position: absolute; bottom: 5px; right: 5px; }
+.badge.conn-status.is-connected { color: var(--ok); }
+.badge.conn-status.is-reconnecting, .badge.conn-status.is-connecting { color: var(--warn); }
+.badge.conn-status.is-offline, .badge.conn-status.is-needs-sign-in { color: var(--bad); }
+.conn-live-line { font-size: calc(11.5rem / 14); color: var(--text-2); overflow-wrap: anywhere; }
+.conn-limit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 10px; }
+.conn-limit select { background: var(--bg); border: 1px solid var(--line-2); border-radius: 7px; padding: 3px 6px; }
+.conn-limit .muted { flex-basis: 100%; font-size: calc(12rem / 14); }
+.leave-dialog.conn-at-limit { width: min(520px, 92vw); }
+.conn-at-limit-list { list-style: none; padding-left: 0; display: flex; flex-direction: column; gap: 6px; }
+.conn-at-limit-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.server-badge { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- search filters, tags and Saved filters (ADR 0106) ---------- */
 .palette-filters-btn {
