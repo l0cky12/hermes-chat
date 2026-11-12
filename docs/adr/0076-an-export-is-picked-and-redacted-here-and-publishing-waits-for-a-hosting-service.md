@@ -1,6 +1,6 @@
 # An export is picked and redacted here, and publishing waits for a hosting service
 
-**Status: accepted for the private stage (#92, first part). Public snapshots wait on the owner's choice of hosting service.**
+**Status: accepted for the private stage (#92, first part). Public snapshots are ADR 0123, which publishes this dialog's HTML page to a bucket the owner names.**
 
 Issue #92 asks for snapshots of a chat that other people can open: chosen messages, likely secrets flagged and redacted, an explicit Publish, then a list of published copies with expiry and Revoke. Its delivery note says to start with a private export and redaction preview when no publication service exists.
 

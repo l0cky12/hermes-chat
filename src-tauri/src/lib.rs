@@ -31,6 +31,7 @@ pub mod repo_git;
 pub mod saved_password;
 pub mod screenshot;
 pub mod server_page;
+pub mod snapshot;
 mod ssh_guard;
 pub mod summon;
 pub mod terminal;
@@ -1976,6 +1977,14 @@ pub fn run(screenshot: bool, link: Option<String>) {
             token_delete,
             chat_export,
             chat_export_image,
+            snapshot::snapshot_host,
+            snapshot::snapshot_host_save,
+            snapshot::snapshot_host_clear,
+            snapshot::snapshot_host_test,
+            snapshot::snapshot_publish,
+            snapshot::snapshot_list,
+            snapshot::snapshot_link,
+            snapshot::snapshot_revoke,
             import_pick_file,
             usage_export,
             logs_export,

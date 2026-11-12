@@ -3578,6 +3578,22 @@ div.export-preview.export-page { height: auto; padding: 10px 12px; background: v
 .export-pick input { flex: 1 1 220px; min-width: 0; height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--code-bg); color: var(--text); font-family: var(--mono); font-size: calc(var(--mono-size) * 0.85); }
 .export-pick > span { flex-basis: 100%; }
 .export-pick-problem { color: var(--warn); }
+/* Share snapshot (ADR 0123): the note when no host is set up, and the confirm step. */
+.export-dialog .confirm-actions { flex-wrap: wrap; }
+.export-host { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line-2); }
+.export-host.export-host-failed { border-color: var(--bad); }
+.export-host p { flex: 1 1 260px; min-width: 0; }
+.export-confirm { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.export-confirm h3 { margin: 0; font-size: inherit; font-weight: 600; outline: none; }
+.export-destination { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 0; }
+.export-destination dt { color: var(--faint); }
+.export-destination dd { margin: 0; overflow-wrap: anywhere; }
+.export-dialog .export-warnings { list-style: disc; padding: 2px 0 2px 26px; border-left: 3px solid var(--warn); line-height: 1.5; }
+.export-published { display: flex; flex-direction: column; gap: 8px; }
+.export-link { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.export-link input { flex: 1 1 240px; min-width: 0; height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--code-bg); color: var(--text); font-family: var(--mono); font-size: calc(var(--mono-size) * 0.85); }
+/* Settings → Snapshots (SnapshotSettings.tsx): a snapshot that needs the owner's attention says so in warning colour. */
+.snapshot-row.expired .set-hint, .snapshot-row.changed .set-hint, .snapshot-row.unrevoked .set-hint { color: var(--warn); }
 
 /* ---------- Settings → Gateways (GatewaySettings.tsx, ADR 0073) and Providers (ProviderSettings.tsx, ADR 0095) ---------- */
 .gw-input, .pk-input {

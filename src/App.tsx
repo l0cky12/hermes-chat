@@ -24,6 +24,7 @@ import { ProjectsStore, type Project } from "./hermes/projects";
 import { instructionsMessage, modelProblem, resolveNewChat, savedDefaults, type ProjectDefaults } from "./hermes/projectDefaults";
 import { systemSecrets } from "./hermes/tauriKeyring";
 import { appUpdates } from "./hermes/tauriUpdates";
+import { tauriSnapshots } from "./hermes/snapshots";
 import { needsAttention, type Updater } from "./hermes/updates";
 import { desktopNotify } from "./hermes/tauriNotify";
 import { ScreenshotDesk, type ScreenshotApi } from "./hermes/screenshots";
@@ -975,6 +976,8 @@ export function Main({
   const caps = useCapabilities(hermes.capabilities);
   /** Set, each time anew, to open Settings on its Voice tab, from a voice conversation's "Change voice settings". */
   const [showVoice, setShowVoice] = useState<object>();
+  /** Set, each time anew, to open Settings → Snapshots, from Share snapshot when no host is set up. */
+  const [showSnapshots, setShowSnapshots] = useState<object>();
   const openVoiceSettings = useRef(() => {});
   const voice = useMemo<VoiceApi>(
     () => ({
@@ -1333,11 +1336,16 @@ export function Main({
     setShowMemory(undefined);
     setShowDiagnostics(undefined);
     setShowVoice(undefined);
+    setShowSnapshots(undefined);
     setSettingsOpen(true);
   };
   openVoiceSettings.current = () => {
     openSettings();
     setShowVoice({});
+  };
+  const openSnapshotSettings = () => {
+    openSettings();
+    setShowSnapshots({});
   };
   /** Opens Settings → Diagnostics at capability `id`, from the note a screen shows when Hermes lacks it. */
   const openDiagnostics = (id: CapabilityId) => {
@@ -2661,6 +2669,7 @@ export function Main({
           pin={{ pinned: pins[chat.id] !== undefined, onPin: (on) => pinChat(chat.id, on) }}
           onSettle={(s) => setSettled(chat.id, s)}
           onExport={(text) => setToast({ text, at: Date.now() })}
+          onSnapshotSettings={openSnapshotSettings}
           onCopyLink={() => copyChatLink(chat)}
           onArchive={(a) => setArchived(chat.id, a)}
           onNew={() => newChat()}
@@ -3151,6 +3160,8 @@ export function Main({
             skillDiscards={skillDiscards}
             checkScreenshots={screenshots.support}
             tray={tray}
+            snapshots={tauriSnapshots}
+            showSnapshots={showSnapshots}
             voiceSetup={voice.setup}
             voiceSettings={hermes.voiceSettings}
             onVoiceChange={voice.onChange}
@@ -3630,6 +3641,7 @@ function ChatView({
   pin,
   onSettle,
   onExport,
+  onSnapshotSettings,
   onCopyLink,
   onArchive,
   onNew,
@@ -3705,6 +3717,8 @@ function ChatView({
   pin: ChatPin;
   onSettle: (settled: boolean) => void;
   onExport: (notice: string) => void;
+  /** Opens Settings → Snapshots, from Share snapshot. */
+  onSnapshotSettings: () => void;
   onCopyLink: () => void;
   onArchive: (archived: boolean) => void;
   onNew: () => void;
@@ -4107,6 +4121,7 @@ function ChatView({
       pin={started ? pin : undefined}
       onSettle={started ? onSettle : undefined}
       onExport={started ? onExport : undefined}
+      onSnapshotSettings={onSnapshotSettings}
       onCopyLink={started ? onCopyLink : undefined}
       onDelete={started ? () => void onDelete() : undefined}
       onArchive={started ? onArchive : undefined}

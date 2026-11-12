@@ -72,11 +72,11 @@ describe("The chat header", () => {
     await user.keyboard("{Enter}");
     const menu = screen.getByRole("menu", { name: "More actions for Nightly backup" });
     expect(more.getAttribute("aria-expanded")).toBe("true");
-    expect([...menu.querySelectorAll("[role=menuitem]")].map((m) => m.textContent)).toEqual(["Export…", "Copy chat link", "PinP", "Settle", "Archive", "Delete chat…"]);
+    expect([...menu.querySelectorAll("[role=menuitem]")].map((m) => m.textContent)).toEqual(["Export…", "Share snapshot…", "Copy chat link", "PinP", "Settle", "Archive", "Delete chat…"]);
     expect(document.activeElement!.textContent).toBe("Export…");
-    await user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}");
+    await user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}");
     expect(document.activeElement!.textContent).toBe("Settle");
-    await user.keyboard("{ArrowUp}{ArrowUp}{ArrowUp}{ArrowUp}");
+    await user.keyboard("{ArrowUp}{ArrowUp}{ArrowUp}{ArrowUp}{ArrowUp}");
     expect(document.activeElement!.textContent).toBe("Delete chat…");
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu")).toBeNull();
@@ -84,7 +84,7 @@ describe("The chat header", () => {
     expect(more.getAttribute("aria-expanded")).toBe("false");
 
     // Enter on an item runs it and closes the menu.
-    await user.keyboard("{Enter}{ArrowDown}{ArrowDown}{ArrowDown}{Enter}");
+    await user.keyboard("{Enter}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{Enter}");
     expect(screen.queryByRole("menu")).toBeNull();
     await screen.findByText("Settled", { selector: ".chat-title .badge" });
     expect(server.restRequests.some((r) => r.method === "PATCH" && r.body?.pinned === false)).toBe(true);

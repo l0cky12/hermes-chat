@@ -1,6 +1,6 @@
 # A snapshot is the previewed page, put in a bucket the owner names, and revoked by deleting it
 
-**Status: proposed. Nothing is built. Waiting on the owner's answers to "Open questions", the first above all.**
+**Status: accepted, 2026-11-11. Built in two slices: the page (PR #531) and publishing (#92). Open question 1 is answered with the default, an S3-compatible bucket the owner names, and questions 2 to 4 take their defaults (see "Answers taken").**
 
 Issue #92 asks for a copy of a chat that other people can open. The owner picks what goes in, likely secrets are redacted, and Publish is explicit. Each copy has its own link, an optional expiry and Revoke, and later messages in the chat never reach it. ADR 0076 built the private part: the Export dialog picks the messages, flags and redacts likely secrets, and previews the exact file. It left one question for the owner, which is where a published copy lives. This ADR answers that question with a default, and decides everything that doesn't depend on the answer.
 
@@ -68,6 +68,28 @@ The webview builds the page from the Export dialog's Markdown. It uses the trans
 
 Math and Mermaid diagrams show as their source, in code. The parser decodes character references and backslash escapes, so the page redacts every text it takes from the document again, after decoding and before escaping. When formatting splits a redacted text, as in `abc*d*ef`, the page would still show it, so the dialog says so and won't save. The host is still open, so this ADR stays proposed.
 
+**Built, 2026-11-11 (#92, publishing).** Rust's `src-tauri/src/snapshot/` signs every request itself (AWS Signature Version 4 with `hmac` and `sha2`, checked against five of AWS's published examples) and holds the host settings and secret key in one keyring entry, `snapshot-host`. The webview's `src/hermes/snapshots.ts` calls eight commands: `snapshot_host`, `snapshot_host_save`, `snapshot_host_clear`, `snapshot_host_test`, `snapshot_publish`, `snapshot_list`, `snapshot_link` and `snapshot_revoke`. Share snapshot… is in the chat header's More menu, and Settings → Snapshots has the host card and the list. The build narrows the design above in these places:
+
+- **Requests are path-style**, `<endpoint>/<bucket>/<key>`. Only Versity S3 Gateway was run live, so it isn't yet checked that every host above takes them.
+- **The endpoint must be `https://`.** `http://` is taken only for a loopback address, for a store on this computer.
+- **Saving the host always takes the secret.** The card's Change asks for it again, so settings and secret are only ever saved together.
+- **A prefix may not have a `.` or `..` folder.** A URL parser drops one after the request is signed, so the signature wouldn't match.
+- **A first upload the host refuses is "not published" without a version listing.** The key is new and random, and nothing was sent before, so the refusal already proves nothing was written. A refused key would also refuse the listing, which would turn a plain refusal into "may have been sent". After a lost answer, the listing runs as described above.
+- **A `409`, or a `5xx` other than `501`, counts as a lost answer,** so the same `PUT` is sent once more.
+- **The list reads each snapshot's body** to compare its SHA-256. A read that fails with anything but a `404` fails the whole list rather than guess a state. The list is newest first.
+- **Secret detection.** The confirm step says detection can miss a secret. The encoded spellings in #530 are flagged on main since #543. Other spellings, such as a password in a sentence, are still missed.
+
+Verified against a stand-in S3 on axum that checks every signature (`src-tauri/tests/snapshot.rs`), and live against Versity S3 Gateway 1.10.0 on this computer with versioning on. MinIO's community server is archived and its images can't be pulled. The live run published, fetched the link (200, same bytes, the three headers above), copied a link, saw a 1-hour link refused after its hour, revoked, saw every old link refused, and listed no version left. Not run live: Amazon S3, Cloudflare R2, Backblaze B2, the list deleting an expired snapshot, and a lost answer.
+
+## Answers taken
+
+The owner asked for #92 to be finished, with the host decided or the private stage kept. These are the defaults this ADR proposed, taken as they stand. The owner can still change any of them.
+
+1. **Host.** An S3-compatible bucket the owner names.
+2. **Longest link.** 7 days.
+3. **Attachment files.** Not published in this stage.
+4. **What a link shows.** The bucket's host, the bucket and the access key's id. The README tells the owner to use a key limited to the prefix.
+
 ### Upload, read back and revoke
 
 Rust holds the secret key and makes every request to the host, as it does for Hermes's own secrets (ADR 0058). The webview never has the secret key. The webview hands Rust the page's bytes, title and expiry. Rust gives back the snapshot, or an error that says whether the page certainly wasn't sent.
@@ -119,7 +141,7 @@ No snapshot request goes to Hermes, so a snapshot needs no Hermes version or cap
 - **A paste service.** Hermes's debug share (`hermes_cli/debug.py`) uploads to paste.rs, deletes each paste after 6 hours, and falls back to dpaste.com, whose pastes it can't delete. A paste is public text with no list for the owner to manage, and the fallback can't be revoked at all.
 - **The AWS SDK for Rust.** Its dependency tree is heavy for the handful of S3 calls this needs. A small signing crate such as `rusty-s3` with the existing `reqwest` is enough. That choice belongs to the implementation PR.
 
-## Open questions for the owner
+## Open questions for the owner (answered 2026-11-11, see "Answers taken")
 
 1. **Which Snapshot host?** The default is an S3-compatible bucket you name. The alternatives are a secret GitHub Gist (no expiry, data on GitHub), or waiting for a Hermes publication route upstream. Nothing is built until you answer.
 2. **Is 7 days long enough?** It is the limit on a presigned S3 link. Anything longer needs another signer, such as CloudFront signed URLs, or a public bucket. The default is yes: 7 days is the maximum.
