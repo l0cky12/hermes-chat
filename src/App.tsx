@@ -1879,7 +1879,11 @@ export function Main({
   const [desk, setDesk] = useState<ScreenshotDesk>();
   const screenshotsRef = useRef(screenshots);
   useLayoutEffect(() => {
-    const d = new ScreenshotDesk(screenshotsRef.current.api, (remote) => remote && screenshotsRef.current.attached());
+    const d = new ScreenshotDesk(
+      screenshotsRef.current.api,
+      (remote) => remote && screenshotsRef.current.attached(),
+      () => revealComposerRef.current(),
+    );
     setDesk(d);
     return () => d.dispose();
   }, []);
@@ -1900,6 +1904,12 @@ export function Main({
     focusPane(active.key);
     void desk.capture({ remote });
   });
+  // An annotation added while the Preview covers the chat (a narrow window) goes to the chat's composer, which shows.
+  const revealComposerRef = useRef(() => {});
+  revealComposerRef.current = () => {
+    if (!previewFits) setPanelHidden(true);
+    focusPane(active.key);
+  };
   const takeScreenshotRef = useRef(takeScreenshot);
   takeScreenshotRef.current = takeScreenshot;
   useEffect(() => (desk ? screenshotsRef.current.onDesktopShortcut(() => takeScreenshotRef.current(true)) : undefined), [desk]);
@@ -3686,6 +3696,7 @@ export function Main({
                     serverPages={previewServerPages}
                     artifacts={artifacts}
                     connected={status === "connected"}
+                    desk={desk}
                   />
                   ),
                 terminal: (shown) => (

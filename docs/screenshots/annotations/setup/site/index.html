@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Settings (synthetic)</title>
+<style>
+  body { margin: 0; font: 15px system-ui, sans-serif; color: #1f2937; background: #f8fafc; }
+  header { padding: 14px 20px; background: #1e293b; color: #fff; font-weight: 600; }
+  main { padding: 18px 20px; }
+  form#profile { display: grid; gap: 10px; max-width: 340px; }
+  button.primary { padding: 8px 16px; border: 0; border-radius: 6px; background: rgb(30, 160, 80); color: #fff; font-size: 14px; }
+  .banner { margin-top: 14px; height: 40px; border-radius: 6px; background-image: url("https://cdn.example/b.png?sig=SECRETSIG"); background-color: #c7d2fe; }
+  iframe { border: 1px solid #94a3b8; width: 300px; height: 90px; margin-top: 12px; display: block; }
+</style>
+<header id="session-8f3a9c" class="token-abc app-header">Example Settings</header>
+<main>
+  <form id="profile">
+    <label>Email <input type="email" value="owner@example.com"></label>
+    <label>Password <input type="password" value="hunter2"></label>
+    <input type="hidden" name="csrf" value="CSRF999">
+    <div data-token="TOK123">Plan: <strong>Team</strong></div>
+    <button class="primary" type="button">Save changes</button>
+  </form>
+  <div class="banner"></div>
+  <a href="next.html">Next page</a>
+  <iframe src="inner.html" title="same-origin frame"></iframe>
+  <iframe id="other" title="cross-origin frame"></iframe>
+</main>
+<script>
+  document.getElementById("other").src = "http://127.0.0.1:" + (Number(location.port) + 1) + "/ad.html";
+  // Hostile: the page tries to fool any query run in its own world.
+  const lie = () => ({ x: 0, y: 0, width: 1, height: 1, top: 0, left: 0, right: 1, bottom: 1 });
+  Element.prototype.getBoundingClientRect = lie;
+  window.getComputedStyle = () => ({ getPropertyValue: () => "LIED" });
+  document.elementFromPoint = () => document.body;
+  JSON.stringify = () => '{"tag":"script","value":"hunter2"}';
+</script>

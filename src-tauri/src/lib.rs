@@ -11,6 +11,8 @@ pub mod defaults_file;
 pub mod dev_servers;
 pub mod display;
 pub mod fonts;
+#[cfg(windows)]
+mod frame_still;
 #[cfg(target_os = "linux")]
 pub mod gtk_clipboard;
 pub mod links;
@@ -1636,9 +1638,27 @@ fn preview_page_close(app: tauri::AppHandle, key: String) {
 /// Takes a still of the page in the Preview to annotate (ADR 0094), kept in the captures folder until it is staged or
 /// discarded (`screenshot_discard`).
 #[tauri::command]
-async fn preview_annotate_still(app: tauri::AppHandle, state: State<'_, Screenshots>, key: String) -> Result<annotate::Still, annotate::AnnotateError> {
+async fn preview_annotate_still(
+    app: tauri::AppHandle,
+    state: State<'_, Screenshots>,
+    source: annotate::StillSource,
+) -> Result<annotate::Still, annotate::AnnotateError> {
     let captures = state.captures().map_err(|e| annotate::AnnotateError::Failed(e.to_string()))?;
-    page_view::annotate_still(&app, key, captures).await
+    match source {
+        annotate::StillSource::View { key } => page_view::annotate_still(&app, key, captures).await,
+        #[cfg(windows)]
+        annotate::StillSource::Frame { url, rect, viewport } => frame_still::take(&app, url, rect, viewport, captures).await,
+        #[cfg(not(windows))]
+        annotate::StillSource::Frame { .. } => Err(annotate::AnnotateError::Unsupported("A still of the page's frame is taken only on Windows.".into())),
+    }
+}
+
+/// A still's PNG, for the Preview to show while the owner marks it. Only a still the app took is read.
+#[tauri::command]
+async fn preview_annotate_read(state: State<'_, Screenshots>, path: String) -> Result<tauri::ipc::Response, String> {
+    let captures = state.captures().map_err(|e| e.to_string())?;
+    let png = tokio::task::spawn_blocking(move || annotate::read_still(&captures, std::path::Path::new(&path))).await.map_err(|e| e.to_string())?;
+    png.map(tauri::ipc::Response::new).map_err(|e| e.to_string())
 }
 
 /// What the page says is under a point of its still, for the outline while the owner points.
@@ -1995,6 +2015,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             preview_page_place,
             preview_page_close,
             preview_annotate_still,
+            preview_annotate_read,
             preview_annotate_query,
             preview_annotate_pick,
             preview_annotate_stage,

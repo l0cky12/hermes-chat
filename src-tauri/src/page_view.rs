@@ -157,7 +157,6 @@ mod imp {
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
     use std::rc::Rc;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
     use tauri::Manager;
     use webkit2gtk::{
@@ -561,7 +560,6 @@ mod imp {
     const ANSWER_WITHIN: Duration = Duration::from_secs(1);
     /// How long the still itself may take.
     const STILL_WITHIN: Duration = Duration::from_secs(3);
-    static NEXT_STILL: AtomicU64 = AtomicU64::new(1);
 
     /// The still the page's annotation is being picked on, kept to check a pick's pixels against.
     #[derive(Clone)]
@@ -637,8 +635,8 @@ mod imp {
             if moves.generation.get() != generation {
                 return Err(AnnotateError::Stale);
             }
-            let taken_at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
-            let kept = Kept { id: NEXT_STILL.fetch_add(1, Ordering::Relaxed), generation, width, height, scale, pixels: Arc::new(pixels) };
+            let taken_at_ms = annotate::now_ms();
+            let kept = Kept { id: annotate::next_still_id(), generation, width, height, scale, pixels: Arc::new(pixels) };
             let page = PAGE.with(|p| p.borrow_mut().as_mut().filter(|p| p.key == key).map(|p| p.still = Some(kept.clone())));
             page.ok_or(AnnotateError::NoPage)?;
             Ok(Taken { kept, url, taken_at_ms })
@@ -755,6 +753,7 @@ mod imp {
             width: kept.width,
             height: kept.height,
             scale: kept.scale,
+            elements: true,
         })
     }
 

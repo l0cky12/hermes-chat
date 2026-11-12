@@ -4,6 +4,7 @@
 // switches until the owner sends or removes them (ADR 0145). It remembers which staged files are its own, so each one
 // is deleted once nothing needs it any more. Nothing here sends anything to Hermes.
 
+import type { AnnotationLabel } from "./annotations";
 import type { Attachment } from "./model";
 import { stagedFiles } from "./unsaved";
 import { errorText } from "./values";
@@ -22,12 +23,14 @@ export type ScreenshotApi = {
 /**
  * The composer on screen. `key` is its chat's Draft key (drafts.ts `draftKey`), where its captures are staged. `check`
  * resolves to the files Hermes can take, and shows why it refused any (one too large, say). `note` shows a line above
- * the composer.
+ * the composer. `insert` puts text at the composer's cursor. `chat`: the chat's title, for the annotation review card.
  */
 export type ScreenshotSink = {
   key: string;
+  chat?: string;
   check: (paths: string[]) => Promise<Attachment[]>;
   note: (text: string) => void;
+  insert?: (text: string) => void;
 };
 
 /**
@@ -72,8 +75,11 @@ export function failureText(e: unknown): string | undefined {
 
 const RESTORED = "Hermes didn't confirm it got your message, so its files are back here. Send them again, or remove them.";
 
-/** A capture or a note waiting for a composer to show it. */
-type Waiting = { paths: string[]; note?: string; remote: boolean };
+/**
+ * A capture or a note waiting for a composer to show it. An annotation also has its words, for the composer's text, and
+ * `to`, the Draft key of the only composer it may go to: it describes a page the owner saw while that chat was theirs.
+ */
+type Waiting = { paths: string[]; note?: string; remote: boolean; words?: string; to?: string; live?: () => boolean };
 
 export class ScreenshotDesk {
   private state: DeskState = { capturing: false };
@@ -84,12 +90,23 @@ export class ScreenshotDesk {
   private readonly sending = new Set<string>();
   private readonly staged = new Map<string, readonly Attachment[]>();
   private sink?: ScreenshotSink;
+  /** The chat whose composer was last on screen: an annotation goes there while a covering Preview hides it. */
+  private last?: { chat?: string; key: string };
   private disposed = false;
+  /** Where each staged annotation came from, for its chip (ADR 0094), and how many moves the Preview's page had made then. */
+  private readonly annotations = new Map<string, { url: string; takenAtMs: number; moves: number }>();
+  private pageMoves = 0;
+  private lastAnnotation = 0;
+  private labels: ReadonlyMap<string, AnnotationLabel> = new Map();
 
-  /** `onAttached(remote)`: a capture went into the composer; `remote` when a desktop shortcut asked for it. */
+  /**
+   * `onAttached(remote)`: a capture went into the composer; `remote` when a desktop shortcut asked for it. `reveal`: an
+   * annotation is waiting for the composer last on screen, which something (a Preview covering a narrow window) hides.
+   */
   constructor(
     private readonly api: ScreenshotApi,
     private readonly onAttached?: (remote: boolean) => void,
+    private readonly reveal?: () => void,
   ) {}
 
   subscribe = (fn: () => void) => {
@@ -126,9 +143,56 @@ export class ScreenshotDesk {
     for (const p of paths) this.mine.add(p);
   }
 
+  /** The chat an annotation goes to: the composer on screen, or the one last on screen. The review card names it. */
+  target = (): { chat?: string; key: string } | undefined =>
+    this.disposed ? undefined : this.sink ? { chat: this.sink.chat, key: this.sink.key } : this.last;
+
+  /** The next annotation's number, 1 to 999, counted for as long as this signed-in window lasts. */
+  nextAnnotation(): number {
+    this.lastAnnotation = (this.lastAnnotation % 999) + 1;
+    return this.lastAnnotation;
+  }
+
+  /**
+   * Stages an annotation Rust has marked (`path`) in the composer on screen, and its `words` at the composer's cursor.
+   * It goes only to the chat `to.key` names, which the review card showed (`target`): with that composer off screen, it
+   * waits and asks for it to show (`reveal`), and another composer coming first deletes it. Once `to.live` says the
+   * annotation was cancelled (the page moved, the Preview went), it is deleted wherever it is. False, with the image
+   * deleted, when it was cancelled already.
+   */
+  async annotate(path: string, words: string, from: { url: string; takenAtMs: number }, to: { key: string; live: () => boolean }): Promise<boolean> {
+    if (this.disposed || !to.live()) {
+      void this.api.discard(path).catch(() => {});
+      return false;
+    }
+    this.mine.add(path);
+    this.annotations.set(path, { ...from, moves: this.pageMoves });
+    this.relabel();
+    // Revealing the chat re-renders at once, which ends the Preview's overlay: asked on the next task, it comes once
+    // the caller has finished adding, so the annotation, queued below first, isn't taken for cancelled.
+    if (!this.sink) setTimeout(() => this.reveal?.(), 0);
+    await this.deliver({ paths: [path], remote: false, words, to: to.key, live: to.live });
+    return true;
+  }
+
+  /** The Preview's page moved (a load, or its own address changing): annotations staged before now are stale. */
+  pageMoved() {
+    this.pageMoves++;
+    if (this.annotations.size) this.relabel();
+  }
+
+  /** What each staged annotation's chip says about the page it came from, by path. */
+  annotationLabels = (): ReadonlyMap<string, AnnotationLabel> => this.labels;
+
+  private relabel() {
+    this.labels = new Map([...this.annotations].map(([p, a]) => [p, { url: a.url, takenAtMs: a.takenAtMs, stale: a.moves !== this.pageMoves }]));
+    for (const fn of [...this.listeners]) fn();
+  }
+
   /** The composer now on screen takes captures, and any that were waiting for one. Returns the function that stops it. */
   attachTo(sink: ScreenshotSink): () => void {
     this.sink = sink;
+    this.last = { chat: sink.chat, key: sink.key };
     const waiting = this.waiting;
     this.waiting = [];
     for (const w of waiting) void this.deliver(w);
@@ -140,14 +204,18 @@ export class ScreenshotDesk {
   private async deliver(w: Waiting): Promise<void> {
     const sink = this.sink;
     if (!sink) return void this.waiting.push(w);
+    const cancelled = () => w.live !== undefined && !w.live();
+    if ((w.to !== undefined && sink.key !== w.to) || cancelled()) return this.release(w.paths);
     if (w.paths.length) {
       const kept = await sink.check(w.paths);
+      if (cancelled()) return this.release(w.paths);
       // The composer went while it checked them (another chat opened, or Settings): they go to the one on screen now,
-      // unless signing out already deleted them.
+      // unless signing out already deleted them. An annotation goes only to its own chat's, and waits for it.
       if (this.sink !== sink) return this.deliver({ ...w, paths: w.paths.filter((p) => this.mine.has(p)) });
       this.change({ kind: "added", key: sink.key, attachments: kept });
       this.release(w.paths.filter((p) => !kept.some((a) => a.path === p)));
       if (kept.length) this.onAttached?.(w.remote);
+      if (kept.length && w.words) sink.insert?.(w.words);
     }
     if (w.note) sink.note(w.note);
   }
@@ -226,7 +294,13 @@ export class ScreenshotDesk {
    * their own folders is never deleted.
    */
   release(paths: readonly string[]) {
-    for (const p of paths) if (!this.sending.has(p) && this.mine.delete(p)) void this.api.discard(p).catch(() => {});
+    let forgot = false;
+    for (const p of paths)
+      if (!this.sending.has(p) && this.mine.delete(p)) {
+        void this.api.discard(p).catch(() => {});
+        forgot = this.annotations.delete(p) || forgot;
+      }
+    if (forgot) this.relabel();
   }
 
   /** The app is signing out or closing: every capture not yet sent is deleted, and one still being taken will be. */

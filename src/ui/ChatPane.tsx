@@ -1005,6 +1005,7 @@ export function ChatPane({
         alsoPostsIn={alsoPostsIn}
         text={draft}
         draftKey={draftKey}
+        chatTitle={chat.title}
         onText={onDraft}
         onStep={onDraftStep}
         onAttach={onAttach}
@@ -1481,6 +1482,7 @@ function Composer({
   alsoPostsIn,
   text,
   draftKey,
+  chatTitle,
   onText,
   onStep,
   onAttach,
@@ -1514,6 +1516,8 @@ function Composer({
   text: string;
   /** Where the desk keeps this chat's staged attachments. */
   draftKey: string;
+  /** Named on the annotation review card, which stages into this composer. */
+  chatTitle?: string;
   onText: (text: string, how?: EditKind) => void;
   onStep: (step: EditStep) => string | undefined;
   onAttach: (paths: string[]) => Promise<AttachCheck>;
@@ -1542,6 +1546,7 @@ function Composer({
   const keys = useBindings();
   // The chat's staged attachments, kept by the desk under its Draft key so they outlive this composer (ADR 0145).
   const attachments = useSyncExternalStore(screenshots.subscribe, () => screenshots.stagedIn(draftKey));
+  const annotations = useSyncExternalStore(screenshots.subscribe, screenshots.annotationLabels);
   const focused = useRef(autoFocus);
   focused.current = autoFocus;
   // The transcript joins the text as it is when it arrives, typed meanwhile included.
@@ -1630,6 +1635,29 @@ function Composer({
   const dropHereRef = useRef(dropHere);
   dropHereRef.current = dropHere;
 
+  // An annotation's words go in at the cursor, on lines of their own, and the cursor ends after them. The review card
+  // has the keyboard by then, so the cursor is where the owner last left it in this composer, or else the end.
+  const caret = useRef<[number, number]>(undefined);
+  const insertWords = (words: string) => {
+    const now = textRef.current;
+    const ta = taRef.current;
+    const [from, to] =
+      ta && document.activeElement === ta
+        ? [ta.selectionStart, ta.selectionEnd]
+        : caret.current
+          ? [Math.min(caret.current[0], now.length), Math.min(caret.current[1], now.length)]
+          : [now.length, now.length];
+    const before = now.slice(0, from);
+    const block = `${before && !before.endsWith("\n") ? "\n" : ""}${words}\n`;
+    const next = before + block + now.slice(to);
+    onText(next);
+    const at = before.length + block.length;
+    caret.current = [at, at];
+    requestAnimationFrame(() => taRef.current?.setSelectionRange(at, at));
+  };
+  const insertRef = useRef(insertWords);
+  insertRef.current = insertWords;
+
   // Screenshots attach here while this composer is on screen.
   const shot = useSyncExternalStore(screenshots.subscribe, screenshots.getSnapshot);
   // A new screenshot replaces the notes about the last thing attached.
@@ -1641,14 +1669,16 @@ function Composer({
     let current = true;
     const stop = screenshots.attachTo({
       key: draftKey,
+      chat: chatTitle,
       check: (paths) => busy(() => checkRef.current(paths, () => current)),
       note: (text) => setRefused((cur) => [...cur, text]),
+      insert: (words) => insertRef.current(words),
     });
     return () => {
       current = false;
       stop();
     };
-  }, [screenshots, autoFocus, draftKey]);
+  }, [screenshots, autoFocus, draftKey, chatTitle]);
 
   // Tauri's native drop event (off on Windows, below): it gives real file paths, so Rust can read the bytes. Every composer
   // hears every drop; with two panes, the one under the pointer takes it. Tauri gives the point in physical pixels.
@@ -1913,6 +1943,7 @@ function Composer({
                 key={f.path}
                 file={f}
                 preview={previews.current?.get(f.path)}
+                annotation={annotations.get(f.path)}
                 onRemove={() => screenshots.change({ kind: "removed", key: draftKey, paths: [f.path] })}
               />
             ))}
@@ -1927,6 +1958,10 @@ function Composer({
           value={text}
           {...slash.inputProps}
           onChange={(e) => onText(e.target.value, inputKind(e.nativeEvent))}
+          onSelect={(e) => {
+            slash.inputProps.onSelect(e);
+            caret.current = [e.currentTarget.selectionStart, e.currentTarget.selectionEnd];
+          }}
           onPaste={(e) => {
             if (dragging) return;
             const paste = pasteAttaches(e.clipboardData);
