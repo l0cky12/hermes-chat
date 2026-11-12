@@ -3,6 +3,8 @@
 // app, against FakeHermes as a new Hermes and as one without some routes. Every version, path and secret is a fixture.
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+// @ts-expect-error The app has no Node types; the tests run in Node. (Vitest empties a CSS import, ?raw included.)
+import { readFileSync } from "node:fs";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import { CapabilityStore, guideUrl, type CapabilityIO } from "../hermes/capabilities";
@@ -233,6 +235,25 @@ describe("Diagnostics' layout (#174, ADR 0059)", () => {
     // Check again and Copy report act on the whole section, so they sit at its heading.
     expect(within(features).getByRole("button", { name: "Check again" }).closest(".set-head-action")).not.toBeNull();
     expect(within(features).getByRole("button", { name: "Copy report" }).closest(".set-head-action")).not.toBeNull();
+  });
+
+  it("keeps Check again and Copy report on one line each, wrapping the pair under the heading when the row is too narrow (#537)", () => {
+    // jsdom lays nothing out, so this reads the rules the screenshots in #537's PR show: a label never wraps inside its
+    // 32px button, and the heading row wraps instead, its buttons starting a line of their own at the left.
+    const sheet = document.createElement("style");
+    sheet.textContent = readFileSync("src/styles.css", "utf8") as string;
+    document.head.append(sheet);
+    try {
+      diagnostics(scriptedStore(NEW));
+      const features = section("Features");
+      for (const name of ["Check again", "Copy report"]) expect(getComputedStyle(within(features).getByRole("button", { name })).whiteSpace).toBe("nowrap");
+      const head = features.querySelector(".set-head")!;
+      expect([getComputedStyle(head).flexWrap, getComputedStyle(head).justifyContent]).toEqual(["wrap", "space-between"]);
+      expect([...head.children].map((c) => c.className)).toEqual(["set-head-title", "set-head-action"]);
+      expect(head.querySelector(".set-head-title > h2")!.textContent).toBe("Features");
+    } finally {
+      sheet.remove();
+    }
   });
 
   it("folds the explanations behind an (i), opens them while Settings is searched, and search still finds their words", async () => {

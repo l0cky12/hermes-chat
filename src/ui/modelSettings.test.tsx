@@ -43,8 +43,10 @@ function Shell({ hermes }: { hermes: Hermes }) {
   );
 }
 
-async function shown() {
+/** `setup` changes what the fake dashboard has before Settings reads it. */
+async function shown(setup?: (server: FakeHermes) => void) {
   const server = new FakeHermes();
+  setup?.(server);
   const hermes = await connect(server.openPipe, "default");
   const user = userEvent.setup();
   render(<Shell hermes={hermes} />);
@@ -54,6 +56,11 @@ async function shown() {
 }
 
 const select = (name: string) => screen.getByRole<HTMLSelectElement>("combobox", { name });
+/** A model field is a search box over the provider's models, not a <select>: it opens on a click and lists options. */
+async function pickModel(user: ReturnType<typeof userEvent.setup>, name: string, model: string) {
+  await user.click(select(name));
+  await user.click(within(screen.getByRole("listbox", { name })).getByRole("option", { name: model }));
+}
 const writes = (server: FakeHermes) => server.restRequests.filter((r) => r.method !== "GET").map((r) => [`${r.method} ${r.path}`, r.body]);
 
 describe("Settings → Model", () => {
@@ -103,8 +110,80 @@ describe("Settings → Model", () => {
     expect(select("Main model").value).toBe("");
     expect(screen.getByText("Choose a model for nous.")).toBeTruthy();
     expect(screen.getByRole<HTMLButtonElement>("button", { name: "Apply main model" }).disabled).toBe(true);
-    await user.selectOptions(select("Main model"), "hermes-5-70b");
+    await pickModel(user, "Main model", "hermes-5-70b");
     expect(screen.getByRole<HTMLButtonElement>("button", { name: "Apply main model" }).disabled).toBe(false);
+  });
+});
+
+describe("A model field searches the provider's models (#538)", () => {
+  const listed = (name: string) => within(screen.getByRole("listbox", { name })).getAllByRole("option").map((o) => o.textContent);
+  const active = (name: string) => within(screen.getByRole("listbox", { name })).getByRole("option", { selected: true }).textContent;
+
+  it("narrows the list as you type; the arrow keys and Enter pick, and nothing is written until Apply", async () => {
+    const { server, user } = await shown();
+    const field = select("Main model");
+    await user.click(field);
+    expect(listed("Main model")).toEqual(["z-ai/glm-5.3-flash", "deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro", "google/gemini-3.7-flash", "anthropic/claude-fable-5.1"]);
+    expect(active("Main model")).toBe("z-ai/glm-5.3-flash");
+
+    await user.type(field, "V4 deep");
+    expect(listed("Main model")).toEqual(["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"]);
+    await user.keyboard("{ArrowDown}");
+    expect(active("Main model")).toBe("deepseek/deepseek-v4-pro");
+    await user.keyboard("{Enter}");
+
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(field.getAttribute("aria-expanded")).toBe("false");
+    expect(field.value).toBe("deepseek/deepseek-v4-pro");
+    expect(screen.getByText("Not applied yet.")).toBeTruthy();
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Apply main model" }).disabled).toBe(false);
+    expect(writes(server)).toEqual([]);
+  });
+
+  it("opens from the keyboard on the model in use, and Escape closes it without changing anything", async () => {
+    const { user } = await shown();
+    const field = select("Main model");
+    field.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(active("Main model")).toBe("z-ai/glm-5.3-flash");
+    await user.keyboard("{ArrowUp}");
+    expect(active("Main model")).toBe("anthropic/claude-fable-5.1");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(field.value).toBe("z-ai/glm-5.3-flash");
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Apply main model" }).disabled).toBe(true);
+  });
+
+  it("says when no model matches, and Enter then picks nothing", async () => {
+    const { user } = await shown();
+    const field = select("Compression model");
+    await user.type(field, "no such model");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(within(field.closest(".model-combo")!).getByRole("status").textContent).toBe("No models match.");
+    await user.keyboard("{Enter}{Escape}");
+    expect(field.value).toBe("deepseek/deepseek-v4-flash");
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Apply auxiliary models" }).disabled).toBe(true);
+  });
+
+  it("shows a saved model the provider no longer lists, and keeps it on offer", async () => {
+    const { user } = await shown((server) => (server.modelConfig.model.default = "z-ai/glm-4-retired"));
+    const field = select("Main model");
+    expect(field.value).toBe("z-ai/glm-4-retired");
+    await user.click(field);
+    expect(listed("Main model")[0]).toBe("z-ai/glm-4-retiredNot listed now");
+    expect(active("Main model")).toBe("z-ai/glm-4-retiredNot listed now");
+    await user.type(field, "glm");
+    expect(listed("Main model")).toEqual(["z-ai/glm-4-retiredNot listed now", "z-ai/glm-5.3-flash"]);
+  });
+
+  it("searches the subagent's model too, among the main provider's models for a custom model", async () => {
+    const { user } = await shown();
+    await user.selectOptions(select("Subagent route"), "custom-model");
+    const field = select("Subagent model");
+    await user.type(field, "gemini");
+    expect(listed("Subagent model")).toEqual(["google/gemini-3.7-flash"]);
+    await user.keyboard("{Enter}");
+    expect(field.value).toBe("google/gemini-3.7-flash");
   });
 });
 
@@ -117,7 +196,7 @@ describe("Settings → Model as cards of rows (#174, ADR 0059)", () => {
     const { user } = await shown();
     // The one model the stand-in gives a fast mode.
     await user.selectOptions(select("Main provider"), "openai-codex");
-    await user.selectOptions(select("Main model"), "gpt-6.1-sol");
+    await pickModel(user, "Main model", "gpt-6.1-sol");
     const box = screen.getByRole<HTMLInputElement>("checkbox", { name: "Fast mode" });
     expect(box.disabled).toBe(false);
     expect(box.checked).toBe(false);
@@ -185,7 +264,7 @@ describe("Leaving Settings", () => {
   it("drops the draft silently: nothing is written, and reopening shows what Hermes has", async () => {
     const { server, user } = await shown();
     await user.selectOptions(select("Main provider"), "nous");
-    await user.selectOptions(select("Main model"), "hermes-5-70b");
+    await pickModel(user, "Main model", "hermes-5-70b");
     await user.selectOptions(select("Subagent route"), "custom-model");
     await user.clear(screen.getByRole("spinbutton", { name: "Subagent turn limit" }));
     await user.type(screen.getByRole("spinbutton", { name: "Subagent turn limit" }), "99");
@@ -211,7 +290,7 @@ describe("Guardrail: helper tasks pinned to another provider", () => {
   it("asks before the main model moves off their provider; Cancel writes nothing, Apply anyway applies", async () => {
     const { server, user } = await shown();
     await user.selectOptions(select("Main provider"), "nous");
-    await user.selectOptions(select("Main model"), "hermes-5-70b");
+    await pickModel(user, "Main model", "hermes-5-70b");
     await user.click(screen.getByRole("button", { name: "Apply main model" }));
 
     const ask = screen.getByRole("alertdialog", { name: "Auxiliary models still pinned" });
@@ -233,7 +312,7 @@ describe("Guardrail: helper tasks pinned to another provider", () => {
 
   it("doesn't ask when the main model stays on the provider they're pinned to", async () => {
     const { server, user } = await shown();
-    await user.selectOptions(select("Main model"), "deepseek/deepseek-v4-pro");
+    await pickModel(user, "Main model", "deepseek/deepseek-v4-pro");
     await user.click(screen.getByRole("button", { name: "Apply main model" }));
     await screen.findByText("Applied. New chats use it.");
     expect(writes(server)).toEqual([["POST /api/model/set", { scope: "main", provider: "openrouter", model: "deepseek/deepseek-v4-pro" }]]);
@@ -243,7 +322,7 @@ describe("Guardrail: helper tasks pinned to another provider", () => {
 describe("Guardrail: a model Hermes flags as expensive", () => {
   it("Keep current writes nothing and puts the current model back", async () => {
     const { server, user } = await shown();
-    await user.selectOptions(select("Main model"), "anthropic/claude-fable-5.1");
+    await pickModel(user, "Main model", "anthropic/claude-fable-5.1");
     await user.click(screen.getByRole("button", { name: "Apply main model" }));
 
     const ask = await screen.findByRole("alertdialog", { name: "Expensive model" });
@@ -262,7 +341,7 @@ describe("Guardrail: a model Hermes flags as expensive", () => {
 
   it("Switch anyway applies it", async () => {
     const { server, user } = await shown();
-    await user.selectOptions(select("Main model"), "anthropic/claude-fable-5.1");
+    await pickModel(user, "Main model", "anthropic/claude-fable-5.1");
     await user.click(screen.getByRole("button", { name: "Apply main model" }));
     await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Switch anyway" }));
     await screen.findByText("Applied. New chats use it.");
@@ -277,7 +356,7 @@ describe("Guardrail: a model Hermes flags as expensive", () => {
 describe("Guardrail: an expensive helper model", () => {
   it("asks too; Keep current puts the task's model back, Switch anyway sets it", async () => {
     const { server, user } = await shown();
-    await user.selectOptions(select("Compression model"), "anthropic/claude-fable-5.1");
+    await pickModel(user, "Compression model", "anthropic/claude-fable-5.1");
     await user.click(screen.getByRole("button", { name: "Apply auxiliary models" }));
     let ask = await screen.findByRole("alertdialog", { name: "Expensive model" });
     expect(ask.textContent).toContain("Use anthropic/claude-fable-5.1 for Compression?");
@@ -285,7 +364,7 @@ describe("Guardrail: an expensive helper model", () => {
     expect(select("Compression model").value).toBe("deepseek/deepseek-v4-flash");
     expect(server.modelConfig.auxiliary.compression.model).toBe("deepseek/deepseek-v4-flash");
 
-    await user.selectOptions(select("Compression model"), "anthropic/claude-fable-5.1");
+    await pickModel(user, "Compression model", "anthropic/claude-fable-5.1");
     await user.click(screen.getByRole("button", { name: "Apply auxiliary models" }));
     ask = await screen.findByRole("alertdialog", { name: "Expensive model" });
     await user.click(within(ask).getByRole("button", { name: "Switch anyway" }));
@@ -310,7 +389,7 @@ describe("Subagents and auxiliary models", () => {
     await user.selectOptions(select("Main reasoning effort"), "low");
     await user.selectOptions(select("Compression provider"), "openai-codex");
     expect(screen.getByRole<HTMLButtonElement>("button", { name: "Apply auxiliary models" }).disabled).toBe(true);
-    await user.selectOptions(select("Compression model"), "gpt-6.1-mini");
+    await pickModel(user, "Compression model", "gpt-6.1-mini");
     await user.selectOptions(select("Compression effort"), "none");
     await user.click(screen.getByRole("button", { name: "Apply auxiliary models" }));
     await waitFor(() => expect(server.modelConfig.auxiliary.compression).toEqual({ provider: "openai-codex", model: "gpt-6.1-mini", reasoning_effort: "none" }));
