@@ -1207,7 +1207,7 @@ export class Hermes {
   /** The Clone profile dialog's profile list, create and delete (profileClone.ts, ADR 0074). Each call names its profiles. */
   readonly profileClone = new ProfileCloneApi((method, pathAndQuery, body) => this.rest(method, pathAndQuery, body), this.persona, this.skills);
   /**
-   * Settings → Profiles' list, create, rename, description, model and delete (profiles.ts, ADR 0144). Each call names its
+   * Settings → Profiles' list, create, rename, description, model and delete (profiles.ts, ADR 0156). Each call names its
    * profile. Every list read keeps `default`'s display name for the rest of the app.
    */
   readonly manageProfiles = new ProfilesApi(async (method, pathAndQuery, body) => {
@@ -1465,7 +1465,7 @@ export class Hermes {
 
   /**
    * The Queued and Failed messages holding text that this computer keeps for `profile`, which deleting the profile
-   * loses (Settings → Profiles, ADR 0144).
+   * loses (Settings → Profiles, ADR 0156).
    */
   heldMessagesIn(profile: string): number {
     const queues = profile === this.profile ? this.snapshot.queues : loadQueues(this.cache, profile);

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Settings → Profiles (ADR 0144) in the running app against a fake Hermes: the list, New profile, Edit (rename with this
+// Settings → Profiles (ADR 0156) in the running app against a fake Hermes: the list, New profile, Edit (rename with this
 // computer's data moving, default's display name, description and model), Delete (typed name, the profile in use, a
 // delete Hermes is still settling and one already gone), Clone from a row, a route the server lacks, and the whole flow
 // by keyboard. All data is synthetic.

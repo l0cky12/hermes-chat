@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // A profile's rename moves everything this computer keeps for it, its delete forgets it, and removing a connection
-// forgets every profile's, all through one list (profileLocalData.ts, ADR 0144). The first test reads the app's source
+// forgets every profile's, all through one list (profileLocalData.ts, ADR 0156). The first test reads the app's source
 // for every storage key it names, so a new one can't be left out of that list. All data is synthetic.
 import { afterEach, describe, expect, it } from "vitest";
 import { moveLiveChatData } from "./chatCache";

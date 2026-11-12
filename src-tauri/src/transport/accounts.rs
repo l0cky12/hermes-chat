@@ -1,7 +1,7 @@
 //! Settings → Providers' subscription sign-ins and custom endpoints (ADR 0133), on Hermes's routes at the deployed
 //! `bf0203a` (`hermes_cli/web_routers/oauth.py` and `config_env.py`). Rust reads both lists so that the token and key
 //! previews Hermes puts in them (`token_preview`, `api_key_preview`) never reach the window, whose own `GET` of either
-//! list the REST relay refuses (ADR 0138), and saves an endpoint so
+//! list the REST relay refuses (ADR 0154), and saves an endpoint so
 //! that its API key goes from the window to Hermes and nowhere else. Starting a sign-in, polling and cancelling it,
 //! signing out, and activating or removing an endpoint carry nothing secret, so the window sends those through the
 //! REST relay (`provider_account_write`).

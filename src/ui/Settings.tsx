@@ -12,7 +12,7 @@
 // skills, switched and edited on Hermes (SkillSettings.tsx). Diagnostics: what the connected Hermes is and what it
 // supports (Diagnostics.tsx), and Logs, this app's and the profile's Hermes logs (Logs.tsx, ADR 0087); a tab whose
 // feature Hermes lacks says so in its place. Profiles: every profile on the server, made, renamed, described, given a
-// model and deleted (ProfileSettings.tsx, ADR 0144).
+// model and deleted (ProfileSettings.tsx, ADR 0156).
 // Profiles are switched in the list's header, not here (ADR 0001); Profiles' Open goes through the same question. The search box (Ctrl+F) shows the sections of every
 // tab whose text holds what was typed (settingsSearch.ts).
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -343,9 +343,9 @@ export function SettingsScreen({
   screen?: Pick<ScreenApi, "status">;
   /** Diagnostics → Logs (ADR 0033, 0087); without it Diagnostics has no Logs. */
   logs?: LogsWiring;
-  /** Settings → Profiles (ADR 0144); without it there is no Profiles tab. Settings adds where its menu's tab jumps go. */
+  /** Settings → Profiles (ADR 0156); without it there is no Profiles tab. Settings adds where its menu's tab jumps go. */
   profilesTab?: Omit<ProfilesWiring, "showTab">;
-  /** The display name Hermes keeps for `default`, for the profile pickers (ADR 0144). */
+  /** The display name Hermes keeps for `default`, for the profile pickers (ADR 0156). */
   defaultName?: string;
 }) {
   const frame = useLocale().settings;

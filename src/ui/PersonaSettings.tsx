@@ -48,9 +48,9 @@ export function PersonaPage({
   api: PersonaApi;
   /** `profile`: the profile in use, which the picker starts on unless `start` names another. */
   where: PersonaWhere;
-  /** The profile the picker starts on, when Settings → Profiles opened Persona at one (ADR 0144). */
+  /** The profile the picker starts on, when Settings → Profiles opened Persona at one (ADR 0156). */
   start?: string;
-  /** The display name Hermes keeps for `default`, shown before its id (ADR 0144). */
+  /** The display name Hermes keeps for `default`, shown before its id (ADR 0156). */
   defaultName?: string;
   connected: boolean;
   store: PersonaStore;

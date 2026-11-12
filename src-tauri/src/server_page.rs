@@ -173,7 +173,7 @@ impl ServerPage {
 }
 
 /// The Fetch standard's bad ports: browsers never load a page from them. The frame loads every server page from an
-/// ephemeral port on this computer, so WebKit's own block never sees the server's port (ADR 0138).
+/// ephemeral port on this computer, so WebKit's own block never sees the server's port (ADR 0154).
 const BAD_PORTS: &[u16] = &[
     1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137,
     139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723,
@@ -1203,7 +1203,7 @@ const ACCEPT_RETRY: Duration = Duration::from_millis(100);
 
 /// Accepts connections on `listener` and copies each one to and from ssh at `address`, until dropped: it never returns.
 /// A failed accept (a connection reset before it was taken, or no file descriptors left) passes, so it is logged and
-/// the next tried a moment later. A connection from anyone but `peers` is closed unanswered (ADR 0105, ADR 0138), before
+/// the next tried a moment later. A connection from anyone but `peers` is closed unanswered (ADR 0105, ADR 0154), before
 /// anything reaches ssh.
 pub(crate) async fn serve(listener: TcpListener, address: Address, peers: Peers) -> Infallible {
     let listener = &listener;

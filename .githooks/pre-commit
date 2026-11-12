@@ -1,0 +1,9 @@
+#!/bin/sh
+# Refuses a commit that stages Rust when `cargo fmt --check` (as CI runs it) fails. Enable once per clone, for every
+# worktree: git config core.hooksPath .githooks
+git diff --cached --name-only --diff-filter=ACMR -- 'src-tauri/*.rs' | grep -q . || exit 0
+PATH=$PATH:$HOME/.cargo/bin
+cargo fmt --manifest-path src-tauri/Cargo.toml --check || {
+  echo "pre-commit: Rust isn't formatted. Run: cargo fmt --manifest-path src-tauri/Cargo.toml" >&2
+  exit 1
+}

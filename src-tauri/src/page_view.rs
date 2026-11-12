@@ -6,7 +6,7 @@
 //! that key is what keeps the app's own frames from its commands (ADR 0007). This view has no Tauri script, no IPC
 //! handler and none of the app's URI schemes, and its web context is new and ephemeral: the page shares no storage
 //! with the app, and its cookies last only while the app runs. Its web process runs in WebKit's bubblewrap sandbox
-//! (ADR 0138).
+//! (ADR 0154).
 //!
 //! The webview names the page and where it shows; Rust checks the address as the pane does (`web_page::web_url`).
 
@@ -502,7 +502,7 @@ mod imp {
 
     pub(super) fn page_context() -> webkit2gtk::WebContext {
         let context = webkit2gtk::WebContext::new_ephemeral();
-        // Off by default in the 4.1 API. A page from any site then runs without the owner's files (ADR 0138).
+        // Off by default in the 4.1 API. A page from any site then runs without the owner's files (ADR 0154).
         context.set_sandbox_enabled(true);
         context.connect_download_started(|_, download| {
             use webkit2gtk::DownloadExt;

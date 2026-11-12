@@ -1,0 +1,51 @@
+name: verify-harness
+
+# The verify-hermes-chat harness's own self-checks (#561): `hv bootstrap`, then `scripts/selftest`, which runs `hv up`
+# against a fake app and driver, so the app isn't built. Agents rely on the harness for real-app proof. Its stand-in
+# dashboard (bridge.ts) bundles FakeHermes from src/ and the bench's chats, so changes there run this too.
+
+on:
+  pull_request:
+    paths:
+      - ".claude/skills/verify-hermes-chat/**"
+      - ".github/workflows/verify-harness.yml"
+      - "src/**"
+      - "bench/**"
+      - "package-lock.json"
+  push:
+    branches: [main]
+    paths:
+      - ".claude/skills/verify-hermes-chat/**"
+      - ".github/workflows/verify-harness.yml"
+      - "src/**"
+      - "bench/**"
+      - "package-lock.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-harness-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-harness:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      # Present, these are used as they are: hv bootstrap's own download names Debian's packages, not Ubuntu's.
+      - name: Headless X, WebKitWebDriver and the tools hv checks for
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb x11-apps xdotool openbox webkit2gtk-driver bubblewrap dbus
+      # The stand-in dashboard is bundled with the repo's rolldown.
+      - run: npm ci
+      - run: .claude/skills/verify-hermes-chat/scripts/hv bootstrap
+      - run: .claude/skills/verify-hermes-chat/scripts/selftest

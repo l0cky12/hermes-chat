@@ -4,7 +4,7 @@
 //! The local end is made as a server page's is (ADR 0114, ADR 0098): ssh forwards a Unix socket in a private folder,
 //! and Rust binds `127.0.0.1:0`, keeps the listener and relays each connection to the socket. The port the sign-in
 //! sends the password to is never free for another program to take while ssh signs in. Only Rust uses that port, so
-//! the relay serves this process alone: a page in the Preview, loaded by WebKit's own process, can't (ADR 0138). On
+//! the relay serves this process alone: a page in the Preview, loaded by WebKit's own process, can't (ADR 0154). On
 //! Windows, where ssh can't listen on a Unix socket, ssh listens on nothing: each connection is an `ssh -W` of its own
 //! (#506).
 
