@@ -4,7 +4,7 @@
 //! and Hermes's write routes don't guard credential files, so every write here takes a path that `ContextPath::parse`
 //! or `ContextDir::parse` checked.
 
-use crate::transport::{self, Attachable, Dashboard, TransportError, UploadSource};
+use crate::transport::{self, Attachable, Dashboard, RelayError, TransportError, UploadSource};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -22,10 +22,11 @@ const READ_TEXT_ANSWER_MAX_BYTES: u64 = 4 * MIB;
 const GIT_FILE_MAX_BYTES: u64 = MIB;
 const ANSWER_MAX_BYTES: u64 = 64 * 1024;
 
-/// What a write is refused with when a file is already at its path and `overwrite` is false.
+/// The `RelayError` code a write is refused with when a file is already at its path and `overwrite` is false.
 pub const EXISTS: &str = "exists";
-/// What adding a file that isn't UTF-8 text up to 8 MiB on an SSH profile is refused with: `/api/fs` has no binary
-/// write (ADR 0135).
+/// The `RelayError` code adding a file that isn't UTF-8 text up to 8 MiB on an SSH profile is refused with, and its
+/// message: `/api/fs` has no binary write (ADR 0135).
+pub const SSH_TEXT_ONLY: &str = "ssh-text-only";
 pub const SSH_BINARY_REFUSED: &str = "can't add this file to a project on an SSH profile yet";
 
 /// A project's `context` folder on the server: a full path, without empty, `.` or `..` segments, whose last segment is
@@ -197,11 +198,19 @@ async fn read(dashboard: &Dashboard, on: Machine<'_>, path: &str, max_bytes: u64
     }
 }
 
-fn written(e: TransportError) -> String {
+fn written(e: TransportError) -> RelayError {
     match e {
-        TransportError::Unexpected { status: 409, .. } => EXISTS.into(),
-        e => e.to_string(),
+        TransportError::Unexpected { status: 409, .. } => exists(),
+        e => e.into(),
     }
+}
+
+fn exists() -> RelayError {
+    RelayError::refused(EXISTS, "A file is there already.")
+}
+
+fn ssh_text_only() -> RelayError {
+    RelayError::refused(SSH_TEXT_ONLY, SSH_BINARY_REFUSED)
 }
 
 /// Uploads an attached file to `to` (ADR 0023). On an SSH profile only UTF-8 text up to 8 MiB goes, else
@@ -213,18 +222,18 @@ pub async fn upload(
     overwrite: bool,
     ssh_profile: Option<&str>,
     progress: impl Fn(u64, Option<u64>) + Send + Sync + 'static,
-) -> Result<(), String> {
+) -> Result<(), RelayError> {
     let Some(profile) = ssh_profile else {
         return dashboard.upload(to.as_str(), UploadSource::File(file.path), overwrite, progress).await.map(drop).map_err(written);
     };
     if file.size > transport::AGENT_TEXT_MAX_BYTES {
-        return Err(SSH_BINARY_REFUSED.into());
+        return Err(ssh_text_only());
     }
     let bytes = tokio::fs::read(&file.path).await.map_err(|e| format!("Couldn't read {} on this computer: {e}.", file.name))?;
     // Written as it is, a byte-order mark included, so the listing shows the size that was picked.
     let text = match plain_text(&bytes).and(std::str::from_utf8(&bytes).ok()) {
         Some(text) if bytes.len() as u64 <= transport::AGENT_TEXT_MAX_BYTES => text,
-        _ => return Err(SSH_BINARY_REFUSED.into()),
+        _ => return Err(ssh_text_only()),
     };
     let size = bytes.len() as u64;
     progress(0, Some(size));
@@ -235,68 +244,68 @@ pub async fn upload(
 
 /// Writes `text` as the file `to`, up to `CONTEXT_FILE_MAX_BYTES`, or 8 MiB on an SSH profile. `overwrite` false:
 /// `EXISTS` when a file is already there.
-pub async fn write_text(dashboard: &Dashboard, to: &ContextPath, text: String, overwrite: bool, ssh_profile: Option<&str>) -> Result<(), String> {
+pub async fn write_text(dashboard: &Dashboard, to: &ContextPath, text: String, overwrite: bool, ssh_profile: Option<&str>) -> Result<(), RelayError> {
     match ssh_profile {
         Some(profile) => write_over_ssh(dashboard, profile, to, &text, overwrite).await,
         None => {
             let size = text.len() as u64;
             if size > CONTEXT_FILE_MAX_BYTES {
-                return Err(TransportError::FileTooLarge { size, max: CONTEXT_FILE_MAX_BYTES }.to_string());
+                return Err(TransportError::FileTooLarge { size, max: CONTEXT_FILE_MAX_BYTES }.into());
             }
             dashboard.upload(to.as_str(), UploadSource::Bytes(text.into_bytes()), overwrite, |_, _| {}).await.map(drop).map_err(written)
         }
     }
 }
 
-async fn write_over_ssh(dashboard: &Dashboard, profile: &str, to: &ContextPath, text: &str, overwrite: bool) -> Result<(), String> {
+async fn write_over_ssh(dashboard: &Dashboard, profile: &str, to: &ContextPath, text: &str, overwrite: bool) -> Result<(), RelayError> {
     // `write-text` always replaces, so a taken name is looked for first. A file created in between is still replaced.
     let taken = || async { read(dashboard, Machine::Ssh(profile), to.as_str(), CONTEXT_FILE_MAX_BYTES).await.map(|r| !matches!(r, Read::Missing)) };
     if !overwrite && taken().await.map_err(written)? {
-        return Err(EXISTS.into());
+        return Err(exists());
     }
     dashboard.write_agent_text(profile, to.as_str(), text, None).await.map(drop).map_err(written)
 }
 
 /// Creates `dir` and its missing parents. Returns the path Hermes answers with.
-pub async fn mkdir(dashboard: &Dashboard, dir: &ContextDir) -> Result<String, String> {
+pub async fn mkdir(dashboard: &Dashboard, dir: &ContextDir) -> Result<String, RelayError> {
     #[derive(Deserialize)]
     struct Made {
         path: String,
     }
     let body = json!({ "path": dir.as_str() });
-    let answer = dashboard.send_limited(Method::POST, "api/files/mkdir", "", Some(&body), ANSWER_MAX_BYTES).await.map_err(|e| e.to_string())?;
+    let answer = dashboard.send_limited(Method::POST, "api/files/mkdir", "", Some(&body), ANSWER_MAX_BYTES).await.map_err(RelayError::from)?;
     serde_json::from_slice::<Made>(&answer).map(|m| m.path).map_err(|_| "Hermes's answer to creating the context folder didn't name it.".into())
 }
 
 /// Deletes the file `file`, never a folder's contents.
-pub async fn remove(dashboard: &Dashboard, file: &ContextPath) -> Result<(), String> {
+pub async fn remove(dashboard: &Dashboard, file: &ContextPath) -> Result<(), RelayError> {
     let body = json!({ "path": file.as_str(), "recursive": false });
-    dashboard.send_limited(Method::DELETE, "api/files", "", Some(&body), ANSWER_MAX_BYTES).await.map(drop).map_err(|e| e.to_string())
+    dashboard.send_limited(Method::DELETE, "api/files", "", Some(&body), ANSWER_MAX_BYTES).await.map(drop).map_err(RelayError::from)
 }
 
 /// The text of the context file `file`, `size` bytes as listed, for full-text mode. `None`: it has no text Hermes Chat
 /// can read, it's over `CONTEXT_FILE_MAX_BYTES`, or on an SSH profile it isn't plain text up to 512 KiB.
-pub async fn read_text(dashboard: &Dashboard, file: &ContextPath, size: u64, ssh_profile: Option<&str>) -> Result<Option<String>, String> {
+pub async fn read_text(dashboard: &Dashboard, file: &ContextPath, size: u64, ssh_profile: Option<&str>) -> Result<Option<String>, RelayError> {
     if size > CONTEXT_FILE_MAX_BYTES {
         return Ok(None);
     }
-    match read(dashboard, Machine::of(ssh_profile), file.as_str(), CONTEXT_FILE_MAX_BYTES).await.map_err(|e| e.to_string())? {
+    match read(dashboard, Machine::of(ssh_profile), file.as_str(), CONTEXT_FILE_MAX_BYTES).await.map_err(RelayError::from)? {
         Read::Bytes(bytes) => Ok(extract(file.name().to_owned(), bytes).await),
         Read::NotText => Ok(None),
-        Read::Missing => Err(format!("{} isn't in the context folder any more.", file.name())),
-        Read::NotAFile => Err(format!("{} isn't a file.", file.name())),
+        Read::Missing => Err(format!("{} isn't in the context folder any more.", file.name()).into()),
+        Read::NotAFile => Err(format!("{} isn't a file.", file.name()).into()),
     }
 }
 
 /// `file` on the SSH machine of `profile`, read once with `read-text`, which reports the size even of a file it cuts
 /// short at 512 KiB.
-pub async fn ssh_file(dashboard: &Dashboard, file: &ContextPath, profile: &str) -> Result<SshFile, String> {
+pub async fn ssh_file(dashboard: &Dashboard, file: &ContextPath, profile: &str) -> Result<SshFile, RelayError> {
     let q = query(&[("path", file.as_str()), ("profile", profile)]);
     let body = match dashboard.send_limited(Method::GET, "api/fs/read-text", &q, None, READ_TEXT_ANSWER_MAX_BYTES).await {
         Ok(body) => body,
-        Err(TransportError::Unexpected { status: 404, .. }) => return Err(format!("{} isn't in the context folder any more.", file.name())),
-        Err(TransportError::Unexpected { status: 400, .. }) => return Err(format!("{} isn't a file.", file.name())),
-        Err(e) => return Err(e.to_string()),
+        Err(TransportError::Unexpected { status: 404, .. }) => return Err(format!("{} isn't in the context folder any more.", file.name()).into()),
+        Err(TransportError::Unexpected { status: 400, .. }) => return Err(format!("{} isn't a file.", file.name()).into()),
+        Err(e) => return Err(e.into()),
     };
     let answer: ReadText = serde_json::from_slice(&body).map_err(|_| "the answer to reading a file wasn't Hermes's".to_owned())?;
     let whole = !answer.binary && !answer.truncated;
@@ -442,7 +451,7 @@ impl ExcludeFile {
 /// Keeps `<main_folder>/context/` out of the Git repository the main folder is in, if any, by appending an anchored line
 /// to the repository's `info/exclude`, unless `info/exclude`, the root's `.gitignore` or the main folder's already
 /// ignores it. Never writes a `.gitignore`.
-pub async fn git_exclude(dashboard: &Dashboard, main_folder: &str, ssh_profile: Option<&str>) -> Result<GitExclude, String> {
+pub async fn git_exclude(dashboard: &Dashboard, main_folder: &str, ssh_profile: Option<&str>) -> Result<GitExclude, RelayError> {
     #[derive(Deserialize)]
     struct GitRoot {
         root: Option<String>,
@@ -451,7 +460,7 @@ pub async fn git_exclude(dashboard: &Dashboard, main_folder: &str, ssh_profile: 
     let on = Machine::of(ssh_profile);
     let mut pairs = vec![("path", main_folder)];
     pairs.extend(ssh_profile.map(|p| ("profile", p)));
-    let answer = dashboard.send_limited(Method::GET, "api/fs/git-root", &query(&pairs), None, ANSWER_MAX_BYTES).await.map_err(|e| e.to_string())?;
+    let answer = dashboard.send_limited(Method::GET, "api/fs/git-root", &query(&pairs), None, ANSWER_MAX_BYTES).await.map_err(RelayError::from)?;
     let found: GitRoot = serde_json::from_slice(&answer).map_err(|_| "Hermes's answer to finding the Git repository wasn't one Hermes Chat knows.")?;
     let Some(root) = found.root else { return Ok(GitExclude::None) };
     let root = normalize(&root).ok_or_else(|| format!("Hermes named {root} as the Git repository, which isn't a full path."))?;
@@ -459,7 +468,7 @@ pub async fn git_exclude(dashboard: &Dashboard, main_folder: &str, ssh_profile: 
         .ok_or_else(|| format!("Hermes named {root} as the Git repository, which doesn't hold {main_folder}, so context/ wasn't excluded."))?;
 
     let unreadable = |path: &str| format!("Couldn't read {path} to keep context/ out of Git.");
-    let read_git = |path: String| async move { read(dashboard, on, &path, GIT_FILE_MAX_BYTES).await.map_err(|e| e.to_string()).map(|r| (path, r)) };
+    let read_git = |path: String| async move { read(dashboard, on, &path, GIT_FILE_MAX_BYTES).await.map_err(RelayError::from).map(|r| (path, r)) };
     let text_or_empty = |(path, read): (String, Read)| match read {
         Read::Bytes(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
         Read::Missing => Ok(String::new()),
@@ -469,7 +478,7 @@ pub async fn git_exclude(dashboard: &Dashboard, main_folder: &str, ssh_profile: 
     let dot_git = match read_git(format!("{root}/.git")).await? {
         (_, Read::NotAFile) => DotGit::Dir,
         (path, Read::Bytes(bytes)) => DotGit::File(gitdir_of(&root, &String::from_utf8_lossy(&bytes)).ok_or_else(|| unreadable(&path))?),
-        (path, _) => return Err(unreadable(&path)),
+        (path, _) => return Err(unreadable(&path).into()),
     };
     let git_dir = match &dot_git {
         DotGit::Dir => format!("{root}/.git"),
@@ -478,22 +487,22 @@ pub async fn git_exclude(dashboard: &Dashboard, main_folder: &str, ssh_profile: 
     let commondir = match read_git(format!("{git_dir}/commondir")).await? {
         (_, Read::Missing) => None,
         (_, Read::Bytes(bytes)) => Some(String::from_utf8_lossy(&bytes).trim().to_owned()),
-        (path, _) => return Err(unreadable(&path)),
+        (path, _) => return Err(unreadable(&path).into()),
     };
     let Some(common) = common_dir(&root, &dot_git, commondir.as_deref()) else {
-        return Err(format!("{git_dir} isn't {root}'s own Git folder or one of its worktrees, so context/ wasn't excluded."));
+        return Err(format!("{git_dir} isn't {root}'s own Git folder or one of its worktrees, so context/ wasn't excluded.").into());
     };
     if !matches!(read_git(format!("{common}/HEAD")).await?, (_, Read::Bytes(_))) {
-        return Err(format!("{common} doesn't look like a Git repository, so context/ wasn't excluded."));
+        return Err(format!("{common} doesn't look like a Git repository, so context/ wasn't excluded.").into());
     }
     let exclude = ExcludeFile::in_common_dir(&common);
     if !exclude_is_itself(dashboard, on, &exclude).await? {
-        return Err(format!("{} is a link, so context/ wasn't added to it.", exclude.0));
+        return Err(format!("{} is a link, so context/ wasn't added to it.", exclude.0).into());
     }
     let exclude_text = match read_git(exclude.0.clone()).await? {
         (_, Read::Bytes(bytes)) => String::from_utf8(bytes).map_err(|_| format!("{} isn't UTF-8 text, so context/ wasn't added to it.", exclude.0))?,
         (_, Read::Missing) => String::new(),
-        (path, _) => return Err(unreadable(&path)),
+        (path, _) => return Err(unreadable(&path).into()),
     };
     let root_ignore = text_or_empty(read_git(format!("{root}/.gitignore")).await?)?;
     let main_ignore = if rel.is_empty() { String::new() } else { text_or_empty(read_git(format!("{main_folder}/.gitignore")).await?)? };
@@ -504,7 +513,7 @@ pub async fn git_exclude(dashboard: &Dashboard, main_folder: &str, ssh_profile: 
         Machine::Dashboard => dashboard.upload(&exclude.0, UploadSource::Bytes(text.into_bytes()), true, |_, _| {}).await.map(drop),
         Machine::Ssh(profile) => dashboard.write_agent_text(profile, &exclude.0, &text, None).await.map(drop),
     }
-    .map_err(|e| e.to_string())?;
+    .map_err(RelayError::from)?;
     Ok(GitExclude::Added)
 }
 
@@ -579,7 +588,7 @@ pub fn common_dir(root: &str, dot_git: &DotGit, commondir: Option<&str>) -> Opti
 
 /// Whether `exclude` is a file of its own or not there yet, as the server resolves it: not a link to somewhere else,
 /// whose target an upload or `write-text` would replace.
-async fn exclude_is_itself(dashboard: &Dashboard, on: Machine<'_>, exclude: &ExcludeFile) -> Result<bool, String> {
+async fn exclude_is_itself(dashboard: &Dashboard, on: Machine<'_>, exclude: &ExcludeFile) -> Result<bool, RelayError> {
     #[derive(Deserialize)]
     struct Entry {
         name: String,
@@ -607,7 +616,7 @@ async fn exclude_is_itself(dashboard: &Dashboard, on: Machine<'_>, exclude: &Exc
     let body = match answer {
         Ok(body) => body,
         Err(TransportError::Unexpected { status: 404, .. }) => return Ok(true),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(e.into()),
     };
     let unknown = || "Hermes's answer about info/exclude wasn't one Hermes Chat knows.".to_owned();
     Ok(match on {

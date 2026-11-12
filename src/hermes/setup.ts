@@ -18,8 +18,21 @@ export const STAGES = ["address", "reach", "sign-in", "chat"] as const satisfies
 /** A connection test that went through, as Rust reports it: the raw `GET /api/status` body and first `/api/ws` frame. */
 export type Probed = { route: Route; status: string; ready: string };
 
-/** A connection test that failed, as Rust reports it. */
-export type ProbeFailure = { stage: Stage; message: string; status?: string | null };
+/**
+ * A connection test that failed, as Rust reports it (`transport::ProbeFailure`). `status`: the dashboard's
+ * `/api/status` body, when it answered one. `answered`: the failed call's HTTP status and the start of its body, when
+ * the dashboard or a gateway in front of it answered.
+ */
+export type ProbeFailure = { stage: Stage; message: string; status?: string | null; answered?: Answered };
+
+/** A call the dashboard answered with a failure: its HTTP status and the start of its body. */
+export type Answered = { status: number; body: string };
+
+/**
+ * Whether `re` matches the words of a failure that got no answer from the dashboard. An answered failure's message
+ * repeats its body, which is server text, so it is told apart by `answered.status` alone (#517).
+ */
+const says = (f: ProbeFailure, re: RegExp) => !f.answered && re.test(f.message);
 
 /** Runs connection tests. `run` rejects with a `ProbeFailure`; `cancel` stops the test under way. */
 export type Probe = { run(d: SignInDetails, profile: string, quick?: boolean): Promise<Probed>; cancel(): void };
@@ -34,12 +47,11 @@ export type Verdict = "timed out" | "refused" | "wrong server" | "sign-in failed
 
 /** What a failure comes to, in a word or two. */
 export function verdictOf(f: ProbeFailure): Verdict {
-  const m = f.message;
   if (f.stage === "cancelled") return "stopped";
-  if (/^Wrong server:|Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/.test(m)) return "wrong server";
+  if (says(f, /^Wrong server:|Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/)) return "wrong server";
   if (f.stage === "sign-in") return "sign-in failed";
-  if (/didn't answer within|didn't open the tunnel within|timed out|didn't finish connecting/i.test(m)) return "timed out";
-  if (/refused/i.test(m)) return "refused";
+  if (says(f, /didn't answer within|didn't open the tunnel within|timed out|didn't finish connecting/i)) return "timed out";
+  if (says(f, /refused/i)) return "refused";
   if (f.stage === "address" || f.stage === "reach") return "unreachable";
   return "failed";
 }
@@ -138,12 +150,13 @@ const sshHost = (target: string) => target.trim().replace(/^.*@/, "");
 
 /**
  * A failed test in the owner's words: `problem` says what went wrong, `detail` is the error as Rust gave it when that
- * adds anything, and `fixes` are what to try. Hints follow the messages Rust and OpenSSH write, and fall back to
- * general advice for the stage when nothing matches.
+ * adds anything, and `fixes` are what to try. A failure the dashboard answered is explained by its stage and status;
+ * any other by the messages Rust and OpenSSH write. Both fall back to general advice for the stage.
  */
 export function explain(f: ProbeFailure, d: SignInDetails): TestOutcome & { ok: false } {
   const m = f.message;
-  const has = (re: RegExp) => re.test(m);
+  const has = (re: RegExp) => says(f, re);
+  const code = f.answered?.status;
   const ssh = d.mode === "ssh";
   const status = readStatus(f.status);
   // `detail` null: the problem says it all.
@@ -157,16 +170,16 @@ export function explain(f: ProbeFailure, d: SignInDetails): TestOutcome & { ok: 
   });
   const where = ssh ? sshHost(d.sshTarget) : hostOf(d.url);
   // Before the password went anywhere (ADR 0120).
-  if (/^Wrong server: a different Hermes/.test(m))
+  if (has(/^Wrong server: a different Hermes/))
     return out(`A different Hermes server answered at ${where}, not the one this connection signed in to before. It wasn't sent the password.`, [
       "On another network, the same LAN address can be another machine. This route is skipped there.",
       "If you reinstalled Hermes on your server, choose Trust this server in the connection's settings.",
     ], null);
-  if (/^Wrong server: something answered/.test(m))
+  if (has(/^Wrong server: something answered/))
     return out(`Something answered at ${where}, but it isn't a Hermes dashboard. It wasn't sent the password.`, [
       ssh ? "Check that port 9119 on the server is the Hermes dashboard." : "Check the address and port: the dashboard listens on 9119 unless it was started with another.",
     ], null);
-  if (/^Plain http:\/\/ is only used/.test(m))
+  if (has(/^Plain http:\/\/ is only used/))
     return out(m, ["Use https:// for an address on the internet, or reach the server over SSH or Tailscale."], null);
   const checkSsh = `Check it from a terminal: ssh -o BatchMode=yes ${d.sshTarget.trim() || "<target>"} true`;
   const turnedAway = () =>
@@ -176,11 +189,10 @@ export function explain(f: ProbeFailure, d: SignInDetails): TestOutcome & { ok: 
         : "If a gateway such as Cloudflare Access is in front of the dashboard, add the headers it needs under Extra request headers, on the Server step. A service token needs CF-Access-Client-Id and CF-Access-Client-Secret.",
       "Or connect over SSH, which goes straight to the dashboard.",
     ]);
-  // With extra request headers, Rust hides a refusal's body, or a close reason, that may repeat them, as a gateway's
-  // can. Past the first request such a refusal is most likely the gateway's too, so the stage's own hints wouldn't
-  // help.
-  const hidden = "\\(not shown, as it may repeat your password or a request header\\)";
-  if (!ssh && d.headers?.length && has(new RegExp(`answered (401|403|407): ${hidden}|closed by the server \\(\\d+ ${hidden}\\)`)))
+  // With extra request headers, a refusal (401, 403, 407), or a close reason Rust hid since it may repeat them, is most
+  // likely a gateway's, past the first request too, so the stage's own hints wouldn't help.
+  const refused = code === 401 || code === 403 || code === 407;
+  if (!ssh && d.headers?.length && (refused || has(/closed by the server \(\d+ \(not shown, as it may repeat your password or a request header\)\)/)))
     return turnedAway();
 
   switch (f.stage) {
@@ -240,8 +252,8 @@ export function explain(f: ProbeFailure, d: SignInDetails): TestOutcome & { ok: 
           "If a gateway such as Cloudflare Access is in front of the dashboard, add the headers it needs under Extra request headers, on the Server step.",
           "Or connect over SSH, which goes straight to the dashboard.",
         ]);
-      if (!ssh && has(/answered (401|403)/)) return turnedAway();
-      if (has(/^The dashboard answered 5\d\d/))
+      if (!ssh && (code === 401 || code === 403)) return turnedAway();
+      if (code !== undefined && code >= 500)
         return out(`The dashboard at ${where} answered its status check with a server error. It wasn't sent the password.`, [
           ssh
             ? "Check that hermes dashboard is running on the server, and look at its log."
@@ -278,7 +290,7 @@ export function explain(f: ProbeFailure, d: SignInDetails): TestOutcome & { ok: 
           `It offers: ${status.authProviders.join(", ") || "nothing"}.`,
           "Set a dashboard username and password under dashboard.basic_auth in the server's Hermes config, then restart the dashboard.",
         ]);
-      if (has(/answered 503/)) return out("The dashboard's sign-in isn't available right now.", ["Try again in a moment."]);
+      if (code === 503) return out("The dashboard's sign-in isn't available right now.", ["Try again in a moment."]);
       if (has(/didn't answer within/)) return out("The dashboard didn't answer the sign-in in time.", ["Try again."]);
       return out("The dashboard's sign-in failed.", ["Try again. If it keeps failing, check the dashboard's log on the server."]);
 
@@ -310,6 +322,10 @@ export function explainSignIn(message: string, d: SignInDetails): Extract<TestOu
       fixes: message.split("\n").slice(1).map((l) => l.replace(/^• /, "")),
       verdict: "unreachable",
     };
+  // `hermes_connect` still rejects with text, so its status comes from Rust's own opening words
+  // (`TransportError::Unexpected`), never from the body after them. Like a test's, it is explained by that status.
+  const head = /^The dashboard answered (\d{3}): /.exec(message);
+  if (head) return explain({ stage: "reach", message, answered: { status: Number(head[1]), body: message.slice(head[0].length) } }, d);
   const stage: Stage = /^Wrong server:/.test(message)
     ? "reach"
     : /^Plain http:\/\//.test(message)

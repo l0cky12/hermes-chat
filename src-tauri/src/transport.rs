@@ -155,6 +155,51 @@ pub enum TransportError {
     RedirectedHidden,
 }
 
+/// How a command that calls the dashboard fails, as the webview gets it: the text to show, and, when the dashboard
+/// answered, its HTTP status and the start of its body. The webview tells failures apart by those two, never by the
+/// text, which repeats the body, server text and all (#486). `code`: a refusal Rust made itself, before or instead of
+/// the call, that the webview acts on, such as `project_context::EXISTS`.
+#[derive(Debug, PartialEq, Serialize)]
+pub struct RelayError {
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<&'static str>,
+}
+
+impl RelayError {
+    /// A refusal named `code`, said as `message`.
+    pub fn refused(code: &'static str, message: impl Into<String>) -> Self {
+        RelayError { code: Some(code), ..RelayError::from(message.into()) }
+    }
+}
+
+impl From<TransportError> for RelayError {
+    fn from(e: TransportError) -> Self {
+        let (status, body) = match &e {
+            TransportError::Unexpected { status, body } => (Some(*status), Some(body.clone())),
+            TransportError::SignedOut => (Some(401), None),
+            _ => (None, None),
+        };
+        RelayError { message: e.to_string(), status, body, code: None }
+    }
+}
+
+impl From<String> for RelayError {
+    fn from(message: String) -> Self {
+        RelayError { message, status: None, body: None, code: None }
+    }
+}
+
+impl From<&str> for RelayError {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+
 /// An extra request header as the owner typed it in the sign-in screen.
 #[derive(Deserialize)]
 pub struct ExtraHeader {
@@ -2924,17 +2969,37 @@ pub enum Stage {
 }
 
 /// A failed connection test. `status`: the dashboard's `GET /api/status` body, when it answered one, so setup can
-/// tell a Hermes dashboard from something else on the port, and which sign-in methods it offers.
+/// tell a Hermes dashboard from something else on the port, and which sign-in methods it offers. `answered`: the
+/// failed call's HTTP status and the start of its body, when the dashboard or a gateway in front of it answered one.
+/// Setup tells such a failure apart by the status, never by `message`, which repeats the body (#517).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProbeFailure {
     pub stage: Stage,
     pub message: String,
     pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answered: Option<Answered>,
+}
+
+/// A dashboard call answered with a failure: its HTTP status and the start of its body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Answered {
+    pub status: u16,
+    pub body: String,
 }
 
 impl ProbeFailure {
     pub fn new(stage: Stage, message: impl Into<String>) -> Self {
-        ProbeFailure { stage, message: message.into(), status: None }
+        ProbeFailure { stage, message: message.into(), status: None, answered: None }
+    }
+
+    /// `e` at `stage`, with its status and body when the dashboard answered.
+    pub fn of(stage: Stage, e: TransportError) -> Self {
+        let answered = match &e {
+            TransportError::Unexpected { status, body } => Some(Answered { status: *status, body: body.clone() }),
+            _ => None,
+        };
+        ProbeFailure { answered, ..ProbeFailure::new(stage, e.to_string()) }
     }
 }
 
@@ -2975,19 +3040,21 @@ pub async fn probe_expecting(
 ) -> Result<Probed, ProbeFailure> {
     let timed_out = |what: &str| format!("{what} didn't answer within {}s.", step.as_secs());
     // The same headers and redirect rule as the sign-in, so a gateway in front of the dashboard lets this through too.
-    let http = client(&sign_in.headers).map_err(|e| ProbeFailure::new(Stage::Address, e.to_string()))?;
+    let http = client(&sign_in.headers).map_err(|e| ProbeFailure::of(Stage::Address, e))?;
     // A refusal's page isn't shown if the request carried extra headers (`shown_body`).
     let status = match tokio::time::timeout(reach, read_status(&http, base, &sign_in.headers)).await {
         Err(_) => return Err(ProbeFailure::new(Stage::Reach, format!("The dashboard didn't answer within {}s.", reach.as_secs()))),
-        Ok(Err(e)) => return Err(ProbeFailure::new(Stage::Reach, e.to_string())),
+        Ok(Err(e)) => return Err(ProbeFailure::of(Stage::Reach, e)),
         Ok(Ok(status)) => status,
     };
-    let server = identify(&status, expect).map_err(|e| ProbeFailure { stage: Stage::Reach, message: e.to_string(), status: Some(status.clone()) })?;
-    let fail = |stage, message: String| ProbeFailure { stage, message, status: Some(status.clone()) };
-    offered(sign_in, Some(&status)).map_err(|e| fail(Stage::SignIn, e.to_string()))?;
+    let fail = |failure: ProbeFailure| ProbeFailure { status: Some(status.clone()), ..failure };
+    let failed = |stage, e| fail(ProbeFailure::of(stage, e));
+    let said = |stage, message: String| fail(ProbeFailure::new(stage, message));
+    let server = identify(&status, expect).map_err(|e| failed(Stage::Reach, e))?;
+    offered(sign_in, Some(&status)).map_err(|e| failed(Stage::SignIn, e))?;
     let dashboard = match tokio::time::timeout(step, Dashboard::sign_in(http, base, sign_in)).await {
-        Err(_) => return Err(fail(Stage::SignIn, timed_out("The dashboard's sign-in"))),
-        Ok(Err(e)) => return Err(fail(Stage::SignIn, e.to_string())),
+        Err(_) => return Err(said(Stage::SignIn, timed_out("The dashboard's sign-in"))),
+        Ok(Err(e)) => return Err(failed(Stage::SignIn, e)),
         Ok(Ok(d)) => d,
     };
     let (tx, rx) = tokio::sync::oneshot::channel::<PipeEvent>();
@@ -3002,17 +3069,17 @@ pub async fn probe_expecting(
     )
     .await
     {
-        Err(_) => return Err(fail(Stage::Chat, timed_out("The chat connection"))),
-        Ok(Err(e)) => return Err(fail(Stage::Chat, e.to_string())),
+        Err(_) => return Err(said(Stage::Chat, timed_out("The chat connection"))),
+        Ok(Err(e)) => return Err(failed(Stage::Chat, e)),
         Ok(Ok(p)) => p,
     };
     let first = tokio::time::timeout(step, rx).await;
     drop(pipe);
     match first {
         Ok(Ok(PipeEvent::Frame { text })) => Ok(Probed { status, ready: text, server }),
-        Ok(Ok(PipeEvent::Closed { reason })) => Err(fail(Stage::Chat, format!("The chat connection closed before Hermes was ready: {reason}"))),
-        Ok(Err(_)) => Err(fail(Stage::Chat, "The chat connection closed before Hermes was ready.".into())),
-        Err(_) => Err(fail(Stage::Chat, timed_out("Hermes"))),
+        Ok(Ok(PipeEvent::Closed { reason })) => Err(said(Stage::Chat, format!("The chat connection closed before Hermes was ready: {reason}"))),
+        Ok(Err(_)) => Err(said(Stage::Chat, "The chat connection closed before Hermes was ready.".into())),
+        Err(_) => Err(said(Stage::Chat, timed_out("Hermes"))),
     }
 }
 

@@ -12,7 +12,7 @@
 // - Audio lives in memory only, and only one turn's worth: the quiet before speech is trimmed to half a second, and a
 //   turn stops at its length limit.
 // - Each recording is sent to Hermes at most once, and late answers from before a pause or End are dropped.
-import { fellBackOf, type HeardTranscript } from "../hermes/sttRoute";
+import { SttFailed, fellBackOf, type HeardTranscript } from "../hermes/sttRoute";
 import type { Delivery } from "../hermes/transport";
 import { type Item, isWaiting } from "../hermes/model";
 import { messageOf, toWav } from "../hermes/voice";
@@ -425,9 +425,9 @@ export class VoiceConversation {
       got = await this.deps.transcribe(turn.recording.audio, turn.recording.mime, abort.signal);
     } catch (e) {
       if (session !== this.session) return;
-      // The transport's own errors already say what failed; others ("Not connected to Hermes.") get it said.
+      // Rust's own errors already say what failed; others get it said.
       const why = messageOf(e);
-      this.pause(/^(Hermes|This computer) couldn't transcribe/.test(why) ? why : `Hermes couldn't transcribe what you said: ${why}`);
+      this.pause(e instanceof SttFailed ? why : `Hermes couldn't transcribe what you said: ${why}`);
       return;
     }
     if (session !== this.session || this.transcribing !== turn) return;

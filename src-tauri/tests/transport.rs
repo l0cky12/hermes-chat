@@ -2226,6 +2226,18 @@ async fn a_connection_test_stops_where_a_gateway_turns_it_away() {
 }
 
 #[tokio::test]
+async fn a_connection_test_the_dashboard_answered_carries_its_status_and_body() {
+    let page = "upstream said: The dashboard answered 401: Unauthorized";
+    let app = Router::new().route("/api/status", get(move || async move { (StatusCode::BAD_GATEWAY, page).into_response() }));
+    let failed = transport::probe(&serve(app).await, &sign_in("hunter2"), "default").await.unwrap_err();
+    assert_eq!(failed.stage, Stage::Reach);
+    assert_eq!(failed.answered, Some(transport::Answered { status: 502, body: page.into() }));
+    let unanswered =
+        transport::probe(&serve(Router::new().route("/api/status", get(|| async { "<html>" }))).await, &sign_in("hunter2"), "default").await.unwrap_err();
+    assert_eq!(unanswered.answered, None, "{}", unanswered.message);
+}
+
+#[tokio::test]
 async fn a_provider_key_never_follows_a_redirect_to_another_site() {
     let (elsewhere, other) = other_site().await;
     let away = elsewhere.join("api/providers/validate").unwrap().to_string();

@@ -51,7 +51,9 @@ use tauri::webview::{PermissionKind, PermissionResponse};
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::Mutex;
-use transport::{Attachable, Credential, Dashboard, ExtraHeader, LocalFile, LocalText, PickedFiles, PipeEvent, ProbeFailure, SavedKey, SignIn, Stage};
+use transport::{
+    Attachable, Credential, Dashboard, ExtraHeader, LocalFile, LocalText, PickedFiles, PipeEvent, ProbeFailure, RelayError, SavedKey, SignIn, Stage,
+};
 use tunnel::Tunnel;
 
 /// The owner's `hermes dashboard` port on the server's loopback (research doc, "SSH tunnel, Host header
@@ -303,41 +305,6 @@ async fn hermes_connect(
     }
 }
 
-/// How a command that calls the dashboard fails, as the webview gets it: the text to show, and, when the dashboard
-/// answered, its HTTP status and the start of its body. The webview tells failures apart by those two, never by the
-/// text, which repeats the body, server text and all (#486).
-#[derive(Debug, Serialize)]
-struct RelayError {
-    message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    status: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    body: Option<String>,
-}
-
-impl From<transport::TransportError> for RelayError {
-    fn from(e: transport::TransportError) -> Self {
-        let (status, body) = match &e {
-            transport::TransportError::Unexpected { status, body } => (Some(*status), Some(body.clone())),
-            transport::TransportError::SignedOut => (Some(401), None),
-            _ => (None, None),
-        };
-        RelayError { message: e.to_string(), status, body }
-    }
-}
-
-impl From<String> for RelayError {
-    fn from(message: String) -> Self {
-        RelayError { message, status: None, body: None }
-    }
-}
-
-impl From<&str> for RelayError {
-    fn from(message: &str) -> Self {
-        message.to_owned().into()
-    }
-}
-
 /// How long a reopen's ticket and socket may each take: a closed socket usually means the rest of the connection still
 /// answers, and when it doesn't, opening it all again soon beats waiting.
 const REOPEN_LIMITS: transport::StepLimits = transport::StepLimits { ticket: QUICK_REACH, socket: QUICK_REACH, ..transport::StepLimits::ROUTES };
@@ -533,10 +500,9 @@ struct Reached {
 async fn hermes_reach(target: Target, expect_server: Option<String>, quick: Option<bool>, methods: Option<bool>) -> Result<Reached, ProbeFailure> {
     let quick = quick.unwrap_or(false);
     let (base, _tunnel, route, headers) = open_target(target, quick, &Steps::default()).await.map_err(|e| ProbeFailure::new(Stage::Address, e))?;
-    let http = transport::client(&headers).map_err(|e| ProbeFailure::new(Stage::Address, e.to_string()))?;
-    let seen = transport::read_server(&http, &base, &headers, expect_server.as_deref(), reach_within(quick))
-        .await
-        .map_err(|e| ProbeFailure::new(Stage::Reach, e.to_string()))?;
+    let http = transport::client(&headers).map_err(|e| ProbeFailure::of(Stage::Address, e))?;
+    let seen =
+        transport::read_server(&http, &base, &headers, expect_server.as_deref(), reach_within(quick)).await.map_err(|e| ProbeFailure::of(Stage::Reach, e))?;
     let methods = match methods {
         Some(true) => Some(transport::read_methods(&base, &headers, Some(&seen.status), reach_within(quick)).await),
         _ => None,
@@ -1251,7 +1217,7 @@ async fn context_upload(
     overwrite: bool,
     ssh_profile: Option<String>,
     on_progress: Channel<TransferProgress>,
-) -> Result<(), String> {
+) -> Result<(), RelayError> {
     let asked = asked(&app, &attempt)?;
     let since = asked.clone();
     let file = project_context::AttachedFile::check(&attachable, &local)?;
@@ -1276,7 +1242,7 @@ async fn context_write_text(
     text: String,
     overwrite: bool,
     ssh_profile: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), RelayError> {
     let asked = asked(&app, &attempt)?;
     let to = project_context::ContextPath::parse(&server_path)?;
     project_context::write_text(&*dashboard_since(&app, &attempt, &asked).await?, &to, text, overwrite, ssh_profile.as_deref()).await
@@ -1285,7 +1251,7 @@ async fn context_write_text(
 /// Creates a project's context folder `path`, and any missing parents, in managed files (ADR 0135). Returns the path
 /// Hermes created.
 #[tauri::command]
-async fn context_mkdir(app: tauri::AppHandle, attempt: String, path: String) -> Result<String, String> {
+async fn context_mkdir(app: tauri::AppHandle, attempt: String, path: String) -> Result<String, RelayError> {
     let asked = asked(&app, &attempt)?;
     let dir = project_context::ContextDir::parse(&path)?;
     project_context::mkdir(&*dashboard_since(&app, &attempt, &asked).await?, &dir).await
@@ -1293,7 +1259,7 @@ async fn context_mkdir(app: tauri::AppHandle, attempt: String, path: String) -> 
 
 /// Deletes the file `server_path` from a project's context folder in managed files (ADR 0135).
 #[tauri::command]
-async fn context_remove(app: tauri::AppHandle, attempt: String, server_path: String) -> Result<(), String> {
+async fn context_remove(app: tauri::AppHandle, attempt: String, server_path: String) -> Result<(), RelayError> {
     let asked = asked(&app, &attempt)?;
     let file = project_context::ContextPath::parse(&server_path)?;
     project_context::remove(&*dashboard_since(&app, &attempt, &asked).await?, &file).await
@@ -1308,7 +1274,7 @@ async fn context_read_text(
     server_path: String,
     size: u64,
     ssh_profile: Option<String>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, RelayError> {
     let asked = asked(&app, &attempt)?;
     let file = project_context::ContextPath::parse(&server_path)?;
     project_context::read_text(&*dashboard_since(&app, &attempt, &asked).await?, &file, size, ssh_profile.as_deref()).await
@@ -1317,7 +1283,7 @@ async fn context_read_text(
 /// A context file where `ssh_profile`'s tools run: its size there, and its text when it is plain text up to 512 KiB
 /// (ADR 0135).
 #[tauri::command]
-async fn context_ssh_file(app: tauri::AppHandle, attempt: String, server_path: String, ssh_profile: String) -> Result<project_context::SshFile, String> {
+async fn context_ssh_file(app: tauri::AppHandle, attempt: String, server_path: String, ssh_profile: String) -> Result<project_context::SshFile, RelayError> {
     let asked = asked(&app, &attempt)?;
     let file = project_context::ContextPath::parse(&server_path)?;
     project_context::ssh_file(&*dashboard_since(&app, &attempt, &asked).await?, &file, &ssh_profile).await
@@ -1331,7 +1297,7 @@ async fn context_git_exclude(
     attempt: String,
     main_folder: String,
     ssh_profile: Option<String>,
-) -> Result<project_context::GitExclude, String> {
+) -> Result<project_context::GitExclude, RelayError> {
     let asked = asked(&app, &attempt)?;
     project_context::git_exclude(&*dashboard_since(&app, &attempt, &asked).await?, &main_folder, ssh_profile.as_deref()).await
 }

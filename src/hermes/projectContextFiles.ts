@@ -2,8 +2,10 @@
 // page's Context card and for every send in a project's chat.
 import {
   CONTEXT_DIR,
+  CONTEXT_EXISTS,
   MAX_FILE_BYTES,
   SSH_REFUSED,
+  SSH_TEXT_ONLY,
   bytesOf,
   capacityOf,
   contextFile,
@@ -25,7 +27,7 @@ import {
   type LocalFile,
   type Told,
 } from "./projectContext";
-import type { LocalFile as PickedFile } from "./pipe";
+import { RefusedError, type LocalFile as PickedFile } from "./pipe";
 import type { Project } from "./projects";
 import { RemoteFilesError, explain, newTransferId, parseListing, type RemoteEntry, type RemoteGet, type RemotePreview, type TransferProgress } from "./remoteFiles";
 import { errorText, isObj } from "./values";
@@ -42,7 +44,10 @@ export type ContextPipe = {
   pick(): Promise<PickedFile[]>;
   /** The size of each dropped file, for paths the app was given by a drop; `error` for one it wasn't given. */
   localFiles(paths: string[]): Promise<PickedFile[]>;
-  /** Sends a local file to `serverPath`. Rejects with `exists` when a file is there and `overwrite` is off. */
+  /**
+   * Sends a local file to `serverPath`. Rejects with a `RefusedError` coded `CONTEXT_EXISTS` when a file is there and
+   * `overwrite` is off, or `SSH_TEXT_ONLY` when an SSH profile can't take it. `writeText` rejects the same way.
+   */
   upload(id: number, local: string, serverPath: string, overwrite: boolean, sshProfile: string | undefined, onProgress: (p: TransferProgress) => void): Promise<void>;
   writeText(serverPath: string, text: string, overwrite: boolean, sshProfile?: string): Promise<void>;
   /** Makes a `context` folder and the folders above it. Resolves to its path as the server has it. */
@@ -244,10 +249,9 @@ export function projectContextFiles(io: ContextFilesIo): ProjectContextFiles {
     if (found?.size !== size) throw new Error(`Hermes said it saved ${name}, but ${dir} ${found ? "has it at another size" : "doesn't list it"}. It may not have been written whole.`);
   };
   const refusal = (e: unknown, name: string) => {
-    const message = errorText(e);
-    if (message === "exists") return new ContextExistsError(name);
-    if (message.includes(SSH_REFUSED)) return new Error(`${name}: ${SSH_REFUSED}. Only text files up to 8 MB can go there.`);
-    return new Error(`Couldn't add ${name}: ${message}`);
+    if (e instanceof RefusedError && e.code === CONTEXT_EXISTS) return new ContextExistsError(name);
+    if (e instanceof RefusedError && e.code === SSH_TEXT_ONLY) return new Error(`${name}: ${SSH_REFUSED}. Only text files up to 8 MB can go there.`);
+    return new Error(`Couldn't add ${name}: ${errorText(e)}`);
   };
   const sshOf = (profile: string, writes: ContextWrites) => (writes === "text-only" ? profile : undefined);
 
