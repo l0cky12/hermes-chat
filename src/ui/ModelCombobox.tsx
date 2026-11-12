@@ -28,6 +28,7 @@ export function ModelCombobox({
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const listId = useId();
+  const field = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const unlisted = !!value && !models.includes(value);
   const all = unlisted ? [value, ...models] : models;
@@ -36,6 +37,8 @@ export function ModelCombobox({
 
   useLayoutEffect(() => {
     if (open) list.current?.querySelector(`[data-row="${at}"]`)?.scrollIntoView?.({ block: "nearest" });
+    // Closed with the focus still here (a pick, Escape): the model's name is selected, so typing starts a new search.
+    else if (document.activeElement === field.current) field.current?.select();
   }, [open, at]);
 
   const show = (q: string) => {
@@ -70,6 +73,7 @@ export function ModelCombobox({
   return (
     <div className="model-combo">
       <input
+        ref={field}
         className="select wide"
         role="combobox"
         aria-label={label}
@@ -94,26 +98,25 @@ export function ModelCombobox({
       {open && (
         // The field keeps the focus while the list is clicked or scrolled, so blurring it means leaving.
         <div className="model-combo-pop" onMouseDown={(e) => e.preventDefault()}>
-          {rows.length ? (
-            <div className="model-combo-list" role="listbox" id={listId} aria-label={label} ref={list}>
-              {rows.map((m, i) => (
-                <div
-                  key={m}
-                  id={`${listId}-${i}`}
-                  data-row={i}
-                  role="option"
-                  aria-selected={i === at}
-                  className={`model-combo-option ${i === at ? "active" : ""}`}
-                  onMouseEnter={() => setActive(i)}
-                  onClick={() => pick(m)}
-                >
-                  <span className="model-name">{m}</span>
-                  {unlisted && m === value && <span className="model-provider">Not listed now</span>}
-                  <span className="model-check">{m === value && <Check size={14} aria-hidden />}</span>
-                </div>
-              ))}
-            </div>
-          ) : (
+          <div className="model-combo-list" role="listbox" id={listId} aria-label={label} ref={list}>
+            {rows.map((m, i) => (
+              <div
+                key={m}
+                id={`${listId}-${i}`}
+                data-row={i}
+                role="option"
+                aria-selected={i === at}
+                className={`model-combo-option ${i === at ? "active" : ""}`}
+                onMouseEnter={() => setActive(i)}
+                onClick={() => pick(m)}
+              >
+                <span className="model-name">{m}</span>
+                {unlisted && m === value && <span className="model-provider">Not listed now</span>}
+                <span className="model-check">{m === value && <Check size={14} aria-hidden />}</span>
+              </div>
+            ))}
+          </div>
+          {!rows.length && (
             <div className="model-empty" role="status">
               {query ? "No models match." : "This provider lists no models."}
             </div>

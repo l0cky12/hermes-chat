@@ -154,15 +154,45 @@ describe("A model field searches the provider's models (#538)", () => {
     expect(screen.getByRole<HTMLButtonElement>("button", { name: "Apply main model" }).disabled).toBe(true);
   });
 
-  it("says when no model matches, and Enter then picks nothing", async () => {
+  /** The open list, found as assistive technology finds it: by the field's aria-controls. */
+  const popup = (field: HTMLElement) => {
+    const list = document.getElementById(field.getAttribute("aria-controls") ?? "");
+    expect(list?.getAttribute("role")).toBe("listbox");
+    return list!;
+  };
+
+  it("starts a new search when typing right after a pick or Escape, without another click", async () => {
+    const { user } = await shown();
+    const field = select("Main model");
+    await user.click(field);
+    await user.keyboard("pro{Enter}");
+    expect(field.value).toBe("deepseek/deepseek-v4-pro");
+    await user.keyboard("gem");
+    expect(listed("Main model")).toEqual(["google/gemini-3.7-flash"]);
+    await user.keyboard("{Escape}");
+    expect(field.value).toBe("deepseek/deepseek-v4-pro");
+    await user.keyboard("glm{Enter}");
+    expect(field.value).toBe("z-ai/glm-5.3-flash");
+  });
+
+  it("says when no model matches, keeping the empty list the field points at, and Enter then picks nothing", async () => {
     const { user } = await shown();
     const field = select("Compression model");
     await user.type(field, "no such model");
-    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(within(popup(field)).queryAllByRole("option")).toEqual([]);
     expect(within(field.closest(".model-combo")!).getByRole("status").textContent).toBe("No models match.");
     await user.keyboard("{Enter}{Escape}");
     expect(field.value).toBe("deepseek/deepseek-v4-flash");
     expect(screen.getByRole<HTMLButtonElement>("button", { name: "Apply auxiliary models" }).disabled).toBe(true);
+  });
+
+  it("says when the provider lists no models", async () => {
+    const { user } = await shown((server) => server.modelConfig.catalog.push({ slug: "bare", name: "Bare", models: [], capabilities: {} }));
+    await user.selectOptions(select("Main provider"), "bare");
+    const field = select("Main model");
+    await user.click(field);
+    expect(within(popup(field)).queryAllByRole("option")).toEqual([]);
+    expect(within(field.closest(".model-combo")!).getByRole("status").textContent).toBe("This provider lists no models.");
   });
 
   it("shows a saved model the provider no longer lists, and keeps it on offer", async () => {

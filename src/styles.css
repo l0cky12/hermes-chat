@@ -1507,6 +1507,7 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
   border-radius: 10px; box-shadow: 0 16px 44px rgba(0, 0, 0, 0.5); animation: menu-in 0.1s ease-out;
 }
 .model-combo-list { max-height: min(320px, 50vh); overflow-y: auto; padding: 4px; }
+.model-combo-list:empty { padding: 0; }
 .model-combo-option { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 8px; border-radius: 7px; font-size: calc(13rem / 14); color: var(--text-2); cursor: default; }
 .model-combo-option.active { background: var(--raised-2); color: var(--text); }
 .model-combo-option .model-name { min-width: 0; }
