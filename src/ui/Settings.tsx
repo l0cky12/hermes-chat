@@ -1,6 +1,7 @@
 // The Settings screen, in thirteen tabs. General, ported from the prototype: the connection and Sign out, what shows on
 // launch, screenshots, updates, the local cache, older history, importing transcripts, and backups. Appearance: how the app looks on this
 // computer (AppearanceSettings.tsx). Keyboard Shortcuts: every command and its keys, changed here (KeyboardSettings.tsx).
+// Snapshots: the bucket Share snapshot publishes to, and the snapshots in it (SnapshotSettings.tsx, ADR 0123).
 // Model: the profile's models on Hermes (ModelSettings.tsx), and Idle compaction on this computer
 // (IdleCompactSettings.tsx). Providers: the profile's model provider API keys on Hermes, listed, added, replaced and removed
 // (ProviderSettings.tsx, ADR 0095), its subscription sign-ins (SignInSettings.tsx) and custom endpoints
@@ -15,7 +16,7 @@
 // Profiles are switched in the list's header, not here (ADR 0001); Profiles' Open goes through the same question. The search box (Ctrl+F) shows the sections of every
 // tab whose text holds what was typed (settingsSearch.ts).
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowLeft, AudioLines, Blocks, Brain, Camera, Cpu, Database, Download, HardDrive, Keyboard, KeyRound, Lock, LogOut, MessagesSquare, NotebookPen, Palette, PlugZap, Power, Puzzle, RadioTower, ScrollText, Search, Server, Settings2, ShieldCheck, Sparkles, Stethoscope, Trash2, User, Users, Wrench, X } from "lucide-react";
+import { ArrowLeft, AudioLines, Blocks, Brain, Camera, Cpu, Database, Download, HardDrive, Keyboard, KeyRound, Lock, LogOut, MessagesSquare, NotebookPen, Palette, PlugZap, Power, Puzzle, RadioTower, ScrollText, Search, Server, Settings2, Share2, ShieldCheck, Sparkles, Stethoscope, Trash2, User, Users, Wrench, X } from "lucide-react";
 import type { MemorySource } from "../hermes/memory";
 import { SubNav, type SubNavItem } from "./SubNav";
 import { SettingRow, SettingsSearching, SettingsSection } from "./SettingRows";
@@ -59,6 +60,8 @@ import { TraySettings } from "./TraySettings";
 import type { TrayWiring } from "../hermes/tauriTray";
 import type { ScreenshotSupport } from "../hermes/tauriScreenshot";
 import { UpdateSettings } from "./UpdateSettings";
+import { SnapshotSettings } from "./SnapshotSettings";
+import type { SnapshotApi } from "../hermes/snapshots";
 import { ImportSection, type ImportWiring } from "./ImportTranscripts";
 import { BackupSection, type BackupWiring } from "./Backup";
 import { guideUrl, type CapabilityId, type CapabilityStore } from "../hermes/capabilities";
@@ -80,7 +83,7 @@ import { ExtensionsSettings } from "./ExtensionsSettings";
 import type { SkillCommands } from "../hermes/skillCommands";
 import { errorText, formatBytes } from "../hermes/values";
 
-type Tab = "general" | "appearance" | "keyboard" | "model" | "providers" | "voice" | "toolsets" | "mcp" | "gateways" | "profiles" | "persona" | "memory" | "skills" | "diagnostics" | "extensions";
+type Tab = "general" | "appearance" | "keyboard" | "snapshots" | "model" | "providers" | "voice" | "toolsets" | "mcp" | "gateways" | "profiles" | "persona" | "memory" | "skills" | "diagnostics" | "extensions";
 /**
  * General's five groups, shown one at a time beside a sub-nav (ADR 0113); a search shows every group's sections at once.
  * Voice moved to its own tab with the speech providers (ADR 0115), so the third group holds screenshots.
@@ -104,6 +107,7 @@ const TABS = [
   { id: "general", Icon: Settings2 },
   { id: "appearance", Icon: Palette },
   { id: "keyboard", Icon: Keyboard },
+  { id: "snapshots", Icon: Share2 },
   { id: "model", Icon: Cpu },
   { id: "providers", Icon: KeyRound },
   { id: "voice", Icon: AudioLines },
@@ -130,6 +134,8 @@ const ABOUT: Partial<Record<Tab, string>> = {
   persona: "Who Hermes is and how it speaks in this profile's chats: the profile's SOUL.md, edited on the server.",
   memory: "What Hermes remembers about you and your work between chats, changed or removed entry by entry.",
   skills: "Instructions Hermes can load for a kind of task: turn each skill on or off for the profile, and edit its SKILL.md.",
+  snapshots:
+    "Share snapshot's host: the S3-compatible bucket and access key this computer publishes chat pages to, tested, changed or removed. The snapshots in the bucket, with Copy link and Revoke.",
   extensions: "Optional commands and views that run in a sandbox: install the ones that come with Hermes Chat, grant or withdraw their permissions, disable or uninstall them, and see why one stopped.",
   diagnostics:
     "The connected Hermes's version, protocol and sign-in, which features this server supports, and whether its Bot Desktop has a browser. Logs: this app's own diagnostics and the profile's Hermes logs, followed, filtered, exported, or saved as a support bundle.",
@@ -179,6 +185,8 @@ export function SettingsScreen({
   listFonts,
   checkScreenshots,
   tray,
+  snapshots,
+  showSnapshots,
   modelSettings,
   toolsets,
   mcp,
@@ -247,6 +255,10 @@ export function SettingsScreen({
   checkScreenshots?: () => Promise<ScreenshotSupport>;
   /** The tray icon and Close to tray; left out where there is no desktop app to ask. */
   tray?: TrayWiring;
+  /** Where Share snapshot publishes, and what it published (ADR 0123); without it there is no Snapshots tab. */
+  snapshots?: SnapshotApi;
+  /** Set, each time anew, to show the Snapshots tab: from Share snapshot when no host is set up. */
+  showSnapshots?: object;
   /** The profile's model setup on Hermes. */
   modelSettings: ModelSettingsApi;
   /** The profile's toolsets on Hermes; without it there is no Toolsets tab. */
@@ -363,7 +375,7 @@ export function SettingsScreen({
     [onMemoryDirty],
   );
   const [tab, setTabNow] = useState<Tab>(
-    showTextGeneration ? "model" : showMemory && memory ? "memory" : showDiagnostics && capabilities ? "diagnostics" : showVoice ? "voice" : "general",
+    showTextGeneration ? "model" : showMemory && memory ? "memory" : showDiagnostics && capabilities ? "diagnostics" : showVoice ? "voice" : showSnapshots && snapshots ? "snapshots" : "general",
   );
   const [diagGroup, setDiagGroup] = useState<DiagGroup>("server");
   // The Voice tab's set-up rows read again after a save there (or a Toolsets speech-to-text switch).
@@ -404,6 +416,7 @@ export function SettingsScreen({
   const tabs = TABS.filter(
     (t) =>
       (t.id !== "toolsets" || toolsets) &&
+      (t.id !== "snapshots" || snapshots) &&
       (t.id !== "mcp" || mcp) &&
       (t.id !== "gateways" || gateways) &&
       (t.id !== "profiles" || profilesTab) &&
@@ -436,6 +449,12 @@ export function SettingsScreen({
     setTab("voice");
   // eslint-disable-next-line react-hooks/exhaustive-deps -- open the Voice tab only when a new `showVoice` arrives; `setTab` is rebuilt each render, so listing it would switch back to Voice on every render
   }, [showVoice]);
+  useEffect(() => {
+    if (!showSnapshots || !snapshots) return;
+    setQuery("");
+    setTab("snapshots");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- open the Snapshots tab only when a new `showSnapshots` arrives; `setTab` is rebuilt each render, so listing it would switch back to Snapshots on every render
+  }, [showSnapshots]);
   useEffect(() => {
     if (!showDiagnostics || !capabilities) return;
     setQuery("");
@@ -875,6 +894,8 @@ export function SettingsScreen({
         return <AppearanceSettings store={appearance} listFonts={listFonts} />;
       case "keyboard":
         return <KeyboardSettings />;
+      case "snapshots":
+        return snapshots && <SnapshotSettings api={snapshots} />;
       case "extensions":
         return <ExtensionsSettings skills={extensions?.skills} />;
       case "model":

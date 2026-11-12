@@ -2866,6 +2866,23 @@ label.memory-pick { cursor: pointer; }
 .sign-in-raw { color: var(--muted); margin-top: 2px; }
 .leave-list { margin: 6px 0 8px; padding-left: 18px; color: var(--text-2); line-height: 1.55; }
 .leave-dialog.conn-remove { width: min(520px, 92vw); }
+/* Live connections (ADR 0125): the rail's summed count and outage mark, the overview's line, the limit, the server badge. */
+.conn-count {
+  position: absolute; top: 2px; right: 1px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px; background: var(--accent);
+  color: var(--bg); font-size: calc(10rem / 14); font-weight: 600; line-height: 15px; text-align: center;
+}
+.conn-down { position: absolute; bottom: 5px; right: 5px; }
+.badge.conn-status.is-connected { color: var(--ok); }
+.badge.conn-status.is-reconnecting, .badge.conn-status.is-connecting { color: var(--warn); }
+.badge.conn-status.is-offline, .badge.conn-status.is-needs-sign-in { color: var(--bad); }
+.conn-live-line { font-size: calc(11.5rem / 14); color: var(--text-2); overflow-wrap: anywhere; }
+.conn-limit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 10px; }
+.conn-limit select { background: var(--bg); border: 1px solid var(--line-2); border-radius: 7px; padding: 3px 6px; }
+.conn-limit .muted { flex-basis: 100%; font-size: calc(12rem / 14); }
+.leave-dialog.conn-at-limit { width: min(520px, 92vw); }
+.conn-at-limit-list { list-style: none; padding-left: 0; display: flex; flex-direction: column; gap: 6px; }
+.conn-at-limit-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.server-badge { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- search filters, tags and Saved filters (ADR 0106) ---------- */
 .palette-filters-btn {
@@ -3578,6 +3595,22 @@ div.export-preview.export-page { height: auto; padding: 10px 12px; background: v
 .export-pick input { flex: 1 1 220px; min-width: 0; height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--code-bg); color: var(--text); font-family: var(--mono); font-size: calc(var(--mono-size) * 0.85); }
 .export-pick > span { flex-basis: 100%; }
 .export-pick-problem { color: var(--warn); }
+/* Share snapshot (ADR 0123): the note when no host is set up, and the confirm step. */
+.export-dialog .confirm-actions { flex-wrap: wrap; }
+.export-host { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line-2); }
+.export-host.export-host-failed { border-color: var(--bad); }
+.export-host p { flex: 1 1 260px; min-width: 0; }
+.export-confirm { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.export-confirm h3 { margin: 0; font-size: inherit; font-weight: 600; outline: none; }
+.export-destination { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 0; }
+.export-destination dt { color: var(--faint); }
+.export-destination dd { margin: 0; overflow-wrap: anywhere; }
+.export-dialog .export-warnings { list-style: disc; padding: 2px 0 2px 26px; border-left: 3px solid var(--warn); line-height: 1.5; }
+.export-published { display: flex; flex-direction: column; gap: 8px; }
+.export-link { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.export-link input { flex: 1 1 240px; min-width: 0; height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--code-bg); color: var(--text); font-family: var(--mono); font-size: calc(var(--mono-size) * 0.85); }
+/* Settings → Snapshots (SnapshotSettings.tsx): a snapshot that needs the owner's attention says so in warning colour. */
+.snapshot-row.expired .set-hint, .snapshot-row.changed .set-hint, .snapshot-row.unrevoked .set-hint { color: var(--warn); }
 
 /* ---------- Settings → Gateways (GatewaySettings.tsx, ADR 0073) and Providers (ProviderSettings.tsx, ADR 0095) ---------- */
 .gw-input, .pk-input {
@@ -3634,6 +3667,58 @@ div.export-preview.export-page { height: auto; padding: 10px 12px; background: v
 .profile-delete-list { margin: 4px 0 8px; padding-left: 20px; }
 .profile-dialog p { margin: 0 0 6px; }
 .profile-save-why { text-align: right; }
+
+/* Annotation mode (ADR 0094): the still covers the page's box, and the review card sits beside or under it. */
+.preview-body { position: relative; }
+.annotate-layer { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; background: var(--sidebar); }
+.annotate { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+/* Picking, the hint floats over the still's foot, so the still lines up with the page it covers. */
+.annotate.picking .annotate-notes {
+  position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 1; border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+  background: var(--sidebar); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+.annotate-notes { flex: none; }
+.annotate:focus { outline: none; }
+.annotate-bar {
+  flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px;
+  color: var(--text-2); font-size: calc(12.5rem / 14);
+}
+.annotate-hint { flex: 1; min-width: 0; }
+.annotate-why, .annotate .attach-note { flex: none; padding: 6px 12px; border-top: 1px solid var(--line); }
+.annotate .attach-note.failed { color: var(--warn); }
+.annotate-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.annotate-frame { flex: none; }
+.annotate.reviewing .annotate-frame { padding: 12px 12px 0; }
+.annotate.reviewing .annotate-stage { margin: 0 auto; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.annotate-stage { position: relative; user-select: none; touch-action: none; }
+.annotate-stage.picking { cursor: crosshair; }
+.annotate-stage:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.annotate-stage img { display: block; width: 100%; height: 100%; pointer-events: none; }
+.annotate-mark { position: absolute; box-sizing: border-box; border: 2px solid rgb(37, 99, 235); background: rgba(37, 99, 235, 0.12); pointer-events: none; }
+.annotate-mark.dragging { border-style: dashed; }
+.annotate-mark.picked { background: transparent; }
+.annotate-tag {
+  position: absolute; max-width: min(90%, 420px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 3px 8px; border-radius: 5px; background: rgb(37, 99, 235); color: #fff; font: calc(11.5rem / 14) / 1.4 var(--mono, monospace);
+  pointer-events: none;
+}
+.annotate-card { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px 16px; font-size: calc(13rem / 14); }
+.annotate-card-title { font-weight: 600; color: var(--text); }
+.annotate-facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 0; }
+.annotate-facts dt { color: var(--muted); }
+.annotate-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.annotate-lines {
+  margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--raised, var(--line-2)); white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: calc(var(--mono-size, 12.5px) - 0.5px); line-height: 1.5; color: var(--text-2);
+}
+.annotate-note { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
+.annotate-note textarea { resize: vertical; min-height: 54px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+.annotate-small { margin: 0; color: var(--muted); font-size: calc(12rem / 14); line-height: 1.45; }
+.annotate-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 4px; }
+.chip-note { color: var(--warn); font-size: calc(11rem / 14); white-space: nowrap; }
+.preview-toolbar .icon-btn.active { color: var(--accent); }
+.annotate.reviewing .annotate-notes { border-bottom: 1px solid var(--line); }
+.chip-stale .chip-size { white-space: nowrap; }
 
 /* ---------- write or improve a project's instructions with AI (InstructionsAI.tsx, ADR 0152) ---------- */
 .defaults-instructions-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

@@ -1,7 +1,7 @@
 // Transcript, thinking, tool-call groups, Approval cards, find bar, composer and the Settle button, ported from the prototype.
 // Dictation and Read aloud come from Voice.tsx.
 import { createContext, memo, type ReactNode, type RefObject, useCallback, startTransition, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
-import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, Columns2, CornerDownRight, EyeOff, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Square, Trash2, Wrench, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, Columns2, CornerDownRight, EyeOff, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Share2, Square, Trash2, Wrench, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { decodeString } from "micromark-util-decode-string";
@@ -14,7 +14,7 @@ import { QuestionCard } from "./QuestionCard";
 import { Menu, PinItem, type ChatPin } from "./ChatMenu";
 import { isBotChat } from "../hermes/bots";
 import { DeleteChatDialog } from "./DeleteChat";
-import { ExportChatDialog } from "./ExportChat";
+import { ExportChatDialog, type ExportMode } from "./ExportChat";
 import { QueuePanel, type QueueApi } from "./Queue";
 import { SubagentsPanel, type SubagentsApi } from "./Subagents";
 import type { SubagentId } from "../hermes/subagents";
@@ -232,11 +232,13 @@ async function clipboardImages(): Promise<File[]> {
  * The header's More (⋯) menu: the chat's less-used actions, each with its name. It opens below its button, at the
  * button's right edge, and the arrow keys move between its items (ChatMenu.tsx's Menu). `onDelete`, left out while a
  * reply runs, adds Delete chat… last; it asks first (DeleteChat.tsx), and a reply starting meanwhile takes the question
- * away for good. Export… opens the Export dialog (ExportChat.tsx); `onExport` gets its notice once saved.
+ * away for good. Export… opens the Export dialog (ExportChat.tsx); `onExport` gets its notice once saved. Share snapshot…
+ * opens it to publish (ADR 0123); `onSnapshotSettings` opens Settings → Snapshots from it.
  */
 function MoreMenu({
   chat,
   onExport,
+  onSnapshotSettings,
   onCopyLink,
   pin,
   onSettle,
@@ -245,6 +247,7 @@ function MoreMenu({
 }: {
   chat: Chat;
   onExport?: (notice: string) => void;
+  onSnapshotSettings?: () => void;
   onCopyLink?: () => void;
   pin?: ChatPin;
   onSettle?: (settled: boolean) => void;
@@ -255,7 +258,7 @@ function MoreMenu({
   const close = useCallback(() => setAt(undefined), []);
   const button = useRef<HTMLButtonElement>(null);
   const [askDelete, setAskDelete] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [exporting, setExporting] = useState<ExportMode>();
   const noDelete = !onDelete;
   useEffect(() => {
     if (noDelete) setAskDelete(false);
@@ -279,7 +282,7 @@ function MoreMenu({
       <button
         ref={button}
         className={`icon-btn ${at ? "on" : ""}`}
-        title={isBotChat(chat) ? "More actions: export" : `More actions: export, copy link, ${pin ? "pin, " : ""}settle, archive${onDelete ? ", delete" : ""}`}
+        title={isBotChat(chat) ? "More actions: export, share" : `More actions: export, share, copy link, ${pin ? "pin, " : ""}settle, archive${onDelete ? ", delete" : ""}`}
         aria-label="More"
         aria-haspopup="menu"
         aria-expanded={!!at}
@@ -297,7 +300,8 @@ function MoreMenu({
       </button>
       {at && (
         <Menu label={`More actions for ${chat.title}`} x={at.x} y={at.y} onClose={close}>
-          {onExport && item("Export…", <FileDown size={15} />, () => setExporting(true))}
+          {onExport && item("Export…", <FileDown size={15} />, () => setExporting("export"))}
+          {onExport && onSnapshotSettings && item("Share snapshot…", <Share2 size={15} />, () => setExporting("share"), "Publish a copy of this chat that anyone with its link can read")}
           {/* A Bot Chat is opened from its bot's row, found by its title (ADR 0066): no link to it by id, and nothing
               that would retire it, which would leave its bot to start another. */}
           {onCopyLink && !isBotChat(chat) && item("Copy chat link", <Link2 size={15} />, onCopyLink, "Copy a link that opens this chat in Hermes Chat on this computer")}
@@ -317,7 +321,16 @@ function MoreMenu({
           )}
         </Menu>
       )}
-      {exporting && onExport && <ExportChatDialog chat={chat} returnTo={button} onSaved={onExport} onClose={() => setExporting(false)} />}
+      {exporting && onExport && (
+        <ExportChatDialog
+          chat={chat}
+          mode={exporting}
+          returnTo={button}
+          onSaved={onExport}
+          onSnapshotSettings={onSnapshotSettings}
+          onClose={() => setExporting(undefined)}
+        />
+      )}
       {askDelete && onDelete && (
         <DeleteChatDialog
           title={chat.title}
@@ -339,7 +352,8 @@ const savedWhen = (at: number) => new Date(at).toLocaleString(undefined, { dateS
 /**
  * `alsoPostsIn`: the Telegram or Discord chat Hermes will also post its replies in. `draft`: the composer's text, kept
  * outside the pane so it survives switching chats. `onAnswer` answers an Approval card, and `onQuestion` any other
- * Question card. `onSettle`, `onArchive`, `onExport` and `onCopyLink` are left out for a chat not started yet. `notLoaded`: the chat has no Saved copy and can't load until
+ * Question card. `onSettle`, `onArchive`, `onExport` and `onCopyLink` are left out for a chat not started yet. `onSnapshotSettings`
+ * opens Settings → Snapshots from Share snapshot. `notLoaded`: the chat has no Saved copy and can't load until
  * Hermes is connected. `onRetry`, `onEdit` and `onDismiss` act on failed or unconfirmed messages. `modelControls`
  * contains the model picker; `footer` contains the status bar. Only the active pane answers Ctrl+F and takes focus as
  * it opens. Native drops attach to the pane under the pointer. Export, Copy chat link, Settle and Archive are in the header's More menu.
@@ -379,6 +393,7 @@ export function ChatPane({
   onSettle,
   onArchive,
   onExport,
+  onSnapshotSettings,
   onCopyLink,
   onDelete,
   modelControls,
@@ -390,6 +405,7 @@ export function ChatPane({
   screenshots,
   screenshotKeys,
   projects,
+  server,
   snoozedUntil,
   notice,
   banner,
@@ -444,6 +460,7 @@ export function ChatPane({
   onArchive?: (archived: boolean) => void;
   /** Shows the notice for a chat exported with the Export dialog. */
   onExport?: (notice: string) => void;
+  onSnapshotSettings?: () => void;
   /** Copies the chat's link (chatLinks.ts). */
   onCopyLink?: () => void;
   /** Deletes the chat, once the owner has said yes in the header menu's question. */
@@ -458,6 +475,8 @@ export function ChatPane({
   screenshotKeys?: string;
   /** The names of the projects the chat is in, or a new chat will be put in. */
   projects?: string[];
+  /** The server and profile the chat is on, shown while more than one connection is live (ADR 0125). */
+  server?: string;
   /** When the chat wakes, if the owner snoozed it and it hasn't woken yet (snooze.ts). */
   snoozedUntil?: number;
   /** Shown at the top of the transcript: what a new chat starts with. */
@@ -807,6 +826,11 @@ export function ChatPane({
               {name}
             </span>
           ))}
+          {server && (
+            <span className="badge server-badge" title={`On ${server}`}>
+              {server}
+            </span>
+          )}
         </div>
         <div className="chat-head-end">
           {/* Outside the actions, whose dimming would show through its breakdown. */}
@@ -823,7 +847,7 @@ export function ChatPane({
               <Search size={16} />
             </button>
             {(onExport || onCopyLink || (onSettle && !chat.archived) || (onArchive && !chat.running) || deleteHere) && (
-              <MoreMenu chat={chat} onExport={onExport} onCopyLink={onCopyLink} pin={pin} onSettle={onSettle} onArchive={onArchive} onDelete={deleteHere} />
+              <MoreMenu chat={chat} onExport={onExport} onSnapshotSettings={onSnapshotSettings} onCopyLink={onCopyLink} pin={pin} onSettle={onSettle} onArchive={onArchive} onDelete={deleteHere} />
             )}
           </div>
         </div>
@@ -997,6 +1021,7 @@ export function ChatPane({
         alsoPostsIn={alsoPostsIn}
         text={draft}
         draftKey={draftKey}
+        chatTitle={chat.title}
         onText={onDraft}
         onStep={onDraftStep}
         onAttach={onAttach}
@@ -1473,6 +1498,7 @@ function Composer({
   alsoPostsIn,
   text,
   draftKey,
+  chatTitle,
   onText,
   onStep,
   onAttach,
@@ -1506,6 +1532,8 @@ function Composer({
   text: string;
   /** Where the desk keeps this chat's staged attachments. */
   draftKey: string;
+  /** Named on the annotation review card, which stages into this composer. */
+  chatTitle?: string;
   onText: (text: string, how?: EditKind) => void;
   onStep: (step: EditStep) => string | undefined;
   onAttach: (paths: string[]) => Promise<AttachCheck>;
@@ -1534,6 +1562,7 @@ function Composer({
   const keys = useBindings();
   // The chat's staged attachments, kept by the desk under its Draft key so they outlive this composer (ADR 0145).
   const attachments = useSyncExternalStore(screenshots.subscribe, () => screenshots.stagedIn(draftKey));
+  const annotations = useSyncExternalStore(screenshots.subscribe, screenshots.annotationLabels);
   const focused = useRef(autoFocus);
   focused.current = autoFocus;
   // The transcript joins the text as it is when it arrives, typed meanwhile included.
@@ -1622,6 +1651,29 @@ function Composer({
   const dropHereRef = useRef(dropHere);
   dropHereRef.current = dropHere;
 
+  // An annotation's words go in at the cursor, on lines of their own, and the cursor ends after them. The review card
+  // has the keyboard by then, so the cursor is where the owner last left it in this composer, or else the end.
+  const caret = useRef<[number, number]>(undefined);
+  const insertWords = (words: string) => {
+    const now = textRef.current;
+    const ta = taRef.current;
+    const [from, to] =
+      ta && document.activeElement === ta
+        ? [ta.selectionStart, ta.selectionEnd]
+        : caret.current
+          ? [Math.min(caret.current[0], now.length), Math.min(caret.current[1], now.length)]
+          : [now.length, now.length];
+    const before = now.slice(0, from);
+    const block = `${before && !before.endsWith("\n") ? "\n" : ""}${words}\n`;
+    const next = before + block + now.slice(to);
+    onText(next);
+    const at = before.length + block.length;
+    caret.current = [at, at];
+    requestAnimationFrame(() => taRef.current?.setSelectionRange(at, at));
+  };
+  const insertRef = useRef(insertWords);
+  insertRef.current = insertWords;
+
   // Screenshots attach here while this composer is on screen.
   const shot = useSyncExternalStore(screenshots.subscribe, screenshots.getSnapshot);
   // A new screenshot replaces the notes about the last thing attached.
@@ -1633,14 +1685,16 @@ function Composer({
     let current = true;
     const stop = screenshots.attachTo({
       key: draftKey,
+      chat: chatTitle,
       check: (paths) => busy(() => checkRef.current(paths, () => current)),
       note: (text) => setRefused((cur) => [...cur, text]),
+      insert: (words) => insertRef.current(words),
     });
     return () => {
       current = false;
       stop();
     };
-  }, [screenshots, autoFocus, draftKey]);
+  }, [screenshots, autoFocus, draftKey, chatTitle]);
 
   // Tauri's native drop event (off on Windows, below): it gives real file paths, so Rust can read the bytes. Every composer
   // hears every drop; with two panes, the one under the pointer takes it. Tauri gives the point in physical pixels.
@@ -1905,6 +1959,7 @@ function Composer({
                 key={f.path}
                 file={f}
                 preview={previews.current?.get(f.path)}
+                annotation={annotations.get(f.path)}
                 onRemove={() => screenshots.change({ kind: "removed", key: draftKey, paths: [f.path] })}
               />
             ))}
@@ -1919,6 +1974,10 @@ function Composer({
           value={text}
           {...slash.inputProps}
           onChange={(e) => onText(e.target.value, inputKind(e.nativeEvent))}
+          onSelect={(e) => {
+            slash.inputProps.onSelect(e);
+            caret.current = [e.currentTarget.selectionStart, e.currentTarget.selectionEnd];
+          }}
           onPaste={(e) => {
             if (dragging) return;
             const paste = pasteAttaches(e.clipboardData);

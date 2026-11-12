@@ -113,10 +113,12 @@ export const reachRoute: ReachRoute = (d, expectServer) => tauriReach(d, expectS
 
 /**
  * The pipe for a connection: its routes, tried in order (routes.ts `routedPipe`), each opened by Rust. `connection`:
- * the saved connection's id, which Rust holds the open connection under (ADR 0125).
+ * the saved connection's id, which Rust holds the open connection under (ADR 0125). `liveLimit`: how many connections
+ * the owner lets be live at once, read at each opening; Rust refuses one past it, and at 1 a connect replaces the one
+ * held.
  */
-export function tauriPipe(d: SignInDetails, connection: string, hooks?: RoutedHooks): OpenPipe {
-  return routedPipe(d, (one, opts) => routePipe(one, connection, opts), hooks);
+export function tauriPipe(d: SignInDetails, connection: string, hooks?: RoutedHooks, liveLimit?: () => number): OpenPipe {
+  return routedPipe(d, (one, opts) => routePipe(one, connection, opts, liveLimit), hooks);
 }
 
 /** One route's pipe. `expectServer`, `quick`, `sshRoute` and `onStep`: see routes.ts `OpenRoute`. */
@@ -124,10 +126,20 @@ function routePipe(
   d: SignInDetails,
   savedConnection: string,
   opts: { expectServer?: string; quick: boolean; sshRoute?: string; onStep?: (s: Step, at?: number) => void },
+  liveLimit?: () => number,
 ): OpenPipe {
   const target = targetOf(d);
   return async (onEvent, profile, signal) => {
-    const args = { target, credential: credentialOf(d), profile, savedConnection, expectServer: opts.expectServer ?? null, quick: opts.quick, sshRoute: opts.sshRoute ?? null };
+    const args = {
+      target,
+      credential: credentialOf(d),
+      profile,
+      savedConnection,
+      expectServer: opts.expectServer ?? null,
+      quick: opts.quick,
+      sshRoute: opts.sshRoute ?? null,
+      liveLimit: liveLimit?.() ?? null,
+    };
     // Names this connection: every command below names it too, so one sent after it was replaced reaches nothing (#474).
     const attempt = crypto.randomUUID();
     const route = await opening<Route>("hermes_connect", args, onEvent, signal, opts.onStep, attempt);

@@ -4,9 +4,11 @@
 //! key the query doesn't send is refused whole.
 
 use crate::screenshot::{CaptureError, Captures};
+use image::{imageops, ImageFormat, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The body of the function the page runs, with `x`, `y` and `up` as its arguments.
 pub const QUERY: &str = include_str!("annotate_query.js");
@@ -39,6 +41,25 @@ pub enum AnnotateError {
     Failed(String),
 }
 
+/// Where a still is taken from.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum StillSource {
+    /// Linux: the Preview's own WebKitGTK view.
+    View { key: String },
+    /// Windows: the sandboxed frame. `rect`: the frame's box in the window's CSS pixels. `viewport`: the window's CSS
+    /// size, to work out the device scale from the capture. `url`: the address the frame shows.
+    Frame { url: String, rect: Rect, viewport: Viewport },
+}
+
+/// The app window's size in CSS pixels (`innerWidth`, `innerHeight`).
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Viewport {
+    pub width: f64,
+    pub height: f64,
+}
+
 /// A still of the page, kept in the captures folder until it is staged or cancelled.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,6 +73,19 @@ pub struct Still {
     pub width: f64,
     pub height: f64,
     pub scale: f64,
+    /// Element queries and picks work on this still. Otherwise only regions can be marked on it.
+    pub elements: bool,
+}
+
+static NEXT_STILL: AtomicU64 = AtomicU64::new(1);
+
+/// A new still's id, never one another still of either kind had.
+pub fn next_still_id() -> u64 {
+    NEXT_STILL.fetch_add(1, Ordering::Relaxed)
+}
+
+pub fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 /// Text from the page: whitespace collapsed, control and direction-changing characters removed, at most `N`
@@ -477,14 +511,90 @@ pub fn png(pixels: &Pixels) -> Result<Vec<u8>, AnnotateError> {
     Ok(png)
 }
 
+/// How far a frame's box may overrun the window, in CSS pixels: a frame flush with the window's edge can, by a
+/// rounding error in layout.
+const OVERRUN: f64 = 1.0;
+
+/// The frame's part of a PNG of the whole window, `rect` in the window's CSS pixels, as a PNG, and the capture's device
+/// scale, which is its width over the window's.
+pub fn crop_frame(window: &[u8], rect: Rect, viewport: Viewport) -> Result<(Vec<u8>, f64), AnnotateError> {
+    let failed = |why: &dyn std::fmt::Display| AnnotateError::Failed(format!("Couldn't take a still of the page: {why}."));
+    let image = image::load_from_memory_with_format(window, ImageFormat::Png).map_err(|e| failed(&e))?.to_rgba8();
+    let (width, height) = (image.width(), image.height());
+    let view_sound = viewport.width.is_finite() && viewport.height.is_finite() && viewport.width > 0.0 && viewport.height > 0.0;
+    let scale = f64::from(width) / viewport.width;
+    if !view_sound || !(scale > 0.0 && scale <= 16.0) || (f64::from(height) / viewport.height - scale).abs() > 0.02 * scale {
+        return Err(failed(&"the capture isn't the window's shape"));
+    }
+    let inside = rect.sound()
+        && rect.width > 0.0
+        && rect.height > 0.0
+        && rect.x >= -OVERRUN
+        && rect.y >= -OVERRUN
+        && rect.x + rect.width <= viewport.width + OVERRUN
+        && rect.y + rect.height <= viewport.height + OVERRUN;
+    if !inside {
+        return Err(failed(&"the page isn't inside the window"));
+    }
+    let edge = |v: f64, most: u32| (v * scale).round().clamp(0.0, f64::from(most)) as u32;
+    let (x0, x1) = (edge(rect.x, width), edge(rect.x + rect.width, width));
+    let (y0, y1) = (edge(rect.y, height), edge(rect.y + rect.height, height));
+    if x1 <= x0 || y1 <= y0 {
+        return Err(failed(&"the page has no size"));
+    }
+    let frame = imageops::crop_imm(&image, x0, y0, x1 - x0, y1 - y0).to_image();
+    Ok((encode(&frame).map_err(|e| failed(&e))?, scale))
+}
+
+/// A still of the frame at `rect` (the window's CSS pixels) showing `url`, cut from `window`, a PNG of the whole
+/// window, and kept in the captures folder. The frame can't be asked about its elements.
+pub fn frame_still(captures: &Captures, window: &[u8], url: String, rect: Rect, viewport: Viewport, taken_at_ms: u64) -> Result<Still, AnnotateError> {
+    let (png, scale) = crop_frame(window, rect, viewport)?;
+    let path = captures.write("still", &png).map_err(|e| AnnotateError::Failed(e.to_string()))?;
+    Ok(Still {
+        id: next_still_id(),
+        generation: 0,
+        path: path.to_string_lossy().into_owned(),
+        url,
+        taken_at_ms,
+        width: rect.width,
+        height: rect.height,
+        scale,
+        elements: false,
+    })
+}
+
+fn encode(image: &RgbaImage) -> Result<Vec<u8>, image::ImageError> {
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, ImageFormat::Png)?;
+    Ok(png.into_inner())
+}
+
 /// The longest side a staged annotation's image may have.
-#[cfg(target_os = "linux")]
-const MAX_SIDE: f64 = 2560.0;
+const MAX_SIDE: u32 = 2560;
+const MARK: Rgba<u8> = Rgba([37, 99, 235, 255]);
+
+/// Paints the outline of `rect` (CSS pixels) times `scale`: a band `2 × scale` device pixels wide, just inside the box.
+fn outline(image: &mut RgbaImage, rect: Rect, scale: f64) {
+    let line = 2.0 * scale;
+    let (x0, y0) = (rect.x * scale, rect.y * scale);
+    let (x1, y1) = ((rect.x + rect.width) * scale, (rect.y + rect.height) * scale);
+    let span = |a: f64, b: f64, most: u32| (a.max(0.0) as u32)..(b.ceil().min(f64::from(most)) as u32);
+    for y in span(y0, y1, image.height()) {
+        let cy = f64::from(y) + 0.5;
+        for x in span(x0, x1, image.width()) {
+            let cx = f64::from(x) + 0.5;
+            let inner = cx >= x0 + line && cx < x1 - line && cy >= y0 + line && cy < y1 - line;
+            if cx >= x0 && cx < x1 && cy >= y0 && cy < y1 && !inner {
+                image.put_pixel(x, y, MARK);
+            }
+        }
+    }
+}
 
 /// Stages the still at `still` as annotation `n`: outlined at `rect` (CSS pixels) times `scale`, scaled down to at most
 /// 2560 pixels on its longest side, and written as `annotation-<n>.png`. The still is deleted once the annotation is
 /// written.
-#[cfg(target_os = "linux")]
 pub fn stage(captures: &Captures, still: &Path, n: u32, rect: Rect, scale: f64) -> Result<PathBuf, CaptureError> {
     let failed = |e: &dyn std::fmt::Display| CaptureError::Failed(format!("Couldn't mark the still: {e}"));
     if !captures.owns(still) {
@@ -493,38 +603,27 @@ pub fn stage(captures: &Captures, still: &Path, n: u32, rect: Rect, scale: f64) 
     if !(1..=999).contains(&n) || !rect.sound() || !(scale > 0.0 && scale <= 16.0) {
         return Err(CaptureError::Failed("That mark isn't on the still.".into()));
     }
-    let mut file = std::fs::File::open(still).map_err(|e| failed(&e))?;
-    let image = cairo::ImageSurface::create_from_png(&mut file).map_err(|e| failed(&e))?;
-    let line = 2.0 * scale;
-    let cx = cairo::Context::new(&image).map_err(|e| failed(&e))?;
-    cx.set_source_rgb(37.0 / 255.0, 99.0 / 255.0, 235.0 / 255.0);
-    cx.set_line_width(line);
-    cx.rectangle(rect.x * scale + line / 2.0, rect.y * scale + line / 2.0, (rect.width * scale - line).max(0.0), (rect.height * scale - line).max(0.0));
-    cx.stroke().map_err(|e| failed(&e))?;
-    drop(cx);
-    let fit = (MAX_SIDE / f64::from(image.width().max(image.height()))).min(1.0);
-    let out = if fit < 1.0 {
-        let (width, height) = ((f64::from(image.width()) * fit).round() as i32, (f64::from(image.height()) * fit).round() as i32);
-        let smaller = cairo::ImageSurface::create(cairo::Format::ARgb32, width.max(1), height.max(1)).map_err(|e| failed(&e))?;
-        let cx = cairo::Context::new(&smaller).map_err(|e| failed(&e))?;
-        cx.scale(fit, fit);
-        cx.set_source_surface(&image, 0.0, 0.0).map_err(|e| failed(&e))?;
-        cx.paint().map_err(|e| failed(&e))?;
-        drop(cx);
-        smaller
-    } else {
-        image
-    };
-    let mut png = Vec::new();
-    out.write_to_png(&mut png).map_err(|e| failed(&e))?;
-    let path = captures.write(&format!("annotation-{n}"), &png)?;
+    let bytes = std::fs::read(still).map_err(|e| failed(&e))?;
+    let mut image = image::load_from_memory_with_format(&bytes, ImageFormat::Png).map_err(|e| failed(&e))?.to_rgba8();
+    outline(&mut image, rect, scale);
+    let longest = image.width().max(image.height());
+    if longest > MAX_SIDE {
+        let fit = f64::from(MAX_SIDE) / f64::from(longest);
+        let side = |v: u32| ((f64::from(v) * fit).round() as u32).max(1);
+        image = imageops::resize(&image, side(image.width()), side(image.height()), imageops::FilterType::Triangle);
+    }
+    let path = captures.write(&format!("annotation-{n}"), &encode(&image).map_err(|e| failed(&e))?)?;
     captures.discard(still);
     Ok(path)
 }
 
-#[cfg(not(target_os = "linux"))]
-pub fn stage(_: &Captures, _: &Path, _: u32, _: Rect, _: f64) -> Result<PathBuf, CaptureError> {
-    Err(CaptureError::Unsupported("Annotations are made on Linux only for now.".into()))
+/// The PNG of a still the app took, for the pane to show while the owner marks it. Nothing else in the captures folder
+/// is read.
+pub fn read_still(captures: &Captures, path: &Path) -> Result<Vec<u8>, CaptureError> {
+    if !captures.owns(path) || path.file_name() != Some("still.png".as_ref()) {
+        return Err(CaptureError::Failed("That isn't a still the app took.".into()));
+    }
+    std::fs::read(path).map_err(|e| CaptureError::Failed(format!("Couldn't read the still: {e}")))
 }
 
 #[cfg(test)]
@@ -796,7 +895,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
     mod staging {
         use super::*;
 
@@ -814,22 +912,28 @@ mod tests {
             (Folder(base), captures)
         }
 
+        const GREY: Rgba<u8> = Rgba([0x80, 0x80, 0x80, 0xff]);
+
         /// A grey still `width` × `height` device pixels, kept as a capture.
-        fn still(captures: &Captures, width: usize, height: usize) -> PathBuf {
-            let pixels = Pixels::new(width, height, width * 4, [0x80, 0x80, 0x80, 0xff].repeat(width * height)).unwrap();
-            captures.write("still", &png(&pixels).unwrap()).unwrap()
+        fn still(captures: &Captures, width: u32, height: u32) -> PathBuf {
+            captures.write("still", &encode(&RgbaImage::from_pixel(width, height, GREY)).unwrap()).unwrap()
         }
 
-        /// The colour at `(x, y)` of a PNG, as `[r, g, b]`.
-        fn rgb(image: &mut cairo::ImageSurface, x: usize, y: usize) -> [u8; 3] {
-            let stride = image.stride() as usize;
-            let data = image.data().unwrap();
-            let i = y * stride + x * 4;
-            [data[i + 2], data[i + 1], data[i]]
+        fn open(path: &Path) -> RgbaImage {
+            decode(&std::fs::read(path).unwrap())
         }
 
-        fn open(path: &Path) -> cairo::ImageSurface {
-            cairo::ImageSurface::create_from_png(&mut std::fs::File::open(path).unwrap()).unwrap()
+        fn decode(png: &[u8]) -> RgbaImage {
+            image::load_from_memory_with_format(png, ImageFormat::Png).unwrap().to_rgba8()
+        }
+
+        /// A PNG of a window `width` × `height` device pixels whose every pixel names where it is.
+        fn window(width: u32, height: u32) -> Vec<u8> {
+            encode(&RgbaImage::from_fn(width, height, |x, y| Rgba([x as u8, y as u8, 7, 255]))).unwrap()
+        }
+
+        fn at(x: u32, y: u32) -> Rgba<u8> {
+            Rgba([x as u8, y as u8, 7, 255])
         }
 
         #[test]
@@ -841,40 +945,146 @@ mod tests {
             assert_eq!(staged.file_name().unwrap(), "annotation-1.png");
             assert!(captures.owns(&staged));
             assert!(!at.exists() && !at.parent().unwrap().exists(), "the still is deleted");
-            let mut image = open(&staged);
-            assert_eq!((image.width(), image.height()), (400, 200), "a small still keeps its size");
-            let blue = [37, 99, 235];
-            assert_eq!(rgb(&mut image, 21, 40), blue, "the box's left edge, 2 CSS px wide at scale 2");
-            assert_eq!(rgb(&mut image, 70, 21), blue, "its top edge");
-            assert_eq!(rgb(&mut image, 118, 58), blue, "its bottom-right corner");
-            assert_eq!(rgb(&mut image, 40, 40), [0x80; 3], "inside the outline");
-            assert_eq!(rgb(&mut image, 18, 40), [0x80; 3], "outside the box");
-            assert_eq!(rgb(&mut image, 121, 40), [0x80; 3], "outside the box");
+            let image = open(&staged);
+            assert_eq!(image.dimensions(), (400, 200), "a small still keeps its size");
+            assert_eq!(*image.get_pixel(21, 40), MARK, "the box's left edge, 2 CSS px wide at scale 2");
+            assert_eq!(*image.get_pixel(23, 40), MARK, "the left edge's last device pixel");
+            assert_eq!(*image.get_pixel(70, 21), MARK, "its top edge");
+            assert_eq!(*image.get_pixel(118, 58), MARK, "its bottom-right corner");
+            assert_eq!(*image.get_pixel(24, 40), GREY, "just inside the outline");
+            assert_eq!(*image.get_pixel(40, 40), GREY, "inside the outline");
+            assert_eq!(*image.get_pixel(19, 40), GREY, "just outside the box");
+            assert_eq!(*image.get_pixel(120, 40), GREY, "just outside the box");
         }
 
         #[test]
         fn a_large_still_is_staged_at_2560_pixels_at_most() {
             let (_folder, captures) = captures("large");
-            let at = still(&captures, 3000, 1000);
+            let at = still(&captures, 4000, 1000);
             let staged = stage(&captures, &at, 2, Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 }, 2.0).unwrap();
             assert_eq!(staged.file_name().unwrap(), "annotation-2.png");
-            let image = open(&staged);
-            assert_eq!((image.width(), image.height()), (2560, 853));
+            assert_eq!(open(&staged).dimensions(), (2560, 640));
         }
 
         #[test]
         fn only_a_still_the_app_took_is_staged() {
             let (folder, captures) = captures("refuse");
             let elsewhere = folder.0.join("still.png");
-            std::fs::write(&elsewhere, b"\x89PNG\r\n\x1a\n").unwrap();
+            std::fs::write(&elsewhere, encode(&RgbaImage::from_pixel(10, 10, GREY)).unwrap()).unwrap();
             let rect = Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 };
             assert!(stage(&captures, &elsewhere, 1, rect, 1.0).is_err());
             assert!(elsewhere.exists());
             let at = still(&captures, 10, 10);
             assert!(stage(&captures, &at, 0, rect, 1.0).is_err(), "annotations count from 1");
+            assert!(stage(&captures, &at, 1000, rect, 1.0).is_err(), "and up to 999");
             assert!(stage(&captures, &at, 1, Rect { width: -1.0, ..rect }, 1.0).is_err());
             assert!(stage(&captures, &at, 1, rect, f64::NAN).is_err());
+            assert!(stage(&captures, &at, 1, rect, 17.0).is_err());
             assert!(at.exists(), "a refused stage keeps the still");
+        }
+
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn a_still_of_the_view_is_staged() {
+            let (_folder, captures) = captures("view");
+            let pixels = Pixels::new(20, 10, 80, [0x80, 0x80, 0x80, 0xff].repeat(200)).unwrap();
+            let at = captures.write("still", &png(&pixels).unwrap()).unwrap();
+            let image = open(&stage(&captures, &at, 3, Rect { x: 0.0, y: 0.0, width: 20.0, height: 10.0 }, 1.0).unwrap());
+            assert_eq!(*image.get_pixel(0, 0), MARK);
+            assert_eq!(*image.get_pixel(5, 5), GREY);
+        }
+
+        #[test]
+        fn a_frame_is_cut_from_the_window_at_its_scale() {
+            let rect = Rect { x: 20.0, y: 10.0, width: 100.0, height: 80.0 };
+            let (png, scale) = crop_frame(&window(160, 120), rect, Viewport { width: 160.0, height: 120.0 }).unwrap();
+            let frame = decode(&png);
+            assert_eq!((scale, frame.dimensions()), (1.0, (100, 80)));
+            assert_eq!((*frame.get_pixel(0, 0), *frame.get_pixel(99, 79)), (at(20, 10), at(119, 89)));
+
+            let (png, scale) = crop_frame(&window(240, 180), rect, Viewport { width: 160.0, height: 120.0 }).unwrap();
+            let frame = decode(&png);
+            assert_eq!((scale, frame.dimensions()), (1.5, (150, 120)));
+            assert_eq!((*frame.get_pixel(0, 0), *frame.get_pixel(149, 119)), (at(30, 15), at(179, 134)));
+        }
+
+        #[test]
+        fn a_frame_is_refused_unless_it_is_inside_a_window_of_the_captures_shape() {
+            let view = Viewport { width: 160.0, height: 120.0 };
+            let rect = Rect { x: 20.0, y: 10.0, width: 100.0, height: 80.0 };
+            let window = window(240, 180);
+            let refused = |rect: Rect, view: Viewport| matches!(crop_frame(&window, rect, view), Err(AnnotateError::Failed(_)));
+            assert!(refused(rect, Viewport { width: 160.0, height: 100.0 }), "a capture of another shape");
+            assert!(!refused(rect, Viewport { width: 160.0, height: 121.0 }), "within 2%");
+            assert!(refused(Rect { x: 100.0, ..rect }, view), "past the window's right edge");
+            assert!(refused(Rect { y: -5.0, ..rect }, view), "above the window");
+            assert!(!refused(Rect { x: 60.5, ..rect }, view), "a rounding error past the edge");
+            assert!(refused(Rect { width: 0.0, ..rect }, view), "no size");
+            for nan in [Rect { x: f64::NAN, ..rect }, Rect { height: f64::NAN, ..rect }] {
+                assert!(refused(nan, view), "{nan:?}");
+            }
+            assert!(refused(rect, Viewport { width: f64::NAN, height: 120.0 }));
+            assert!(refused(rect, Viewport { width: 0.0, height: 0.0 }));
+            assert!(matches!(crop_frame(b"not a png", rect, view), Err(AnnotateError::Failed(_))));
+        }
+
+        #[test]
+        fn a_frame_still_is_kept_for_regions_only_and_read_back() {
+            let (_folder, captures) = captures("frame");
+            let rect = Rect { x: 20.0, y: 10.0, width: 100.0, height: 80.0 };
+            let still = frame_still(&captures, &window(320, 240), "https://example.com/".into(), rect, Viewport { width: 160.0, height: 120.0 }, 5).unwrap();
+            let path = Path::new(&still.path);
+            assert!(captures.owns(path));
+            assert_eq!(path.file_name().unwrap(), "still.png");
+            assert_eq!((still.width, still.height, still.scale, still.elements, still.generation), (100.0, 80.0, 2.0, false, 0));
+            let json = serde_json::to_value(&still).unwrap();
+            assert_eq!((&json["elements"], &json["takenAtMs"]), (&json!(false), &json!(5)));
+            let read = read_still(&captures, path).unwrap();
+            assert_eq!(decode(&read).dimensions(), (200, 160));
+            let staged = stage(&captures, path, 1, Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 }, still.scale).unwrap();
+            assert_eq!(*open(&staged).get_pixel(1, 1), MARK);
+        }
+
+        #[test]
+        fn only_a_still_is_read() {
+            let (folder, captures) = captures("read");
+            let annotation = captures.write("annotation-1", &encode(&RgbaImage::from_pixel(2, 2, GREY)).unwrap()).unwrap();
+            assert!(read_still(&captures, &annotation).is_err(), "another capture");
+            let elsewhere = folder.0.join("1").join("still.png");
+            std::fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
+            std::fs::write(&elsewhere, b"\x89PNG\r\n\x1a\n").unwrap();
+            assert!(read_still(&captures, &elsewhere).is_err(), "a still outside the captures folder");
+            let at = still(&captures, 2, 2);
+            assert!(read_still(&captures, &at.parent().unwrap().join("..").join("1").join("still.png")).is_err());
+            assert_eq!(read_still(&captures, &at).unwrap(), std::fs::read(&at).unwrap());
+        }
+    }
+
+    #[test]
+    fn a_still_comes_from_the_view_or_the_frame() {
+        let view: StillSource = serde_json::from_value(json!({ "kind": "view", "key": "p1" })).unwrap();
+        assert_eq!(view, StillSource::View { key: "p1".into() });
+        let frame = json!({
+            "kind": "frame",
+            "url": "https://example.com/",
+            "rect": { "x": 1, "y": 2, "width": 3, "height": 4 },
+            "viewport": { "width": 1280, "height": 800 },
+        });
+        assert_eq!(
+            serde_json::from_value::<StillSource>(frame).unwrap(),
+            StillSource::Frame {
+                url: "https://example.com/".into(),
+                rect: Rect { x: 1.0, y: 2.0, width: 3.0, height: 4.0 },
+                viewport: Viewport { width: 1280.0, height: 800.0 },
+            }
+        );
+        for bad in [
+            json!({ "kind": "view", "key": "p1", "url": "x" }),
+            json!({ "kind": "screen", "key": "p1" }),
+            json!({ "key": "p1" }),
+            json!({ "kind": "frame", "url": "x", "rect": { "x": 0, "y": 0, "width": 1, "height": 1 }, "viewport": { "width": 1, "height": 1, "scale": 2 } }),
+        ] {
+            assert!(serde_json::from_value::<StillSource>(bad.clone()).is_err(), "{bad}");
         }
     }
 }

@@ -11,6 +11,11 @@ export type Serial = (<T>(job: (stale: () => boolean) => Promise<T>) => Promise<
    * stopping it is the job's own business.
    */
   stoppable<T>(signal: AbortSignal | undefined, stopped: () => Error, job: (stale: () => boolean) => Promise<T>): Promise<T>;
+  /**
+   * Runs `job` in its turn without overtaking anything: changes asked for before it aren't made stale by it, and it
+   * isn't made stale by later ones. For work beside the changes, such as opening a background connection (ADR 0125).
+   */
+  after<T>(job: () => Promise<T>): Promise<T>;
 };
 
 export function serial(): Serial {
@@ -25,6 +30,7 @@ export function serial(): Serial {
     const n = ++latest;
     return enqueue(() => job(() => n !== latest));
   }) as Serial;
+  run.after = <T>(job: () => Promise<T>) => enqueue(job);
   run.stoppable = <T>(signal: AbortSignal | undefined, stopped: () => Error, job: (stale: () => boolean) => Promise<T>) => {
     if (signal?.aborted) return Promise.reject<T>(stopped());
     // What was asked for last when this was; anything newer by the time it starts overtakes it.

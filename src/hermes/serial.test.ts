@@ -175,3 +175,23 @@ describe("A stoppable change and the change before it", () => {
     expect(seen).toEqual([false]);
   });
 });
+
+describe("Work queued beside the changes", () => {
+  it("runs in its turn, and makes no change asked for before it stale", async () => {
+    const run = serial();
+    const seen: string[] = [];
+    const change = run(async (stale) => void seen.push(`switch stale=${stale()}`));
+    const opens = ["b", "c", "d"].map((c) => run.after(async () => void seen.push(`open ${c}`)));
+    await Promise.all([change, ...opens]);
+    expect(seen).toEqual(["switch stale=false", "open b", "open c", "open d"]);
+  });
+
+  it("still runs when a change is asked for after it", async () => {
+    const run = serial();
+    const seen: string[] = [];
+    const opens = ["b", "c"].map((c) => run.after(async () => void seen.push(`open ${c}`)));
+    const later = run(async (stale) => void seen.push(`switch stale=${stale()}`));
+    await Promise.all([...opens, later]);
+    expect(seen).toEqual(["open b", "open c", "switch stale=false"]);
+  });
+});

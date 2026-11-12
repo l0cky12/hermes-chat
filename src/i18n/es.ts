@@ -26,6 +26,7 @@ export const es: Catalogue = {
       general: "General",
       appearance: "Apariencia",
       keyboard: "Atajos de teclado",
+      snapshots: "Instantáneas",
       model: "Modelo",
       providers: "Proveedores",
       voice: "Voz",

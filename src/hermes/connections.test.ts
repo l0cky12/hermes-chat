@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CONNECTIONS_KEY, Connections, LEGACY_SIGN_IN_KEY, addressKey, connectionScope, defaultName, inScope, prefScope, scopeParts } from "./connections";
+import { CONNECTIONS_KEY, Connections, LEGACY_SIGN_IN_KEY, LIVE_LIMIT_DEFAULT, LIVE_LIMIT_MAX, addressKey, connectionScope, defaultName, inScope, prefScope, scopeParts } from "./connections";
 import { draftKey, drafts } from "./drafts";
 import { forgetConnectionData } from "./forgetConnection";
 import { inboxScope } from "./inbox";
@@ -181,6 +181,46 @@ describe("Saved connections", () => {
     broken.save(broken.draft(at("https://a.example.com"), "A"));
     expect(broken.unsaved).toBe(true);
     expect(broken.recent()).toHaveLength(1);
+  });
+});
+
+describe("Live connections (ADR 0125)", () => {
+  const two = () => {
+    const s = store();
+    const a = s.draft({ ...legacy, sshTarget: "liam@alpha" }, "Alpha");
+    const b = s.draft({ ...legacy, sshTarget: "liam@bravo" }, "Bravo");
+    s.save(a);
+    s.save(b);
+    return { s, a, b };
+  };
+
+  it("keep which are live, the target first, and leave out ones no longer saved", () => {
+    const { s, a, b } = two();
+    expect(s.live()).toEqual([]);
+    s.use(b.id);
+    s.setLive([b.id, a.id, "00000000-0000-4000-8000-999999999999", b.id]);
+    expect(s.live().map((c) => c.id)).toEqual([b.id, a.id]);
+    expect(new Connections(localStorage).live().map((c) => c.id)).toEqual([b.id, a.id]);
+    // Using one keeps the live set; removing one drops it from there too.
+    s.use(a.id);
+    expect(s.live().map((c) => c.id)).toEqual([b.id, a.id]);
+    s.remove(b.id);
+    expect(s.live().map((c) => c.id)).toEqual([a.id]);
+  });
+
+  it("allow three live by default, from 1 to 8, and ignore a limit edited by hand outside that", () => {
+    const { s } = two();
+    expect(s.liveLimit()).toBe(LIVE_LIMIT_DEFAULT);
+    s.setLiveLimit(1);
+    expect(new Connections(localStorage).liveLimit()).toBe(1);
+    s.setLiveLimit(LIVE_LIMIT_MAX + 1);
+    s.setLiveLimit(0);
+    s.setLiveLimit(2.5);
+    expect(s.liveLimit()).toBe(1);
+    const doc = JSON.parse(localStorage.getItem(CONNECTIONS_KEY)!);
+    localStorage.setItem(CONNECTIONS_KEY, JSON.stringify({ ...doc, liveLimit: 40, live: "everything" }));
+    const read = new Connections(localStorage);
+    expect([read.liveLimit(), read.live()]).toEqual([LIVE_LIMIT_DEFAULT, []]);
   });
 });
 

@@ -180,6 +180,46 @@ elif grep -E "^REPORT " "$EV/probe.log" | grep -qE ": OK|data not found" || [ "$
   echo "PREVIEW_PAGE_REFUSED=no" >>"$EV/result.txt"
 else echo "PREVIEW_PAGE_REFUSED=yes" >>"$EV/result.txt"; fi
 
+# Annotating the framed page (#96, ADR 0152): Annotate takes WebView2's image of the window cut to the frame, which
+# must show the page itself (its green button where the page puts it) at the frame's size times the device scale.
+# A dragged region then stages annotation-1.png and its words, and nothing is sent.
+ANN_PORT=47993
+node "$HERE/annotate-page.mjs" $ANN_PORT >"$EV/annotate-page.log" 2>&1 &
+ANN_PID=$!
+trap 'kill $PROBE_PID $ANN_PID 2>/dev/null; cleanup' EXIT
+wd fill input Address -- "http://localhost:$ANN_PORT/"
+wd press Enter
+wd click button "Open on this computer instead" || true
+wd wait 'button[aria-label=Annotate]:not([disabled])' "" 30000 || evidence 11-annotate-not-offered
+sleep 2
+wd click 'button[aria-label=Annotate]'
+if wd wait '.annotate-stage img' "" 20000; then echo "ANNOTATE_OPENED=yes" >>"$EV/result.txt"; else echo "ANNOTATE_OPENED=no" >>"$EV/result.txt"; fi
+sleep 1
+evidence 11-annotate-still
+node "$S/wd.mjs" eval 'const img = document.querySelector(".annotate-stage img"); const frame = document.querySelector("iframe.preview-frame").getBoundingClientRect();
+  const c = document.createElement("canvas"); c.width = img.naturalWidth; c.height = img.naturalHeight; const g = c.getContext("2d"); g.drawImage(img, 0, 0);
+  const scale = img.naturalWidth / frame.width; const [r, gr, b] = g.getImageData(Math.round(60 * scale), Math.round(60 * scale), 1, 1).data;
+  const [wr, wg, wb] = g.getImageData(Math.round(400 * scale), Math.round(40 * scale), 1, 1).data;
+  return ({ natural: [img.naturalWidth, img.naturalHeight], frame: [frame.width, frame.height], dpr: devicePixelRatio, scale, button: [r, gr, b], page: [wr, wg, wb],
+    green: Math.abs(r - 30) < 12 && Math.abs(gr - 160) < 12 && Math.abs(b - 80) < 12, white: wr > 240 && wg > 240 && wb > 240,
+    sized: Math.abs(img.naturalWidth - frame.width * devicePixelRatio) <= 2 && Math.abs(img.naturalHeight - frame.height * devicePixelRatio) <= 2,
+    png: c.toDataURL("image/png") });' >"$EV/11-still-check.txt" 2>&1
+node -e 'const t = require("fs").readFileSync(process.argv[1], "utf8"); const j = JSON.parse(t);
+  require("fs").writeFileSync(process.argv[2], Buffer.from(j.png.split(",")[1], "base64")); delete j.png; console.log(JSON.stringify(j));
+  process.exit(j.green && j.white && j.sized ? 0 : 1)' "$EV/11-still-check.txt" "$EV/11-the-still.png" | tee "$EV/11-still-check.json" \
+  && echo "ANNOTATE_STILL_SHOWS_PAGE=yes" >>"$EV/result.txt" || echo "ANNOTATE_STILL_SHOWS_PAGE=no" >>"$EV/result.txt"
+wd drag .annotate-stage -- 20 20 260 140
+if wd wait '[aria-label="Review the annotation"]' "Region:" 15000; then echo "ANNOTATE_REVIEWED=yes" >>"$EV/result.txt"; else echo "ANNOTATE_REVIEWED=no" >>"$EV/result.txt"; fi
+wd fill 'textarea[placeholder="What should change here?"]' -- "make this button blue" || true
+evidence 12-annotate-review
+wd click button "Add to message"
+if wd wait .chip "annotation-1.png" 15000; then echo "ANNOTATE_STAGED=yes" >>"$EV/result.txt"; else echo "ANNOTATE_STAGED=no" >>"$EV/result.txt"; fi
+wd value 'textarea[data-composer]' >"$EV/13-composer.txt" 2>&1 || true
+evidence 13-annotate-staged
+if grep -q "Region: The app can't read this page on Windows" "$EV/13-composer.txt" && grep -q "Note: make this button blue" "$EV/13-composer.txt" && ! grep -q "hunter2" "$EV/13-composer.txt"; then
+  echo "ANNOTATE_WORDS=yes" >>"$EV/result.txt"; else echo "ANNOTATE_WORDS=no" >>"$EV/result.txt"; fi
+if grep -q "make this button blue" "$EV/13-annotate-staged-server-state.json" 2>/dev/null; then echo "ANNOTATE_NOT_SENT=no" >>"$EV/result.txt"; else echo "ANNOTATE_NOT_SENT=yes" >>"$EV/result.txt"; fi
+
 echo "=== result"; cat "$EV/result.txt"
 echo "=== errors after send"; cat "$EV/07-after-send-errors.json"
 echo "=== app stderr"; cat "$EV/app-stderr.log"

@@ -5,6 +5,7 @@ import {
   Blocks,
   ArrowRight,
   Copy,
+  Crosshair,
   ExternalLink,
   FileQuestion,
   FileText,
@@ -40,13 +41,25 @@ import { Markdown } from "./Markdown";
 import { HIGHLIGHT_MAX_CHARS } from "./markdownPipeline";
 import { Spinner } from "./bits";
 import { Menu } from "./ChatMenu";
-import { ServerPageError, type DevServers, type Listening, type LocalFiles, type NativePage, type NativePages, type ServerPages, type WebPages } from "./tauriPreview";
+import {
+  ServerPageError,
+  type DevServers,
+  type Listening,
+  type LocalFiles,
+  type NativePage,
+  type NativePages,
+  type ServerPages,
+  type StillSource,
+  type WebPages,
+} from "./tauriPreview";
 import { usePlacement } from "./pagePlacement";
 import { canGoBack, canGoForward, type HistoryStep, type PreviewHistory } from "./previewHistory";
 import type { ArtifactStore } from "../hermes/artifacts";
 import { ArtifactEditor } from "./ArtifactEditor";
 import { errorText, formatBytes } from "../hermes/values";
 import { ExtensionView } from "./ExtensionView";
+import { failureText as annotateFailure, type PageWhere, type Still } from "../hermes/annotations";
+import { AnnotationOverlay, type AnnotationDesk } from "./Annotate";
 
 /** When a web page that hasn't loaded gets a note that it may never show. */
 const SLOW_PAGE_MS = 15_000;
@@ -85,6 +98,7 @@ export function PreviewPane({
   serverPages,
   artifacts,
   connected = true,
+  desk,
 }: {
   history: PreviewHistory;
   onStep: (s: HistoryStep) => void;
@@ -97,6 +111,8 @@ export function PreviewPane({
   /** Where an artifact's draft lives (artifacts.ts): editing it in the pane, and away from it, share one store. */
   artifacts?: ArtifactStore;
   connected?: boolean;
+  /** Where annotations are staged (the composer on screen), and who hears that the page moved. */
+  desk?: AnnotationDesk & { pageMoved(): void };
 }) {
   const here = history?.here;
   const [note, setNote] = useState<{ text: string; failed: boolean }>();
@@ -104,6 +120,7 @@ export function PreviewPane({
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
   const browserUrl = here?.kind === "web" ? viewUrlOf(here, tunnel) : undefined;
+  const annotate = useAnnotation(web, desk, here, tunnel, setNote);
 
   const open = (target: PreviewTarget) => {
     setNote(undefined);
@@ -168,6 +185,18 @@ export function PreviewPane({
         >
           <ExternalLink size={15} />
         </button>
+        {annotate.offered && (
+          <button
+            className={annotate.active ? "icon-btn active" : "icon-btn"}
+            title={annotate.ready ? "Annotate: point at part of this page to add it to your message" : "Annotate: once the page has loaded"}
+            aria-label="Annotate"
+            aria-pressed={annotate.active}
+            disabled={!annotate.ready || annotate.active}
+            onClick={annotate.start}
+          >
+            <Crosshair size={15} />
+          </button>
+        )}
         <MoreMenu address={here && addressOf(here)} framed={!web.native} picking={picking} onCopy={copy} onPick={() => void pick()} />
       </div>
       {note && (
@@ -189,6 +218,9 @@ export function PreviewPane({
             onTunnel={setTunnel}
             onBusy={setBusy}
             onOpenInBrowser={openInBrowser}
+            annotating={annotate.covering}
+            onAnnotatable={annotate.setSource}
+            onMoved={annotate.moved}
           />
         ) : here.kind === "tool" ? (
           <pre className="preview-pre">{here.text || "(empty)"}</pre>
@@ -212,9 +244,101 @@ export function PreviewPane({
         ) : (
           <FileBody key={`local:${here.path}:${history.reloadSeq}`} name={here.name} load={() => local.read(here)} />
         )}
+        {annotate.overlay}
       </div>
     </section>
   );
+}
+
+/** What a page body tells the Preview about annotating it (ADR 0094). */
+type Annotatable = {
+  /** The still covers the page: its view is hidden, and stays loaded behind. */
+  annotating: boolean;
+  /** How to take a still of the page now, while it is shown and loaded; nothing otherwise. */
+  onAnnotatable: (source: (() => StillSource | undefined) | undefined) => void;
+  /** The page moved: a load, or its own address changing. */
+  onMoved: () => void;
+};
+
+const whereOf = (t: WebTarget): PageWhere => (t.on === "server" ? "server" : t.on === "local" ? "local" : "web");
+
+/**
+ * Annotation mode: Annotate takes a still of the page shown, which then covers it until Add or Cancel. Cancel, a new
+ * page, another Preview entry, a profile switch (which clears the Preview) or the pane going (sign-out) deletes the
+ * still. A still that arrives after any of those is deleted as it comes.
+ */
+function useAnnotation(
+  web: WebPages,
+  desk: (AnnotationDesk & { pageMoved(): void }) | undefined,
+  here: PreviewTarget | undefined,
+  tunnel: Tunnel | undefined,
+  onNote: (note: { text: string; failed: boolean } | undefined) => void,
+) {
+  const api = web.annotate;
+  const [source, setSourceNow] = useState<() => StillSource | undefined>();
+  const setSource = useCallback((s: (() => StillSource | undefined) | undefined) => setSourceNow(() => s), []);
+  const [state, setState] = useState<{ still?: Still; viewKey?: string }>();
+  const ticket = useRef(0);
+  const held = useRef<Still>(undefined);
+  const capturing = useRef(false);
+  const end = useCallback(
+    (staged: boolean) => {
+      ticket.current++;
+      capturing.current = false;
+      const still = held.current;
+      held.current = undefined;
+      if (still && !staged) void api?.discard(still.path).catch(() => {});
+      setState(undefined);
+    },
+    [api],
+  );
+  const deskRef = useRef(desk);
+  deskRef.current = desk;
+  const moved = useCallback(() => {
+    deskRef.current?.pageMoved();
+    if (held.current || capturing.current) end(false);
+  }, [end]);
+  const hereKey = here?.kind === "web" ? here.url : here ? `${here.kind}` : "";
+  useEffect(() => () => end(false), [hereKey, end]);
+
+  const start = () => {
+    const from = source?.();
+    if (!api || !from) return;
+    const n = ++ticket.current;
+    capturing.current = true;
+    onNote(undefined);
+    setState({});
+    api.still(from).then(
+      (still) => {
+        if (n !== ticket.current) return void api.discard(still.path).catch(() => {});
+        capturing.current = false;
+        held.current = still;
+        setState({ still, viewKey: from.kind === "view" ? from.key : undefined });
+      },
+      (e) => {
+        if (n !== ticket.current) return;
+        end(false);
+        onNote({ text: annotateFailure(e), failed: true });
+      },
+    );
+  };
+
+  const still = state?.still;
+  const page = still && here?.kind === "web" ? fromView(still.url as ViewUrl, tunnel) : undefined;
+  return {
+    offered: !!api && !!desk && here?.kind === "web",
+    ready: !!source,
+    active: !!state,
+    covering: !!still,
+    start,
+    setSource,
+    moved,
+    overlay: still && page && api && desk && (
+      <div className="annotate-layer">
+        <AnnotationOverlay still={still} viewKey={state.viewKey} page={{ url: page.url, where: whereOf(page) }} api={api} desk={desk} onDone={(staged) => held.current === still && end(staged)} />
+      </div>
+    ),
+  };
 }
 
 function Badge({ here, serverLabel, onSwitch }: { here: PreviewTarget | undefined; serverLabel: string; onSwitch: (on: PageOn) => void }) {
@@ -615,8 +739,17 @@ function TextView({ view, name }: { view: Extract<FileView, { kind: "text" }>; n
  * a note and Open in your browser, and a site this computer can't reach says so instead of loading forever. Anything
  * else (a script that blanks the page, say) still can't be told apart, so a page slow to load says it may not show.
  */
-function FramedWebView({ url, src, check, onOpenInBrowser }: { url: string; src: string; check: (url: string) => Promise<Framing>; onOpenInBrowser: () => void }) {
+function FramedWebView({
+  url,
+  src,
+  check,
+  onOpenInBrowser,
+  annotating,
+  onAnnotatable,
+  onMoved,
+}: { url: string; src: string; check: (url: string) => Promise<Framing>; onOpenInBrowser: () => void } & Annotatable) {
   const [loaded, setLoaded] = useState(false);
+  const frame = useRef<HTMLIFrameElement>(null);
   const [slow, setSlow] = useState(false);
   const [framing, setFraming] = useState<Framing>();
   const [showAnyway, setShowAnyway] = useState(false);
@@ -638,7 +771,17 @@ function FramedWebView({ url, src, check, onOpenInBrowser }: { url: string; src:
     };
   }, [src]);
   const host = hostOf(url);
-  if (framing?.kind === "refused" && !showAnyway)
+  const refused = framing?.kind === "refused" && !showAnyway;
+  // The frame says only that something loaded, not where (ADR 0094): any load after a still makes it stale.
+  useEffect(() => {
+    if (!loaded || refused) return;
+    onAnnotatable(() => {
+      const r = frame.current?.getBoundingClientRect();
+      return r && { kind: "frame", url: src, rect: { x: r.x, y: r.y, width: r.width, height: r.height }, viewport: { width: innerWidth, height: innerHeight } };
+    });
+    return () => onAnnotatable(undefined);
+  }, [loaded, refused, src, onAnnotatable]);
+  if (refused)
     return (
       <div className="preview-state preview-error" role="alert">
         <AlertTriangle size={18} />
@@ -667,7 +810,8 @@ function FramedWebView({ url, src, check, onOpenInBrowser }: { url: string; src:
     );
   return (
     <div className="preview-web">
-      <div className="preview-web-frame">
+      {/* Covered by the still, the page stays loaded but out of reach of the keyboard and the pointer. */}
+      <div className="preview-web-frame" inert={annotating || undefined}>
         <iframe
           className="preview-frame"
           title={`Web page: ${url}`}
@@ -675,7 +819,11 @@ function FramedWebView({ url, src, check, onOpenInBrowser }: { url: string; src:
           sandbox={WEB_SANDBOX}
           allow={WEB_PERMISSIONS}
           referrerPolicy="no-referrer"
-          onLoad={() => setLoaded(true)}
+          ref={frame}
+          onLoad={() => {
+            setLoaded(true);
+            onMoved();
+          }}
         />
         {!loaded &&
           (framing?.kind === "unreachable" ? (
@@ -756,6 +904,9 @@ function BrowserView({
   onTunnel,
   onBusy,
   onOpenInBrowser,
+  annotating,
+  onAnnotatable,
+  onMoved,
 }: {
   here: WebTarget;
   reloadSeq: number;
@@ -766,7 +917,7 @@ function BrowserView({
   onTunnel: (t: Tunnel | undefined) => void;
   onBusy: (busy: boolean) => void;
   onOpenInBrowser: (url: string) => void;
-}) {
+} & Annotatable) {
   const trying = useHttpsFirst(here, web, onStep, onBusy);
   const need = tunnelNeeded(here);
   const [tunnel, retry] = useStickyTunnel(need, serverPages);
@@ -794,9 +945,37 @@ function BrowserView({
     </div>
   );
   if (!web.native)
-    return tryingNote || tunnelState || (src ? <FramedWebView key={`${src}:${reloadSeq}`} url={here.url} src={src} check={web.check} onOpenInBrowser={() => onOpenInBrowser(src)} /> : null);
+    return (
+      tryingNote ||
+      tunnelState ||
+      (src ? (
+        <FramedWebView
+          key={`${src}:${reloadSeq}`}
+          url={here.url}
+          src={src}
+          check={web.check}
+          onOpenInBrowser={() => onOpenInBrowser(src)}
+          annotating={annotating}
+          onAnnotatable={onAnnotatable}
+          onMoved={onMoved}
+        />
+      ) : null)
+    );
   return (
-    <PageView here={here} src={trying ? undefined : src} trying={trying} tunnel={open} reloadSeq={reloadSeq} cover={tryingNote || tunnelState} native={web.native} onStep={onStep} onBusy={onBusy} />
+    <PageView
+      here={here}
+      src={trying ? undefined : src}
+      trying={trying}
+      tunnel={open}
+      reloadSeq={reloadSeq}
+      cover={tryingNote || tunnelState}
+      native={web.native}
+      onStep={onStep}
+      onBusy={onBusy}
+      annotating={annotating}
+      onAnnotatable={onAnnotatable}
+      onMoved={onMoved}
+    />
   );
 }
 
@@ -843,6 +1022,9 @@ function PageView({
   native,
   onStep,
   onBusy,
+  annotating,
+  onAnnotatable,
+  onMoved,
 }: {
   here: WebTarget;
   src: ViewUrl | undefined;
@@ -854,15 +1036,15 @@ function PageView({
   native: NativePages;
   onStep: (s: HistoryStep) => void;
   onBusy: (busy: boolean) => void;
-}) {
+} & Annotatable) {
   const box = useRef<HTMLDivElement>(null);
   const [page, setPage] = useState<NativePage>();
   const [state, setState] = useState<"loading" | "shown" | { message: string; url?: string }>("loading");
   const [slow, setSlow] = useState(false);
   const viewAt = useRef<ViewUrl>(undefined);
   const sentThrough = useRef<Tunnel>(undefined);
-  const latest = useRef({ tunnel, onStep, trying });
-  latest.current = { tunnel, onStep, trying };
+  const latest = useRef({ tunnel, onStep, trying, onMoved });
+  latest.current = { tunnel, onStep, trying, onMoved };
 
   useEffect(() => {
     let live = true;
@@ -871,6 +1053,7 @@ function PageView({
       if (e.kind === "at") {
         viewAt.current = e.url;
         setState("shown");
+        latest.current.onMoved();
         // While the entry's https try is out, a page landing is the one before it, which mustn't take the entry's place.
         if (!latest.current.trying)
           latest.current.onStep({ kind: "arrived", target: fromView(e.url, sentThrough.current), replace: e.replace });
@@ -913,7 +1096,14 @@ function PageView({
   useEffect(() => () => onBusy(false), [onBusy]);
 
   const showing = !cover && !!src && (state === "shown" || (state === "loading" && !!viewAt.current));
-  usePlacement(box, showing ? page : undefined);
+  // Annotating covers the page with its still and hides the view; it stays loaded behind (ADR 0094).
+  usePlacement(box, showing && !annotating ? page : undefined);
+  const ready = !cover && !!src && state === "shown" && !!page;
+  useEffect(() => {
+    if (!ready || !page) return;
+    onAnnotatable(() => ({ kind: "view", key: page.key }));
+    return () => onAnnotatable(undefined);
+  }, [ready, page, onAnnotatable]);
   return (
     <div className="preview-web">
       <div ref={box} className="preview-web-frame" tabIndex={-1}>

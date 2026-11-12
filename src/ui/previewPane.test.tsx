@@ -9,6 +9,7 @@ import { FakeHermes, row } from "../hermes/fakeHermes";
 import { connect, type Hermes } from "../hermes/transport";
 import { getUIPrefs } from "../hermes/uiPrefs";
 import type { FileView, Framing, ViewUrl } from "../hermes/preview";
+import type { Answer, Pick, Still } from "../hermes/annotations";
 import {
   ServerPageError,
   type DevServers,
@@ -19,6 +20,8 @@ import {
   type Placement,
   type ServerPage,
   type ServerPages,
+  type StillSource,
+  type Annotator,
   type WebPages,
 } from "./tauriPreview";
 import { Main } from "../App";
@@ -128,6 +131,7 @@ function theView() {
       const said = view.say;
       view.say = (m, e) => (m === n ? onEvent(e) : said(m, e));
       const page: NativePage = {
+        key: `view${n}`,
         go: (url) => void view.asked.push([n, `go ${url}`]),
         reload: () => void view.asked.push([n, "reload"]),
         place: (p) => void view.placed.set(n, p),
@@ -509,7 +513,8 @@ const stubLayout = () => {
   );
   const rect = Element.prototype.getBoundingClientRect;
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    return this.classList.contains("preview-web-frame") ? ({ ...BOX, top: BOX.y, left: BOX.x, right: 1280, bottom: 820 } as DOMRect) : rect.call(this);
+    const placed = ["preview-web-frame", "preview-frame", "annotate-stage"].some((c) => this.classList.contains(c));
+    return placed ? ({ ...BOX, top: BOX.y, left: BOX.x, right: 1280, bottom: 820 } as DOMRect) : rect.call(this);
   });
 };
 async function withView(over: Parameters<typeof signedIn>[0] = {}) {
@@ -1542,5 +1547,287 @@ describe("The link menu (issue #240)", () => {
     await openTool(user, "patch");
     expect(rightClick(screen.getByRole("button", { name: "Output" }))).toBe(true);
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
+/**
+ * Rust's annotation commands (src-tauri/src/annotate.rs) as the Preview calls them. A still is the box's size at scale
+ * 2; the page answers `answer` under every point and picks `picked`. `asked` records each query and pick.
+ */
+function theAnnotator(url: string) {
+  const a: Annotator & {
+    sources: StillSource[];
+    asked: string[];
+    staged: { stillPath: string; n: number; rect: unknown; scale: number }[];
+    discarded: string[];
+    answer: Answer | null;
+    picked: Pick | { kind: "noAnswer" | "stale" };
+  } = {
+    sources: [],
+    asked: [],
+    staged: [],
+    discarded: [],
+    answer: null,
+    picked: { kind: "noAnswer" },
+    still: async (source) => {
+      a.sources.push(source);
+      const still: Still = { id: 7, generation: 1, path: `/c/1/${a.sources.length}/still.png`, url, takenAtMs: Date.UTC(2026, 10, 12, 14, 2, 31), width: BOX.width, height: BOX.height, scale: 2, elements: source.kind === "view" };
+      return still;
+    },
+    query: async (key, still, x, y, up) => {
+      a.asked.push(`query ${key} ${still} ${Math.round(x)},${Math.round(y)} up ${up}`);
+      return a.answer;
+    },
+    pick: async (key, still, x, y, up) => {
+      a.asked.push(`pick ${key} ${still} ${Math.round(x)},${Math.round(y)} up ${up}`);
+      if ("target" in a.picked || a.picked.kind === "region") return a.picked as Pick;
+      throw a.picked;
+    },
+    read: async () => new Blob(["png"]),
+    stage: async (stillPath, n, rect, scale) => {
+      a.staged.push({ stillPath, n, rect, scale });
+      return `/c/1/9/annotation-${n}.png`;
+    },
+    discard: async (path) => void a.discarded.push(path),
+  };
+  return a;
+}
+
+const BUTTON: Answer = {
+  target: { kind: "element", tag: "button", role: null, label: "Save changes", selector: "main > form#profile > button.primary", styles: { color: "rgb(255, 255, 255)" } },
+  rect: { x: 200, y: 80, width: 120, height: 36 },
+  view: { width: BOX.width, height: BOX.height, scrollX: 0, scrollY: 0, scale: 2 },
+};
+
+describe("Annotating a page in the Preview (issue #96)", () => {
+  const PAGE = "https://app.example/settings?token=abc123";
+  const sends = (server: FakeHermes) => server.requests.filter((r) => r.method === "prompt.submit" || r.method === "image.attach_bytes");
+  const stillOnScreen = () => screen.getByLabelText<HTMLElement>(/^The still of the page/);
+  /** A point on the still, in its CSS pixels, as the pointer's place in the window. */
+  const on = (x: number, y: number) => ({ clientX: BOX.x + x, clientY: BOX.y + y, button: 0, pointerId: 1 });
+  afterEach(() => vi.restoreAllMocks());
+
+  async function annotatingOnLinux() {
+    URL.createObjectURL = () => "blob:still";
+    URL.revokeObjectURL = () => {};
+    const annotator = theAnnotator(PAGE);
+    const s = await withView({ web: Object.assign(theWeb(), { annotate: annotator }) });
+    await s.user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await s.user.type(address(), `${PAGE}{Enter}`);
+    await act(async () => s.view.land(1));
+    s.server.files["/c/1/9/annotation-1.png"] = "\x89PNG\r\n\x1a\nmarked";
+    s.server.files["/c/1/9/annotation-2.png"] = "\x89PNG\r\n\x1a\nmarked";
+    return { ...s, annotator };
+  }
+
+  it("picks an element on a still of the hidden page, shows everything first, and stages it in the composer without sending", async () => {
+    const { annotator, view, server, user } = await annotatingOnLinux();
+    await user.click(button("Annotate"));
+    expect(annotator.sources).toEqual([{ kind: "view", key: "view1" }]);
+    await screen.findByRole("dialog", { name: "Annotate the page" });
+    expect(view.placed.get(1)).toBeNull();
+
+    annotator.answer = BUTTON;
+    fireEvent.pointerMove(await waitFor(stillOnScreen), on(240, 100));
+    await waitFor(() => expect(annotator.asked).toEqual(["query view1 7 240,100 up 0"]));
+    expect(await screen.findByText("main > form#profile > button.primary")).toBeTruthy();
+    fireEvent.keyDown(stillOnScreen(), { key: "ArrowUp" });
+    await waitFor(() => expect(annotator.asked.at(-1)).toBe("query view1 7 240,100 up 1"));
+
+    annotator.picked = { kind: "element", ...BUTTON };
+    fireEvent.pointerDown(stillOnScreen(), on(240, 100));
+    fireEvent.pointerUp(stillOnScreen(), on(240, 100));
+    const card = await screen.findByRole("region", { name: "Review the annotation" });
+    expect(annotator.asked.at(-1)).toBe("pick view1 7 240,100 up 1");
+    expect(card.textContent).toContain('Element: button, text from the page: "Save changes"');
+    expect(card.textContent).toContain("Selector: main > form#profile > button.primary");
+    expect(card.textContent).toContain("Box: 200, 80, 120 × 36 CSS px, in a 480 × 683 view at scale 2");
+    expect(card.textContent).toContain("Adds to the message in Fix the app.");
+    expect(card.textContent).not.toContain("abc123");
+
+    await user.type(within(card).getByRole("textbox", { name: "Note" }), "make this match the secondary button");
+    expect(annotator.staged).toEqual([]);
+    expect(sends(server)).toEqual([]);
+    await user.click(within(card).getByRole("button", { name: "Add to message" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Annotate the page" })).toBeNull());
+    expect(annotator.staged).toEqual([{ stillPath: "/c/1/1/still.png", n: 1, rect: BUTTON.rect, scale: 2 }]);
+    const composer = document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")!;
+    await waitFor(() => expect(composer.value).toContain("Annotation 1. annotation-1.png marks it in blue."));
+    expect(composer.value).toContain("Page: https://app.example/settings?token=%E2%80%A6 (web page), still taken");
+    expect(composer.value).toContain("Note: make this match the secondary button");
+    expect(await screen.findByText("annotation-1.png")).toBeTruthy();
+    expect(annotator.discarded).toEqual([]);
+    expect(sends(server)).toEqual([]);
+    await waitFor(() => expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [] }));
+
+    // The page moves on: the staged annotation says it came from an earlier page, and still sends as it is.
+    await act(async () => view.say(1, at("https://app.example/billing")));
+    expect((await screen.findByText("page changed")).getAttribute("aria-label")).toMatch(/^Taken on https:\/\/app.example\/settings\?token=%E2%80%A6 at .*The page has changed since\.$/);
+  });
+
+  it("sends and stages nothing on Cancel or Escape, deletes each still, and shows the page again", async () => {
+    const { annotator, view, server, user } = await annotatingOnLinux();
+    const typed = document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")!.value;
+    await user.click(button("Annotate"));
+    await screen.findByRole("dialog", { name: "Annotate the page" });
+    await user.click(screen.getByRole("button", { name: "Cancel the annotation" }));
+    await waitFor(() => expect(annotator.discarded).toEqual(["/c/1/1/still.png"]));
+    expect(screen.queryByRole("dialog", { name: "Annotate the page" })).toBeNull();
+    await waitFor(() => expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [] }));
+
+    await user.click(button("Annotate"));
+    const dialog = await screen.findByRole("dialog", { name: "Annotate the page" });
+    fireEvent.pointerDown(await waitFor(stillOnScreen), on(10, 10));
+    fireEvent.pointerMove(stillOnScreen(), on(100, 60));
+    fireEvent.pointerUp(stillOnScreen(), on(100, 60));
+    await screen.findByRole("region", { name: "Review the annotation" });
+    // Escape, pressed wherever the keyboard is, steps back from the card, then ends the mode.
+    expect(document.activeElement).toBe(within(dialog).getByRole("textbox", { name: "Note" }));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("region", { name: "Review the annotation" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(stillOnScreen()));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await waitFor(() => expect(annotator.discarded).toEqual(["/c/1/1/still.png", "/c/1/2/still.png"]));
+    expect(annotator.staged).toEqual([]);
+    expect(document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")!.value).toBe(typed);
+    expect(sends(server)).toEqual([]);
+  });
+
+  it("puts the words where the owner left the composer's cursor, and keeps a drag that runs off the still", async () => {
+    const { annotator, user } = await annotatingOnLinux();
+    const composer = document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")!;
+    await user.clear(composer);
+    await user.type(composer, "Fix this: please");
+    composer.setSelectionRange(10, 10);
+    fireEvent.select(composer);
+    await user.click(button("Annotate"));
+    fireEvent.pointerDown(await waitFor(stillOnScreen), on(100, 60));
+    fireEvent.pointerMove(stillOnScreen(), on(200, 100));
+    fireEvent.pointerMove(stillOnScreen(), on(BOX.width + 50, 160));
+    fireEvent.pointerUp(stillOnScreen(), on(BOX.width + 50, 160));
+    const card = await screen.findByRole("region", { name: "Review the annotation" });
+    expect(card.textContent).toContain(`Box: 100, 60, ${BOX.width - 100} × 100 CSS px`);
+    await user.click(within(card).getByRole("button", { name: "Add to message" }));
+    await waitFor(() => expect(composer.value).toMatch(/^Fix this: \nAnnotation 1\. annotation-1\.png marks it in blue\.\n[^]*\nplease$/));
+    expect(annotator.staged).toHaveLength(1);
+
+    // A second one, with the composer untouched since, goes after the first.
+    await user.click(button("Annotate"));
+    fireEvent.pointerDown(await waitFor(stillOnScreen), on(10, 10));
+    fireEvent.pointerMove(stillOnScreen(), on(100, 60));
+    fireEvent.pointerUp(stillOnScreen(), on(100, 60));
+    await user.click(within(await screen.findByRole("region", { name: "Review the annotation" })).getByRole("button", { name: "Add to message" }));
+    await waitFor(() => expect(composer.value).toContain("Annotation 2."));
+    expect(composer.value.indexOf("Annotation 1.")).toBeLessThan(composer.value.indexOf("Annotation 2."));
+    expect(composer.value.endsWith("\nplease")).toBe(true);
+  });
+
+  it("stages nothing when the page moves while the annotation is being marked", async () => {
+    const { annotator, view, user } = await annotatingOnLinux();
+    let finish!: () => void;
+    const stage = annotator.stage;
+    annotator.stage = (...args) => new Promise<void>((r) => (finish = r)).then(() => stage(...args));
+    const typed = document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")!.value;
+    await user.click(button("Annotate"));
+    fireEvent.pointerDown(await waitFor(stillOnScreen), on(10, 10));
+    fireEvent.pointerMove(stillOnScreen(), on(100, 60));
+    fireEvent.pointerUp(stillOnScreen(), on(100, 60));
+    await user.click(within(await screen.findByRole("region", { name: "Review the annotation" })).getByRole("button", { name: "Add to message" }));
+    await act(async () => view.say(1, at("https://app.example/elsewhere")));
+    await act(async () => finish());
+    await waitFor(() => expect(annotator.discarded).toEqual(["/c/1/1/still.png", "/c/1/9/annotation-1.png"]));
+    expect(document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")!.value).toBe(typed);
+    expect(screen.queryByText("annotation-1.png")).toBeNull();
+  });
+
+  it("never stages in a chat opened while the annotation was being marked", async () => {
+    const { annotator, user } = await annotatingOnLinux();
+    let finish!: () => void;
+    const stage = annotator.stage;
+    annotator.stage = (...args) => new Promise<void>((r) => (finish = r)).then(() => stage(...args));
+    await user.click(button("Annotate"));
+    fireEvent.pointerDown(await waitFor(stillOnScreen), on(31, 41));
+    fireEvent.pointerMove(stillOnScreen(), on(131, 91));
+    fireEvent.pointerUp(stillOnScreen(), on(131, 91));
+    const card = await screen.findByRole("region", { name: "Review the annotation" });
+    expect(card.textContent).toContain("Adds to the message in Fix the app.");
+    await user.click(within(card).getByRole("button", { name: "Add to message" }));
+    await user.click(screen.getByRole("button", { name: /Another chat/ }));
+    await act(async () => finish());
+    await waitFor(() => expect(annotator.staged).toHaveLength(1));
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    // Neither the chat now open nor the one the card named holds it: it was deleted, not left waiting.
+    for (const chat of [/Another chat/, /Fix the app/]) {
+      await user.click(screen.getByRole("button", { name: chat }));
+      await waitFor(() => expect(document.querySelector(".chat-title")?.textContent).toBe(chat.source));
+      expect(document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")!.value).not.toContain("Box: 31, 41, 100 × 50");
+      expect(screen.queryByText("annotation-1.png")).toBeNull();
+    }
+  });
+
+  it("ends annotating and deletes the still when the page moves by itself, or the Preview goes out of sight", async () => {
+    const { annotator, view, user } = await annotatingOnLinux();
+    await user.click(button("Annotate"));
+    await screen.findByRole("dialog", { name: "Annotate the page" });
+    await act(async () => view.say(1, at("https://app.example/elsewhere")));
+    await waitFor(() => expect(annotator.discarded).toEqual(["/c/1/1/still.png"]));
+    expect(screen.queryByRole("dialog", { name: "Annotate the page" })).toBeNull();
+
+    await user.click(button("Annotate"));
+    await screen.findByRole("dialog", { name: "Annotate the page" });
+    await user.click(within(pane()).getByRole("tab", { name: /Files/ }));
+    await waitFor(() => expect(annotator.discarded).toEqual(["/c/1/1/still.png", "/c/1/2/still.png"]));
+    expect(annotator.staged).toEqual([]);
+  });
+
+  it("keeps a region when the page changed under the pick, or nothing answered there", async () => {
+    const { annotator, user } = await annotatingOnLinux();
+    await user.click(button("Annotate"));
+    await screen.findByRole("dialog", { name: "Annotate the page" });
+    annotator.picked = { kind: "region", rect: BUTTON.rect, why: { kind: "changed" } };
+    fireEvent.pointerDown(await waitFor(stillOnScreen), on(240, 100));
+    fireEvent.pointerUp(stillOnScreen(), on(240, 100));
+    const card = await screen.findByRole("region", { name: "Review the annotation" });
+    expect(card.textContent).toContain("Region: The page changed after the still. Element details are left out.");
+    expect(card.textContent).not.toContain("Selector");
+
+    await user.click(within(card).getByRole("button", { name: "Pick again" }));
+    annotator.picked = { kind: "noAnswer" };
+    fireEvent.pointerDown(stillOnScreen(), on(5, 5));
+    fireEvent.pointerUp(stillOnScreen(), on(5, 5));
+    expect((await screen.findByRole("alert")).textContent).toBe("Nothing there answered. Drag to mark a region instead.");
+  });
+
+  it("marks regions only on a framed page (Windows), from a still of the frame's box", async () => {
+    stubLayout();
+    URL.createObjectURL = () => "blob:still";
+    URL.revokeObjectURL = () => {};
+    const url = "https://framed.example/app";
+    const annotator = theAnnotator(url);
+    const { user, server } = await signedIn({ web: Object.assign(theWeb(), { annotate: annotator }) });
+    server.files["/c/1/9/annotation-1.png"] = "\x89PNG\r\n\x1a\nmarked";
+    await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.type(address(), `${url}{Enter}`);
+    expect(button("Annotate").disabled).toBe(true);
+    const frame = within(pane()).getByTitle(`Web page: ${url}`);
+    Object.defineProperty(frame, "contentWindow", { get: () => ({}) });
+    fireEvent.load(frame);
+
+    await user.click(button("Annotate"));
+    expect(annotator.sources).toEqual([{ kind: "frame", url, rect: BOX, viewport: { width: innerWidth, height: innerHeight } }]);
+    const dialog = await screen.findByRole("dialog", { name: "Annotate the page" });
+    expect(dialog.textContent).toContain("The app can't read this page on Windows, so annotations here are regions.");
+    // The covered frame stays loaded, out of the keyboard's and the pointer's reach.
+    await waitFor(() => expect(frame.closest(".preview-web-frame")!.hasAttribute("inert")).toBe(true));
+    fireEvent.pointerDown(await waitFor(stillOnScreen), on(100, 60));
+    fireEvent.pointerMove(stillOnScreen(), on(220, 160));
+    fireEvent.pointerUp(stillOnScreen(), on(220, 160));
+    const card = await screen.findByRole("region", { name: "Review the annotation" });
+    expect(annotator.asked).toEqual([]);
+    expect(card.textContent).toContain("Box: 100, 60, 120 × 100 CSS px");
+    await user.click(within(card).getByRole("button", { name: "Add to message" }));
+    await waitFor(() => expect(annotator.staged).toEqual([{ stillPath: "/c/1/1/still.png", n: 1, rect: { x: 100, y: 60, width: 120, height: 100 }, scale: 2 }]));
+    await waitFor(() => expect(document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")!.value).toContain("Region: The app can't read this page on Windows"));
   });
 });

@@ -10,6 +10,8 @@
 //   wd.mjs wheel <css> [text] -- <dy> [below]   turn the scroll wheel by dy pixels over the match's middle, or `below`
 //                                    pixels under it (negative dy: away from you, which zooms the office in toward that
 //                                    point; `below` reaches the character under an office name tag)
+//   wd.mjs drag <css> [text] -- <x0> <y0> <x1> <y1>   press at (x0, y0) from the match's top-left, move to (x1, y1) in
+//                                    steps, and release, as WebDriver pointer input
 //   wd.mjs rightclick <css> [text]   right-click the match with real X input (xdotool), which opens a context menu
 //   wd.mjs fill  <css> [text] -- <value>   clear the field, then type value as key presses
 //   wd.mjs select <css> [text] -- <option>   pick a native <select> option by its text (the popup itself never renders)
@@ -140,6 +142,21 @@ try {
       });
       await wd("DELETE", s("/actions"));
       console.log("scrolled");
+      break;
+    }
+    case "drag": {
+      if (dashdash < 0) die("drag needs `-- <x0> <y0> <x1> <y1>`");
+      const [x0, y0, x1, y1] = args.slice(dashdash + 1, dashdash + 5).map(Number);
+      if (![x0, y0, x1, y1].every(Number.isFinite)) die("drag needs four numbers");
+      const corner = "const r = arguments[0].getBoundingClientRect(); return [r.left, r.top];";
+      const [left, top] = await exec(corner, [{ [ELEMENT]: await one(css, text) }]);
+      const at = (x, y) => ({ type: "pointerMove", origin: "viewport", x: Math.round(left + x), y: Math.round(top + y), duration: 50 });
+      const steps = Array.from({ length: 8 }, (_, i) => at(x0 + ((x1 - x0) * (i + 1)) / 8, y0 + ((y1 - y0) * (i + 1)) / 8));
+      await wd("POST", s("/actions"), {
+        actions: [{ type: "pointer", id: "mouse", parameters: { pointerType: "mouse" }, actions: [at(x0, y0), { type: "pointerDown", button: 0 }, ...steps, { type: "pointerUp", button: 0 }] }],
+      });
+      await wd("DELETE", s("/actions"));
+      console.log("dragged");
       break;
     }
     case "rightclick": {

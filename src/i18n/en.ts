@@ -29,6 +29,7 @@ export const en = {
       general: "General",
       appearance: "Appearance",
       keyboard: "Keyboard Shortcuts",
+      snapshots: "Snapshots",
       model: "Model",
       providers: "Providers",
       voice: "Voice",
