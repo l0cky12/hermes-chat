@@ -1,12 +1,17 @@
 // Fails when two ADRs in docs/adr share a number, and prints the highest number in use (a new ADR takes the next).
 //
 //   node scripts/check-adrs.mjs
+//
+// HERMES_CHAT_ROOT points it at another checkout (the tests use a scratch one).
 
 import { readdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const dir = new URL("../docs/adr/", import.meta.url);
+const root = process.env.HERMES_CHAT_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const dir = join(root, "docs/adr");
 const byNumber = Map.groupBy(
-  readdirSync(dir).filter((f) => /^\d{4}-.*\.md$/.test(f)),
+  readdirSync(dir).sort().filter((f) => /^\d{4}-.*\.md$/.test(f)),
   (f) => f.slice(0, 4),
 );
 const taken = [...byNumber].filter(([, files]) => files.length > 1);
