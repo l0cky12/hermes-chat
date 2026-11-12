@@ -1069,7 +1069,8 @@ mod local_fs {
 }
 
 /// `name` as a plain file name: no folders, control characters, characters Windows refuses in a name (`<>:"|?*`) or
-/// leading dots, a sane length, and its extension only when it looks like one (Hermes and the previews go by it).
+/// leading dots, a sane length, its extension only when it looks like one (Hermes and the previews go by it), and a
+/// `_` before a name Windows reserves for a device, on every platform.
 fn safe_name(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
     let base: String = base.chars().filter(|c| !c.is_control() && !"<>:\"|?*".contains(*c)).collect();
@@ -1084,11 +1085,24 @@ fn safe_name(name: &str) -> String {
         stem.pop();
     }
     let stem = if stem.trim().is_empty() { "clipboard" } else { stem.as_str() };
-    if ext.is_empty() {
-        stem.to_owned()
+    let name = if ext.is_empty() { stem.to_owned() } else { format!("{stem}.{ext}") };
+    if names_a_device(&name) {
+        format!("_{name}")
     } else {
-        format!("{stem}.{ext}")
+        name
     }
+}
+
+/// Whether Windows opens `name` as a device: `CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9` or `LPT1`–`LPT9` (Windows counts
+/// `¹²³` as digits too) in any case, before the first dot and any spaces there, so `nul .tar.gz` is `NUL`.
+fn names_a_device(name: &str) -> bool {
+    let head = name.split('.').next().unwrap_or_default().trim_end_matches(' ').to_ascii_uppercase();
+    let port = head.strip_prefix("COM").or_else(|| head.strip_prefix("LPT"));
+    ["CON", "PRN", "AUX", "NUL"].contains(&head.as_str())
+        || port.is_some_and(|n| {
+            let mut n = n.chars();
+            matches!((n.next(), n.next()), (Some('1'..='9' | '¹' | '²' | '³'), None))
+        })
 }
 
 /// Reads a whole file, refusing one over `max_bytes`; the size is checked again after reading, in case it grew.

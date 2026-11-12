@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findSecrets } from "./secrets";
+import { findMarkdownSecrets, findSecrets } from "./secrets";
 
 const found = (text: string) => findSecrets(text).map((s) => [s.kind, s.text]);
 
@@ -97,5 +97,21 @@ describe("Flagging likely secrets", () => {
   it("still flags a password named after a long run of words, or in a link with a long scheme", () => {
     expect(found("a-b-c-d-e-f-g-h-i-j-k-l-db_password=Tr0ub4dor!3")).toEqual([["password or key", "Tr0ub4dor!3"]]);
     expect(found("postgresql+asyncpg://app:Pa55w0rd!@db.internal/app")).toEqual([["password in a link", "Pa55w0rd!"]]);
+  });
+});
+
+describe("Flagging likely secrets in Markdown a reader decodes", () => {
+  const key = "sk-ant-api03-Zx8Kq2LmN4pR7tVw9yBc";
+  const written = (md: string) => findMarkdownSecrets(md).map((s) => md.slice(s.start, s.start + s.text.length));
+
+  it("gives a secret spelled with escapes or references as written, wherever it is in the text", () => {
+    for (const spelling of ["sk\\-ant\\-api03\\-Zx8Kq2LmN4pR7tVw9yBc", "sk-ant-api03-Zx8K&#x71;2LmN4pR7tVw9yBc", "sk&#45;ant-api03-Zx8Kq2LmN4pR7tVw9yBc"])
+      for (const md of [spelling, `a\r\n\tb &lt; \\* ${spelling}\r\nend`, `[link](https://x.io/?k=${spelling})`, `\`${spelling}\``])
+        expect(written(md)).toEqual([spelling]);
+  });
+
+  it("flags a secret written plainly once, and leaves other escapes and unknown references alone", () => {
+    expect(written(`password=hunter\\2\\!x and ${key} &amp; \\*`)).toEqual(["hunter\\2\\!x", key]);
+    expect(written("sk-ant-api03-Zx8K&bogus;q2LmN4pR7tVw9yBc")).toEqual([]);
   });
 });
