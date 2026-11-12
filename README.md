@@ -249,6 +249,16 @@ bind = SUPER SHIFT, S, exec, env WEBKIT_DISABLE_DMABUF_RENDERER=1 hermes-chat --
 
 If Hermes Chat is running, the screenshot goes to the chat on screen. If it isn't running, or is on the sign-in screen, the screenshot is taken once you sign in, if you sign in within two minutes.
 
+### Annotations
+
+The crosshair button in the Preview's toolbar annotates the web page shown there, whether it is on the web, on the Hermes server or on this computer. It is offered once the page has loaded. The app takes a still of the page and lays it over the page, which stays loaded behind it. Point at an element and click it, or drag a region. The Up and Down arrows step to the element's parent and back. Then a card shows everything that would be added to your message: the image with your mark, the page's address and time, and what the page says the element is (its tag, its text, a selector, its box and a few computed styles). Add a note, and **Add to message** stages `annotation-N.png` in the chat you were last in, with the words at the composer's cursor. You can edit or delete the words before you send. Cancel or Esc deletes the still and adds nothing. Nothing is sent until you send the message.
+
+- **What is never collected.** Form values, password and hidden fields beyond "a password field", cookies, storage, the page's HTML, and attributes other than the tag, role, label, id and two classes. Ids, classes and labels that look like secrets are left out. So are style values that hold an address, and query or fragment values in the page's address whose names look like secrets (`?token=`, `#access_token=`). The image shows what was visible on the page, so the card shows it before anything is staged.
+- **Regions.** A part of the page from another site, a page that changed under your pick, and every page on Windows give a region: the box with the reason, and no element details. On Windows the page is a sandboxed frame the app can't read, so the still is WebView2's image of the window, cut to the frame (ADR 0153).
+- **After the page moves.** A staged annotation's chip says "page changed" once the Preview's page loads again or changes its address. It still sends as it is, with the address and time it was taken.
+- **Storage.** The still and the staged image live in the private captures folder with Screenshots. The still is deleted on Cancel, when the page moves, when the Preview shows something else or goes out of sight, and on sign-out; the staged image is deleted as any Screenshot is. Nothing else is written.
+- **Server versions.** Annotations need only what a Screenshot needs (`image.attach_bytes` and `prompt.submit`), so every Hermes this app signs in to takes them. Whether the model looks at the image depends on its vision support; the words say what was picked either way.
+
 ### Chat links
 
 **Copy chat link**, in a chat's header and in its right-click menu, copies a link like this:
@@ -674,6 +684,7 @@ Everything kept per connection in local storage, and in `project-defaults.json`,
 
 ## Known limitations
 
+- Annotations: on Windows every annotation is a region, with no element details (ADR 0153). The Screen (Bot Desktop) offers no annotations until Hermes has a read-only way to inspect its browser (ADR 0094). Element details on Linux haven't been tried on Wayland. A Windows page's own same-document moves (`pushState`) don't mark a staged annotation as stale.
 - The app keeps several saved connections but uses one at a time: only the connection in use has a socket, so other servers' replies and Approvals show only after switching to them. Saved connections stay on this computer and don't sync. The app supports only the legacy session protocol with username and password sign-in.
 - Before switching connection, the app names running replies and waiting Approvals only as the inbox sees them, so it doesn't name work running in the CLI, a messaging gateway or cron on that server. Hermes keeps that work going anyway.
 - Setup was checked with the app's tests against the fake Hermes, and in the real app against a local stub dashboard. It wasn't checked against a live Hermes server, with a real provider key, or with a working Secret Service. Account (OAuth) providers can't be set up from the app. A Stop that reaches the app after Hermes has answered keeps the new connection, because it's already saved (ADR 0054).

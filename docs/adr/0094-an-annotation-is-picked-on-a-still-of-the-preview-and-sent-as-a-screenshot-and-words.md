@@ -1,6 +1,6 @@
 # An annotation is picked on a still of the Preview and sent as a Screenshot and words
 
-**Status: proposed (#96). The Rust half is built: the still, the query, the pick and staging (`annotate.rs`, `page_view.rs`, `preview_annotate_*`). The UI isn't, and nothing calls them yet. The owner's open questions are at the end.**
+**Status: accepted (#96). Built: the Rust half (`annotate.rs`, `page_view.rs`, `preview_annotate_*`), the Annotate button, overlay and review card in the Preview (`src/ui/Annotate.tsx`, `src/hermes/annotations.ts`), staging through the Screenshot desk, and the Windows still (ADR 0153). The open questions at the end keep their defaults until the owner answers them.**
 
 Issue #96 asks for a way to point at part of a web page and send that to Hermes as exact context, instead of describing where it is in words. The owner picks an element or a region, adds a note, reviews what will be sent, and the result waits in the composer until the owner sends it. The app never reads cookies, form values, hidden inputs or secret-looking attributes from the page. The screenshot holds only what is visible, and the owner sees it before it is staged. When the app can't read a part of the page, the annotation falls back to a screenshot and a box.
 
@@ -31,7 +31,7 @@ The still makes every surface the same. Only two things vary by platform: where 
 | Surface | Still | Element details |
 |---|---|---|
 | Linux, web page or Server page (native WebKitGTK view) | `WebViewExt::snapshot` of the visible area | Yes, through a fixed query function in an isolated world |
-| Windows, web page or Server page (sandboxed frame), when shown | WebView2 `CapturePreview`, cropped to the frame's box. Not built yet: it needs the Windows smoke test (#309), and until then the still is `Unsupported` off Linux, so Windows has no annotations at first. | No: regions only at first (open question 1). "The app can't read this page on Windows." A framed page has an opaque origin (ADR 0138), which doesn't change this. |
+| Windows, web page or Server page (sandboxed frame), when shown | WebView2 `CapturePreview` of the app's webview, cropped to the frame's box (`frame_still.rs`, `annotate::crop_frame`). The device scale is the capture's width over the window's CSS width. Run on `windows-latest` by the Windows smoke test (ADR 0153). | No: regions only at first (open question 1). "The app can't read this page on Windows." A framed page has an opaque origin (ADR 0138), which doesn't change this. |
 | A frame from another site inside the page | Part of the page's still | No: the mark is the frame's box. "This part comes from `<host>`, which the app can't read." |
 | The Screen (Bot Desktop) | Not offered | See "Capability gap" |
 
@@ -78,7 +78,7 @@ The function never reads `document.cookie`, storage, the page's HTML, or any att
 
 ### Where it goes, and what is kept
 
-- The annotation goes to the composer that last had focus, as a Screenshot does. The review card names that chat. If that composer is gone when the owner presses Add, the card says so and keeps the still until Cancel.
+- The annotation goes to the composer that last had focus, as a Screenshot does. The review card names that chat. When the Preview covers the chat (a narrow window), that composer isn't on screen: Add stages the annotation for it and hides the Preview, so the chat shows with the annotation in its composer. If no composer has been on screen since sign-in, the card says so, Add is off, and the still is kept until Cancel.
 - The still is a capture in the existing `Captures` folder from the moment it is taken. Writing it there doesn't delete it on its own: `ScreenshotDesk` deletes only files it has accepted, and the startup sweep skips the running process. So the annotation flow owns the still until Add. It deletes the still on Cancel, when the Preview changes, on a profile switch, which clears the Preview, and when the signed-in view goes away, as on sign-out, which doesn't clear the Preview. After a crash, the next start's sweep deletes it. Add stages it through Rust (`preview_annotate_stage`), which writes `annotation-N.png`, deletes the still, and adds the new file to `Attachable` as `screenshot_capture` does, or `hermes_send_file` refuses it (ADR 0129). After Add the annotation is a staged Screenshot: deleted when its chip is removed, when the composer goes away, or when its message is confirmed, and kept for Retry while unconfirmed.
 - The annotation's address, time and page generation stay in memory beside the capture, only to label the chip. The words block is ordinary composer text, so it is kept in the chat's Draft like any other text.
 - Nothing else is written. The page view's cookies and storage stay in its in-memory context (ADR 0081).
@@ -110,7 +110,7 @@ Until then the Screen offers no annotations (see open question 2).
 - **The page is hidden while the owner annotates.** A page that changes on its own, such as a video or a live chart, keeps running behind the still. The still is what is sent.
 - **The words are editable.** The owner can change or delete what the query found before sending. This is how the owner sees all the context that will be transmitted. A page can put misleading text in its own elements, and the card and the words label that text as the page's.
 - **Removing the image chip leaves its words** in the composer, and deleting the words leaves the image (open question 6). An image sent with no words goes to Hermes as "What do you see in this image?", as any image-only message does today.
-- **Element details are Linux-only at first.** On Windows every annotation is a region, and none can be made until the Windows still is built.
+- **Element details are Linux-only at first.** On Windows every annotation is a region.
 
 ## Verification plan for the implementation
 

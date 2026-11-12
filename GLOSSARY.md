@@ -187,8 +187,8 @@ _Avoid_: upload, file (when the attachment is meant)
 An image of a region or window of the owner's screen, taken from the composer by a shortcut or the camera button, and staged as an Attachment. It stays on this computer until the message is sent. A capture staged in a composer is deleted when the owner removes it or its chat is deleted or archived, and is staged in one chat at a time; a failed or uncertain message keeps its Screenshot for Retry until confirmed, reconciled or dismissed.
 _Avoid_: screen capture, snapshot
 
-**Annotation** (proposed; Rust can take the still, pick and stage, and nothing in the UI offers it yet):
-A pointer at part of a web page in the Preview, staged in the composer: a Screenshot of the page with the picked element or region marked, plus a block of words with the page's address, the time, the box and the owner's note. An element also adds its details. A region has none. The owner picks it on a still of the page, which covers the live page while they annotate; the page stays loaded behind it. Nothing is sent until the owner sends the message (ADR 0094).
+**Annotation**:
+A pointer at part of a web page in the Preview, staged in the composer: a Screenshot of the page with the picked element or region marked, plus a block of words with the page's address, the time, the box and the owner's note. An element also adds its details. A region has none, and says why. The owner presses Annotate in the Preview, picks on a **still** of the page, which covers the live page while they annotate (the page stays loaded behind it), and reviews everything on a card before Add to message. Nothing is sent until the owner sends the message. On Windows every annotation is a region (ADR 0094, ADR 0153).
 _Avoid_: comment (the official desktop app's word), inspector
 
 **Keyboard shortcut**:

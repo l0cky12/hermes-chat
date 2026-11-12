@@ -3634,3 +3634,55 @@ div.export-preview.export-page { height: auto; padding: 10px 12px; background: v
 .profile-delete-list { margin: 4px 0 8px; padding-left: 20px; }
 .profile-dialog p { margin: 0 0 6px; }
 .profile-save-why { text-align: right; }
+
+/* Annotation mode (ADR 0094): the still covers the page's box, and the review card sits beside or under it. */
+.preview-body { position: relative; }
+.annotate-layer { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; background: var(--sidebar); }
+.annotate { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+/* Picking, the hint floats over the still's foot, so the still lines up with the page it covers. */
+.annotate.picking .annotate-notes {
+  position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 1; border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+  background: var(--sidebar); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+.annotate-notes { flex: none; }
+.annotate:focus { outline: none; }
+.annotate-bar {
+  flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px;
+  color: var(--text-2); font-size: calc(12.5rem / 14);
+}
+.annotate-hint { flex: 1; min-width: 0; }
+.annotate-why, .annotate .attach-note { flex: none; padding: 6px 12px; border-top: 1px solid var(--line); }
+.annotate .attach-note.failed { color: var(--warn); }
+.annotate-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.annotate-frame { flex: none; }
+.annotate.reviewing .annotate-frame { padding: 12px 12px 0; }
+.annotate.reviewing .annotate-stage { margin: 0 auto; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.annotate-stage { position: relative; user-select: none; touch-action: none; }
+.annotate-stage.picking { cursor: crosshair; }
+.annotate-stage:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.annotate-stage img { display: block; width: 100%; height: 100%; pointer-events: none; }
+.annotate-mark { position: absolute; box-sizing: border-box; border: 2px solid rgb(37, 99, 235); background: rgba(37, 99, 235, 0.12); pointer-events: none; }
+.annotate-mark.dragging { border-style: dashed; }
+.annotate-mark.picked { background: transparent; }
+.annotate-tag {
+  position: absolute; max-width: min(90%, 420px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 3px 8px; border-radius: 5px; background: rgb(37, 99, 235); color: #fff; font: calc(11.5rem / 14) / 1.4 var(--mono, monospace);
+  pointer-events: none;
+}
+.annotate-card { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px 16px; font-size: calc(13rem / 14); }
+.annotate-card-title { font-weight: 600; color: var(--text); }
+.annotate-facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 0; }
+.annotate-facts dt { color: var(--muted); }
+.annotate-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.annotate-lines {
+  margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--raised, var(--line-2)); white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: calc(var(--mono-size, 12.5px) - 0.5px); line-height: 1.5; color: var(--text-2);
+}
+.annotate-note { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
+.annotate-note textarea { resize: vertical; min-height: 54px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+.annotate-small { margin: 0; color: var(--muted); font-size: calc(12rem / 14); line-height: 1.45; }
+.annotate-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 4px; }
+.chip-note { color: var(--warn); font-size: calc(11rem / 14); white-space: nowrap; }
+.preview-toolbar .icon-btn.active { color: var(--accent); }
+.annotate.reviewing .annotate-notes { border-bottom: 1px solid var(--line); }
+.chip-stale .chip-size { white-space: nowrap; }
