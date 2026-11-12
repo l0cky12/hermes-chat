@@ -29,6 +29,11 @@ Host hvprobe
   User probe
   StrictHostKeyChecking no
   UserKnownHostsFile $($dir -replace '\\', '/')/known_hosts
+  # An owner's config the app must override: kept forwards would listen for every account, and StdinNull would
+  # stop ssh -W reading the connection.
+  ClearAllForwardings no
+  LocalForward 127.0.0.1:8770 127.0.0.1:8765
+  StdinNull yes
 Host hvnowhere
   HostName 127.0.0.1
   Port 9

@@ -236,9 +236,12 @@ pub fn ssh_args(target: &str, socket: &Path, page: &ServerPage) -> Result<Vec<Os
 }
 
 /// ssh's arguments for one connection on Windows: `options`, then `-W <far_end> -- <target>`, so ssh carries the
-/// connection on its stdin and stdout and listens on nothing.
+/// connection on its stdin and stdout and listens on nothing. `-W` drops the config's forwards only while the config
+/// leaves `ClearAllForwardings` unset, and a config's `StdinNull yes` would stop ssh reading the connection, so both
+/// are set here, where they beat the owner's config.
 pub fn stdio_args(options: impl IntoIterator<Item = OsString>, far_end: &str, target: &str) -> Vec<OsString> {
-    options.into_iter().chain(["-W", far_end, "--", target].map(OsString::from)).collect()
+    let stdio = ["-o", "ClearAllForwardings=yes", "-o", "StdinNull=no", "-W", far_end, "--", target];
+    options.into_iter().chain(stdio.map(OsString::from)).collect()
 }
 
 fn forward_args(target: &str, listen: &str, page: &ServerPage) -> Vec<OsString> {
@@ -1467,9 +1470,36 @@ mod tests {
         let p = page("http://[::1]:8080/");
         let stdio = stdio_args(SSH_OPTIONS.iter().map(OsString::from), &p.far_end(), "liam@hermes");
         let socket = ssh_args("liam@hermes", Path::new("/tmp/d/s"), &p).unwrap();
-        assert_eq!(stdio[..stdio.len() - 4], socket[1..socket.len() - 4], "the same options, without -N");
+        assert_eq!(stdio[..stdio.len() - 8], socket[1..socket.len() - 4], "the same options, without -N");
         assert_eq!(stdio[stdio.len() - 4..], ["-W", "[::1]:8080", "--", "liam@hermes"]);
         assert!(!stdio.iter().any(|a| a == "-L" || a == "-D" || a == "-R"), "ssh listens on nothing: {stdio:?}");
+    }
+
+    #[test]
+    fn a_connections_ssh_keeps_no_forward_and_reads_stdin_whatever_the_owners_config_says() {
+        let config = std::env::temp_dir().join(format!("hc-ssh-config-{}", std::process::id()));
+        std::fs::write(
+            &config,
+            "Host hermes\n  ClearAllForwardings no\n  StdinNull yes\n  LocalForward 127.0.0.1:47111 127.0.0.1:22\n  \
+             DynamicForward 127.0.0.1:47112\n  RemoteForward 47113 127.0.0.1:22\n",
+        )
+        .unwrap();
+        let p = page("http://localhost:3000/");
+        let resolved = std::process::Command::new("ssh")
+            .arg("-F")
+            .arg(&config)
+            .arg("-G")
+            .args(stdio_args(SSH_OPTIONS.iter().map(OsString::from), &p.far_end(), "hermes"))
+            .output()
+            .expect("ssh on PATH");
+        std::fs::remove_file(&config).unwrap();
+        let resolved = String::from_utf8_lossy(&resolved.stdout).to_lowercase();
+        let lines: Vec<&str> = resolved.lines().collect();
+        assert!(lines.contains(&"clearallforwardings yes"), "{resolved}");
+        assert!(lines.contains(&"stdinnull no"), "{resolved}");
+        let forwards: Vec<&str> =
+            lines.into_iter().filter(|l| ["localforward ", "dynamicforward ", "remoteforward "].iter().any(|f| l.starts_with(f))).collect();
+        assert!(forwards.is_empty(), "ssh would listen: {forwards:?}");
     }
 
     #[test]
