@@ -109,6 +109,9 @@ const SCREEN_RELEASE_MS = 1_500;
 /** Waits before each try to reconnect a dropped connection. When the last try fails the app is Offline until the
  * owner asks to reconnect, so a wrong password isn't retried for ever. */
 const RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
+/** A reconnect counts as a failed try until its connection has stayed up this long, so a server that closes each
+ * connection just after it is ready is retried ever more slowly, then not at all (ADR 0148). */
+const STEADY_MS = 10_000;
 /** After a launch that couldn't connect, once those tries are spent, how often the app tries again while it is open,
  * Offline in between, until it connects or Hermes turns the password down (#269). */
 const LAUNCH_RETRY_MS = 60_000;
@@ -787,9 +790,10 @@ export class Hermes {
   /** The newest stored row each chat is known to have, from its history and the turns sent from here. A message that
    * may have reached Hermes is looked for only past the row its chat had when it went out. */
   private knownRow = new PerProfile<number>();
-  /** The list sync under way. `next`, once `detach` has ended it: the next sync to begin, whose outcome it reports. */
-  private syncing?: { done: Promise<Error | undefined>; next?: Promise<Error | undefined> };
-  private abandonedSyncs: ((next: Promise<Error | undefined>) => void)[] = [];
+  /** The list sync under way, and how it settles `done`. */
+  private syncing?: { done: Promise<Error | undefined>; report: (outcome: Error | undefined | Promise<Error | undefined>) => void };
+  /** Syncs `detach` ended, each waiting to report the outcome of the next sync to begin, or that none can. */
+  private abandonedSyncs: ((next: Error | Promise<Error | undefined>) => void)[] = [];
   private syncAgain = false;
   private background = new Set<Promise<unknown>>();
   /** When the shown profile's list last synced on this connection. */
@@ -3786,8 +3790,12 @@ export class Hermes {
       this.syncAgain = true;
       return this.syncing.done;
     }
+    let report!: (outcome: Error | undefined | Promise<Error | undefined>) => void;
+    const sync = { done: new Promise<Error | undefined>((resolve) => (report = resolve)), report };
     const current = () => this.syncing === sync;
-    const passes = async (): Promise<Error | undefined> => {
+    this.syncing = sync;
+    for (const reportNext of this.abandonedSyncs.splice(0)) reportNext(sync.done);
+    const passes = (async (): Promise<Error | undefined> => {
       let failure: Error | undefined;
       try {
         do {
@@ -3797,19 +3805,30 @@ export class Hermes {
       } finally {
         if (current()) this.syncing = undefined;
       }
-      return sync.next ?? failure;
-    };
-    const sync: { done: Promise<Error | undefined>; next?: Promise<Error | undefined> } = { done: passes() };
-    this.syncing = sync;
-    for (const report of this.abandonedSyncs.splice(0)) report(sync.done);
-    this.track(sync.done);
+      return failure;
+    })();
+    // Once `detach` has ended the sync, `done` already follows the next one, and this changes nothing.
+    const settled = () => report(passes);
+    passes.then(settled, settled);
+    this.track(passes);
     return sync.done;
   }
 
+  /** Ends the sync under way: its outcome becomes the next sync's, while its dropped read runs on unheeded (#440). */
   private abandonListSync() {
-    if (this.syncing) this.syncing.next = new Promise((report) => this.abandonedSyncs.push(report));
+    this.syncing?.report(new Promise((reportNext) => this.abandonedSyncs.push(reportNext)));
     this.syncing = undefined;
     this.syncAgain = false;
+  }
+
+  /** Offline or closed, no list sync follows, so the syncs a drop ended report that they couldn't finish (#437). */
+  private failAbandonedSyncs() {
+    for (const reportNext of this.abandonedSyncs.splice(0)) reportNext(new Error("Not connected to Hermes."));
+  }
+
+  private goOffline() {
+    this.update({ status: "offline" });
+    this.failAbandonedSyncs();
   }
 
   /** Resolves once background work (list syncs, pinning) has finished. Tests wait on it; the app doesn't need to. */
@@ -3828,6 +3847,7 @@ export class Hermes {
     const releasing = this.releaseScreen();
     if (releasing) await releasing;
     this.closing = true;
+    this.failAbandonedSyncs();
     this.abortDial?.(new Error("Closed by the app."));
     this.generation++;
     this.capabilities.disconnected();
@@ -4153,12 +4173,14 @@ export class Hermes {
 
   /**
    * The connection has dropped, and reconnecting starts. `socketClosed`: its socket closed, so when its pipe can
-   * reopen, the rest of the connection is kept and the socket opened again at once, though not sooner than the first
-   * retry's wait after it connected.
+   * reopen, the rest of the connection is kept and the socket opened again at once, though not sooner than the current
+   * try's wait after it connected (ADR 0148).
    */
   private dropped(reason: string, socketClosed = false) {
+    if (Date.now() - this.connectedAt >= STEADY_MS) this.failedTries = 0;
     this.detach(reason, socketClosed);
-    if (this.socketClosed) this.retryTimer = setTimeout(() => void this.redial(), Math.max(0, this.connectedAt + RETRY_DELAYS_MS[0] - Date.now()));
+    const wait = RETRY_DELAYS_MS[this.failedTries];
+    if (this.socketClosed && wait !== undefined) this.retryTimer = setTimeout(() => void this.redial(), Math.max(0, this.connectedAt + wait - Date.now()));
     else this.retryLater();
   }
 
@@ -4223,7 +4245,7 @@ export class Hermes {
     const wait = RETRY_DELAYS_MS[this.failedTries];
     if (wait !== undefined) this.retryTimer = setTimeout(() => void this.redial(), wait);
     else {
-      this.update({ status: "offline" });
+      this.goOffline();
       if (this.launchFailed) this.retryTimer = setTimeout(() => void this.redial(), LAUNCH_RETRY_MS);
     }
   }
@@ -4236,9 +4258,10 @@ export class Hermes {
       // The first try at launch stays Connecting until it has failed once (`openSaved`).
       const status = this.snapshot.status === "connecting" ? "connecting" : "reconnecting";
       this.update({ status, ...(switching && { switching: { from: switching.from } }) });
+      // Counted until the connection proves steady (`dropped`).
+      this.failedTries++;
       try {
         await this.dial();
-        this.failedTries = 0;
         this.launchFailed = false;
         this.resumeBusyChats();
         void this.sync();
@@ -4246,13 +4269,12 @@ export class Hermes {
         void this.checkLive();
       } catch (e) {
         if (this.closing) return;
-        this.failedTries++;
         this.update({ status: "reconnecting", closedReason: (e as Error).message, ...this.switchFailed(e as Error) });
         // A server that changed protocol won't change back on its own, nor will a sign-in Hermes turned down (ADR 0058,
         // 0089), and retrying one only spends sign-in attempts (#472). Reconnecting then waits for the owner.
         const refused = signInRefused((e as Error).message);
         if (refused) this.launchFailed = false;
-        if (e instanceof ProtocolMismatchError || refused) this.update({ status: "offline" });
+        if (e instanceof ProtocolMismatchError || refused) this.goOffline();
         else this.retryLater();
       } finally {
         this.redialing = undefined;

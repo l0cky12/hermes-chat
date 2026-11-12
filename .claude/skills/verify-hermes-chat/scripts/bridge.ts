@@ -289,6 +289,8 @@ function frame(text: string): Buffer {
           })();
   return Buffer.concat([head, body]);
 }
+// A write to a socket the app has closed is dropped.
+const alive = (sock: Socket) => sock.writable && !sock.destroyed;
 function readFrames(sock: Socket, onText: (t: string) => void) {
   let buf = Buffer.alloc(0);
   sock.on("data", (d) => {
@@ -307,7 +309,7 @@ function readFrames(sock: Socket, onText: (t: string) => void) {
       buf = buf.subarray(off + 4 + len);
       if (op === 1) onText(data.toString());
       else if (op === 8) sock.end();
-      else if (op === 9) sock.write(Buffer.concat([Buffer.from([0x8a, data.length]), data]));
+      else if (op === 9 && alive(sock)) sock.write(Buffer.concat([Buffer.from([0x8a, data.length]), data]));
     }
   });
 }
@@ -407,8 +409,11 @@ const http = createServer(async (req, res) => {
 http.on("upgrade", async (req, sock: Socket) => {
   const url = new URL(req.url!, "http://x");
   const accept = createHash("sha1").update(`${req.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+  // Node drops its own `error` handler from an upgraded socket, so without this an app that closes the WebSocket
+  // mid-write (EPIPE, ECONNRESET) takes the stand-in down (#432). The socket is destroyed; the app reconnects.
+  sock.on("error", (e: NodeJS.ErrnoException) => console.log(new Date().toISOString(), "WS closed by the app:", e.code ?? e.message));
   sock.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
-  send = (t) => sock.writable && sock.write(frame(t));
+  send = (t) => void (alive(sock) && sock.write(frame(t)));
   closeSocket = () => sock.destroy();
   readFrames(sock, (t) => {
     try {
