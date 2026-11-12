@@ -142,6 +142,7 @@ export type FindTarget = { query: string; itemId?: string; at: number };
 
 /** How long a new find query may wait for the transcript to mark it in the background before a streamed delta marks it. */
 const FIND_WAITS_MS = 200;
+const sizeOf = (el: HTMLElement) => `${el.clientWidth}x${el.clientHeight}`;
 
 /**
  * What to go to: a tool call, opened, by its call id (`Item.callId`), or a message by its stored row (`rowId`), as a
@@ -714,11 +715,13 @@ export function ChatPane({
   // Resizing the pane rewraps the transcript without a render; one at the bottom stays there.
   const qRef = useRef(q);
   qRef.current = q;
+  const observedSize = useRef<string>(undefined);
   useEffect(() => {
     const el = scrollRef.current;
     const inner = el?.firstElementChild;
     if (!el || !inner || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => {
+      observedSize.current = sizeOf(el);
       if (stickToBottom.current && !qRef.current) el.scrollTop = el.scrollHeight;
     });
     ro.observe(el);
@@ -868,6 +871,9 @@ export function ChatPane({
         ref={scrollRef}
         onScroll={(e) => {
           const el = e.currentTarget;
+          // WebKitGTK moves the view of a resized pane itself, and fires this before the ResizeObserver runs for the
+          // new size (#512). That scroll isn't the owner's, and the observer puts a pane that follows back at the bottom.
+          if (observedSize.current !== undefined && observedSize.current !== sizeOf(el)) return;
           stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
