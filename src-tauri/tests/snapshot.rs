@@ -8,7 +8,9 @@ use axum::response::{IntoResponse, Response};
 use axum::Router;
 use hermes_chat::lock::Locked;
 use hermes_chat::snapshot::sigv4::{canonical_query, hex_sha256, uri_encode, Key, Request, UNSIGNED_PAYLOAD};
-use hermes_chat::snapshot::{amz_date, parse_rfc3339, unix_now, Bucket, Expiry, HostEntry, Published, Snapshot, SnapshotHost, SnapshotId};
+use hermes_chat::snapshot::{
+    amz_date, only_shown, parse_rfc3339, unix_now, Bucket, Expiry, HostEntry, Published, Snapshot, SnapshotHost, SnapshotId, HOST_CHANGED,
+};
 use percent_encoding::percent_decode_str;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -393,6 +395,22 @@ async fn a_repeated_key_is_never_written_over() {
 }
 
 #[tokio::test]
+async fn publish_link_and_revoke_go_only_to_the_host_the_owner_was_shown() {
+    let s3 = StandIn::start("AKID", "s3cret").await;
+    let shown = s3.bucket("AKID", "s3cret").host().clone();
+    for change in [
+        |h: &mut SnapshotHost| h.bucket = "elsewhere".into(),
+        |h: &mut SnapshotHost| h.endpoint = "https://other.example".into(),
+        |h: &mut SnapshotHost| h.key_id = "OTHER".into(),
+    ] {
+        let mut other = shown.clone();
+        change(&mut other);
+        assert_eq!(only_shown(s3.bucket("AKID", "s3cret"), &other).err().as_deref(), Some(HOST_CHANGED));
+    }
+    assert!(only_shown(s3.bucket("AKID", "s3cret"), &shown).is_ok());
+}
+
+#[tokio::test]
 async fn a_lost_answer_is_settled_by_sending_the_put_again() {
     let s3 = StandIn::start("AKID", "s3cret").await;
     let bucket = s3.bucket("AKID", "s3cret");
@@ -418,7 +436,7 @@ async fn a_lost_answer_is_settled_by_sending_the_put_again() {
     s3.fault(Method::PUT, Fault::Hang);
     s3.fault(Method::PUT, Fault::Status(403, "AccessDenied"));
     let refused = bucket.publish(&refused_after_lost, PAGE.as_bytes(), "t", Expiry::Day, now).await;
-    assert!(matches!(&refused, Published::NotPublished { .. }), "a listing shows nothing under the key: {refused:?}");
+    assert!(matches!(&refused, Published::MaybeSent { .. }), "the first try may still land after any listing: {refused:?}");
 
     let written_then_refused = SnapshotId::random();
     s3.fault(Method::PUT, Fault::StoreThenHang);

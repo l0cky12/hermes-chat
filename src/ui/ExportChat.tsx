@@ -228,7 +228,7 @@ export function ExportChatDialog({
     setConfirm({ ...confirm, sent: { kind: "sending" } });
     let sent: Sent;
     try {
-      sent = { kind: "done", published: await snapshots.publish(confirm.html, confirm.title, confirm.expiry) };
+      sent = { kind: "done", published: await snapshots.publish(confirm.host, confirm.html, confirm.title, confirm.expiry) };
     } catch (e) {
       sent = { kind: "refused", message: errorText(e) };
     }

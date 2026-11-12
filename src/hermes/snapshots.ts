@@ -62,13 +62,16 @@ export type SnapshotApi = {
   clearHost: () => Promise<void>;
   /** Lists the prefix's versions and writes nothing. Rejects with what the host answered. */
   testHost: () => Promise<void>;
-  /** Uploads exactly `html`. Rejects only when no host is saved or the keyring fails, so nothing was sent. */
-  publish: (html: string, title: string, expiry: Expiry) => Promise<Published>;
+  /**
+   * Uploads exactly `html` to `host`, the host the owner was shown. Rejects only when no host is saved, the saved one
+   * is no longer `host`, or the keyring fails, so nothing was sent.
+   */
+  publish: (host: SnapshotHost, html: string, title: string, expiry: Expiry) => Promise<Published>;
   list: () => Promise<SnapshotList>;
-  /** A freshly signed link to a Live snapshot that ends when it does. */
-  link: (id: string) => Promise<string>;
-  /** Resolves only once no version of the snapshot is left in the bucket. */
-  revoke: (id: string) => Promise<void>;
+  /** A freshly signed link to a Live snapshot that ends when it does. Rejects when the saved host is no longer `host`. */
+  link: (host: SnapshotHost, id: string) => Promise<string>;
+  /** Resolves only once no version of the snapshot is left in the bucket. Rejects when the saved host is no longer `host`. */
+  revoke: (host: SnapshotHost, id: string) => Promise<void>;
 };
 
 export const tauriSnapshots: SnapshotApi = {
@@ -76,10 +79,10 @@ export const tauriSnapshots: SnapshotApi = {
   saveHost: (host, secret) => invoke<SnapshotHost>("snapshot_host_save", { host, secret }).catch(asError),
   clearHost: () => invoke<void>("snapshot_host_clear").catch(asError),
   testHost: () => invoke<void>("snapshot_host_test").catch(asError),
-  publish: (html, title, expiry) => invoke<Published>("snapshot_publish", { html, title, expiry }).catch(asError),
+  publish: (host, html, title, expiry) => invoke<Published>("snapshot_publish", { host, html, title, expiry }).catch(asError),
   list: () => invoke<SnapshotList>("snapshot_list").catch(asError),
-  link: (id) => invoke<string>("snapshot_link", { id }).catch(asError),
-  revoke: (id) => invoke<void>("snapshot_revoke", { id }).catch(asError),
+  link: (host, id) => invoke<string>("snapshot_link", { host, id }).catch(asError),
+  revoke: (host, id) => invoke<void>("snapshot_revoke", { host, id }).catch(asError),
 };
 
 export const sameHost = (a: SnapshotHost, b: SnapshotHost) =>

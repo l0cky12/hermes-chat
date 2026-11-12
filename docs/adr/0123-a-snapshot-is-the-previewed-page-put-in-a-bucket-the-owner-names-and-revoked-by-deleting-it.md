@@ -74,7 +74,10 @@ Math and Mermaid diagrams show as their source, in code. The parser decodes char
 - **The endpoint must be `https://`.** `http://` is taken only for a loopback address, for a store on this computer.
 - **Saving the host always takes the secret.** The card's Change asks for it again, so settings and secret are only ever saved together.
 - **A prefix may not have a `.` or `..` folder.** A URL parser drops one after the request is signed, so the signature wouldn't match.
-- **A first upload the host refuses is "not published" without a version listing.** The key is new and random, and nothing was sent before, so the refusal already proves nothing was written. A refused key would also refuse the listing, which would turn a plain refusal into "may have been sent". After a lost answer, the listing runs as described above.
+- **"Not published" means the only upload for the key was refused outright.** The key is new and random, and nothing was sent before, so the refusal proves nothing was written; no version listing is needed, and a refused key would refuse that too. After a lost answer, a refused second upload is always "may have been sent". A listing can't settle it, because the first upload may still be in flight and land after the listing. Only a `412` on the second upload settles a lost answer. This replaces "a version listing shows no object" above.
+- **Publish, Copy link and Revoke name the host the owner was shown.** The webview passes the host settings its screen showed, and Rust refuses before any request when the saved entry is no longer those settings, for example after another window changed them. So the confirm step's destination is where the upload goes.
+- **A version listing must be whole.** One cut short (an element left open), with more than one root, without `IsTruncated`, or with a version missing its key or version id is an error, never an empty or complete listing. Revoke is done only on a whole listing with nothing left.
+- **The key also needs `GetObjectVersion`,** for the read-back, the list and links signed for a version. Open question 4's permission list gains it.
 - **A `409`, or a `5xx` other than `501`, counts as a lost answer,** so the same `PUT` is sent once more.
 - **The list reads each snapshot's body** to compare its SHA-256. A read that fails with anything but a `404` fails the whole list rather than guess a state. The list is newest first.
 - **Secret detection.** The confirm step says detection can miss a secret. The encoded spellings in #530 are flagged on main since #543. Other spellings, such as a password in a sentence, are still missed.
@@ -146,7 +149,7 @@ No snapshot request goes to Hermes, so a snapshot needs no Hermes version or cap
 1. **Which Snapshot host?** The default is an S3-compatible bucket you name. The alternatives are a secret GitHub Gist (no expiry, data on GitHub), or waiting for a Hermes publication route upstream. Nothing is built until you answer.
 2. **Is 7 days long enough?** It is the limit on a presigned S3 link. Anything longer needs another signer, such as CloudFront signed URLs, or a public bucket. The default is yes: 7 days is the maximum.
 3. **Should attachment files ever be published?** The default is not in this stage. If yes, they become their own issue, with the prefix design above.
-4. **Is a link that shows the bucket's host, the bucket and the access key's id acceptable?** A presigned link carries all three. The default is yes, with the README telling you to use a key limited to the prefix, with `GetObject`, `PutObject`, `DeleteObject`, `DeleteObjectVersion`, `ListBucket` and `ListBucketVersions`. Revoke needs the two version permissions.
+4. **Is a link that shows the bucket's host, the bucket and the access key's id acceptable?** A presigned link carries all three. The default is yes, with the README telling you to use a key limited to the prefix, with `GetObject`, `GetObjectVersion`, `PutObject`, `DeleteObject`, `DeleteObjectVersion`, `ListBucket` and `ListBucketVersions`. Reading back, links and Revoke need the version permissions.
 
 ## Consequences
 

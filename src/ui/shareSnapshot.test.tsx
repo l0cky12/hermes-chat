@@ -129,7 +129,8 @@ describe("Share snapshot", () => {
     await user.click(screen.getByRole("radio", { name: "7 days" }));
     await user.click(screen.getByRole("button", { name: "Publish" }));
     expect(publish).toHaveBeenCalledTimes(1);
-    const [html, title, expiry] = publish.mock.calls[0] as unknown as [string, string, string];
+    const [to, html, title, expiry] = publish.mock.calls[0] as unknown as [SnapshotHost, string, string, string];
+    expect(to).toEqual(HOST);
     expect(html).toBe(frame.getAttribute("srcdoc"));
     expect(title).toBe("Moving house");
     expect(expiry).toBe("week");
@@ -155,7 +156,7 @@ describe("Share snapshot", () => {
     await user.click(publishButton());
     rerender(chat({ title: "Renamed", items: [{ kind: "user", id: "u10", text: "Something else entirely" }] }));
     await user.click(screen.getByRole("button", { name: "Publish" }));
-    const [html] = publish.mock.calls[0] as unknown as [string];
+    const [, html] = publish.mock.calls[0] as unknown as [SnapshotHost, string];
     expect(html).toBe(confirmFrame().getAttribute("srcdoc"));
     expect(pageText(html)).toContain("Booked for 14 Larch Lane.");
     for (const later of ["One more thing", "4821", "Something else entirely", "Renamed"]) expect(pageText(html)).not.toContain(later);

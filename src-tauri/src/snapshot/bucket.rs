@@ -231,12 +231,10 @@ impl Bucket {
             Put::Exists => self.read_back(id, &key, None, &sha256, now).await,
             // The only request for a key made moments ago was refused, so nothing is under it.
             Put::Refused(reason) if !resent => Published::NotPublished { reason },
-            Put::Refused(why) => match self.versions(&key, now).await {
-                Ok(versions) if versions.iter().all(|v| v.key != key) => Published::NotPublished { reason: why },
-                _ => Published::MaybeSent {
-                    reason: format!("{why} An earlier try had no answer, so the page may be in the bucket. Check Settings → Snapshots."),
-                },
-            },
+            // The first try may still be in flight and land after any listing, so nothing short of a 412 settles it.
+            Put::Refused(why) => {
+                Published::MaybeSent { reason: format!("{why} An earlier try had no answer, so the page may be in the bucket. Check Settings → Snapshots.") }
+            }
             Put::Uncertain(why) => Published::MaybeSent {
                 reason: format!("The upload wasn't confirmed after two tries. {why} The page may be in the bucket. Check Settings → Snapshots."),
             },
@@ -441,9 +439,12 @@ fn metadata(title: &str, created: u64, expires: u64, sha256: &str) -> Vec<(Strin
 fn xml_leaves(body: &[u8]) -> Option<Vec<(Vec<String>, String)>> {
     let mut reader = quick_xml::Reader::from_str(std::str::from_utf8(body).ok()?);
     let (mut path, mut text, mut leaves) = (Vec::<String>::new(), String::new(), Vec::new());
+    let mut roots = 0;
     loop {
         match reader.read_event().ok()? {
+            Event::Start(_) | Event::Empty(_) if path.is_empty() && roots > 0 => return None,
             Event::Start(e) => {
+                roots += usize::from(path.is_empty());
                 path.push(e.local_name().as_ref().to_string());
                 text.clear();
             }
@@ -452,6 +453,7 @@ fn xml_leaves(body: &[u8]) -> Option<Vec<(Vec<String>, String)>> {
                 path.pop();
             }
             Event::Empty(e) => {
+                roots += usize::from(path.is_empty());
                 path.push(e.local_name().as_ref().to_string());
                 leaves.push((path.clone(), String::new()));
                 path.pop();
@@ -459,7 +461,8 @@ fn xml_leaves(body: &[u8]) -> Option<Vec<(Vec<String>, String)>> {
             Event::Text(t) => text.push_str(&t.xml10_content()),
             Event::CData(t) => text.push_str(&t.xml10_content()),
             Event::GeneralRef(r) => text.push_str(&quick_xml::escape::unescape(&format!("&{};", &*r)).ok()?),
-            Event::Eof => return Some(leaves),
+            // A body cut short ends with elements still open, and must never read as a complete answer.
+            Event::Eof => return (path.is_empty() && roots == 1).then_some(leaves),
             _ => {}
         }
     }
@@ -475,10 +478,13 @@ struct Page {
 
 fn parse_versions(body: &[u8]) -> Result<Page, String> {
     let leaves = xml_leaves(body).ok_or("The host's version listing wasn't readable XML.")?;
-    match leaves.last().and_then(|(path, _)| path.first()).map(String::as_str) {
-        Some("ListVersionsResult") => {}
-        Some("ListBucketResult") => return Err("The host lists the bucket but not its object versions, which Revoke needs.".into()),
+    match leaves.last().map(|(path, _)| path.iter().map(String::as_str).collect::<Vec<_>>()).as_deref() {
+        Some(["ListVersionsResult"]) => {}
+        Some(["ListBucketResult"]) => return Err("The host lists the bucket but not its object versions, which Revoke needs.".into()),
         _ => return Err("The host's answer wasn't a version listing.".into()),
+    }
+    if !leaves.iter().any(|(path, _)| matches!(path.iter().map(String::as_str).collect::<Vec<_>>()[..], [_, "IsTruncated"])) {
+        return Err("The host's version listing didn't say whether it was complete.".into());
     }
     let mut versions = Vec::new();
     let mut current = Version { key: String::new(), id: String::new(), latest: false, marker: false };
@@ -488,6 +494,9 @@ fn parse_versions(body: &[u8]) -> Result<Page, String> {
             [_, "Version" | "DeleteMarker", "Key"] => current.key = text,
             [_, "Version" | "DeleteMarker", "VersionId"] => current.id = text,
             [_, "Version" | "DeleteMarker", "IsLatest"] => current.latest = text.trim() == "true",
+            [_, "Version" | "DeleteMarker"] if current.key.is_empty() || current.id.is_empty() => {
+                return Err("The host's version listing has a version without its key or version id.".into());
+            }
             [_, kind @ ("Version" | "DeleteMarker")] => {
                 current.marker = kind == "DeleteMarker";
                 versions.push(std::mem::replace(&mut current, Version { key: String::new(), id: String::new(), latest: false, marker: false }));
@@ -541,5 +550,22 @@ mod tests {
         assert_eq!(next, Some(("p/a&b.html".to_string(), "v2".to_string())));
         assert!(parse_versions(b"<ListBucketResult><Name>b</Name></ListBucketResult>").unwrap_err().contains("not its object versions"));
         assert!(parse_versions(b"not xml <").is_err());
+    }
+
+    #[test]
+    fn a_listing_cut_short_or_missing_a_version_id_is_never_read_as_complete() {
+        let cut = [
+            &b"<ListVersionsResult><IsTruncated>false</IsTruncated>"[..],
+            b"<ListVersionsResult><IsTruncated>false</IsTruncated><Version><Key>p/a.html</Key>",
+            b"<ListVersionsResult><Name>b</Name></ListVersionsResult>",
+            b"<ListVersionsResult><IsTruncated>false</IsTruncated></ListVersionsResult><ListVersionsResult></ListVersionsResult>",
+            b"<ListVersionsResult><IsTruncated>false</IsTruncated><Version><Key>p/a.html</Key><IsLatest>true</IsLatest></Version></ListVersionsResult>",
+            b"<ListVersionsResult><IsTruncated>false</IsTruncated><DeleteMarker><VersionId>v</VersionId></DeleteMarker></ListVersionsResult>",
+        ];
+        for body in cut {
+            assert!(parse_versions(body).is_err(), "{}", String::from_utf8_lossy(body));
+        }
+        let empty = parse_versions(b"<ListVersionsResult><IsTruncated>false</IsTruncated></ListVersionsResult>").unwrap();
+        assert!(empty.versions.is_empty() && empty.next.is_none());
     }
 }

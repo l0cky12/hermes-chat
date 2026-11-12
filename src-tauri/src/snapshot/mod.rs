@@ -309,6 +309,23 @@ async fn saved_bucket() -> Result<Bucket, String> {
     Bucket::new(saved().await?.ok_or(NO_HOST)?, TIMEOUT)
 }
 
+pub const HOST_CHANGED: &str =
+    "The snapshot host changed since this screen read it, so nothing was sent. Look at the host in Settings → Snapshots and try again.";
+
+/// The saved host's bucket, only when it is the host the owner was shown, so a request never goes somewhere the
+/// screen didn't name. Another window or computer can change the entry at any time.
+async fn shown_bucket(shown: &SnapshotHost) -> Result<Bucket, String> {
+    only_shown(saved_bucket().await?, shown)
+}
+
+pub fn only_shown(bucket: Bucket, shown: &SnapshotHost) -> Result<Bucket, String> {
+    if bucket.host() == shown {
+        Ok(bucket)
+    } else {
+        Err(HOST_CHANGED.into())
+    }
+}
+
 #[tauri::command]
 pub async fn snapshot_host() -> Result<Option<SnapshotHost>, String> {
     Ok(saved().await?.map(|e| e.host))
@@ -333,8 +350,8 @@ pub async fn snapshot_host_test() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn snapshot_publish(html: String, title: String, expiry: Expiry) -> Result<Published, String> {
-    Ok(saved_bucket().await?.publish(&SnapshotId::random(), html.as_bytes(), &title, expiry, unix_now()).await)
+pub async fn snapshot_publish(host: SnapshotHost, html: String, title: String, expiry: Expiry) -> Result<Published, String> {
+    Ok(shown_bucket(&host).await?.publish(&SnapshotId::random(), html.as_bytes(), &title, expiry, unix_now()).await)
 }
 
 #[tauri::command]
@@ -345,15 +362,15 @@ pub async fn snapshot_list() -> Result<SnapshotList, String> {
 }
 
 #[tauri::command]
-pub async fn snapshot_link(id: String) -> Result<String, String> {
+pub async fn snapshot_link(host: SnapshotHost, id: String) -> Result<String, String> {
     let id = SnapshotId::parse(&id)?;
-    saved_bucket().await?.link(&id, unix_now()).await
+    shown_bucket(&host).await?.link(&id, unix_now()).await
 }
 
 #[tauri::command]
-pub async fn snapshot_revoke(id: String) -> Result<(), String> {
+pub async fn snapshot_revoke(host: SnapshotHost, id: String) -> Result<(), String> {
     let id = SnapshotId::parse(&id)?;
-    saved_bucket().await?.revoke(&id, unix_now()).await
+    shown_bucket(&host).await?.revoke(&id, unix_now()).await
 }
 
 #[cfg(test)]

@@ -160,10 +160,11 @@ export function SnapshotSettings({ api = tauriSnapshots, copyText = clipboardTex
   };
 
   const copyLink = async (s: Snapshot) => {
+    if (!host) return;
     setRowOp({ id: s.id, kind: "linking" });
     setNote(undefined);
     try {
-      const url = await api.link(s.id);
+      const url = await api.link(host, s.id);
       await copyText(url);
       if (alive.current) setNote({ where: `row:${s.id}`, ok: true, text: "Link copied." });
     } catch (e) {
@@ -174,10 +175,11 @@ export function SnapshotSettings({ api = tauriSnapshots, copyText = clipboardTex
   };
 
   const revoke = async (s: Snapshot) => {
+    if (!host) return;
     setRowOp({ id: s.id, kind: "revoking" });
     setNote(undefined);
     try {
-      await api.revoke(s.id);
+      await api.revoke(host, s.id);
       if (!alive.current) return;
       setList((l) => ({ ...l, snapshots: l.snapshots?.filter((x) => x.id !== s.id) }));
       setRowOp(undefined);
@@ -203,8 +205,8 @@ export function SnapshotSettings({ api = tauriSnapshots, copyText = clipboardTex
         <>
           Share snapshot publishes a chat's page to an S3-compatible bucket you name, such as Amazon S3, Cloudflare R2, Backblaze B2 or MinIO. The bucket
           stays private: each page is reached by a signed link that lasts at most 7 days. Use a key limited to the prefix, with <code>GetObject</code>,{" "}
-          <code>PutObject</code>, <code>DeleteObject</code>, <code>DeleteObjectVersion</code>, <code>ListBucket</code> and <code>ListBucketVersions</code>.
-          Revoke needs the two version permissions.
+          <code>PutObject</code>, <code>GetObjectVersion</code>, <code>DeleteObject</code>, <code>DeleteObjectVersion</code>, <code>ListBucket</code> and{" "}
+          <code>ListBucketVersions</code>. Reading back, links and Revoke need the version permissions.
         </>
       }
     >

@@ -143,7 +143,7 @@ describe("Settings → Snapshots, the list", () => {
   it("Copy link asks for a fresh link and copies that, never the one the list read", async () => {
     const { api, copied, user } = fake();
     await user.click(await screen.findByRole("button", { name: "Copy link to Moving house" }));
-    expect(api.link).toHaveBeenCalledWith(id("a"));
+    expect(api.link).toHaveBeenCalledWith(HOST, id("a"));
     expect(copied).toEqual(["https://fresh.example/new-link"]);
     expect(within(rowOf("Moving house")).getByRole("status").textContent).toBe("Link copied.");
   });
@@ -155,7 +155,7 @@ describe("Settings → Snapshots, the list", () => {
     expect(api.revoke).not.toHaveBeenCalled();
     snapshots.splice(1, 1);
     await user.click(within(screen.getByRole("alertdialog", { name: "Revoke Old plans?" })).getByRole("button", { name: "Revoke" }));
-    expect(api.revoke).toHaveBeenCalledWith(id("b"));
+    expect(api.revoke).toHaveBeenCalledWith(HOST, id("b"));
     await waitFor(() => expect(screen.queryByText("Old plans")).toBeNull());
     expect(api.list).toHaveBeenCalledTimes(2);
     expect(screen.getByText("Moving house")).toBeTruthy();
