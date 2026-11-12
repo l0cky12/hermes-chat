@@ -13,7 +13,7 @@ Every string in the app was an English literal in a component, `index.html` set 
 - **A change re-renders in place.** `App` reads the locale from the appearance store and provides it through `LocaleContext`. Nothing remounts, so open chats, drafts and a theme being edited stay as they are. The store follows `languagechange` from the desktop.
 - **Screens convert one at a time, and a test proves each.** A converted screen is rendered under a pseudo-locale that marks every catalogue string, and the test fails on any text or `aria-label`, `title`, `placeholder`, `alt`, `label` or `aria-valuetext` without the mark. Data such as theme names, font names and sample code is marked `translate="no"` and skipped. Settings → Appearance is converted first (`appearanceTranslated.test.tsx`), with the frame around it: the Settings heading, search box, Back to chat and the tab names.
 - **Settings search finds translated words for free.** It reads the rendered text (ADR 0047), so a translated label is searched in the language shown.
-- **Formatting goes through the locale on unconverted screens too.** The chat list and the other places that showed `relTime` use `fmt.age`, and Usage and Usage analytics use `fmt.number`, `fmt.time` and `fmt.day`. Their words stay English until those screens convert. The CSV, grouping keys and sorting stay ISO.
+- **Formatting goes through the locale on unconverted screens too.** The chat list and the other places that showed `relTime` use `fmt.age`, and Usage and Usage analytics use `fmt.number`, `fmt.time` and `fmt.day` for their counts, times and days. These exceptions remain. Token counts and dollar amounts (`tokens` and `usd` in `usage.ts`) use a `.` decimal point and `k`/`M` in every language. The count of unread chats in a cost's detail (`tallyLabel` in `usageAnalytics.ts`) uses `toLocaleString()`, so it follows the runtime's default locale. Their words stay English until those screens convert. The CSV, grouping keys and sorting stay ISO.
 
 ## Considered options
 
@@ -28,4 +28,4 @@ Every string in the app was an English literal in a component, `index.html` set 
 - A component on a converted screen reads its words with `useLocale()`. A plain function that writes words or formats takes the `Locale` (or its tag) as a parameter.
 - A new language is one file typed as `Catalogue`, one entry in `LANGUAGES`, and its name in the README's Languages list; a test checks the README names every language.
 - The Spanish was written with machine help and needs a native speaker's review.
-- Snooze wake times outside the chat list, `storedTime`, and the app's other `toLocale*` calls still use the runtime's default locale until their screens convert.
+- Snooze wake times outside the chat list, `storedTime`, the unread-chats count in `tallyLabel`, and the app's other `toLocale*` calls still use the runtime's default locale until their screens convert.
