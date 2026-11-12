@@ -207,11 +207,44 @@ it("stops following on a key that scrolls up after the owner clicked in the tran
 });
 
 it("keeps following on a key that scrolls up after the owner clicked somewhere else", () => {
-  const { frame, fromBottom, grow } = pane(10);
+  const { scroller, frame, fromBottom, grow } = pane(10);
 
+  fireEvent.pointerDown(scroller);
   fireEvent.pointerDown(document.body);
   fireEvent.keyDown(document.body, { key: "PageUp" });
   frame();
   grow(5);
   expect(fromBottom()).toBe(0);
+});
+
+it("stops following on a key that scrolls up from a button in the transcript", () => {
+  const { scroller, frame, fromBottom, grow } = pane(10);
+
+  grow(5);
+  fireEvent.keyDown(scroller.querySelector("button")!, { key: "ArrowUp" });
+  frame();
+  grow(5);
+  expect(fromBottom()).toBe(5);
+});
+
+it("keeps following when the wheel turns up over a box in the transcript that scrolls up itself", () => {
+  const { scroller, frame, fromBottom, grow } = pane(10);
+  const box = document.createElement("pre");
+  scroller.querySelector(".msg.assistant")!.append(box);
+  Object.defineProperty(box, "scrollTop", { configurable: true, value: 120 });
+
+  fireEvent.wheel(box, { deltaY: -87 });
+  frame();
+  grow(5);
+  expect(fromBottom()).toBe(0);
+});
+
+it("stops following when the first frame of a wheel scroll moves the view up less than a pixel", () => {
+  const { scroller, frame, fromBottom, grow } = pane(10);
+
+  fireEvent.wheel(scroller, { deltaY: -87 });
+  scroller.scrollTop -= 0.5;
+  frame();
+  grow(5);
+  expect(fromBottom()).toBe(5.5);
 });
