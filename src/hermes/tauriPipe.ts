@@ -3,11 +3,12 @@
 // webview.
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { CustomEndpoint, EndpointSave, ProviderSignIn } from "./accounts";
-import { RestError, type LocalFile, type OpenPipe, type Pipe, type PipeEvent, type Route, type ToolsetGuards, type Transcript, type VoiceSetup } from "./pipe";
+import { RefusedError, RestError, type LocalFile, type OpenPipe, type Pipe, type PipeEvent, type Route, type ToolsetGuards, type Transcript, type VoiceSetup } from "./pipe";
 import type { GitExclude } from "./projectContextFiles";
 import type { Downloaded, PickedUpload, TransferProgress } from "./remoteFiles";
 import type { Probe, Probed, ProbeFailure, SavedKey } from "./setup";
 import { routedPipe, type ReachRoute, type RouteDetails, type RoutedHooks } from "./routes";
+import { sttFailed } from "./sttRoute";
 import type { SignInWay } from "./connections";
 import type { Step } from "./attempts";
 
@@ -17,8 +18,9 @@ import type { Step } from "./attempts";
  */
 export const asError = (e: unknown) => {
   if (e && typeof e === "object" && typeof (e as { message?: unknown }).message === "string") {
-    const { message, status, body } = e as { message: string; status?: unknown; body?: unknown };
-    return Promise.reject(typeof status === "number" ? new RestError(status, typeof body === "string" ? body : "", message) : new Error(message));
+    const { message, status, body, code } = e as { message: string; status?: unknown; body?: unknown; code?: unknown };
+    if (typeof status === "number") return Promise.reject(new RestError(status, typeof body === "string" ? body : "", message));
+    return Promise.reject(typeof code === "string" ? new RefusedError(code, message) : new Error(message));
   }
   return Promise.reject(new Error(String(e)));
 };
@@ -146,7 +148,7 @@ function routePipe(
       transcribe: (profile, audio, mime) =>
         invoke<Transcript>("hermes_transcribe", audio, {
           headers: { "x-mime": encodeURIComponent(mime), "x-profile": encodeURIComponent(profile), "x-attempt": attempt },
-        }).catch(asError),
+        }).catch(sttFailed),
       speak: async (profile, text) => {
         const got = await invoke<{ mime: string; audio: string; provider?: string }>("hermes_speak", { attempt, profile, text }).catch(asError);
         return { ...got, audio: fromBase64(got.audio) };

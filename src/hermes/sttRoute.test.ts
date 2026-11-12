@@ -14,10 +14,10 @@ describe("where speech to text ran", () => {
     expect(fellBackOf({ text: "hi", ran: "local", fellBack: { from: "server", why: "GROQ_API_KEY is not set" } })).toBe(
       "Transcribed on this computer. Hermes couldn't transcribe it: GROQ_API_KEY is not set.",
     );
-    expect(fellBackOf({ text: "hi", ran: "server", fellBack: { from: "local", why: "This computer couldn't transcribe it: It took longer than 30 s." } })).toBe(
+    expect(fellBackOf({ text: "hi", ran: "server", fellBack: { from: "local", why: "It took longer than 30 s." } })).toBe(
       "Transcribed on Hermes. This computer couldn't transcribe it: It took longer than 30 s.",
     );
-    expect(couldnt("server", "Hermes couldn't transcribe the recording: no key!")).toBe("Hermes couldn't transcribe it: no key!");
+    expect(couldnt("server", "no key!")).toBe("Hermes couldn't transcribe it: no key!");
   });
 });
 

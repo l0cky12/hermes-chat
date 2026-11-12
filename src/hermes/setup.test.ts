@@ -112,7 +112,7 @@ describe("Explaining a failed test", () => {
   });
 
   it("says a status check that failed with a server error got no password, and isn't the wrong server", () => {
-    const failing = { stage: "reach", message: "The dashboard answered 502: <html>Bad Gateway</html>" } as const;
+    const failing = { stage: "reach", message: "The dashboard answered 502: <html>Bad Gateway</html>", answered: { status: 502, body: "<html>Bad Gateway</html>" } } as const;
     expect(why(failing, url)).toMatchObject({
       problem: "The dashboard at hermes.example.com:9119 answered its status check with a server error. It wasn't sent the password.",
       detail: failing.message,
@@ -122,7 +122,8 @@ describe("Explaining a failed test", () => {
   });
 
   it("points a gateway's refusal or redirect at the extra request headers", () => {
-    const refused = { stage: "reach", message: "The dashboard answered 403: Forbidden. You don't have permission to view this." } as const;
+    const forbidden = "Forbidden. You don't have permission to view this.";
+    const refused = { stage: "reach", message: `The dashboard answered 403: ${forbidden}`, answered: { status: 403, body: forbidden } } as const;
     expect(why(refused, url)).toMatchObject({
       problem: "Something in front of the dashboard at hermes.example.com:9119 turned Hermes Chat away.",
       fixes: [expect.stringContaining("add the headers it needs under Extra request headers"), "Or connect over SSH, which goes straight to the dashboard."],
@@ -135,13 +136,14 @@ describe("Explaining a failed test", () => {
     const awayHidden = "The dashboard sent Hermes Chat on to another site, whose address isn't shown, as it may repeat your password or a request header. Hermes Chat doesn't follow it there, so nothing is sent to it.";
     expect(why({ stage: "reach", message: awayHidden }, withHeaders).problem).toBe("The dashboard's address sent Hermes Chat on to another site.");
     // Past the first request, a refusal whose body Rust hid for the headers' sake still points at them.
-    const hidden = "The dashboard answered 403: (not shown, as it may repeat your password or a request header)";
+    const hiddenBody = "(not shown, as it may repeat your password or a request header)";
+    const hidden = { message: `The dashboard answered 403: ${hiddenBody}`, answered: { status: 403, body: hiddenBody } };
     const closed = "The chat connection closed before Hermes was ready: closed by the server (1008 (not shown, as it may repeat your password or a request header))";
     // A hidden body or close reason doesn't move the failure to another stage.
     expect(explainSignIn(closed, url).stage).toBe("chat");
     expect(explainSignIn(awayHidden, url).stage).toBe("reach");
-    for (const [stage, message] of [["sign-in", hidden], ["chat", hidden], ["chat", closed]] as const) {
-      expect(why({ stage, message, status: STATUS }, withHeaders)).toMatchObject({
+    for (const [stage, failure] of [["sign-in", hidden], ["chat", hidden], ["chat", { message: closed }]] as const) {
+      expect(why({ stage, ...failure, status: STATUS }, withHeaders)).toMatchObject({
         problem: "Something in front of the dashboard at hermes.example.com:9119 turned Hermes Chat away.",
         fixes: [expect.stringMatching(/^Check the extra request headers' names and values/), "Or connect over SSH, which goes straight to the dashboard."],
       });
@@ -153,11 +155,13 @@ describe("Explaining a failed test", () => {
       "Wait a minute, then try again.",
     ]);
     const tokenOnly = JSON.stringify({ version: "0.22.5", auth_required: true, auth_providers: ["session-token"] });
-    expect(why({ stage: "sign-in", message: 'The dashboard answered 404: {"detail":"Unknown provider"}', status: tokenOnly })).toMatchObject({
+    const unknown = '{"detail":"Unknown provider"}';
+    expect(why({ stage: "sign-in", message: `The dashboard answered 404: ${unknown}`, answered: { status: 404, body: unknown }, status: tokenOnly })).toMatchObject({
       problem: "This dashboard doesn't offer username and password sign-in, which Hermes Chat uses.",
       fixes: expect.arrayContaining(["It offers: session-token."]),
     });
-    expect(why({ stage: "sign-in", message: 'The dashboard answered 503: {"detail":"provider unreachable"}', status: STATUS }).problem).toBe(
+    const unavailable = '{"detail":"provider unreachable"}';
+    expect(why({ stage: "sign-in", message: `The dashboard answered 503: ${unavailable}`, answered: { status: 503, body: unavailable }, status: STATUS }).problem).toBe(
       "The dashboard's sign-in isn't available right now.",
     );
   });

@@ -7,6 +7,7 @@
 // Dictation and voice conversations both transcribe through that one command, so they behave the same.
 
 import type { Transcript } from "./pipe";
+import { errorText } from "./values";
 
 export type SttSide = "server" | "local";
 
@@ -28,11 +29,10 @@ export const sideLabel = (side: SttSide) => (side === "server" ? "Hermes" : "thi
 /** A transcript as Dictation and voice conversations get it: where it ran, and why the primary didn't give it. */
 export type HeardTranscript = Transcript & { ran?: SttSide; fellBack?: { from: SttSide; why: string } };
 
-/** "Hermes couldn't transcribe it: …", as Rust says it (`couldnt` in local_stt.rs). */
+/** "Hermes couldn't transcribe it: …", as Rust says it (`couldnt` in local_stt.rs). `why`: the reason alone. */
 export function couldnt(side: SttSide, why: string): string {
   const who = side === "server" ? "Hermes" : "This computer";
-  const reason = why.replace(/^(Hermes|This computer) couldn't transcribe[^:]*:\s*/, "");
-  return `${who} couldn't transcribe it: ${/[.!?]$/.test(reason) ? reason : `${reason}.`}`;
+  return `${who} couldn't transcribe it: ${why}${[".", "!", "?"].some((end) => why.endsWith(end)) ? "" : "."}`;
 }
 
 /** What the chat says under a transcript that came from the backup: which side, and why the primary didn't. */
@@ -40,6 +40,20 @@ export function fellBackOf(t: HeardTranscript): string | undefined {
   if (!t.fellBack || !t.ran) return undefined;
   return `Transcribed on ${sideLabel(t.ran)}. ${couldnt(t.fellBack.from, t.fellBack.why)}`;
 }
+
+/**
+ * A recording `hermes_transcribe` couldn't transcribe. Rust words the message and names the side that failed, "Hermes
+ * couldn't transcribe it: …", so it is shown as it is (#517).
+ */
+export class SttFailed extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SttFailed";
+  }
+}
+
+/** `hermes_transcribe`'s rejection as an `SttFailed`. */
+export const sttFailed = (e: unknown): Promise<never> => Promise.reject(new SttFailed(errorText(e)));
 
 /** The recording was dropped (Cancel, the chat closed, the conversation ended or paused) before it was transcribed. */
 export class SttCancelled extends Error {

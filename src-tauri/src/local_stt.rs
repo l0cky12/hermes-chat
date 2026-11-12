@@ -626,7 +626,7 @@ impl Side {
     }
 }
 
-/// The primary didn't give the text, and why: the backup did.
+/// The primary didn't give the text, and why, without a "… couldn't transcribe …:" start (`reason`): the backup did.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FellBack {
@@ -648,8 +648,9 @@ pub struct Routed {
 
 pub const CANCELLED: &str = "Cancelled.";
 
-/// "Hermes couldn't transcribe it: …", "This computer couldn't transcribe it either: …", without saying it twice.
-pub fn couldnt(side: Side, why: &str, either: bool) -> String {
+/// `why` without the "Hermes couldn't transcribe the recording:" its side's error may start with, so the side isn't
+/// said twice.
+fn reason(why: &str) -> &str {
     let mut reason = why.trim();
     for who in ["Hermes", "This computer"] {
         if let Some(rest) = reason.strip_prefix(who).and_then(|r| r.strip_prefix(" couldn't transcribe")) {
@@ -658,6 +659,12 @@ pub fn couldnt(side: Side, why: &str, either: bool) -> String {
             }
         }
     }
+    reason
+}
+
+/// "Hermes couldn't transcribe it: …", "This computer couldn't transcribe it either: …", without saying it twice.
+pub fn couldnt(side: Side, why: &str, either: bool) -> String {
+    let reason = reason(why);
     let end = if reason.ends_with(['.', '!', '?']) { "" } else { "." };
     format!("{} couldn't transcribe it{}: {reason}{end}", side.who(), if either { " either" } else { "" })
 }
@@ -690,8 +697,8 @@ async fn cancelled(mut cancel: watch::Receiver<bool>) {
 /// and an answer after that is dropped. An empty transcript is an answer: the owner said nothing. Once `cancel` is set,
 /// the side running is dropped (a local engine is killed) and nothing more is tried.
 ///
-/// Errors: one side alone says its own error (Hermes's unchanged; this computer's as "This computer couldn't
-/// transcribe it: …", unless `plain`); both say what each said.
+/// Errors name the side that failed, "Hermes couldn't transcribe it: …", so the webview never reads the text to tell
+/// whose it is (#517); both sides say what each said. With `plain` (one side asked alone), its error is unchanged.
 pub async fn route<'a>(
     sides: &[Side],
     timeout: Option<Duration>,
@@ -727,15 +734,14 @@ pub async fn route<'a>(
         };
         match got {
             Ok(t) => {
-                let fell_back = tried.into_iter().next().map(|(from, why)| FellBack { from, why });
+                let fell_back = tried.into_iter().next().map(|(from, why)| FellBack { from, why: reason(&why).to_owned() });
                 return Ok(Routed { text: t.text, provider: t.provider, ran: side, fell_back });
             }
             Err(why) => tried.push((side, why)),
         }
     }
     Err(match tried.as_slice() {
-        [(Side::Server, why)] => why.clone(),
-        [(Side::Local, why)] if plain => why.clone(),
+        [(_, why)] if plain => why.clone(),
         [(side, why)] => couldnt(*side, why, false),
         [(first, a), (second, b)] => format!("{} {}", couldnt(*first, a, false), couldnt(*second, b, true)),
         _ => "Nothing could transcribe the recording.".into(),
@@ -1724,6 +1730,21 @@ mod tests {
         assert!(go(None).await.unwrap_err().contains("can't be read"), "an unreadable choice isn't taken as Hermes server");
         assert_eq!(sent.load(Ordering::SeqCst), 0, "nothing reached Hermes");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn every_failure_names_its_side_and_a_fallback_says_why_once() {
+        let sent = Arc::new(AtomicUsize::new(0));
+        let local_ok = async { Ok(Transcript { text: "from here".into(), provider: None }) };
+        let err = route(&[Side::Server], None, false, hermes(&sent, Err("The chat connection is closed.")), local_ok, not_cancelled()).await.unwrap_err();
+        assert_eq!(err, "Hermes couldn't transcribe it: The chat connection is closed.");
+        let local_ok = async { Ok(Transcript { text: "from here".into(), provider: None }) };
+        let plain = route(&[Side::Server], None, true, hermes(&sent, Err("The chat connection is closed.")), local_ok, not_cancelled()).await.unwrap_err();
+        assert_eq!(plain, "The chat connection is closed.", "a side asked alone says its own error");
+        let local_ok = async { Ok(Transcript { text: "from here".into(), provider: None }) };
+        let refused = hermes(&sent, Err("Hermes couldn't transcribe the recording: The provider failed"));
+        let got = route(&[Side::Server, Side::Local], None, false, refused, local_ok, not_cancelled()).await.unwrap();
+        assert_eq!(got.fell_back, Some(FellBack { from: Side::Server, why: "The provider failed".into() }));
     }
 
     #[cfg(unix)]

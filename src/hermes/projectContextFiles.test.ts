@@ -178,6 +178,16 @@ describe("changing a project's context files", () => {
     expect(server.context.writes).toHaveLength(1);
   });
 
+  it("takes a server's failure for what it is, even when its body reads like one of Rust's refusals (#517)", async () => {
+    const { server, files } = await signedIn();
+    for (const body of ["exists", "can't add this file to a project on an SSH profile yet"]) {
+      server.context.failWrite = new RestError(500, body);
+      const failed = files.addText("default", DIR, "all", "Style guide.md", "Plain.", false);
+      await expect(failed).rejects.not.toBeInstanceOf(ContextExistsError);
+      await expect(failed).rejects.toThrow(`Couldn't add Style guide.md: The dashboard answered 500: ${body}`);
+    }
+  });
+
   it("doesn't count a file as added unless a fresh listing shows it at the size sent", async () => {
     const { server, files } = await signedIn((s) => (s.context.shortBy = 3));
     await expect(files.upload("default", DIR, "all", local(server, "notes.md", "Rent is 900."), false)).rejects.toThrow(/has it at another size/);
