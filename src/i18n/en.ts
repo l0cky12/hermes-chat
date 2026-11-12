@@ -39,6 +39,7 @@ export const en = {
       persona: "Persona",
       memory: "Memory",
       skills: "Skills",
+      extensions: "Extensions",
       diagnostics: "Diagnostics",
     },
   },

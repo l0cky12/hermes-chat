@@ -25,6 +25,8 @@ export function sameTarget(a: PreviewTarget, b: PreviewTarget): boolean {
       return b.kind === "artifact" && a.ref.path === b.ref.path && a.ref.host === b.ref.host && a.ref.profile === b.ref.profile && a.ref.session === b.ref.session;
     case "tool":
       return b.kind === "tool" && a.name === b.name && a.text === b.text;
+    case "extension":
+      return b.kind === "extension" && a.id === b.id && a.view === b.view;
   }
 }
 

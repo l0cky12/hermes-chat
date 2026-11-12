@@ -36,6 +36,7 @@ export const es: Catalogue = {
       persona: "Persona",
       memory: "Memoria",
       skills: "Habilidades",
+      extensions: "Extensiones",
       diagnostics: "Diagnóstico",
     },
   },

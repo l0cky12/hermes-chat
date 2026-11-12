@@ -15,7 +15,7 @@
 // Profiles are switched in the list's header, not here (ADR 0001); Profiles' Open goes through the same question. The search box (Ctrl+F) shows the sections of every
 // tab whose text holds what was typed (settingsSearch.ts).
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowLeft, AudioLines, Brain, Camera, Cpu, Database, Download, HardDrive, Keyboard, KeyRound, Lock, LogOut, MessagesSquare, NotebookPen, Palette, PlugZap, Power, Puzzle, RadioTower, ScrollText, Search, Server, Settings2, ShieldCheck, Sparkles, Stethoscope, Trash2, User, Users, Wrench, X } from "lucide-react";
+import { ArrowLeft, AudioLines, Blocks, Brain, Camera, Cpu, Database, Download, HardDrive, Keyboard, KeyRound, Lock, LogOut, MessagesSquare, NotebookPen, Palette, PlugZap, Power, Puzzle, RadioTower, ScrollText, Search, Server, Settings2, ShieldCheck, Sparkles, Stethoscope, Trash2, User, Users, Wrench, X } from "lucide-react";
 import type { MemorySource } from "../hermes/memory";
 import { SubNav, type SubNavItem } from "./SubNav";
 import { SettingRow, SettingsSearching, SettingsSection } from "./SettingRows";
@@ -76,9 +76,10 @@ import { SignInSettings, type SignInApi } from "./SignInSettings";
 import { EndpointSettings, type EndpointApi } from "./EndpointSettings";
 import { useLocale } from "../i18n/locale";
 import { ProfileSettings, type ProfilesWiring } from "./ProfileSettings";
+import { ExtensionsSettings } from "./ExtensionsSettings";
 import { errorText, formatBytes } from "../hermes/values";
 
-type Tab = "general" | "appearance" | "keyboard" | "model" | "providers" | "voice" | "toolsets" | "mcp" | "gateways" | "profiles" | "persona" | "memory" | "skills" | "diagnostics";
+type Tab = "general" | "appearance" | "keyboard" | "model" | "providers" | "voice" | "toolsets" | "mcp" | "gateways" | "profiles" | "persona" | "memory" | "skills" | "diagnostics" | "extensions";
 /**
  * General's five groups, shown one at a time beside a sub-nav (ADR 0113); a search shows every group's sections at once.
  * Voice moved to its own tab with the speech providers (ADR 0115), so the third group holds screenshots.
@@ -113,6 +114,7 @@ const TABS = [
   { id: "memory", Icon: Brain },
   { id: "skills", Icon: Puzzle },
   { id: "diagnostics", Icon: Stethoscope },
+  { id: "extensions", Icon: Blocks },
 ] as const;
 
 /** The tabs whose sections a search shows in place. */
@@ -127,6 +129,7 @@ const ABOUT: Partial<Record<Tab, string>> = {
   persona: "Who Hermes is and how it speaks in this profile's chats: the profile's SOUL.md, edited on the server.",
   memory: "What Hermes remembers about you and your work between chats, changed or removed entry by entry.",
   skills: "Instructions Hermes can load for a kind of task: turn each skill on or off for the profile, and edit its SKILL.md.",
+  extensions: "Optional commands and views that run in a sandbox: install the ones that come with Hermes Chat, grant or withdraw their permissions, disable or uninstall them, and see why one stopped.",
   diagnostics:
     "The connected Hermes's version, protocol and sign-in, which features this server supports, and whether its Bot Desktop has a browser. Logs: this app's own diagnostics and the profile's Hermes logs, followed, filtered, exported, or saved as a support bundle.",
 };
@@ -189,6 +192,7 @@ export function SettingsScreen({
   onMemoryDirty = () => {},
   memoryDiscards = 0,
   skills,
+  extensions,
   onSkillDirty = () => {},
   skillDiscards = 0,
   onClearCache,
@@ -270,6 +274,8 @@ export function SettingsScreen({
   memoryDiscards?: number;
   /** The profile's skills on Hermes; the Skills tab shows only with it. */
   skills?: SkillsApi;
+  /** Shows Settings → Extensions (ADR 0126), where the window has its extensions. */
+  extensions?: boolean;
   /** Called with whether the Skills tab has an unsaved edit. */
   onSkillDirty?: (dirty: boolean) => void;
   /** Changes each time the owner discards the unsaved skill edit from App's question. */
@@ -405,7 +411,8 @@ export function SettingsScreen({
       (t.id !== "persona" || persona) &&
       (t.id !== "memory" || memory) &&
       (t.id !== "skills" || skills) &&
-      (t.id !== "diagnostics" || capabilities || logs),
+      (t.id !== "diagnostics" || capabilities || logs) &&
+      (t.id !== "extensions" || extensions),
   ).map((t) => ({ ...t, label: tabLabels[t.id] }));
   // Leaving the Persona, Memory or Skills tab asks first while it holds an unsaved edit.
   const setTab = (t: Tab) => t !== tab && guard(() => setTabNow(t));
@@ -867,6 +874,8 @@ export function SettingsScreen({
         return <AppearanceSettings store={appearance} listFonts={listFonts} />;
       case "keyboard":
         return <KeyboardSettings />;
+      case "extensions":
+        return <ExtensionsSettings />;
       case "model":
         // A draft lives only while this tab is open, and for one profile. Idle compaction is this computer's, and shows
         // whether or not Hermes is reachable.

@@ -80,6 +80,7 @@ export const NOT_PER_PROFILE: Record<string, string> = {
   "hermes-chat.terminal-target": "The terminal's SSH target, per connection",
   "hermes-chat.tags": "The tags file's stand-in outside the app: moved as a file (`files.tags`)",
   "hermes-chat.project-defaults": "The project defaults file's stand-in outside the app: moved as a file (`files.defaults`)",
+  "hermes-chat.extensions": "Which extensions are installed and what they were granted, the same for every connection and profile",
   "hermes-ui-prefs": "Display preferences: its per-profile parts are moved by `movePrefs`",
   [RENAMES_KEY]: "Renames waiting to move this computer's data, per connection",
 };

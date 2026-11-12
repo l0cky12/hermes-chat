@@ -7,6 +7,7 @@ import { COMMANDS, argProblem, completion, matchCommands, menuQuery, typedComman
 import { dollarQuery, matchSkills, skillRun, type SkillCommand, type SkillCommands, type SkillRun } from "../hermes/skillCommands";
 import { Spinner, composing } from "./bits";
 import { errorText } from "../hermes/values";
+import type { OfferedCommand } from "../hermes/extensions";
 
 /**
  * What runs the commands for one composer. `why`: why a command can't run now, or undefined when it can. `run` resolves
@@ -23,10 +24,31 @@ export type CommandHost = {
   skills?: SkillCommands;
   /** Reads the skills again if they may have changed; called as a menu opens. */
   refreshSkills?: () => void;
+  /** The installed extensions' commands offered here (ADR 0126, section 5), after the commands and the skills. */
+  extensions?: ExtensionCommands;
 };
 
+/** `why`: why an extension's command can't run here now. `run` resolves with its note, as `CommandHost.run` does. */
+export type ExtensionCommands = {
+  offered: readonly OfferedCommand[];
+  why(cmd: OfferedCommand): string | undefined;
+  run(cmd: OfferedCommand, arg: string, still: () => boolean): Promise<string | undefined>;
+};
+
+/** The extension command typed: "/" first, then an offered command's name, then whitespace or the end. */
+export function typedExtension(text: string, offered: readonly OfferedCommand[]): { cmd: OfferedCommand; arg: string } | undefined {
+  const m = /^\/(\S+)([\s\S]*)$/.exec(text);
+  const cmd = m ? offered.find((c) => c.name === m[1].toLowerCase()) : undefined;
+  return cmd && { cmd, arg: m![2].trim() };
+}
+
+const matchExtensions = (q: string, offered: readonly OfferedCommand[]) => [
+  ...offered.filter((c) => c.name.startsWith(q)),
+  ...offered.filter((c) => !c.name.startsWith(q) && (c.name.includes(q) || c.description.toLowerCase().split(/\W+/).some((w) => w.startsWith(q)))),
+];
+
 /** A row of the menu: one of the app's commands, or a skill. */
-type Row = { kind: "command"; def: CommandDef } | { kind: "skill"; skill: SkillCommand };
+type Row = { kind: "command"; def: CommandDef } | { kind: "skill"; skill: SkillCommand } | { kind: "extension"; cmd: OfferedCommand };
 
 type Note = { title?: string; text: string; error?: boolean };
 
@@ -84,6 +106,7 @@ export function useSlashCommands(host: CommandHost | undefined, text: string, on
       ? [
           ...matchCommands(query).map((def): Row => ({ kind: "command", def })),
           ...matchSkills(query, skills.filter((s) => !COMMANDS.some((c) => c.name === s.key))).map((skill): Row => ({ kind: "skill", skill })),
+          ...matchExtensions(query, host?.extensions?.offered ?? []).map((cmd): Row => ({ kind: "extension", cmd })),
         ]
       : dollar
         ? matchSkills(dollar.query, skills).map((skill): Row => ({ kind: "skill", skill }))
@@ -99,7 +122,7 @@ export function useSlashCommands(host: CommandHost | undefined, text: string, on
     if (asking) refresh?.();
   }, [asking, refresh]);
   // How the text runs skills when sent; a command of the app's runs instead when the text is one.
-  const toRun = host?.skills && !typedCommand(text) ? skillRun(text.trim(), host.skills) : undefined;
+  const toRun = host?.skills && !typedCommand(text) && !typedExtension(text, host.extensions?.offered ?? []) ? skillRun(text.trim(), host.skills) : undefined;
   // The chosen command stays in view as the arrows move through a list taller than the menu.
   useEffect(() => {
     if (open) document.getElementById(`${listId}-${sel}`)?.scrollIntoView?.({ block: "nearest" });
@@ -117,6 +140,7 @@ export function useSlashCommands(host: CommandHost | undefined, text: string, on
     let next: string;
     let at: number | undefined;
     if (row.kind === "command") next = completion(row.def);
+    else if (row.kind === "extension") next = `/${row.cmd.name} `;
     else if (!dollar) next = `/${row.skill.key} `;
     else {
       // The "$name" typed so far becomes the skill's, with a space after it unless one is there already.
@@ -133,23 +157,32 @@ export function useSlashCommands(host: CommandHost | undefined, text: string, on
     focusText();
   };
 
-  const execute = async (def: CommandDef, arg: string) => {
+  const execute = async (name: string, go: (still: () => boolean) => Promise<string | undefined>) => {
     setNote(undefined);
-    setPending(def.name);
+    setPending(name);
     try {
-      const out = await host!.run(def, arg, () => mounted.current);
-      if (mounted.current && out) setNote({ title: `/${def.name}`, text: out });
+      const out = await go(() => mounted.current);
+      if (mounted.current && out) setNote({ title: `/${name}`, text: out });
     } catch (e) {
-      if (mounted.current) setNote({ text: `/${def.name} didn't run: ${errorText(e)}`, error: true });
+      if (mounted.current) setNote({ text: `/${name} didn't run: ${errorText(e)}`, error: true });
     } finally {
       if (mounted.current) setPending(undefined);
     }
   };
+  const runDef = (def: CommandDef, arg: string) => execute(def.name, (still) => host!.run(def, arg, still));
 
-  const refuse = (def: CommandDef, why: string) => setNote({ text: `/${def.name} can't run: ${why}`, error: true });
+  const refuse = (name: string, why: string) => setNote({ text: `/${name} can't run: ${why}`, error: true });
 
   const run = (): boolean => {
     const typed = host && typedCommand(text);
+    const ext = host?.extensions && !typed ? typedExtension(text, host.extensions.offered) : undefined;
+    if (ext) {
+      if (pending) return true;
+      const why = host!.extensions!.why(ext.cmd);
+      if (why) refuse(ext.cmd.name, why);
+      else void execute(ext.cmd.name, (still) => host!.extensions!.run(ext.cmd, ext.arg, still));
+      return true;
+    }
     if (!typed) return false;
     if (pending) return true;
     const { def, arg } = typed;
@@ -160,9 +193,9 @@ export function useSlashCommands(host: CommandHost | undefined, text: string, on
       return true;
     }
     const why = host.why(def) ?? argProblem(def, arg);
-    if (why) refuse(def, why);
+    if (why) refuse(def.name, why);
     else if (def.destructive) setConfirm({ def, arg });
-    else void execute(def, arg);
+    else void runDef(def, arg);
     return true;
   };
 
@@ -175,8 +208,8 @@ export function useSlashCommands(host: CommandHost | undefined, text: string, on
     setConfirm(undefined);
     // The chat may have changed while the question was open, say a reply started.
     const why = host?.why(confirm.def);
-    if (why) refuse(confirm.def, why);
-    else void execute(confirm.def, confirm.arg);
+    if (why) refuse(confirm.def.name, why);
+    else void runDef(confirm.def, confirm.arg);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): boolean => {
@@ -257,12 +290,19 @@ export function useSlashCommands(host: CommandHost | undefined, text: string, on
           {matches.length ? (
             <div role="listbox" id={listId} aria-label={dollar ? "Skills" : "Commands"}>
               {matches.map((row, i) => {
-                const why = row.kind === "command" ? host.why(row.def) : undefined;
+                const why = row.kind === "command" ? host.why(row.def) : row.kind === "extension" ? host.extensions?.why(row.cmd) : undefined;
+                const prev = matches[i - 1];
+                const newExtension = row.kind === "extension" && (prev?.kind !== "extension" || prev.cmd.id !== row.cmd.id);
                 return (
-                  <div key={row.kind === "command" ? `c-${row.def.name}` : `s-${row.skill.key}`} role="presentation">
+                  <div key={row.kind === "command" ? `c-${row.def.name}` : row.kind === "skill" ? `s-${row.skill.key}` : `e-${row.cmd.name}`} role="presentation">
                     {i === firstSkill && !dollar && (
                       <div className="cmd-group" aria-hidden="true">
                         Skills
+                      </div>
+                    )}
+                    {newExtension && (
+                      <div className="cmd-group" aria-hidden="true">
+                        {row.cmd.extension}
                       </div>
                     )}
                     <div
@@ -281,6 +321,15 @@ export function useSlashCommands(host: CommandHost | undefined, text: string, on
                           {row.def.args && <span className="cmd-args">{row.def.args}</span>}
                           <Scope def={row.def} />
                           <span className="cmd-desc">{row.def.description}</span>
+                          {why && <span className="cmd-why">{why}</span>}
+                        </>
+                      ) : row.kind === "extension" ? (
+                        <>
+                          <span className="cmd-name">/{row.cmd.name}</span>
+                          <span className="cmd-scope extension" title={`An extension's command: ${row.cmd.extension} runs it in its sandbox on this computer. Nothing is sent to Hermes.`}>
+                            Extension
+                          </span>
+                          <span className="cmd-desc">{row.cmd.description}</span>
                           {why && <span className="cmd-why">{why}</span>}
                         </>
                       ) : (
@@ -361,6 +410,27 @@ function CommandHelp({ host, onClose }: { host: CommandHost; onClose: () => void
       )}
       {group("local", "In this app")}
       {group("server", "On Hermes, for this chat")}
+      {!!host.extensions?.offered.length && (
+        <>
+          <h3>From extensions, on this computer</h3>
+          <dl>
+            {host.extensions.offered.map((cmd) => {
+              const why = host.extensions!.why(cmd);
+              return (
+                <div key={cmd.name} className={why ? "unavailable" : undefined}>
+                  <dt>
+                    <code>/{cmd.name}</code>
+                  </dt>
+                  <dd>
+                    {cmd.description} ({cmd.extension})
+                    {why && <span className="cmd-why">{why}</span>}
+                  </dd>
+                </div>
+              );
+            })}
+          </dl>
+        </>
+      )}
       {host.guide && (
         <p className="cmd-why">
           This Hermes server doesn't support Hermes's slash commands; the app's own commands still work.{" "}

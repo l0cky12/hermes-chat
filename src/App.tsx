@@ -4,7 +4,9 @@ import { ArrowLeft, ArrowRight, Columns2, FolderCog, GitBranch, PanelBottom, Pan
 import { CONNECT_STOPPED, LIVE_MIN_GAP_MS, RenameConflict, connect, openSaved, readSaved, toSource, type Delivery, type Hermes } from "./hermes/transport";
 import { invoke } from "@tauri-apps/api/core";
 import type { CommandHost } from "./ui/SlashCommands";
-import { STEER, type ServerCommandList } from "./hermes/commands";
+import { COMMANDS, STEER, type ServerCommandList } from "./hermes/commands";
+import { offeredCommands, type ChatContext } from "./hermes/extensions";
+import { useExtensions } from "./ui/extensionsContext";
 import type { SkillCall, SkillCommands } from "./hermes/skillCommands";
 import { CHECK_EVERY_MS } from "./hermes/otherProfiles";
 import { type Account, type Kept, type SavedSignIn, launchOpen, launchSignIn, removeConnection, savedSignIn, savedSignInOrForm, signIn, signInForm, signOutToSignIn } from "./hermes/account";
@@ -92,7 +94,7 @@ import { ContextCard } from "./ui/ProjectContext";
 import { ScheduledJobs } from "./ui/ScheduledJobs";
 import { TroubleshootStore, startTroubleshoot } from "./hermes/troubleshoot";
 import { CapabilityGate } from "./ui/Diagnostics";
-import { guideUrl, type CapabilityId } from "./hermes/capabilities";
+import { CAPABILITIES, guideUrl, type CapabilityId } from "./hermes/capabilities";
 import { useCapabilities } from "./ui/Diagnostics";
 import { Automations } from "./ui/Automations";
 import { tauriLocalTerminal, tauriTerminal } from "./ui/tauriTerminal";
@@ -115,7 +117,7 @@ import { PreviewPane } from "./ui/PreviewPane";
 import { stepHistory } from "./ui/previewHistory";
 import { PANE_MIN_WIDTH, SidePanel, type PanelTab } from "./ui/SidePanel";
 import { ScreenTab } from "./ui/Screen";
-import { LinksProvider } from "./ui/previewContext";
+import { LinksProvider, useOpenPreview } from "./ui/previewContext";
 import { tauriLocalFiles, tauriServerPages, tauriWebPages, type LocalFiles, type ServerPages, type WebPages } from "./ui/tauriPreview";
 import type { PreviewTarget } from "./hermes/preview";
 import type { Route } from "./hermes/pipe";
@@ -3147,6 +3149,7 @@ export function Main({
             onMemoryDirty={onMemoryDirty}
             memoryDiscards={memoryDiscards}
             skills={hermes.skills}
+            extensions
             onSkillDirty={onSkillDirty}
             skillDiscards={skillDiscards}
             checkScreenshots={screenshots.support}
@@ -4008,6 +4011,55 @@ function ChatView({
       } finally {
         commandsRunning.delete(key);
       }
+    },
+  };
+  // Extension commands (ADR 0126, section 5): after the app's commands and the skills, never a name either has. One runs
+  // in its sandbox on this computer and sends nothing to Hermes. It reads this chat only while it runs and while this
+  // composer is still on the chat; text it adds to the Draft lands only once it has answered, and its views open in the
+  // Preview.
+  const extensions = useExtensions();
+  const openPreview = useOpenPreview();
+  const latestChat = useRef(chat);
+  latestChat.current = chat;
+  const offeredSkills = status === "connected" ? skillCommands.skills?.offered : undefined;
+  const offeredExtensions = useMemo(
+    () =>
+      offeredCommands(extensions.states, (name) =>
+        COMMANDS.some((c) => c.name === name) ? `Hermes Chat has its own /${name}.` : offeredSkills?.some((s) => s.key === name) ? `This profile has a skill called ${name}.` : undefined,
+      ).offered,
+    [extensions.states, offeredSkills],
+  );
+  commands.extensions = {
+    offered: offeredExtensions,
+    why: (cmd) => {
+      if (!started) return "This chat hasn't started yet. Send a message first.";
+      const missing = cmd.needs.find((n) => caps.caps[n].state === "unsupported");
+      return missing && `This Hermes doesn't support ${CAPABILITIES.find((c) => c.id === missing)?.label ?? missing}, which ${cmd.extension} needs.`;
+    },
+    run: async (cmd, arg, still) => {
+      const key = shownDraft;
+      const typed = savedDrafts.get(key);
+      const here = () => still() && stillIn();
+      const added: string[] = [];
+      const ctx: ChatContext = {
+        connection: connection.id,
+        profile,
+        chat: chat.id,
+        title: chat.title || "Untitled chat",
+        items: () => latestChat.current.items,
+        addToDraft: (text) => void added.push(text),
+        still: here,
+      };
+      const res = await extensions.store.run(cmd.id, { kind: "command", name: cmd.name, arg }, ctx);
+      if (!here()) return undefined;
+      const now = savedDrafts.get(key);
+      const kept = now === typed ? "" : now;
+      if (!added.length) {
+        if (now === typed) savedDrafts.take(key);
+      } else savedDrafts.set(key, [kept, ...added].filter(Boolean).join("\n\n"));
+      const manifest = extensions.states.find((s) => s.manifest.id === cmd.id)?.manifest;
+      for (const view of res.views) openPreview?.({ kind: "extension", id: cmd.id, view, title: manifest?.views.find((v) => v.id === view)?.title ?? view });
+      return res.note;
     },
   };
 

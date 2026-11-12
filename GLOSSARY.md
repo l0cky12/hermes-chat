@@ -562,6 +562,14 @@ _Avoid_: signing key (ambiguous with Git commit signing)
 The language Hermes Chat's own words are in, picked in Settings → Appearance: System, or a language by its own name. System takes the first of the desktop's languages the app has words for, else English. Dates and numbers follow it too, in the desktop's region where that is in the same language. A screen not yet translated stays English, and a word a language lacks shows in English (ADR 0100). It changes nothing Hermes writes: replies come in whatever language the model answers in.
 _Avoid_: locale (the code's word for the language, its tag and its formats together), translation
 
+**Extension**:
+A package of code that adds commands to the "/" menu and views to the Preview, and runs only in a sandbox, even when it comes with the app: a worker behind an opaque-origin frame, with no network, no files, no passwords and no storage of its own. It reaches the app only through calls the owner granted: with `chat.read`, the messages of the chat the owner ran it in, while that command runs. Settings → Extensions installs one after showing what each permission means, withdraws or grants a permission, disables, enables and uninstalls it, and says why one stopped. For now the only one is Chat stats, which comes with the app; installing one from a file comes later (ADR 0126).
+_Avoid_: plugin (Hermes's own server-side plugins, under Toolset, MCP server and Memory provider), add-on, integration
+
+**Grant**:
+The owner's yes to one permission an extension's manifest asks for. Installing gives every permission it asks for, and Settings → Extensions withdraws or gives each one again; either restarts the extension (ADR 0126).
+_Avoid_: capability (a feature Hermes supports, ADR 0044), approval (Hermes asking about a command)
+
 ## Relationships
 
 - Every **Chat** is either **Active** or **Settled**, never both. An **Archived** chat keeps that state for when it is restored.
@@ -589,6 +597,8 @@ _Avoid_: locale (the code's word for the language, its tag and its formats toget
 - **Restore** (an Archived chat) vs **Restore a backup**: the first is Hermes's, for one chat; the second writes this computer's own data from a Backup file, and changes nothing on the server.
 - **Import** vs **Export** and **Upload**: Export saves one chat as a file on this computer; Import makes chats in Hermes from such a file; Upload puts a file on the server's disk, not in a chat.
 - **Draft** vs the New chat pane: the code also calls the pane for a chat not started yet "the draft". In this glossary a Draft is only the composer's unsent text.
+- **Extension** vs Hermes's plugins: an extension runs on this computer, in the app's sandbox, and adds commands and views to this app. A Hermes plugin runs on the server and can bring tools, a toolset, an MCP server or a memory provider. Neither installs the other.
+- **Extension command** vs **Slash command** and **Skill**: all three are picked after "/". The app's commands come first, then the skills, then the extensions' commands; an extension's command is never offered under a name the app or a skill has, and running it sends nothing to Hermes.
 - **Approval** vs **Approval mode**: an Approval is one question Hermes asks, as a card in the chat; the Approval mode decides which commands Hermes asks about at all.
 - **Question** (from Hermes) vs **Side question (/btw)**: a Question is Hermes asking the owner, and the reply waits for the answer; a Side question is the owner asking Hermes, and nothing waits on it.
 - **Secret** vs **Provider key**: both are values Hermes keeps on the server. A Secret is asked for by Hermes in a reply, under a name Hermes picks; a Provider key is set by the owner in Settings → Providers.
