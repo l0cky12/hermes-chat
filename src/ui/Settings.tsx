@@ -16,7 +16,7 @@
 // Profiles are switched in the list's header, not here (ADR 0001); Profiles' Open goes through the same question. The search box (Ctrl+F) shows the sections of every
 // tab whose text holds what was typed (settingsSearch.ts).
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowLeft, AudioLines, Brain, Camera, Cpu, Database, Download, HardDrive, Keyboard, KeyRound, Lock, LogOut, MessagesSquare, NotebookPen, Palette, PlugZap, Power, Puzzle, RadioTower, ScrollText, Search, Server, Settings2, Share2, ShieldCheck, Sparkles, Stethoscope, Trash2, User, Users, Wrench, X } from "lucide-react";
+import { ArrowLeft, AudioLines, Blocks, Brain, Camera, Cpu, Database, Download, HardDrive, Keyboard, KeyRound, Lock, LogOut, MessagesSquare, NotebookPen, Palette, PlugZap, Power, Puzzle, RadioTower, ScrollText, Search, Server, Settings2, Share2, ShieldCheck, Sparkles, Stethoscope, Trash2, User, Users, Wrench, X } from "lucide-react";
 import type { MemorySource } from "../hermes/memory";
 import { SubNav, type SubNavItem } from "./SubNav";
 import { SettingRow, SettingsSearching, SettingsSection } from "./SettingRows";
@@ -79,9 +79,11 @@ import { SignInSettings, type SignInApi } from "./SignInSettings";
 import { EndpointSettings, type EndpointApi } from "./EndpointSettings";
 import { useLocale } from "../i18n/locale";
 import { ProfileSettings, type ProfilesWiring } from "./ProfileSettings";
+import { ExtensionsSettings } from "./ExtensionsSettings";
+import type { SkillCommands } from "../hermes/skillCommands";
 import { errorText, formatBytes } from "../hermes/values";
 
-type Tab = "general" | "appearance" | "keyboard" | "snapshots" | "model" | "providers" | "voice" | "toolsets" | "mcp" | "gateways" | "profiles" | "persona" | "memory" | "skills" | "diagnostics";
+type Tab = "general" | "appearance" | "keyboard" | "snapshots" | "model" | "providers" | "voice" | "toolsets" | "mcp" | "gateways" | "profiles" | "persona" | "memory" | "skills" | "diagnostics" | "extensions";
 /**
  * General's five groups, shown one at a time beside a sub-nav (ADR 0113); a search shows every group's sections at once.
  * Voice moved to its own tab with the speech providers (ADR 0115), so the third group holds screenshots.
@@ -117,6 +119,7 @@ const TABS = [
   { id: "memory", Icon: Brain },
   { id: "skills", Icon: Puzzle },
   { id: "diagnostics", Icon: Stethoscope },
+  { id: "extensions", Icon: Blocks },
 ] as const;
 
 /** The tabs whose sections a search shows in place. */
@@ -133,6 +136,7 @@ const ABOUT: Partial<Record<Tab, string>> = {
   skills: "Instructions Hermes can load for a kind of task: turn each skill on or off for the profile, and edit its SKILL.md.",
   snapshots:
     "Share snapshot's host: the S3-compatible bucket and access key this computer publishes chat pages to, tested, changed or removed. The snapshots in the bucket, with Copy link and Revoke.",
+  extensions: "Optional commands and views that run in a sandbox: install the ones that come with Hermes Chat, grant or withdraw their permissions, disable or uninstall them, and see why one stopped.",
   diagnostics:
     "The connected Hermes's version, protocol and sign-in, which features this server supports, and whether its Bot Desktop has a browser. Logs: this app's own diagnostics and the profile's Hermes logs, followed, filtered, exported, or saved as a support bundle.",
 };
@@ -197,6 +201,7 @@ export function SettingsScreen({
   onMemoryDirty = () => {},
   memoryDiscards = 0,
   skills,
+  extensions,
   onSkillDirty = () => {},
   skillDiscards = 0,
   onClearCache,
@@ -282,6 +287,8 @@ export function SettingsScreen({
   memoryDiscards?: number;
   /** The profile's skills on Hermes; the Skills tab shows only with it. */
   skills?: SkillsApi;
+  /** Shows Settings → Extensions (ADR 0126). `skills` reads the skills offered in the profile shown, whose names win. */
+  extensions?: { skills: () => Promise<SkillCommands | undefined> };
   /** Called with whether the Skills tab has an unsaved edit. */
   onSkillDirty?: (dirty: boolean) => void;
   /** Changes each time the owner discards the unsaved skill edit from App's question. */
@@ -418,7 +425,8 @@ export function SettingsScreen({
       (t.id !== "persona" || persona) &&
       (t.id !== "memory" || memory) &&
       (t.id !== "skills" || skills) &&
-      (t.id !== "diagnostics" || capabilities || logs),
+      (t.id !== "diagnostics" || capabilities || logs) &&
+      (t.id !== "extensions" || extensions),
   ).map((t) => ({ ...t, label: tabLabels[t.id] }));
   // Leaving the Persona, Memory or Skills tab asks first while it holds an unsaved edit.
   const setTab = (t: Tab) => t !== tab && guard(() => setTabNow(t));
@@ -888,6 +896,8 @@ export function SettingsScreen({
         return <KeyboardSettings />;
       case "snapshots":
         return snapshots && <SnapshotSettings api={snapshots} />;
+      case "extensions":
+        return <ExtensionsSettings skills={extensions?.skills} />;
       case "model":
         // A draft lives only while this tab is open, and for one profile. Idle compaction is this computer's, and shows
         // whether or not Hermes is reachable.

@@ -1,0 +1,12 @@
+{
+  "manifest": 1,
+  "id": "dev.hermes-chat.chat-stats",
+  "name": "Chat stats",
+  "version": "1.0.0",
+  "api": 1,
+  "main": "main.js",
+  "commands": [{ "name": "stats", "description": "Count this chat's messages and words" }],
+  "views": [{ "id": "stats", "title": "Chat stats" }],
+  "permissions": ["chat.read"],
+  "needs": []
+}

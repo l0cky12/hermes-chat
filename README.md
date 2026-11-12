@@ -226,6 +226,16 @@ Edit opens the skill's SKILL.md as plain text, with the file's path on the serve
 
 The agent reads SKILL.md each time it loads a skill, so a saved edit reaches its next load in any chat, even one already going; the description in the skills list the agent sees reaches chats started afterwards. A skill turned off is left out of new chats and refused in every chat from then on; one turned on is listed in new chats. Nothing needs restarting. Installing skills from elsewhere isn't done here. See [ADR 0030](docs/adr/0030-skills-are-hermess-skill-files-checked-first-and-read-back.md).
 
+### Extensions
+
+![Chat stats run from the composer: its answer under the composer, and its view in the Preview](docs/screenshots/extensions/2-stats-ran.png)
+
+An extension adds commands to the "/" menu, after the app's commands and the skills, and a view to the Preview. Each runs in a sandbox: a worker behind a frame with an opaque origin and its own CSP, so it has no network, no files, no passwords, no storage, and no way to call the app's commands. It reaches the app only through a fixed set of calls the owner granted. With `chat.read`, it gets the messages of the chat the owner ran it in (who wrote each one, its text and time; no attachments or tool output), and only while that command runs. Its view is drawn by the app from a small list of text nodes, never its HTML, so a view loads nothing and links nowhere.
+
+Settings → Extensions lists each extension with its version, permissions, commands and status. Install… shows what each permission means first. Each permission can be withdrawn or given again, which restarts the extension. Disable and Uninstall remove its commands and its view at once. An extension that misses a deadline (5 s to start, 10 s for a command), throws, or sends a message that is broken, over 256 KB or one of more than 50 in a second is stopped, and Settings says why. Three stops in 10 minutes disable it. Settings → Diagnostics → Logs lists each start, stop, refused call and permission change.
+
+For now the only extension is **Chat stats**, which comes with the app: `/stats` counts the chat's messages and words by who wrote them. Installing an extension from a file isn't available yet. It waits until the sandbox has been checked in WebView2 on Windows, and until signatures and memory limits are decided ([ADR 0126](docs/adr/0126-an-extension-runs-in-a-worker-behind-a-sandboxed-frame-and-reaches-the-app-only-through-granted-calls.md)).
+
 ### Context inspector
 
 Click the status bar's context meter to see what fills the chat's context window. Until Hermes has measured the chat (a chat reopened from the list has no measure until its next reply), the meter reads **Context not measured** and still opens the inspector; its compactions can be read without a live session. Every figure comes from Hermes, labelled Exact, Estimated or Unavailable. Nothing is worked out from the meter's percentage, and nothing is kept on this computer.
@@ -672,6 +682,7 @@ Hermes stores the chats and their history, imported chats included, titles, Arch
 | Unsaved persona edits, and the last five versions of `SOUL.md` that saves from this app replaced | Webview local storage, per connection and profile | Saving or discarding the edit; a newer save pushes out the oldest version. Clear local cache keeps them. |
 | The Repository screen's folder opened last, the five most recent, and its SSH target. No file contents, diffs or Git output. | Webview local storage (`hermes-chat.repo-path`, `hermes-chat.repo-recent`, `hermes-chat.repo-target`) | Not removed by the app |
 | Which chats this computer started in a worktree: the worktree's path, branch, repository, SSH target and record id, per connection and profile. The server's record is what counts; this copy only labels the chat. | Webview local storage (`hermes-chat.worktree-chats`) | Detaching the chat. Not in backups. |
+| Installed extensions: each one's id, version, permissions granted, whether it is disabled and why, when it last failed, and the version last started. No chat text. | Webview local storage (`hermes-chat.extensions`) | Uninstalling the extension. Clear local cache keeps it. |
 | Close to tray | `$XDG_CONFIG_HOME/net.l0cky12.hermes-chat/window.json` (usually `~/.config/...`) | Not removed by the app |
 | Display preferences (the agent office's Building, List or Off among them), model pick, starred models, and reopen-last-chat (the pick and the chat to reopen are per connection and profile) | Webview local storage | Not removed by Clear local cache. Removing a connection removes its pick and chat to reopen. |
 | **Templates**, at most 300, each message up to 20,000 characters | Webview local storage, in the display preferences (`hermes-ui-prefs`), for every connection and profile; a project-scoped one names its connection, profile and project | Deleting them. Clear local cache keeps them. |

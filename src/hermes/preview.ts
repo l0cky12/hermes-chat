@@ -3,6 +3,7 @@
 // `GET /api/fs/read-data-url` (research doc "Preview pane"). A Local file is one the owner picked on this computer in
 // the native Open dialog; Rust reads it (src-tauri/src/transport.rs `read_local_text`). Web pages load in a sandboxed
 // frame (ADR 0007). Everything shown is untrusted: nothing here turns it into HTML the app itself renders.
+import type { ExtensionId } from "./extensionManifest";
 import type { Item } from "./model";
 import { RestError, sessionNotFound } from "./pipe";
 import { IMAGE_DATA_URL, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, type RemotePreview } from "./remoteFiles";
@@ -27,7 +28,9 @@ export type PreviewTarget =
   /** An Output open to edit (artifacts.ts, ADR 0029): read and saved on the machine `ref` names. */
   | { kind: "artifact"; ref: ArtifactRef }
   | { kind: "local"; path: string; name: string }
-  | { kind: "tool"; name: string; text: string };
+  | { kind: "tool"; name: string; text: string }
+  /** An extension's view (ADR 0126, section 6): a tree the app draws, kept by `Extensions`, never the extension's HTML. */
+  | { kind: "extension"; id: ExtensionId; view: string; title: string };
 
 /**
  * A file as the pane shows it. `text`: its first part when `truncated`; `format` picks the view: Markdown and HTML
@@ -63,6 +66,8 @@ export function previewName(t: PreviewTarget): string {
   switch (t.kind) {
     case "tool":
       return `${t.name} output`;
+    case "extension":
+      return t.title;
     case "local":
       return t.name;
     case "server":
@@ -176,6 +181,8 @@ export function addressOf(t: PreviewTarget): string {
       return t.ref.path;
     case "tool":
       return `${t.name} output`;
+    case "extension":
+      return `${t.title} (extension)`;
   }
 }
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import {
   AlertTriangle,
   ArrowLeft,
+  Blocks,
   ArrowRight,
   Copy,
   Crosshair,
@@ -56,6 +57,7 @@ import { canGoBack, canGoForward, type HistoryStep, type PreviewHistory } from "
 import type { ArtifactStore } from "../hermes/artifacts";
 import { ArtifactEditor } from "./ArtifactEditor";
 import { errorText, formatBytes } from "../hermes/values";
+import { ExtensionView } from "./ExtensionView";
 import { failureText as annotateFailure, type PageWhere, type Still } from "../hermes/annotations";
 import { AnnotationOverlay, type AnnotationDesk } from "./Annotate";
 
@@ -222,6 +224,8 @@ export function PreviewPane({
           />
         ) : here.kind === "tool" ? (
           <pre className="preview-pre">{here.text || "(empty)"}</pre>
+        ) : here.kind === "extension" ? (
+          <ExtensionView key={`${here.id}:${here.view}`} id={here.id} view={here.view} title={here.title} reloadSeq={history.reloadSeq} />
         ) : here.kind === "artifact" ? (
           artifacts ? (
             <ArtifactEditor
@@ -392,6 +396,12 @@ function Badge({ here, serverLabel, onSwitch }: { here: PreviewTarget | undefine
       return (
         <span className="where where-tool" title="What the tool call returned, as Hermes sent it">
           <Wrench size={12} /> Tool output
+        </span>
+      );
+    case "extension":
+      return (
+        <span className="where where-tool" title="Drawn by Hermes Chat from what an extension sent. It runs in a sandbox on this computer.">
+          <Blocks size={12} /> Extension
         </span>
       );
     default:

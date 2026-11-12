@@ -5,10 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Frames (the preview pane's web pages) may load only http(s) pages, never the app's own tauri: or ipc: origins.
          No image or sound loads from the network, since a mermaid diagram is laid out in the page before it is cleaned.
-         Tauri's CSP stays off (tauri.conf.json). See docs/adr/0007, docs/adr/0129 and docs/adr/0136. -->
+         Tauri's CSP stays off (tauri.conf.json). See docs/adr/0007, docs/adr/0129 and docs/adr/0136.
+         WebKit applies this policy inside srcdoc frames too, so the script hash (SHIM_HASH in src/hermes/extensionHost.ts)
+         and blob: workers are what let an extension's host frame run its shim and worker (docs/adr/0126). -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="script-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://api.github.com; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src http: https:; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="script-src 'self' 'sha256-sELYs6Cxhmzc0m3KuPPGF2XkQ8pbRMHwwIdgEaA13XM='; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://api.github.com; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-src http: https:; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <title>Hermes Chat</title>
   </head>
