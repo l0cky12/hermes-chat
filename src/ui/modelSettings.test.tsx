@@ -140,6 +140,25 @@ describe("A model field searches the provider's models (#538)", () => {
     expect(writes(server)).toEqual([]);
   });
 
+  it("scrolls the first match into view as typing narrows the list, even when it's still the first row", async () => {
+    const { user } = await shown();
+    const scrolled: string[] = [];
+    const was = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.textContent ?? "");
+    };
+    try {
+      const field = select("Main model");
+      await user.click(field);
+      expect(scrolled).toEqual(["z-ai/glm-5.3-flash"]);
+      await user.keyboard("d");
+      expect(listed("Main model")[0]).toBe("deepseek/deepseek-v4-flash");
+      expect(scrolled[scrolled.length - 1]).toBe("deepseek/deepseek-v4-flash");
+    } finally {
+      Element.prototype.scrollIntoView = was;
+    }
+  });
+
   it("opens from the keyboard on the model in use, and Escape closes it without changing anything", async () => {
     const { user } = await shown();
     const field = select("Main model");

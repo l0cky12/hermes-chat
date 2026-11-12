@@ -39,7 +39,7 @@ export function ModelCombobox({
     if (open) list.current?.querySelector(`[data-row="${at}"]`)?.scrollIntoView?.({ block: "nearest" });
     // Closed with the focus still here (a pick, Escape): the model's name is selected, so typing starts a new search.
     else if (document.activeElement === field.current) field.current?.select();
-  }, [open, at]);
+  }, [open, at, query]);
 
   const show = (q: string) => {
     setOpen(true);
