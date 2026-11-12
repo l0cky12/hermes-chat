@@ -5,9 +5,9 @@ import { createContext, useCallback, useContext, useId, useState, type ReactNode
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { Copy, ExternalLink, PanelRight } from "lucide-react";
 import { linkTarget, withoutBidi, type LinkTarget, type PreviewTarget } from "../hermes/preview";
-import { messageOf } from "../hermes/voice";
 import { Menu } from "./ChatMenu";
 import type { WebPages } from "./tauriPreview";
+import { errorText } from "../hermes/values";
 
 type OpenMenu = { link: LinkTarget; at: { x: number; y: number } };
 type ShowLinkMenu = (e: ReactMouseEvent<HTMLElement>, link: LinkTarget) => void;
@@ -75,7 +75,7 @@ function LinkMenu({
     f();
   };
   const copy = (text: string) => {
-    const failed = (e?: unknown) => onToast(`Couldn't copy the link${e ? `: ${messageOf(e)}` : "."}`);
+    const failed = (e?: unknown) => onToast(`Couldn't copy the link${e ? `: ${errorText(e)}` : "."}`);
     if (!navigator.clipboard?.writeText) return failed();
     navigator.clipboard.writeText(text).then(() => onToast("Link copied."), failed);
   };
@@ -97,7 +97,7 @@ function LinkMenu({
                 () =>
                   void web.openInBrowser(link.url).then(
                     (browser) => onToast(`Opened in ${browser ?? "your browser"}.`),
-                    (e) => onToast(`Couldn't open it in your browser: ${messageOf(e)}`),
+                    (e) => onToast(`Couldn't open it in your browser: ${errorText(e)}`),
                   ),
               )}
             >

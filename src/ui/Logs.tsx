@@ -27,6 +27,7 @@ import {
 import { KEEP } from "../hermes/attempts";
 import { useModal } from "./modal";
 import { Spinner } from "./bits";
+import { clockTimeWithSeconds } from "../hermes/values";
 
 type Source = "app" | "attempts" | RemoteLog;
 const SOURCES: Source[] = ["app", "attempts", ...(Object.keys(REMOTE_LOGS) as RemoteLog[])];
@@ -167,7 +168,7 @@ export function LogsPanel({
       case "reading":
         return "Reading…";
       case "ok":
-        return `Read from Hermes every ${Math.round((pollMs ?? 2000) / 1000)} s, last at ${new Date(state.at).toLocaleTimeString()}. Hermes gives the last 500 lines each time.`;
+        return `Read from Hermes every ${Math.round((pollMs ?? 2000) / 1000)} s, last at ${clockTimeWithSeconds(state.at)}. Hermes gives the last 500 lines each time.`;
       default:
         return "";
     }
@@ -339,7 +340,7 @@ function SupportBundle({
   const [note, setNote] = useState<string>();
   const [saving, setSaving] = useState(false);
   const included = parts.filter((p) => chosen.has(p.id));
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- rebuilt only when the owner picks parts; `parts` is the snapshot taken at open, and `included` is a new array every render
   const text = useMemo(() => bundleText(included, { profile, connection, now }), [chosen]);
   const counts = redactionCounts(included);
   const all = text.split("\n");

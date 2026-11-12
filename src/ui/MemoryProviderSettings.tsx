@@ -143,7 +143,7 @@ export function MemoryProviderSettings({
   const dirty = Object.keys(edits).length > 0;
   useEffect(() => {
     onDirtyChange(dirty);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- report only when `dirty` flips; a caller may pass a new `onDirtyChange` each render, which must not report again
   }, [dirty]);
   useEffect(() => {
     alive.current = true;
@@ -151,7 +151,7 @@ export function MemoryProviderSettings({
       alive.current = false;
       onDirtyChange(false);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount and unmount only: listing `onDirtyChange` would run this cleanup, reporting clean, whenever a caller passes a new one
   }, []);
   const discards = useRef(discardSignal);
   useEffect(() => {
@@ -205,7 +205,7 @@ export function MemoryProviderSettings({
     if (!connected || memory || unsupported) return;
     void loadOverview();
     void loadProfile(target);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- first read once connected; the loaders are rebuilt each render, so listing them would start another read on every render until one lands
   }, [connected]);
 
   /** Runs `go` now, or once the owner agrees to drop unsaved changes. */
@@ -233,12 +233,11 @@ export function MemoryProviderSettings({
       setConfirmSetup(false);
       switchTo(targetProp);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- follow a pick from outside once nothing is busy; `switchTo` is rebuilt each render, so listing it would rerun this on every render
   }, [targetProp, busy]);
   useEffect(() => {
     if (rows) onProfiles?.(rows.map((r) => r.profile));
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
-  }, [rows]);
+  }, [rows, onProfiles]);
   const switchTo = (who: string) => {
     {
       setTarget(who);

@@ -161,7 +161,7 @@ mkdirSync(out, { recursive: true });
 try {
   for (const name of wanted) {
     const scene = scenes[name];
-    const target = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: "PUT" })).json();
+    const target = /** @type {{ webSocketDebuggerUrl: string }} */ (await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: "PUT" })).json());
     const ws = new WebSocket(target.webSocketDebuggerUrl);
     await new Promise((r) => ws.addEventListener("open", r, { once: true }));
     let id = 0;

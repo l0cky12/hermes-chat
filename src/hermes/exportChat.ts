@@ -5,7 +5,7 @@
 // chat's session id, so an import of it is skipped where Hermes already has the chat.
 import { invoke } from "@tauri-apps/api/core";
 import type { ApprovalChoice, Chat, Item } from "./model";
-import { findMarkdownSecrets } from "./secrets";
+import { REDACTED, findMarkdownSecrets, redactValues } from "./secrets";
 import { asError } from "./tauriPipe";
 import { LOAD_ERROR_ID } from "./transport";
 import type { ImagePage } from "./exportImage";
@@ -44,9 +44,6 @@ export const exportFileName = (title: string, extension = "md") =>
       .trim() || "Chat"
   }.${extension}`;
 
-/** What stands in the file for redacted text. */
-export const REDACTED = "[redacted]";
-
 /** The owner's messages, Hermes's replies and its thinking: picked one by one. Tool calls and Approvals go in all or none. */
 export const isMessage = (i: Item) => i.kind === "user" || i.kind === "assistant" || i.kind === "thinking";
 
@@ -84,28 +81,10 @@ const chosen = (chat: Chat, choice: Omit<ExportChoice, "redact">) =>
 
 const oneLine = (title: string) => title.replace(/\s+/g, " ").trim();
 
-/** `text` with every place each of `redact` is replaced, and how many `[redacted]` it has for them. */
-export function redactText(text: string, redact: readonly string[]): { text: string; places: number } {
-  const spans: [number, number][] = [];
-  for (const r of redact) if (r) for (let i = text.indexOf(r); i >= 0; i = text.indexOf(r, i + 1)) spans.push([i, i + r.length]);
-  spans.sort((a, b) => a[0] - b[0]);
-  let out = "";
-  let at = 0;
-  let places = 0;
-  for (let k = 0; k < spans.length; places++) {
-    const start = spans[k][0];
-    let end = spans[k++][1];
-    while (k < spans.length && spans[k][0] <= end) end = Math.max(end, spans[k++][1]);
-    out += text.slice(at, start) + REDACTED;
-    at = end;
-  }
-  return { text: out + text.slice(at), places };
-}
-
 function render(format: ExportFormat, chat: Chat, exportedAt: Date, choice: ExportChoice): string {
   let places = 0;
   const redact = (s: string) => {
-    const r = redactText(s, choice.redact);
+    const r = redactValues(s, choice.redact, { anywhere: true });
     places += r.places;
     return r.text;
   };

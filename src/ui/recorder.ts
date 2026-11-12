@@ -2,7 +2,8 @@
 // and closed as soon as they stop, cancel or end it, or the window that started it goes away. Samples stay in memory;
 // nothing is written to disk. A recording becomes 16 kHz mono WAV, which every Hermes transcriber takes (a plain Web
 // Audio capture, since WebKitGTK's MediaRecorder depends on which GStreamer encoders are installed).
-import { messageOf, micProblem, toWav } from "../hermes/voice";
+import { micProblem, toWav } from "../hermes/voice";
+import { errorText } from "../hermes/values";
 
 export type Recording = { audio: Uint8Array; mime: "audio/wav"; seconds: number };
 
@@ -116,7 +117,7 @@ export async function openMicrophone(
   } catch (e) {
     close();
     if (signal?.aborted) throw aborted();
-    throw new MicError(`The microphone couldn't be recorded from: ${messageOf(e)}`);
+    throw new MicError(`The microphone couldn't be recorded from: ${errorText(e)}`);
   }
   signal?.removeEventListener("abort", close);
   if (signal?.aborted || !open) {

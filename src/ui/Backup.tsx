@@ -35,10 +35,9 @@ import {
   type Policy,
   type RestoreReport,
 } from "../hermes/backup";
-import { fmtSize } from "./bits";
 import { useModal } from "./modal";
 import { SettingRow, SettingsSection } from "./SettingRows";
-import { errorText, plural } from "../hermes/values";
+import { errorText, formatBytes, plural } from "../hermes/values";
 
 /** What Backup needs from the app. */
 export type BackupWiring = {
@@ -159,7 +158,7 @@ export function ExportDialog({ wiring, returnTo, onClose }: { wiring: BackupWiri
       (summary) => live.current && setStep({ at: "choose", summary }),
       (e) => live.current && setStep({ at: "unreadable", error: `Couldn't read what this computer keeps: ${errorText(e)}` }),
     );
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- summarize once when the dialog opens; a new `wiring` from the parent must not reset the step the owner is on
   }, []);
 
   const save = async (summary: ExportSummary) => {
@@ -287,8 +286,7 @@ export function RestoreDialog({ wiring, returnTo, onClose }: { wiring: BackupWir
   const [mapping, setMapping] = useState<Mapping>({});
   const [policies, setPolicies] = useState<Partial<Record<CategoryId, Policy>>>({});
   const live = useLive();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
-  useEffect(() => void listed.current!.then((list) => live.current && setProfiles(list)), []);
+  useEffect(() => void listed.current!.then((list) => live.current && setProfiles(list)), [live]);
 
   const choose = async () => {
     setStep({ at: "reading" });
@@ -428,7 +426,7 @@ function Preview({
       <dl className="files-meta">
         <dt>File</dt>
         <dd>
-          <span className="mono">{picked.path || picked.name}</span>, {fmtSize(picked.bytes)}
+          <span className="mono">{picked.path || picked.name}</span>, {formatBytes(picked.bytes)}
         </dd>
         <dt>Made</dt>
         <dd>{made && !Number.isNaN(made.getTime()) ? made.toLocaleString() : "not known"}</dd>

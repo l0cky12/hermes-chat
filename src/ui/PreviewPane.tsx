@@ -37,14 +37,14 @@ import {
 } from "../hermes/preview";
 import { Markdown } from "./Markdown";
 import { HIGHLIGHT_MAX_CHARS } from "./markdownPipeline";
-import { Spinner, fmtSize } from "./bits";
+import { Spinner } from "./bits";
 import { Menu } from "./ChatMenu";
 import { ServerPageError, type DevServers, type Listening, type LocalFiles, type NativePage, type NativePages, type ServerPages, type WebPages } from "./tauriPreview";
 import { usePlacement } from "./pagePlacement";
 import { canGoBack, canGoForward, type HistoryStep, type PreviewHistory } from "./previewHistory";
 import type { ArtifactStore } from "../hermes/artifacts";
 import { ArtifactEditor } from "./ArtifactEditor";
-import { errorText } from "../hermes/values";
+import { errorText, formatBytes } from "../hermes/values";
 
 /** When a web page that hasn't loaded gets a note that it may never show. */
 const SLOW_PAGE_MS = 15_000;
@@ -529,7 +529,7 @@ function FileBody({ name, load }: { name: string; load: () => Promise<FileView> 
           <div className="preview-state-title">No preview for this file</div>
           <div>
             {v.reason}
-            {v.size !== undefined && ` It's ${fmtSize(v.size)}.`}
+            {v.size !== undefined && ` It's ${formatBytes(v.size)}.`}
           </div>
         </div>
       </div>
@@ -553,7 +553,7 @@ function ImageView({ src, name, size }: { src: string; name: string; size?: numb
   return (
     <div className="preview-image">
       <img src={src} alt={name.split("/").pop()} onError={() => setBroken(true)} />
-      {size !== undefined && <div className="preview-foot">{fmtSize(size)}</div>}
+      {size !== undefined && <div className="preview-foot">{formatBytes(size)}</div>}
     </div>
   );
 }
@@ -577,7 +577,7 @@ function TextView({ view, name }: { view: Extract<FileView, { kind: "text" }>; n
           )}
           {view.truncated && (
             <span className="preview-truncated">
-              Showing the first {fmtSize(view.text.length)} of {fmtSize(view.size)}.
+              Showing the first {formatBytes(view.text.length)} of {formatBytes(view.size)}.
             </span>
           )}
         </div>

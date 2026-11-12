@@ -137,8 +137,7 @@ export function useReturnFocus() {
       const now = document.activeElement;
       if ((!now || now === document.body) && opener instanceof HTMLElement && opener.isConnected) opener.focus();
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
-    [],
+    [opener],
   );
 }
 
@@ -250,13 +249,6 @@ export const STATUS_LABEL: Record<ConnectionStatus, string> = { connected: "Conn
 
 /** Where the connection goes, as the owner typed it. */
 export const routeLabel = (route?: Route) => (route?.kind === "ssh" ? `ssh://${route.target}` : route?.url);
-
-export function fmtSize(b: number): string {
-  if (b < 1024) return `${b} B`;
-  if (b < 1024 ** 2) return `${(b / 1024).toFixed(0)} KB`;
-  if (b < 1024 ** 3) return `${(b / 1024 ** 2).toFixed(1)} MB`;
-  return `${(b / 1024 ** 3).toFixed(2)} GB`;
-}
 
 export const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 

@@ -70,7 +70,7 @@ import type { UsageIo } from "./usageAnalytics";
 import { compactResultOf, compactionsOf, readingOf, type CompactResult, type CompactionHistory, type CompactionRow, type ContextReading } from "./contextInspect";
 import { chatUsageOf, countersOf, newerChatUsage, newerListedUsage, replyUsage, ZERO_COUNTERS, type ReplyUsage, type UsageCounters } from "./usage";
 import { toolResultText } from "./toolResult";
-import { num, str } from "./chatCache";
+import { num } from "./chatCache";
 import { onLost, onRoster, onSubagentEvent, onUnchecked, parseOutput, type SubagentId, type SubagentOutput } from "./subagents";
 import {
   BRANCH_KEY_TTL_MS,
@@ -90,7 +90,7 @@ import {
   type StoredBranchRow,
 } from "./branch";
 import { cannotResend, laterOf, replayBlocked, resendText, replayTarget, splitRefs, turnAt, variantRoot, withRefs, withoutMarkers, type ReplayKind, type ReplayPreview } from "./replay";
-import { errorText } from "./values";
+import { errorText, formatBytes, optionalText } from "./values";
 
 /**
  * The `source` this app stamps on chats it starts. Legacy `session.create` stores any string as-is, but the gateway
@@ -171,7 +171,7 @@ const MiB = 1024 * 1024;
 export const LIMITS = { image: { bytes: 25 * MiB, what: "images" }, file: { bytes: 256 * MiB, what: "files" } };
 /** What the owner is told about a file over its limit. */
 export const overLimitNote = (name: string, size: number, limit: (typeof LIMITS)[keyof typeof LIMITS]) =>
-  `${name} is ${(size / MiB).toFixed(1)} MB. Hermes takes ${limit.what} up to ${limit.bytes / MiB} MB.`;
+  `${name} is ${formatBytes(size)}. Hermes takes ${limit.what} up to ${formatBytes(limit.bytes)}.`;
 /** The images Hermes looks at (`cli._IMAGE_EXTENSIONS`); anything else is staged as a file. */
 const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp)$/i;
 /** What the official desktop app asks when an image is sent with no text. */
@@ -319,9 +319,9 @@ type TranscriptMessage = {
 const transcriptMessages = (raw: unknown): TranscriptMessage[] =>
   (Array.isArray(raw) ? raw : []).flatMap((v): TranscriptMessage[] => {
     const m = obj(v);
-    const role = str(m?.role);
+    const role = optionalText(m?.role);
     if (!m || role === undefined) return [];
-    const [text, reasoning, name, context, tool_call_id, display_kind] = [m.text, m.reasoning, m.name, m.context, m.tool_call_id, m.display_kind].map(str);
+    const [text, reasoning, name, context, tool_call_id, display_kind] = [m.text, m.reasoning, m.name, m.context, m.tool_call_id, m.display_kind].map((v) => optionalText(v));
     return [{ role, text, reasoning, content: m.content, name, context, args: obj(m.args), tool_call_id, timestamp: num(m.timestamp), row_id: num(m.row_id), display_kind }];
   });
 
@@ -3885,14 +3885,14 @@ export class Hermes {
       if (!p) return;
       this.pending.delete(id);
       const error = obj(frame.error);
-      if (frame.error) p.reject(new RpcError(num(error?.code) ?? 0, str(error?.message) ?? ""));
+      if (frame.error) p.reject(new RpcError(num(error?.code) ?? 0, optionalText(error?.message) ?? ""));
       else p.resolve(frame.result);
       return;
     }
     if (typeof id === "string" && typeof method === "string" && method) return this.onServerRequest({ id, method, params });
-    const type = str(params.type);
+    const type = optionalText(params.type);
     if (method !== "event" || !type) return;
-    const session_id = str(params.session_id);
+    const session_id = optionalText(params.session_id);
     const payload = obj(params.payload) ?? {};
     if (type === "gateway.ready") {
       this.onReady?.(payload);
@@ -5717,9 +5717,9 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: st
         kind: "tool",
         id: freeId(items, callId),
         callId,
-        name: str(p.name) ?? "tool",
+        name: optionalText(p.name) ?? "tool",
         args: obj(p.args),
-        preview: str(p.preview),
+        preview: optionalText(p.preview),
         status: "running",
       });
       return { ...c, items };
@@ -5729,7 +5729,7 @@ function applyEvent(c: Chat, type: string, p: Record<string, unknown>, from?: st
       const call = items[at];
       if (call?.kind !== "tool") return c;
       // A screenshot inside the result stays on the server (ADR 0061).
-      items[at] = { ...call, status: "done", durationS: num(p.duration_s), result: toolResultText(p.result), summary: str(p.summary) };
+      items[at] = { ...call, status: "done", durationS: num(p.duration_s), result: toolResultText(p.result), summary: optionalText(p.summary) };
       return { ...c, items };
     }
     // Every second or so while a turn runs.

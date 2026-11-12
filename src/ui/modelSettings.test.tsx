@@ -2,7 +2,7 @@
 // Settings → Model on screen, against the fake dashboard: the draft, Apply, the guardrails, and leaving Settings.
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-// @ts-expect-error The app has no Node types; the tests run in Node. (Vitest empties a CSS import, ?raw included.)
+// Vitest empties a CSS import, ?raw included.
 import { readFileSync } from "node:fs";
 import { useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";

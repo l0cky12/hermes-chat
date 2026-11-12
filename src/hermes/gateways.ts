@@ -13,10 +13,10 @@
 // Hermes has no revision to check a write against, so a save reads the platform first and stops if it isn't what the
 // screen showed, then reads it again to confirm what landed.
 
-import { redact as redactKnown } from "./logs";
+import { redactSecrets, redactValues } from "./secrets";
 import { failureOf, type Failure } from "./toolsets";
 import type { RestMethod } from "./pipe";
-import { errorText } from "./values";
+import { errorText, textOrEmpty } from "./values";
 
 export const PLATFORMS = ["telegram", "discord"] as const;
 export type PlatformId = (typeof PLATFORMS)[number];
@@ -96,30 +96,14 @@ export class GatewaysReadError extends Error {
 
 type Json = Record<string, unknown>;
 const obj = (v: unknown): Json => (v && typeof v === "object" && !Array.isArray(v) ? (v as Json) : {});
-const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const q = (profile: string) => `profile=${encodeURIComponent(profile)}`;
 const supported = (id: string): id is PlatformId => (PLATFORMS as readonly string[]).includes(id);
 
 /** FastAPI's own "no such route", as opposed to a route refusing, which names its own reason. */
 const noRoute = (f: Failure) => f.status === 405 || (f.status === 404 && f.reason === "Not Found");
 
-/**
- * `text` without anything that looks like a secret: the values in `typed`, Telegram and Discord bot tokens, and what
- * the Logs screen redacts (provider keys, bearer tokens, `token=` pairs). Hermes's own `«redacted:…»` previews stay.
- */
-export function redact(text: string, typed: readonly string[] = []): string {
-  let out = text;
-  for (const t of typed) {
-    if (!t) continue;
-    // A short value is taken out only where it stands alone, so "ab" doesn't eat every "ab" in the sentence.
-    out = t.length >= 4 ? out.split(t).join("[redacted]") : out.replace(new RegExp(`(?<![A-Za-z0-9])${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`, "g"), "[redacted]");
-  }
-  out = out
-    // No word boundary before the ID: Telegram's API puts the token right after "bot" in its URLs (`/bot123:AA…/getMe`).
-    .replace(/(?<!\d)\d{5,}:[A-Za-z0-9_-]{20,}/g, "[redacted token]")
-    .replace(/(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{20,}/g, "[redacted token]");
-  return redactKnown(out).text;
-}
+/** `text` without the values in `typed` or any secret shape (secrets.ts). Hermes's own `«redacted:…»` previews stay. */
+export const redact = (text: string, typed: readonly string[] = []): string => redactSecrets(redactValues(text, typed).text).text;
 
 /** The gateway's runtime error codes this screen tells apart (the Telegram and Discord adapters' `_set_fatal_error`). */
 const RUNTIME_KIND: Record<string, ProblemKind> = {
@@ -139,39 +123,39 @@ const runtimeKind = (code: string, configured: boolean): ProblemKind =>
 
 function fieldOf(v: unknown): GatewayField | undefined {
   const f = obj(v);
-  const key = str(f.key);
+  const key = textOrEmpty(f.key);
   if (!key) return undefined;
   // Hermes sends the value only for an allowlist; anything else is write-only here, a password field or not.
   const readable = f.is_list === true && typeof f.value === "string";
   const set = f.is_set === true;
   return {
     key,
-    label: str(f.prompt) || key,
-    hint: str(f.description),
-    url: str(f.url) || undefined,
+    label: textOrEmpty(f.prompt) || key,
+    hint: textOrEmpty(f.description),
+    url: textOrEmpty(f.url) || undefined,
     required: f.required === true,
     set,
     secret: !readable,
-    preview: !readable && set ? str(f.redacted_value) || undefined : undefined,
-    value: readable ? str(f.value) : undefined,
+    preview: !readable && set ? textOrEmpty(f.redacted_value) || undefined : undefined,
+    value: readable ? textOrEmpty(f.value) : undefined,
   };
 }
 
 function gatewayOf(v: unknown, typed: readonly string[]): Gateway | undefined {
   const g = obj(v);
-  const id = str(g.id);
+  const id = textOrEmpty(g.id);
   if (!supported(id)) return undefined;
-  const code = str(g.error_code);
-  const message = str(g.error_message);
+  const code = textOrEmpty(g.error_code);
+  const message = textOrEmpty(g.error_message);
   return {
     id,
-    name: str(g.name) || id,
-    description: str(g.description),
-    docsUrl: /^https:\/\//.test(str(g.docs_url)) ? str(g.docs_url) : undefined,
+    name: textOrEmpty(g.name) || id,
+    description: textOrEmpty(g.description),
+    docsUrl: /^https:\/\//.test(textOrEmpty(g.docs_url)) ? textOrEmpty(g.docs_url) : undefined,
     enabled: g.enabled === true,
     configured: g.configured === true,
     gatewayRunning: g.gateway_running === true,
-    state: str(g.state) || "unknown",
+    state: textOrEmpty(g.state) || "unknown",
     error: code || message ? { kind: runtimeKind(code, g.configured === true), text: redact(message || code, typed) } : undefined,
     fields: (Array.isArray(g.env_vars) ? g.env_vars : []).flatMap((f) => fieldOf(f) ?? []),
   };
@@ -266,7 +250,7 @@ export class GatewaysApi {
     }
     const rows = obj(res).platforms;
     if (!Array.isArray(rows)) throw new Error("Hermes answered with something other than a list of messaging platforms.");
-    const start = str(obj(res).gateway_start_command);
+    const start = textOrEmpty(obj(res).gateway_start_command);
     return { profile, gateways: rows.flatMap((r) => gatewayOf(r, this.sent) ?? []), startCommand: start || undefined, readAt: Date.now() };
   }
 
@@ -326,7 +310,7 @@ export class GatewaysApi {
       const problem = problemOf(failureOf(e), this.sent, false);
       return { check: { ok: false, problem, text: problem.text, at: Date.now() } };
     }
-    const text = redact(str(res.message) || (res.ok === true ? "Connected." : "Hermes didn't say why."), this.sent);
+    const text = redact(textOrEmpty(res.message) || (res.ok === true ? "Connected." : "Hermes didn't say why."), this.sent);
     // The check's answer has no error code; the list, read again, does.
     const list = await this.again(profile);
     const g = list?.gateways.find((x) => x.id === id);

@@ -65,7 +65,7 @@ export function useVoiceConversation(o: {
     });
     setConversation(c);
     return () => c.dispose();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one conversation per Speaker, made once Voice is there; a new `voice` or `env` object must not end it mid-conversation
   }, [o.speaker, !o.voice]);
   useEffect(() => conversation?.observe({ running: !!o.chat.running, items: o.chat.items }), [conversation, o.chat.running, o.chat.items]);
   useEffect(() => conversation?.setAway(o.away), [conversation, o.away]);

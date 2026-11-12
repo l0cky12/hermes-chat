@@ -18,7 +18,7 @@
 //
 // Hermes picks the provider when it builds a chat's agent, so a change reaches chats started after it.
 import { failureOf, type Failure } from "./toolsets";
-import { errorText } from "./values";
+import { errorText, textOrEmpty } from "./values";
 
 /** One signed-in dashboard REST call; resolves to the parsed JSON body. */
 export type Rest = (method: "GET" | "PUT" | "POST", pathAndQuery: string, body?: unknown) => Promise<unknown>;
@@ -138,7 +138,6 @@ export const sendableName = (name: string) => NAME.test(name);
 
 type Json = Record<string, unknown>;
 const obj = (v: unknown): Json => (v && typeof v === "object" && !Array.isArray(v) ? (v as Json) : {});
-const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const strs = (v: unknown): string[] => (Array.isArray(v) ? v.map((x) => String(x ?? "").trim()).filter(Boolean) : []);
 const text = (v: unknown): string => (v === null || v === undefined ? "" : typeof v === "boolean" ? (v ? "true" : "false") : typeof v === "object" ? JSON.stringify(v) : String(v));
 
@@ -150,7 +149,7 @@ function setupOf(v: unknown): ProviderSetup {
     pip: strs(s.pip_dependencies),
     python: s.python_dependencies_declared === true || strs(s.pip_dependencies).length > 0,
     external: (Array.isArray(s.external_dependencies) ? s.external_dependencies : [])
-      .map((d) => ({ name: str(obj(d).name), install: str(obj(d).install), check: str(obj(d).check) }))
+      .map((d) => ({ name: textOrEmpty(obj(d).name), install: textOrEmpty(obj(d).install), check: textOrEmpty(obj(d).check) }))
       .filter((d) => d.name || d.install || d.check),
     requiredEnv: strs(s.required_env),
     // Older answers may not say; then it isn't claimed to need installing.
@@ -166,8 +165,8 @@ function memoryOf(profile: string, res: unknown): ProfileMemory {
     active: r.active,
     providers: r.providers.flatMap((p): ProviderRow[] => {
       const row = obj(p);
-      const name = str(row.name);
-      return name ? [{ name, description: str(row.description), status: str(row.status) || "unavailable", setup: setupOf(row.setup) }] : [];
+      const name = textOrEmpty(row.name);
+      return name ? [{ name, description: textOrEmpty(row.description), status: textOrEmpty(row.status) || "unavailable", setup: setupOf(row.setup) }] : [];
     }),
     readAt: Date.now(),
   };
@@ -180,33 +179,33 @@ function formOf(profile: string, name: string, res: unknown, surface: ProviderFo
   const blankIsPlaceholder = surface === "declared" ? (STORES[name]?.blankIsPlaceholder ?? []) : [];
   const fields = (Array.isArray(r.fields) ? r.fields : []).flatMap((f): ProviderField[] => {
     const raw = obj(f);
-    const key = str(raw.key);
+    const key = textOrEmpty(raw.key);
     if (!key) return [];
-    const kind = KINDS[str(raw.kind)] ?? "text";
+    const kind = KINDS[textOrEmpty(raw.kind)] ?? "text";
     const when = obj(raw.when);
-    const placeholder = str(raw.placeholder);
+    const placeholder = textOrEmpty(raw.placeholder);
     return [
       {
         key,
-        label: str(raw.label) || key,
+        label: textOrEmpty(raw.label) || key,
         kind,
-        description: str(raw.description),
+        description: textOrEmpty(raw.description),
         placeholder,
         value: kind === "secret" ? "" : text(raw.value),
         isSet: raw.is_set === true,
-        options: (Array.isArray(raw.options) ? raw.options : []).map((o) => ({ value: text(obj(o).value), label: str(obj(o).label) || text(obj(o).value) })),
+        options: (Array.isArray(raw.options) ? raw.options : []).map((o) => ({ value: text(obj(o).value), label: textOrEmpty(obj(o).label) || text(obj(o).value) })),
         required: raw.required === true,
-        group: str(raw.group),
+        group: textOrEmpty(raw.group),
         // The legacy surface has no main/other split: all of it is the main settings.
         main: surface === "legacy" || raw.inline === true,
-        url: str(raw.url),
+        url: textOrEmpty(raw.url),
         ...(Object.keys(when).length ? { when: Object.fromEntries(Object.entries(when).map(([k, v]) => [k, text(v)])) } : {}),
         ...(blankIsPlaceholder.includes(key) && placeholder ? { inUse: placeholder } : {}),
         ...(surface === "declared" && fileWide(name, key) ? { shared: true } : {}),
       },
     ];
   });
-  return { profile, name, label: str(r.label) || name, docsUrl: str(r.docs_url), surface, fields, readAt: Date.now() };
+  return { profile, name, label: textOrEmpty(r.label) || name, docsUrl: textOrEmpty(r.docs_url), surface, fields, readAt: Date.now() };
 }
 
 /** Whether `field` shows with these values (legacy `when`; Hermes compares the dependency's value as a string). */
@@ -294,7 +293,7 @@ export class MemoryProvidersApi {
   /** The server's profiles, by name. */
   async profiles(): Promise<string[]> {
     const res = obj(await this.rest("GET", "api/profiles"));
-    const names = (Array.isArray(res.profiles) ? res.profiles : []).map((p) => str(obj(p).name)).filter(Boolean);
+    const names = (Array.isArray(res.profiles) ? res.profiles : []).map((p) => textOrEmpty(obj(p).name)).filter(Boolean);
     if (!names.length) throw new Error("Hermes answered with no profiles.");
     return names;
   }
@@ -466,12 +465,12 @@ export class MemoryProvidersApi {
       const steps = (Array.isArray(res.results) ? res.results : []).map((r) => {
         const s = obj(r);
         return {
-          kind: str(s.kind),
-          name: str(s.name),
-          status: str(s.status),
-          command: str(s.command),
+          kind: textOrEmpty(s.kind),
+          name: textOrEmpty(s.name),
+          status: textOrEmpty(s.status),
+          command: textOrEmpty(s.command),
           returncode: typeof s.returncode === "number" ? s.returncode : null,
-          output: [str(s.stdout), str(s.stderr)].filter((x) => x.trim()).join("\n").trim(),
+          output: [textOrEmpty(s.stdout), textOrEmpty(s.stderr)].filter((x) => x.trim()).join("\n").trim(),
         };
       });
       return { kind: "done", ok: res.ok === true, steps, memory: await this.read(profile).catch(() => undefined) };

@@ -8,8 +8,8 @@ import type { EditBase, RemoteEntry, RemoteFiles, SaveOutcome } from "../hermes/
 import { MINE_MARK, diffLines, hunks, merge3 } from "../hermes/textEdit";
 import { useCloseGuard } from "./LeaveMemoryEdit";
 import { useModal } from "./modal";
-import { Spinner, fmtSize } from "./bits";
-import { errorText } from "../hermes/values";
+import { Spinner } from "./bits";
+import { errorText, formatBytes } from "../hermes/values";
 
 type Conflict = Extract<SaveOutcome, { kind: "conflict" }>;
 
@@ -114,7 +114,7 @@ export function FileEditor({
       (e) => current && setMode({ kind: "refused", why: errorText(e) }),
     );
     return () => void (current = false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- reopen only for another path; a new `entry` or `files` object for the same file must not reload and drop the draft
   }, [entry.path]);
 
   const dirty = !!base && draft !== base.text;
@@ -220,7 +220,7 @@ export function FileEditor({
           </span>
           {base && (
             <span className="muted small">
-              {eolLabel(base)}, {fmtSize(new TextEncoder().encode(draft).length)}
+              {eolLabel(base)}, {formatBytes(new TextEncoder().encode(draft).length)}
             </span>
           )}
         </div>

@@ -18,10 +18,9 @@ import {
   type ToolsetsApi,
   type WriteSupport,
 } from "../hermes/toolsets";
-import { errorText } from "../hermes/values";
+import { clockTime, errorText } from "../hermes/values";
 
 const onOff = (on: boolean) => (on ? "on" : "off");
-const timeOf = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 /**
  * What happened to the latest change of one toolset, under its row. `unsettled`: Hermes didn't confirm it, for this
@@ -332,7 +331,7 @@ export function ToolsetSettings({
             Object.entries(n).flatMap(([name, note]): [string, Note][] => {
               const t = fresh.toolsets.find((x) => x.name === name);
               if (note.unsettled !== undefined && t)
-                return [[name, { tone: "warn", text: `Hermes didn't confirm the last change (${note.unsettled}). Read back at ${timeOf(fresh.readAt)}, ${t.label} is ${onOff(t.enabled)}.` }]];
+                return [[name, { tone: "warn", text: `Hermes didn't confirm the last change (${note.unsettled}). Read back at ${clockTime(fresh.readAt)}, ${t.label} is ${onOff(t.enabled)}.` }]];
               return moved.has(name) ? [] : [[name, note]];
             }),
           ),
@@ -399,7 +398,7 @@ export function ToolsetSettings({
     const onFocus = () => connected && shownList.current && (void read(false), void readChatNow.current(), readGuards());
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- re-listen when the connection or `read` changes; `readGuards` is new every render but reads the same `api` and `profile` that `read` is keyed on
   }, [connected, read]);
 
   /** The config facts (inherited, forced off, no_mcp) read again; only the latest read's answer is shown. */
@@ -630,7 +629,7 @@ export function ToolsetSettings({
         )}
         {!connected && (
           <SettingNote tone="warn" role="status">
-            Not connected to Hermes. This is what Hermes had at {timeOf(list.readAt)}; it can't be changed until Hermes is back.
+            Not connected to Hermes. This is what Hermes had at {clockTime(list.readAt)}; it can't be changed until Hermes is back.
           </SettingNote>
         )}
         {write && !write.ok && (
@@ -670,7 +669,7 @@ export function ToolsetSettings({
                         ? `Hermes no longer has “${chat.title}” open: it gets the profile's list when it's opened again.`
                         : chatShown.read!.kind === "unsupported"
                           ? `${chatShown.read!.reason} Each toolset shows the profile's setting only.`
-                          : `“${chat.title}”: what Hermes offers it, read at ${timeOf(chatShown.read!.readAt)}, is under each toolset.`}
+                          : `“${chat.title}”: what Hermes offers it, read at ${clockTime(chatShown.read!.readAt)}, is under each toolset.`}
             {chat?.running && connected && " A reply is running in it now; nothing here changes the tools it's using."}
           </div>
         </SettingNote>
@@ -679,7 +678,7 @@ export function ToolsetSettings({
         )}
         <SettingNote role="status">
           <span>
-            {reading ? "Reading the toolsets from Hermes…" : loadError ? null : `Read from Hermes at ${timeOf(list.readAt)}.`}
+            {reading ? "Reading the toolsets from Hermes…" : loadError ? null : `Read from Hermes at ${clockTime(list.readAt)}.`}
             {loadError && <span className="sign-in-error">Couldn't read them again: {loadError}</span>}
           </span>
         </SettingNote>

@@ -788,7 +788,7 @@ def hooks(top):
 
 
 def ident(top, role):
-    code, out, err = git(["var", "GIT_%s_IDENT" % role], top)
+    code, out, _err = git(["var", "GIT_%s_IDENT" % role], top)
     if code != 0:
         return None
     # "Name <email> 1700000000 +0000": the time isn't part of who.
@@ -1452,9 +1452,9 @@ def main():
         # Children first: Git lets go of its own locks as it ends, then the helper's are let go. A stop signal that
         # arrives meanwhile waits until all of it is done.
         with no_stop():
-            for proc in list(CHILDREN):
+            for proc in list(CHILDREN):  # noqa: PERF101 - end_child removes from CHILDREN
                 end_child(proc)
-            for idx in list(HELD):
+            for idx in list(HELD):  # noqa: PERF101 - __exit__ removes from HELD
                 idx.__exit__()
 
 

@@ -5,6 +5,7 @@
 import type { InboxEntry, InboxKind } from "./inbox";
 import type { Chat } from "./model";
 import { childrenOf, type Subagent, type SubagentId, type SubagentState, type SubagentTree } from "./subagents";
+import { clockTime } from "./values";
 
 /**
  * What a desk's agent is doing. `waiting`: the chat's reply ended after handing work off, and waits for it
@@ -69,7 +70,7 @@ const isLive = (e: InboxEntry) => e.kind === "running" || (e.kind === "approval"
 const NOT_CONNECTED = "Not connected to Hermes: as last seen.";
 
 function treeStale(tree: SubagentTree, connected: boolean): string | undefined {
-  if (tree.sync.kind === "lost") return `Disconnected since ${new Date(tree.sync.since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}: as last heard.`;
+  if (tree.sync.kind === "lost") return `Disconnected since ${clockTime(tree.sync.since)}: as last heard.`;
   if (tree.sync.kind === "unchecked") return `As last heard. ${tree.sync.why}`;
   return connected ? undefined : NOT_CONNECTED;
 }

@@ -1,6 +1,6 @@
 // Themes: the colors worked out from a theme's four, what contrast does to them, and reading a pasted theme.
 import { describe, expect, it } from "vitest";
-// @ts-expect-error The app has no Node types; the tests run in Node. (Vitest empties a CSS import, ?raw included.)
+// Vitest empties a CSS import, ?raw included.
 import { readFileSync } from "node:fs";
 import { BUILTIN_THEMES, contrastRatio, freeName, parseTheme, readThemeJson, resolveMode, themeJson, themeVars } from "./themes";
 

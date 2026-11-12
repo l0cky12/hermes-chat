@@ -11,7 +11,7 @@ import sys
 import time
 
 sys.path.insert(0, ".")
-from tools.computer_use.tool import handle_computer_use  # noqa: E402
+from tools.computer_use.tool import handle_computer_use
 
 
 def run(args, n):

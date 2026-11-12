@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-// @ts-expect-error node:fs has no types in this project; vitest runs in node.
 import { readFileSync } from "node:fs";
 import { AttemptLog, KEEP, STEPS, TEXT_MAX, WITHHELD, addressFree, attemptText, scrubberFor, type Attempt, type AttemptStore } from "./attempts";
 import { FakeHermes } from "./fakeHermes";

@@ -164,7 +164,7 @@ describe("Speech to text: Whisper models for whisper.cpp", () => {
     render(<LocalSttSettings api={api} status="connected" />);
     await userEvent.click(await screen.findByRole("button", { name: "Download the base model" }));
     const bar = await screen.findByRole("progressbar", { name: "Downloading the base model" });
-    expect(bar.textContent).toMatch(/74 MB of 148 MB/);
+    expect(bar.textContent).toMatch(/71 MB of 141 MB/);
     // One download at a time.
     expect((screen.getByRole("button", { name: "Download the tiny model" }) as HTMLButtonElement).disabled).toBe(true);
     finish();

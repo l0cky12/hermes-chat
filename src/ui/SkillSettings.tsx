@@ -24,7 +24,7 @@ import {
   type TransferOutcome,
 } from "../hermes/skills";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
-import { errorText } from "../hermes/values";
+import { clockTime, errorText } from "../hermes/values";
 
 /** The skill open in the editor: its row, SKILL.md as last read from Hermes, and the owner's text. */
 type Editing = { row: SkillRow; base: SkillFile; draft: string };
@@ -40,7 +40,6 @@ type BulkDone = { op: Bulk; to?: string; outcomes: TransferOutcome[] };
 
 const SOURCE: Record<string, string> = { hub: "Skills Hub", bundled: "Built in", external: "External folder", agent: "Local" };
 const sourceLabel = (s: string) => SOURCE[s] ?? s;
-const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 /** An element id for a skill's row: one per name, without spaces (ids go in `aria-labelledby` lists). */
 const domId = (name: string) => `skill-${encodeURIComponent(name)}`;
 
@@ -122,14 +121,13 @@ export function SkillSettings({
   const focusAfter = useRef<string | undefined>(undefined);
 
   const dirty = !!editing && editing.draft !== editing.base.content;
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
-  useEffect(() => onDirtyChange(dirty), [dirty]);
+  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
   const discards = useRef(discardSignal);
   useEffect(() => {
     if (discardSignal === discards.current) return;
     discards.current = discardSignal;
     close();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- close the edit only when the discard signal moves; `close` is new every render
   }, [discardSignal]);
   useEffect(() => {
     alive.current = true;
@@ -137,7 +135,7 @@ export function SkillSettings({
       alive.current = false;
       onDirtyChange(false);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount: on unmount it reports clean; running again for a new `onDirtyChange` would report clean while an edit is open
   }, []);
   // Back in the list, focus returns to the skill's Edit button.
   useEffect(() => {
@@ -170,7 +168,7 @@ export function SkillSettings({
   // Read once connected; after a drop, the screen keeps what it read, and the owner's edit, until Reload.
   useEffect(() => {
     if (connected && !view && !problem && !loading) void load();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- first read when the connection comes up; `view`, `problem` and `loading` are checked, not triggers, and `load` is new every render
   }, [connected]);
 
   function close() {
@@ -453,7 +451,7 @@ export function SkillSettings({
             {!connected && (
               <SettingNote tone="warn" role="status">
                 <AlertTriangle size={14} />
-                <span>Not connected to Hermes. These are the skills as read at {clock(view.readAt)}; reconnect to change or save them.</span>
+                <span>Not connected to Hermes. These are the skills as read at {clockTime(view.readAt)}; reconnect to change or save them.</span>
               </SettingNote>
             )}
             {editing ? (
@@ -565,7 +563,7 @@ export function SkillSettings({
                       <RestoreButton api={api} profile={profile} editing={editing} disabled={!!busy} onRestore={(content, when) =>
                           unlessDirty("Replace your unsaved edit with the earlier version? Nothing of your edit has been saved to Hermes.", () => {
                             setEditing({ ...editing, draft: content });
-                            setNotice({ kind: "ok", text: `The version your save at ${clock(when)} replaced is in the editor. Save to put it back on Hermes; nothing has changed there yet.` });
+                            setNotice({ kind: "ok", text: `The version your save at ${clockTime(when)} replaced is in the editor. Save to put it back on Hermes; nothing has changed there yet.` });
                           })
                         }
                       />
@@ -981,7 +979,7 @@ function RestoreButton({
   const version = api.versionsOf(profile, editing.base.path).find((v) => v.content !== editing.draft);
   if (!version) return null;
   return (
-    <button className="btn" disabled={disabled} onClick={() => onRestore(version.content, version.replacedAt)} title={`The text your save at ${clock(version.replacedAt)} replaced.`}>
+    <button className="btn" disabled={disabled} onClick={() => onRestore(version.content, version.replacedAt)} title={`The text your save at ${clockTime(version.replacedAt)} replaced.`}>
       <History size={14} /> Restore previous version
     </button>
   );

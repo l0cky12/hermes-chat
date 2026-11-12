@@ -64,9 +64,9 @@ export function EndpointSettings({ api, profile, connected }: { api: EndpointApi
     setForm(EMPTY);
     setNote(undefined);
     if (connected) void load(scope);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `scopes` is a counter, not a DOM node: the cleanup bumps its live value so a late answer for the old profile or connection is dropped
     return () => void scopes.current++;
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- reset and read again only when the api, profile or connection changes; `load` is new every render, so listing it would read again on every render
   }, [api, profile, connected]);
 
   const busy = ui.kind === "adding" || ui.kind === "activating" || ui.kind === "removing";

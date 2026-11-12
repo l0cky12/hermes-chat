@@ -25,6 +25,7 @@
 use crate::live::ConnectionId;
 use crate::lock::Locked;
 use crate::loopback_peer::{self, Peers};
+use crate::ssh_guard::{self, ForwardFailure, HostKeys, Kind, Local, Target};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -210,79 +211,39 @@ pub fn server_page(raw: &str) -> Result<ServerPage, ServerPageError> {
     Ok(ServerPage { url, host, port })
 }
 
-/// An SSH target as the sign-in tunnel takes it: no leading '-', which ssh would read as an option, and no whitespace.
-pub fn checked_target(target: &str) -> Option<&str> {
-    let target = target.trim();
-    (!target.is_empty() && !target.starts_with('-') && !target.contains(char::is_whitespace)).then_some(target)
+fn ssh_target(raw: &str) -> Result<Target<'_>, ServerPageError> {
+    Target::parse(raw).ok_or_else(|| ServerPageError::Ssh("The sign-in's SSH target isn't one ssh can take.".into()))
 }
 
-/// ssh's arguments for a tunnel from `socket` to `page` on `target`'s loopback.
+/// ssh's arguments for a tunnel from `socket` to `page` on `target`'s loopback (`ssh_guard::Kind::Forward`).
 ///
-/// - `-N`, `-T`: no command, no terminal; stdin is closed.
-/// - `BatchMode`: nothing to answer a prompt with, so a key that needs one fails rather than waiting.
-/// - No `StrictHostKeyChecking=accept-new`: the sign-in already knows this host's key; a new one is refused.
-/// - `ControlMaster=no`, `ControlPath=none`: with the owner's ControlMaster, the forward would be set up in that
-///   master and outlive this ssh. Now it ends with it.
-/// - `ForkAfterAuthentication=no`: the owner's config can't send ssh to the background, where it would leave this
-///   process (and its death signal) behind. `PermitLocalCommand=no`: nor run a command of its own here.
+/// - Host keys are the owner's config's: the sign-in already knows this host's key.
 /// - `ExitOnForwardFailure=no`: a `LocalForward` in the owner's config for this host is opened by every ssh to it, and
 ///   the sign-in tunnel holds its port already, so with `yes` it would end every tunnel. Whether this tunnel's own
 ///   forward works is seen directly: its socket accepts, or ssh names the socket in an error (`open`).
-/// - `StreamLocalBindMask=0177`: only the owner can connect to the socket (its folder is 0700 as well).
 pub fn ssh_args(target: &str, socket: &Path, page: &ServerPage) -> Result<Vec<OsString>, ServerPageError> {
-    let target = checked_target(target).ok_or_else(|| ServerPageError::Ssh("The sign-in's SSH target isn't one ssh can take.".into()))?;
+    let target = ssh_target(target)?;
     let socket = socket.to_str().filter(|s| socket_path_ok(s)).ok_or_else(|| ServerPageError::Io("The tunnel's socket path isn't usable.".into()))?;
-    Ok(forward_args(target, socket, page))
+    Ok(forward_args(target, Local::Socket(socket), page))
 }
 
-/// ssh's arguments for one connection on Windows: `options`, then `-W <far_end> -- <target>`, so ssh carries the
-/// connection on its stdin and stdout and listens on nothing. `-W` drops the config's forwards only while the config
-/// leaves `ClearAllForwardings` unset, and a config's `StdinNull yes` would stop ssh reading the connection, so both
-/// are set here, where they beat the owner's config.
-pub fn stdio_args(options: impl IntoIterator<Item = OsString>, far_end: &str, target: &str) -> Vec<OsString> {
-    let stdio = ["-o", "ClearAllForwardings=yes", "-o", "StdinNull=no", "-W", far_end, "--", target];
-    options.into_iter().chain(stdio.map(OsString::from)).collect()
+/// ssh's arguments for one connection to `page` on Windows, where ssh carries it on its stdin and stdout and listens
+/// on nothing (`ssh_guard::Local::Stdio`), with the same options as `ssh_args`.
+pub fn stdio_args(target: &str, page: &ServerPage) -> Result<Vec<OsString>, ServerPageError> {
+    Ok(forward_args(ssh_target(target)?, Local::Stdio, page))
 }
 
-fn forward_args(target: &str, listen: &str, page: &ServerPage) -> Vec<OsString> {
-    let forward = format!("{listen}:{}", page.far_end());
-    let mut args: Vec<OsString> = ["-N"].iter().chain(SSH_OPTIONS).chain(&["-L"]).map(OsString::from).collect();
-    args.push(forward.into());
-    args.push("--".into());
-    args.push(target.into());
-    args
+fn forward_args(target: Target, local: Local, page: &ServerPage) -> Vec<OsString> {
+    let far_end = page.far_end();
+    let kind = Kind::Forward { local, far_end: &far_end, host_keys: HostKeys::OwnersConfig, on_failure: ForwardFailure::KeepGoing };
+    ssh_guard::args(target, kind, Some(SSH_CONNECT_TIMEOUT))
 }
 
 pub fn listening_args(target: &str) -> Result<Vec<OsString>, ServerPageError> {
-    let target = checked_target(target).ok_or_else(|| ServerPageError::Ssh("The sign-in's SSH target isn't one ssh can take.".into()))?;
-    Ok(SSH_OPTIONS.iter().copied().chain(["--", target, "ss", "-ltnpH"]).map(OsString::from).collect())
+    Ok(ssh_guard::args(ssh_target(target)?, Kind::Command { remote: &["ss", "-ltnpH"] }, Some(SSH_CONNECT_TIMEOUT)))
 }
 
-const SSH_OPTIONS: &[&str] = &[
-    "-T",
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "ConnectTimeout=15",
-    "-o",
-    "ServerAliveInterval=15",
-    "-o",
-    "ServerAliveCountMax=3",
-    "-o",
-    "ControlMaster=no",
-    "-o",
-    "ControlPath=none",
-    "-o",
-    "ForkAfterAuthentication=no",
-    "-o",
-    "PermitLocalCommand=no",
-    "-o",
-    "ExitOnForwardFailure=no",
-    "-o",
-    "StreamLocalBindMask=0177",
-    "-o",
-    "StreamLocalBindUnlink=yes",
-];
+const SSH_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// A socket path ssh's `-L` reads as one path: absolute, short enough for `sun_path`, and only characters that can't
 /// split the forward spec (`:`) or be read as anything but a path.
@@ -311,9 +272,9 @@ pub(crate) struct Address {
 
 #[cfg(windows)]
 impl Address {
-    /// Each connection starts `program` with `stdio_args(options, far_end, target)`.
-    pub(crate) fn new(program: &str, options: impl IntoIterator<Item = OsString>, far_end: &str, target: &str) -> Address {
-        Address { program: program.into(), args: stdio_args(options, far_end, target).into() }
+    /// Each connection starts `program` with `args`, ssh's for a `Local::Stdio` forward.
+    pub(crate) fn new(program: &str, args: Vec<OsString>) -> Address {
+        Address { program: program.into(), args: args.into() }
     }
 }
 
@@ -906,7 +867,7 @@ impl ServerPages {
         if !key_ok(key) {
             return Err(ServerPageError::Io("That page key isn't one Hermes Chat makes.".into()));
         }
-        let target = checked_target(target).ok_or(ServerPageError::NoSshTarget)?.to_owned();
+        let target = Target::parse(target).ok_or(ServerPageError::NoSshTarget)?.as_str().to_owned();
         let mut open = self.open.locked();
         {
             let mut stopped = self.stopped.locked();
@@ -1032,7 +993,7 @@ impl ServerPages {
     /// once it is opened again, those that don't go through `keep_target`, the SSH target it has now. Another
     /// connection's tunnels stay.
     pub fn close_for(&self, connection: &ConnectionId, keep_target: Option<&str>, why: &str) {
-        let keep = keep_target.and_then(checked_target);
+        let keep = keep_target.and_then(Target::parse).map(Target::as_str);
         let mut open = self.open.locked();
         let going: Vec<String> = open.iter().filter(|(_, o)| o.connection == *connection && Some(o.target.as_str()) != keep).map(|(k, _)| k.clone()).collect();
         for key in going {
@@ -1141,8 +1102,7 @@ async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started
 /// has `READY_TIMEOUT` to sign in and the page to answer; no answer by then, with ssh still running, opens the page.
 #[cfg(windows)]
 async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started, ServerPageError> {
-    let target = checked_target(target).ok_or_else(|| ServerPageError::Ssh("The sign-in's SSH target isn't one ssh can take.".into()))?;
-    let address = Address::new(program, SSH_OPTIONS.iter().map(OsString::from), &page.far_end(), target);
+    let address = Address::new(program, stdio_args(target, page)?);
     let mut probe = connect(&address).await.map_err(|e| ServerPageError::Spawn(e.to_string()))?;
     if !answers(&mut probe, page, READY_TIMEOUT).await {
         return Err(match probe.refusal().await {
@@ -1429,9 +1389,13 @@ mod tests {
                 "-o",
                 "ControlPath=none",
                 "-o",
-                "ForkAfterAuthentication=no",
-                "-o",
                 "PermitLocalCommand=no",
+                "-o",
+                "ForwardAgent=no",
+                "-o",
+                "ForwardX11=no",
+                "-o",
+                "ForkAfterAuthentication=no",
                 "-o",
                 "ExitOnForwardFailure=no",
                 "-o",
@@ -1468,9 +1432,9 @@ mod tests {
     #[test]
     fn on_windows_each_connection_is_an_ssh_with_the_same_options_that_listens_on_nothing() {
         let p = page("http://[::1]:8080/");
-        let stdio = stdio_args(SSH_OPTIONS.iter().map(OsString::from), &p.far_end(), "liam@hermes");
+        let stdio = stdio_args("liam@hermes", &p).unwrap();
         let socket = ssh_args("liam@hermes", Path::new("/tmp/d/s"), &p).unwrap();
-        assert_eq!(stdio[..stdio.len() - 8], socket[1..socket.len() - 4], "the same options, without -N");
+        assert_eq!(stdio[..stdio.len() - 8], socket[2..socket.len() - 8], "the same options, without -N -T");
         assert_eq!(stdio[stdio.len() - 4..], ["-W", "[::1]:8080", "--", "liam@hermes"]);
         assert!(!stdio.iter().any(|a| a == "-L" || a == "-D" || a == "-R"), "ssh listens on nothing: {stdio:?}");
     }
@@ -1485,13 +1449,8 @@ mod tests {
         )
         .unwrap();
         let p = page("http://localhost:3000/");
-        let resolved = std::process::Command::new("ssh")
-            .arg("-F")
-            .arg(&config)
-            .arg("-G")
-            .args(stdio_args(SSH_OPTIONS.iter().map(OsString::from), &p.far_end(), "hermes"))
-            .output()
-            .expect("ssh on PATH");
+        let resolved =
+            std::process::Command::new("ssh").arg("-F").arg(&config).arg("-G").args(stdio_args("hermes", &p).unwrap()).output().expect("ssh on PATH");
         std::fs::remove_file(&config).unwrap();
         let resolved = String::from_utf8_lossy(&resolved.stdout).to_lowercase();
         let lines: Vec<&str> = resolved.lines().collect();
@@ -1509,7 +1468,9 @@ mod tests {
         let tunnel = ssh_args("liam@hermes", Path::new("/tmp/d/s"), &p).unwrap();
         assert_eq!(listing[listing.len() - 4..], ["--", "liam@hermes", "ss", "-ltnpH"]);
         assert!(!listing.iter().any(|a| a == "-L" || a == "-N"));
-        assert_eq!(listing[..listing.len() - 4], tunnel[1..tunnel.len() - 4]);
+        let forwarding = tunnel.iter().position(|a| a == "ForkAfterAuthentication=no").unwrap() - 1;
+        assert_eq!(listing[..listing.len() - 6], tunnel[1..forwarding], "the tunnel's options up to a tunnel's own");
+        assert_eq!(listing[listing.len() - 6..listing.len() - 4], ["-o", "ClearAllForwardings=yes"], "and no forward from the owner's config");
         assert!(listening_args("-oProxyCommand=x").is_err());
     }
 

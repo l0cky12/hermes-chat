@@ -15,6 +15,7 @@ import { replyUsageOf } from "./usage";
 import { persist } from "./unsaved";
 import { NO_BRANCHES, type BranchAttempt, type BranchLink, type BranchPoint, type BranchStore, type BranchVariant } from "./branch";
 import { pickOf } from "./models";
+import { optionalText } from "./values";
 
 /** Every key prefix this module keeps a connection's data under, each followed by its scope (connections.ts). */
 export const CACHE_PREFIXES = () => [LIST_PREFIX, TRANSCRIPT_PREFIX, PROFILE_PREFIX, PULLED_PREFIX, OUTBOX_PREFIX, QUEUE_PREFIX, HELD_PREFIX, BRANCH_PREFIX];
@@ -128,7 +129,6 @@ export function clearCachedChats() {
 const savedAtOf = (k: string) => Number(/^\{"savedAt":(\d+)/.exec(localStorage.getItem(k) ?? "")?.[1] ?? 0);
 
 const SOURCES: Source[] = ["app", "telegram", "discord", "desktop", "cli", "import", "other"];
-export const str = (v: unknown) => (typeof v === "string" ? v : undefined);
 export const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
 /** A saved list row as a Chat, or undefined if it isn't one. The transcript is never in the list. */
@@ -154,9 +154,9 @@ function toChat(v: unknown): Chat | undefined {
  */
 function toItem(v: unknown): Item | undefined {
   const i = v as Record<string, unknown> | null;
-  const id = str(i?.id);
+  const id = optionalText(i?.id);
   if (!i || id === undefined) return undefined;
-  const text = str(i.text);
+  const text = optionalText(i.text);
   const at = num(i.at);
   switch (i.kind) {
     case "user": {
@@ -192,10 +192,10 @@ function toItem(v: unknown): Item | undefined {
     case "thinking":
       return text === undefined ? undefined : { kind: "thinking", id, text };
     case "tool": {
-      const name = str(i.name);
+      const name = optionalText(i.name);
       if (name === undefined || (i.status !== "done" && i.status !== "stopped")) return undefined;
       const args = i.args && typeof i.args === "object" && !Array.isArray(i.args) ? (i.args as Record<string, unknown>) : undefined;
-      const [preview, result, summary, durationS] = [str(i.preview), str(i.result), str(i.summary), num(i.durationS)];
+      const [preview, result, summary, durationS] = [optionalText(i.preview), optionalText(i.result), optionalText(i.summary), num(i.durationS)];
       return {
         kind: "tool",
         id,
@@ -228,7 +228,7 @@ function toOutgoing(v: unknown): OutgoingItem | undefined {
   const attachments = Array.isArray(o.attachments) ? o.attachments.filter(isAttachment) : [];
   const outgoing: Outgoing = {
     state: o.state,
-    ...(str(o.reason) !== undefined && { reason: str(o.reason) }),
+    ...(optionalText(o.reason) !== undefined && { reason: optionalText(o.reason) }),
     ...(attachments.length && { attachments }),
     ...(typeof sent?.prompt === "string" && { sent: { prompt: sent.prompt, ...(num(sent.after) !== undefined && { after: num(sent.after) }) } }),
     ...(skill && typeof skill.name === "string" && skill.name && typeof skill.arg === "string" && { skill: { name: skill.name, arg: skill.arg } }),
@@ -260,42 +260,42 @@ export function toBranches(v: unknown): BranchStore {
   };
   const variant = (v: unknown): BranchVariant | undefined => {
     const q = v as Record<string, unknown> | null;
-    if (!q || typeof q !== "object" || (q.kind !== "edit" && q.kind !== "regenerate") || !str(q.rootId) || !Number.isSafeInteger(q.turn) || (q.turn as number) < 0) return undefined;
+    if (!q || typeof q !== "object" || (q.kind !== "edit" && q.kind !== "regenerate") || !optionalText(q.rootId) || !Number.isSafeInteger(q.turn) || (q.turn as number) < 0) return undefined;
     const model = pickOf(q.model);
     const pending = q.pending as Record<string, unknown> | null | undefined;
     const kept =
-      pending && typeof pending.text === "string" && str(pending.prefix) && str(pending.through)
-        ? { text: pending.text, prefix: str(pending.prefix)!, through: str(pending.through)! }
+      pending && typeof pending.text === "string" && optionalText(pending.prefix) && optionalText(pending.through)
+        ? { text: pending.text, prefix: optionalText(pending.prefix)!, through: optionalText(pending.through)! }
         : undefined;
-    return { kind: q.kind, rootId: str(q.rootId)!, turn: q.turn as number, ...(model && { model }), ...(kept && { pending: kept }) };
+    return { kind: q.kind, rootId: optionalText(q.rootId)!, turn: q.turn as number, ...(model && { model }), ...(kept && { pending: kept }) };
   };
   const links: Record<string, BranchLink> = {};
   for (const [id, l] of Object.entries(o.links && typeof o.links === "object" ? o.links : {})) {
     const r = l as Record<string, unknown>;
     const p = point(r?.point);
     const v = variant(r?.variant);
-    if (p && str(r.parentId) && str(r.parentTitle) !== undefined && num(r.at) !== undefined)
-      links[id] = { parentId: str(r.parentId)!, parentTitle: str(r.parentTitle)!, point: p, at: num(r.at)!, ...(v && { variant: v }) };
+    if (p && optionalText(r.parentId) && optionalText(r.parentTitle) !== undefined && num(r.at) !== undefined)
+      links[id] = { parentId: optionalText(r.parentId)!, parentTitle: optionalText(r.parentTitle)!, point: p, at: num(r.at)!, ...(v && { variant: v }) };
   }
   const attempts = (Array.isArray(o.attempts) ? o.attempts : []).flatMap((a): BranchAttempt[] => {
     const r = a as Record<string, unknown>;
     const p = point(r?.point);
     const count = num(r?.count);
     const startedAt = num(r?.startedAt);
-    if (!p || !str(r.key) || !str(r.parentId) || !str(r.fingerprint) || count === undefined || startedAt === undefined || !Array.isArray(r.before)) return [];
+    if (!p || !optionalText(r.key) || !optionalText(r.parentId) || !optionalText(r.fingerprint) || count === undefined || startedAt === undefined || !Array.isArray(r.before)) return [];
     const model = pickOf(r.model);
     const v = variant(r.variant);
     return [
       {
-        key: str(r.key)!,
-        parentId: str(r.parentId)!,
-        parentTitle: str(r.parentTitle) ?? "",
+        key: optionalText(r.key)!,
+        parentId: optionalText(r.parentId)!,
+        parentTitle: optionalText(r.parentTitle) ?? "",
         point: p,
         count,
-        fingerprint: str(r.fingerprint)!,
+        fingerprint: optionalText(r.fingerprint)!,
         before: r.before.filter((b): b is string => typeof b === "string"),
         startedAt,
-        ...(str(r.title) && { title: str(r.title) }),
+        ...(optionalText(r.title) && { title: optionalText(r.title) }),
         ...(model && { model }),
         ...(v && { variant: v }),
       },

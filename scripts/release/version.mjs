@@ -162,6 +162,7 @@ export function bump(root, target) {
   return { from: current, to: next };
 }
 
+/** @param {string[]} argv */
 function main([command, arg]) {
   const root = process.env.HERMES_CHAT_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   if (command === "bump" && arg) {

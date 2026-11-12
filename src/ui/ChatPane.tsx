@@ -256,10 +256,10 @@ function MoreMenu({
   const button = useRef<HTMLButtonElement>(null);
   const [askDelete, setAskDelete] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const noDelete = !onDelete;
   useEffect(() => {
-    if (!onDelete) setAskDelete(false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
-  }, [!onDelete]);
+    if (noDelete) setAskDelete(false);
+  }, [noDelete]);
   const item = (label: string, icon: ReactNode, run: () => void, title?: string, danger?: boolean) => (
     <button
       role="menuitem"
@@ -495,13 +495,13 @@ export function ChatPane({
   const voiceRef = useRef(voice);
   voiceRef.current = voice;
   const [speaker, setSpeaker] = useState<Speaker>();
+  const noVoice = !voice;
   useEffect(() => {
-    if (!voice) return;
+    if (noVoice) return;
     const s = new Speaker((text) => voiceRef.current!.speak(text));
     setSpeaker(s);
     return () => s.dispose();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
-  }, [!voice]);
+  }, [noVoice]);
   const listen = speaker && { speaker, blocked: listenBlocked(status, voiceSetup) };
   useEffect(() => { if (!active) speaker?.stop(); }, [active, speaker]);
   // Hidden to the tray, nothing is read aloud (ADR 0034).
@@ -603,7 +603,7 @@ export function ChatPane({
     setQuery(findTarget.query);
     setLanding(true);
     stickToBottom.current = false;
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- a new search pick is a new `at`; listing `findTarget` would also reset the typed query whenever a new object for the same pick arrives
   }, [findTarget?.at]);
 
   const openFind = () => {
@@ -640,7 +640,7 @@ export function ChatPane({
   const finding = q !== typed;
   const finds = useMemo(() => (q ? new RegExp(escapeRe(q), "i") : undefined), [q]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- every render on purpose: any render can change the marks in the DOM, so the count and current match are taken again
   useLayoutEffect(() => {
     if (q !== typed) return;
     const marks = q ? Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("mark.hit") ?? []) : [];
@@ -668,9 +668,9 @@ export function ChatPane({
     if (!jumpTo) return;
     stickToBottom.current = false;
     setJumping(jumpTo);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- a new jump is a new `at`; listing `jumpTo` would start the jump again whenever a new object for the same jump arrives
   }, [jumpTo?.at]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- every render on purpose: the target row can reach the DOM in any render, and the jump waits for it
   useLayoutEffect(() => {
     if (!jumping) return;
     let el: HTMLElement | null | undefined;
@@ -771,7 +771,7 @@ export function ChatPane({
   const shown = useTranscriptWindow({ scroller: scrollRef, chunks, all: !!q, stuck: stickToBottom, target: jumpChunk ?? revealChunk });
   revealRef.current = (has) => shown.reveal(chunks.findIndex((c) => c.some(has)));
   // Cards ignore clicks for a moment after the transcript changes, since it may have moved them under the pointer.
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- a timestamp of the transcript's last change: `chat.items` and `chat.sideQuestions` are the trigger, not inputs
   const movedAt = useMemo(() => performance.now(), [chat.items, chat.sideQuestions]);
   const last = chat.items[chat.items.length - 1];
   const waiting = chat.items.find(isWaiting);
@@ -1359,7 +1359,7 @@ function ToolRow({ t }: { t: ToolItem }) {
   const jump = useContext(JumpContext);
   useEffect(() => {
     if (jump?.callId && t.callId === jump.callId) setOpen(true);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- open on each new jump (its `at`), even a repeat to the same call; the call ids are only read then
   }, [jump?.at]);
   const summary = t.status === "stopped" ? "stopped" : t.summary;
   return (
@@ -1433,7 +1433,7 @@ function ToolGroup({ tools }: { tools: ToolItem[] }) {
   const jump = useContext(JumpContext);
   useEffect(() => {
     if (jump?.callId && tools.some((t) => t.callId === jump.callId)) setOpen(true);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- open on each new jump (its `at`); listing `tools`, a new array as the reply streams, would reopen a group the owner folded
   }, [jump?.at]);
   if (tools.length === 1)
     return (
@@ -1575,15 +1575,15 @@ function Composer({
   useEffect(() => {
     if (wasDictating.current && !dictation.active && autoFocus) taRef.current?.focus();
     wasDictating.current = dictation.active;
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- refocus only as a recording ends; listing `autoFocus` would rerun this whenever the pane gains or loses focus
   }, [dictation.active]);
   // Leaving a pane (including Settings or the narrow switcher) releases its microphone and drops late transcripts.
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- cancel only as the pane loses focus; `dictation` is a new object each render, so listing it would rerun this on every render
   useEffect(() => { if (!autoFocus) dictation.cancel(); }, [autoFocus]);
   // So does hiding the window to the tray: the microphone never stays open behind a hidden window (ADR 0034). The
   // recording is dropped, as Cancel drops it; nothing is sent to Hermes to transcribe.
   const windowHidden = useWindowHidden();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- cancel only as the window hides; `dictation` is a new object each render, so listing it would rerun this on every render
   useEffect(() => { if (windowHidden) dictation.cancel(); }, [windowHidden]);
 
   // Files still being read, saved or checked: sending waits for them, so none misses the message it was added for.

@@ -25,9 +25,9 @@ import {
   fieldsOf,
   readiness,
 } from "../hermes/voiceSettings";
-import { messageOf } from "../hermes/voice";
 import { Spinner } from "./bits";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { errorText } from "../hermes/values";
 
 const USED_FOR: Record<VoiceKind, string> = {
   stt: "Dictation, and what you say in a voice conversation.",
@@ -116,7 +116,7 @@ export function VoiceProviderSettings({
       (e) => {
         if (!current(mine, forApi, forProfile)) return;
         if (e instanceof VoiceUnsupportedError) setUnsupported(e.message);
-        else setLoadError(messageOf(e));
+        else setLoadError(errorText(e));
       },
     );
   };
@@ -131,9 +131,9 @@ export function VoiceProviderSettings({
     setSaving(false);
     if (connected) load();
     else epoch.current++;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `epoch` is a counter, not a DOM node: the cleanup bumps its live value so a late answer for the old profile or connection is dropped
     return () => void epoch.current++;
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- reset and read again only when the api, profile or connection changes; `load` is new every render, so listing it would read again on every render
   }, [api, profile, connected]);
 
   const changed = draftChanges(draft);
@@ -145,7 +145,7 @@ export function VoiceProviderSettings({
   useEffect(() => {
     if (wasElsewhere.current && !elsewhere && connected) load();
     wasElsewhere.current = elsewhere;
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- acts only when `elsewhere` turns false; `load` is new every render
   }, [elsewhere]);
   const busy = saving || elsewhere;
 
@@ -164,7 +164,7 @@ export function VoiceProviderSettings({
       if (!current(mine, forApi, forProfile)) return;
       setSaving(false);
       setDraft((d) => ({ ...d, keys: {} }));
-      setOutcome({ ok: false, text: `Couldn't save: ${messageOf(e)}` });
+      setOutcome({ ok: false, text: `Couldn't save: ${errorText(e)}` });
       return;
     }
     // The save finished on Hermes whatever is shown now; what it came to is told only to the profile it was for.

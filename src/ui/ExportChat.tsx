@@ -7,7 +7,6 @@ import type { Chat, Item } from "../hermes/model";
 import {
   EXPORT_FORMATS,
   FIRST_DRAFT,
-  REDACTED,
   exportPreview,
   isMessage,
   saveExport,
@@ -18,6 +17,7 @@ import {
   type SaveImage,
 } from "../hermes/exportChat";
 import { chatImage, type ImagePage } from "../hermes/exportImage";
+import { REDACTED } from "../hermes/secrets";
 import { composing } from "./bits";
 import { useModal } from "./modal";
 import { errorText } from "../hermes/values";
@@ -81,8 +81,7 @@ export function ExportChatDialog({
   const [note, setNote] = useState<string>();
   const [saving, setSaving] = useState(false);
   const pre = useRef<HTMLPreElement>(null);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
-  const preview = useMemo(() => exportPreview(shot, draft, at, format), [draft, format]);
+  const preview = useMemo(() => exportPreview(shot, draft, at, format), [shot, draft, at, format]);
   const messages = shot.items.filter(isMessage);
   const tools = shot.items.filter((i) => i.kind === "tool" || i.kind === "approval").length;
   const attached = shot.items.reduce((n, i) => n + (i.kind === "user" ? (i.attachments?.length ?? 0) : 0), 0);
@@ -104,8 +103,7 @@ export function ExportChatDialog({
     return () => {
       live = false;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
-  }, [isImage, preview.text]);
+  }, [isImage, preview.text, draw]);
 
   // Text selected in the preview goes in Text to redact, which can also be typed or pasted into from the keyboard.
   useEffect(() => {

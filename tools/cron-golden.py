@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 checkout = os.path.expanduser(sys.argv[1])
 sys.path.insert(0, checkout)
-from cron import jobs  # noqa: E402
+from cron import jobs
 
 ZONES = ["America/Chicago", "Europe/London", "Australia/Lord_Howe", "America/Santiago", "Asia/Kolkata"]
 # Starts a day or so before each zone's 2026/27 transitions, plus an ordinary day.
@@ -67,7 +67,7 @@ def chain(schedule: dict, base: datetime, n: int = 8) -> list[str]:
     return runs
 
 
-out = {"hermes": subprocess.run(["git", "-C", checkout, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip(),
+out = {"hermes": subprocess.run(["git", "-C", checkout, "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=False).stdout.strip(),
        "cron": [], "interval": [], "parse": []}
 for zone in ZONES:
     for base_text in BASES[zone]:
@@ -85,7 +85,7 @@ for zone in ["America/Chicago", "Europe/London"]:
         try:
             result = jobs.parse_schedule(text)
             out["parse"].append({"zone": zone, "now": now.isoformat(), "input": text, "result": result})
-        except Exception as e:  # what the dashboard answers 400 with
+        except Exception as e:  # noqa: BLE001 - what the dashboard answers 400 with
             out["parse"].append({"zone": zone, "now": now.isoformat(), "input": text, "error": str(e)})
 
 with open("src/hermes/cronGolden.json", "w") as f:

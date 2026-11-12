@@ -12,6 +12,7 @@ use crate::loopback_peer::Peers;
 use crate::server_page::{self, Address};
 #[cfg(unix)]
 use crate::server_page::{LocalEnd, Ssh, Stderr};
+use crate::ssh_guard::{self, ForwardFailure, HostKeys, Kind, Local, Target};
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::process::Stdio;
@@ -64,56 +65,30 @@ pub async fn open_within(target: &str, remote_port: u16, quick: Option<Duration>
 
 /// `open_within` with `program` as ssh.
 async fn open_through(program: &str, target: &str, remote_port: u16, quick: Option<Duration>) -> Result<Tunnel, TunnelError> {
-    let target = target.trim();
-    // A leading '-' would be read as an ssh option.
-    if target.is_empty() || target.starts_with('-') || target.contains(char::is_whitespace) {
-        return Err(TunnelError::BadTarget);
-    }
+    let target = Target::parse(target).ok_or(TunnelError::BadTarget)?;
     let ready_within = quick.map_or(READY_TIMEOUT, |q| q * 2);
-    let mut options: Vec<OsString> = Vec::new();
-    if let Some(q) = quick {
-        options.extend(["-o".into(), format!("ConnectTimeout={}", q.as_secs().max(1)).into()]);
-    }
-    options.extend(OPTIONS.iter().map(OsString::from));
-    let (forward, address) = reach(program, options, &format!("127.0.0.1:{remote_port}"), target, ready_within).await?;
+    let (forward, address) = reach(program, target, &format!("127.0.0.1:{remote_port}"), quick, ready_within).await?;
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| TunnelError::Spawn(e.to_string()))?;
     let local_port = listener.local_addr().map_err(|e| TunnelError::Spawn(e.to_string()))?.port();
     let relay = tokio::spawn(server_page::serve(listener, address, Peers::ThisProcess)).abort_handle();
     Ok(Tunnel { _forward: forward, relay, local_port })
 }
 
-const OPTIONS: &[&str] = &[
-    "-o",
-    "BatchMode=yes",
-    // Else the owner's ControlPath joins their shared connection, whose ControlPersist keeps the forward after this ssh.
-    "-o",
-    "ControlMaster=no",
-    "-o",
-    "ControlPath=none",
-    // Nor fork to the background, leaving this process to exit and the forward running.
-    "-o",
-    "ForkAfterAuthentication=no",
-    "-o",
-    "ExitOnForwardFailure=yes",
-    "-o",
-    "ServerAliveInterval=15",
-    "-o",
-    "StrictHostKeyChecking=accept-new",
-    "-o",
-    "StreamLocalBindMask=0177",
-    "-o",
-    "StreamLocalBindUnlink=yes",
-];
+/// The sign-in's ssh from `local` to `far_end`: a host key ssh doesn't know yet is kept, since this is the first ssh to
+/// a server, and ssh ends when any forward fails. `quick` is ssh's TCP connect timeout.
+fn sign_in_args(target: Target, local: Local, far_end: &str, quick: Option<Duration>) -> Vec<OsString> {
+    let kind = Kind::Forward { local, far_end, host_keys: HostKeys::AcceptNew, on_failure: ForwardFailure::Exit };
+    ssh_guard::args(target, kind, quick)
+}
 
-/// Starts `program` with `options` and `-N -L <socket>:<far_end> -- <target>`, and waits until its socket accepts.
+/// Starts `program` forwarding a socket to `far_end` (`ssh_guard::Local::Socket`), and waits until its socket accepts.
 #[cfg(unix)]
-async fn reach(program: &str, options: Vec<OsString>, far_end: &str, target: &str, within: Duration) -> Result<(Forward, Address), TunnelError> {
+async fn reach(program: &str, target: Target<'_>, far_end: &str, quick: Option<Duration>, within: Duration) -> Result<(Forward, Address), TunnelError> {
     let end = LocalEnd::new().map_err(|e| TunnelError::Spawn(format!("{}: {e}", LocalEnd::COULDNT)))?;
-    let mut command = background(program);
+    let listen = end.listen();
     let mut child = Ssh::start(
-        command
-            .args(options)
-            .args(["-N", "-L", &format!("{}:{far_end}", end.listen()), "--", target])
+        background(program)
+            .args(sign_in_args(target, Local::Socket(&listen), far_end, quick))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped()),
@@ -141,11 +116,12 @@ async fn reach(program: &str, options: Vec<OsString>, far_end: &str, target: &st
     }
 }
 
-/// Each connection runs `program` with `options` and `-W <far_end> -- <target>`. One such connection, asking `HEAD /`,
-/// waits until the dashboard answers through it, so a sign-in that fails says what ssh said.
+/// Each connection runs `program` carrying it to `far_end` over its stdin and stdout (`ssh_guard::Local::Stdio`). One
+/// such connection, asking `HEAD /`, waits until the dashboard answers through it, so a sign-in that fails says what
+/// ssh said.
 #[cfg(windows)]
-async fn reach(program: &str, options: Vec<OsString>, far_end: &str, target: &str, within: Duration) -> Result<(Forward, Address), TunnelError> {
-    let address = Address::new(program, options, far_end, target);
+async fn reach(program: &str, target: Target<'_>, far_end: &str, quick: Option<Duration>, within: Duration) -> Result<(Forward, Address), TunnelError> {
+    let address = Address::new(program, sign_in_args(target, Local::Stdio, far_end, quick));
     let mut probe = server_page::connect(&address).await.map_err(|e| TunnelError::Spawn(e.to_string()))?;
     match server_page::first_byte(&mut probe, b"HEAD / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n", within).await {
         server_page::Reply::Came => Ok(((), address)),
@@ -157,23 +133,15 @@ async fn reach(program: &str, options: Vec<OsString>, far_end: &str, target: &st
     }
 }
 
-/// Options every `ssh` this app starts gets on this platform. Windows's OpenSSH can't share connections
-/// (ControlMaster needs a Unix socket), so an ~/.ssh/config written for Linux that turns sharing on would make every
-/// connection fail; there each ssh opens its own connection instead.
-#[cfg(windows)]
-pub const PLATFORM_SSH_OPTIONS: &[&str] = &["-o", "ControlMaster=no", "-o", "ControlPath=none"];
-#[cfg(not(windows))]
-pub const PLATFORM_SSH_OPTIONS: &[&str] = &[];
-
-/// `ssh` with `PLATFORM_SSH_OPTIONS`, run in the background: on Windows without a console window of its own, which
-/// the app (a windowed program) would otherwise open for it.
+/// `ssh` run in the background: on Windows without a console window of its own, which the app (a windowed program)
+/// would otherwise open for it.
 pub fn background_ssh() -> Command {
     background("ssh")
 }
 
 fn background(program: &str) -> Command {
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut command = Command::new(program);
-    command.args(PLATFORM_SSH_OPTIONS);
     #[cfg(windows)]
     {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;

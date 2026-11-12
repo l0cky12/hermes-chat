@@ -94,7 +94,7 @@ export function Onboarding({
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     return () => {
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- `run` is a counter, not a DOM node: the cleanup bumps its live value so a late answer for the stopped test is dropped
       run.current++;
       if (testing.current) probe.cancel();
       dialing.current?.abort();
@@ -770,7 +770,7 @@ function ProviderKeys({
     setKeySaved(false);
     setSaving(false);
     void load();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- reset and read again only when the connection or profile changes; `load` is new every render, so listing it would read again on every render
   }, [hermes, profile]);
 
   const pick: ProviderKey | undefined = setup?.keys.find((k) => k.provider === chosen);

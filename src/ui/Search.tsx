@@ -116,7 +116,7 @@ export function SearchPalette({
       current = false;
       clearTimeout(timer);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- search again only when the filter (by its `key`) or the tags it names change; `tidy` and `onRun` are new every render, so listing them would restart the search on every render
   }, [key, tagDep]);
   // A bulk edit is for the results it previewed: a new filter, or a change to the tags it filters by, ends it,
   // applying nothing. Either searches again, so a failed search has ended it too.

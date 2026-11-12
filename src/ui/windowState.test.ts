@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Following the window's visibility from Rust (windowState.ts, ADR 0034).
 import { afterEach, describe, expect, it, vi } from "vitest";
-// @ts-expect-error The app has no Node types; the tests run in Node. (Vitest empties a CSS import, ?raw included.)
+// Vitest empties a CSS import, ?raw included.
 import { readFileSync } from "node:fs";
 
 const rust = vi.hoisted(() => ({

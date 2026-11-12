@@ -8,7 +8,7 @@
 // docs/research/hermes-gateway-api.md, "Server files".
 import { RestError, statusOf } from "./pipe";
 import { EDIT_MAX_BYTES, decodeForEdit, encodeEdit, revisionOf, type EditableText } from "./textEdit";
-import { errorText } from "./values";
+import { errorText, formatBytes, optionalText } from "./values";
 
 /** A directory entry as `GET /api/files` lists it (`_managed_file_entry`, `hermes_cli/web_server_files.py` at `bf0203a`). */
 type WireEntry = {
@@ -220,10 +220,10 @@ export function remoteFiles(get: RemoteGet, pipe: TransferPipe): RemoteFiles {
     } catch {
       throw new RemoteFilesError("The server's answer isn't a file.");
     }
-    const dataUrl = str(wire?.data_url);
+    const dataUrl = optionalText(wire?.data_url);
     const m = dataUrl && /^data:[^,]*;base64,/.exec(dataUrl);
     if (!dataUrl || !m) throw new RemoteFilesError("The server's answer isn't a file.");
-    return { path: str(wire.path) ?? path, bytes: Uint8Array.from(atob(dataUrl.slice(m[0].length)), (c) => c.charCodeAt(0)) };
+    return { path: optionalText(wire.path) ?? path, bytes: Uint8Array.from(atob(dataUrl.slice(m[0].length)), (c) => c.charCodeAt(0)) };
   };
   /**
    * Writes an edit's text through the upload route. Resolves when Hermes said it wrote it; rejects with a
@@ -271,13 +271,13 @@ export function remoteFiles(get: RemoteGet, pipe: TransferPipe): RemoteFiles {
     // A link in the way would be written through: Hermes replaces what it points to.
     else if (plan.taken?.linkTarget && protectedPath(plan.taken.linkTarget))
       plan.refused = `${picked.name} here is a link to a credential file (${plan.taken.linkTarget}), so Hermes Chat doesn't upload over it.`;
-    else if (picked.size > SERVER_FILE_MAX_BYTES) plan.refused = `It's ${mb(picked.size)}. Hermes takes files up to 100 MB.`;
+    else if (picked.size > SERVER_FILE_MAX_BYTES) plan.refused = `It's ${formatBytes(picked.size)}. Hermes takes files up to 100 MB.`;
     else if (plan.taken?.kind === "dir") plan.refused = `There's a folder named ${picked.name} there.`;
     return plan;
   };
   const cantDownload = (entry: RemoteEntry) => {
     if (entry.kind !== "file") return entry.kind === "dir" ? "Folders can't be downloaded, only files." : "It's a symbolic link to something that isn't there.";
-    if (entry.size !== undefined && entry.size > SERVER_FILE_MAX_BYTES) return `It's ${mb(entry.size)}. Hermes sends files up to 100 MB.`;
+    if (entry.size !== undefined && entry.size > SERVER_FILE_MAX_BYTES) return `It's ${formatBytes(entry.size)}. Hermes sends files up to 100 MB.`;
   };
   return {
     cantDownload,
@@ -299,7 +299,7 @@ export function remoteFiles(get: RemoteGet, pipe: TransferPipe): RemoteFiles {
     },
     async openForEdit(entry) {
       if (entry.kind !== "file") throw new RemoteFilesError("Only files can be edited.");
-      if (entry.size !== undefined && entry.size > EDIT_MAX_BYTES) throw new RemoteFilesError(`It's ${mb(entry.size)}. The editor opens files up to ${mb(EDIT_MAX_BYTES)}.`);
+      if (entry.size !== undefined && entry.size > EDIT_MAX_BYTES) throw new RemoteFilesError(`It's ${formatBytes(entry.size)}. The editor opens files up to ${formatBytes(EDIT_MAX_BYTES)}.`);
       if (protectedPath(entry.path)) throw new RemoteFilesError("Hermes Chat doesn't edit credential files.");
       return editing.open(entry.path, entry.name);
     },
@@ -361,9 +361,7 @@ export function remoteFiles(get: RemoteGet, pipe: TransferPipe): RemoteFiles {
   };
 }
 
-const MB = 1024 * 1024;
-const mb = (n: number) => `${(n / MB).toFixed(n < 10 * MB ? 1 : 0)} MB`;
-const tooLarge = (size: number, max: number) => `It's ${mb(size)}. Previews go up to ${mb(max)}.`;
+const tooLarge = (size: number, max: number) => `It's ${formatBytes(size)}. Previews go up to ${formatBytes(max)}.`;
 
 /** Raster and vector images the webview shows in an `<img>`, where an SVG can't run scripts. */
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon"]);
@@ -470,7 +468,7 @@ export const isLost = (e: unknown): e is { lost: string } => typeof e === "objec
 /** The edit's bytes, refused past what the editor saves (and could read back). */
 function sizeChecked(text: string): Uint8Array {
   const bytes = new TextEncoder().encode(text);
-  if (bytes.length > EDIT_MAX_BYTES) throw new RemoteFilesError(`The edit is ${mb(bytes.length)}. The editor saves files up to ${mb(EDIT_MAX_BYTES)}.`);
+  if (bytes.length > EDIT_MAX_BYTES) throw new RemoteFilesError(`The edit is ${formatBytes(bytes.length)}. The editor saves files up to ${formatBytes(EDIT_MAX_BYTES)}.`);
   return bytes;
 }
 
@@ -662,7 +660,7 @@ export function explain(e: unknown, what: "list" | "read" | "write", previewMax?
   if (OFFLINE.some((re) => re.test(message))) return new RemoteFilesError("Hermes isn't connected. Server files can be browsed again once it is.", undefined, true);
   if (statusOf(e) === 401) return new RemoteFilesError(message, 401, true);
   if (/^it's .* MB now, over the .* MB limit/.test(message))
-    return new RemoteFilesError(`The file grew past what a preview reads${previewMax ? ` (${mb(previewMax)})` : ""}.`, 413);
+    return new RemoteFilesError(`The file grew past what a preview reads${previewMax ? ` (${formatBytes(previewMax)})` : ""}.`, 413);
   if (!(e instanceof RestError)) return new RemoteFilesError(message);
   const status = e.status;
   let detail = e.body.trim();
@@ -697,7 +695,6 @@ export function explain(e: unknown, what: "list" | "read" | "write", previewMax?
   return new RemoteFilesError(`The server couldn't ${doing} (${status}): ${detail || "no reason given"}`, status);
 }
 
-const str = (v: unknown) => (typeof v === "string" ? v : undefined);
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
 function joinPath(dir: string, name: string) {
@@ -715,12 +712,12 @@ export function parseListing(body: string, listedAt: number): RemoteListing {
   } catch {
     throw notAListing();
   }
-  const path = str(wire?.path);
+  const path = optionalText(wire?.path);
   if (!path || !Array.isArray(wire.entries)) throw notAListing();
   const entries: RemoteEntry[] = [];
   for (const raw of wire.entries as WireEntry[]) {
-    const name = str(raw?.name);
-    const at = str(raw?.path);
+    const name = optionalText(raw?.name);
+    const at = optionalText(raw?.path);
     if (!name || !at) continue;
     const expected = joinPath(path, name);
     if (raw.broken_link === true) {
@@ -735,13 +732,13 @@ export function parseListing(body: string, listedAt: number): RemoteListing {
       kind: raw.is_directory === true ? "dir" : "file",
       size: raw.is_directory === true ? undefined : size,
       modified: mtime === undefined ? undefined : Math.round(mtime * 1000),
-      mime: str(raw.mime_type),
+      mime: optionalText(raw.mime_type),
       // The server lists a link by where it leads; an entry anywhere else than inside this folder is one.
       linkTarget: at === expected ? undefined : at,
     });
   }
-  const root = str(wire.locked_root) ?? str(wire.root);
-  return { path, parent: str(wire.parent) ?? undefined, entries, root: root || undefined, listedAt };
+  const root = optionalText(wire.locked_root) ?? optionalText(wire.root);
+  return { path, parent: optionalText(wire.parent) ?? undefined, entries, root: root || undefined, listedAt };
 }
 
 /** Mirrors the server's own test for binary text previews (`_fs_looks_binary`, `files.py`): a NUL, or over 12% control bytes. */
@@ -763,12 +760,12 @@ function parseRead(body: string, entry: RemoteEntry, support: PreviewSupport, as
   } catch {
     throw new RemoteFilesError("The server's answer isn't a file.");
   }
-  const dataUrl = str(wire?.data_url);
+  const dataUrl = optionalText(wire?.data_url);
   const m = dataUrl && /^data:([^;,]*)(?:;[^,]*)?;base64,/.exec(dataUrl);
   if (!dataUrl || !m) throw new RemoteFilesError("The server's answer isn't a file.");
-  const name = str(wire.name) ?? entry.name;
-  const path = str(wire.path) ?? entry.path;
-  const mime = str(wire.mime_type) ?? m[1] ?? entry.mime ?? "application/octet-stream";
+  const name = optionalText(wire.name) ?? entry.name;
+  const path = optionalText(wire.path) ?? entry.path;
+  const mime = optionalText(wire.mime_type) ?? m[1] ?? entry.mime ?? "application/octet-stream";
   const max = "max" in support ? support.max : TEXT_PREVIEW_MAX_BYTES;
   const size = num(wire.size) ?? entry.size ?? 0;
   if (size > max) throw new RemoteFilesError(tooLarge(size, max));

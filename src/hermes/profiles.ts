@@ -79,25 +79,25 @@ export function nameProblem(name: string, profiles: readonly Pick<ProfileRow, "n
 /** What the screen calls a profile: its display name, if Hermes keeps one, with the id after it. */
 export const shownName = (p: Pick<ProfileRow, "name" | "displayName">) => (p.displayName && p.displayName !== p.name ? `${p.displayName} (${p.name})` : p.name);
 
-const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+const trimmedNonBlank = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
 
 /** One `GET /api/profiles` row, or nothing for a row without a name Hermes's profile routes would take. */
 export function toProfileRow(r: unknown): ProfileRow | undefined {
   if (!isObj(r)) return undefined;
-  const name = str(r.name);
+  const name = trimmedNonBlank(r.name);
   if (!name || (name !== "default" && !PROFILE_ID.test(name))) return undefined;
   const count = typeof r.skill_count === "number" && Number.isSafeInteger(r.skill_count) && r.skill_count >= 0 ? r.skill_count : undefined;
   return {
     name,
     ...((r.is_default === true || name === "default") && { isDefault: true }),
-    ...(str(r.display_name) && { displayName: str(r.display_name) }),
-    ...(str(r.model) && { model: str(r.model) }),
-    ...(str(r.provider) && { provider: str(r.provider) }),
+    ...(trimmedNonBlank(r.display_name) && { displayName: trimmedNonBlank(r.display_name) }),
+    ...(trimmedNonBlank(r.model) && { model: trimmedNonBlank(r.model) }),
+    ...(trimmedNonBlank(r.provider) && { provider: trimmedNonBlank(r.provider) }),
     description: typeof r.description === "string" ? r.description.trim() : "",
     ...(r.description_auto === true && { descriptionAuto: true }),
     ...(count !== undefined && { skillCount: count }),
     ...(r.gateway_running === true && { gatewayRunning: true }),
-    ...(str(r.distribution_name) && { distribution: str(r.distribution_name) }),
+    ...(trimmedNonBlank(r.distribution_name) && { distribution: trimmedNonBlank(r.distribution_name) }),
   };
 }
 
@@ -232,7 +232,7 @@ export class ProfilesApi {
     try {
       const res = await this.call("create", "POST", "api/profiles", body, this.timeouts.createMs, `creating ${name}`);
       const wanted = !!(body.provider && body.model);
-      return { name, answered: true, modelSet: !wanted || res.model_set === true, ...(wanted && res.model_set !== true && { modelError: str(res.model_error) }) };
+      return { name, answered: true, modelSet: !wanted || res.model_set === true, ...(wanted && res.model_set !== true && { modelError: trimmedNonBlank(res.model_error) }) };
     } catch (e) {
       if (!(e instanceof ProfileError) || e.failure.kind !== "lost") throw e;
       if (await this.listed(name)) return { name, answered: false, modelSet: false };
@@ -250,7 +250,7 @@ export class ProfilesApi {
     try {
       const res = await this.call("rename", "PATCH", path, { new_name: to }, this.timeouts.renameMs, `renaming ${name}`);
       if (name === "default") return { name: "default", displayName: typeof res.display_name === "string" ? res.display_name : to.trim() };
-      return { name: str(res.name) ?? to };
+      return { name: trimmedNonBlank(res.name) ?? to };
     } catch (e) {
       if (!(e instanceof ProfileError) || e.failure.kind !== "lost" || name === "default") throw e;
       const names = await this.names();
@@ -276,7 +276,7 @@ export class ProfilesApi {
     }
     if (!isObj(res)) throw new ProfileError({ kind: "lost", message: `Hermes didn't answer describing ${name}.` });
     if (res.ok === true && typeof res.description === "string") return { ok: true, description: res.description };
-    return { ok: false, reason: str(res.reason) ?? "Hermes didn't say why." };
+    return { ok: false, reason: trimmedNonBlank(res.reason) ?? "Hermes didn't say why." };
   }
 
   /** Sets `name`'s main model, whichever profile the app shows. */
@@ -292,7 +292,7 @@ export class ProfilesApi {
     if (name === "default") throw new ProfileError({ kind: "refused", status: 400, detail: "Hermes's built-in profile can't be deleted." });
     try {
       const res = await this.call("remove", "DELETE", this.path(name), undefined, this.timeouts.removeMs, `deleting ${name}`);
-      return res.settlement_pending === true ? { kind: "settling", retryCommand: str(res.retry_command) } : { kind: "deleted" };
+      return res.settlement_pending === true ? { kind: "settling", retryCommand: trimmedNonBlank(res.retry_command) } : { kind: "deleted" };
     } catch (e) {
       if (!(e instanceof ProfileError)) throw e;
       if (e.failure.kind === "gone") return { kind: "alreadyGone" };

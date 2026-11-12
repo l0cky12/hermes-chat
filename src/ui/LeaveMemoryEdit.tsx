@@ -78,6 +78,6 @@ export function useCloseGuard(unsaved: boolean, ask: (close: () => void) => void
       window.removeEventListener("beforeunload", onUnload);
       unlisten?.();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- guard only while `unsaved` holds; callers pass a new `ask` each render, so listing it would drop and add the window-close guard on every render
   }, [unsaved]);
 }

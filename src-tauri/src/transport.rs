@@ -1042,11 +1042,7 @@ fn write_json(path: &std::path::Path, value: &impl Serialize) -> std::io::Result
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, serde_json::to_vec(value)?)?;
-    std::fs::rename(&tmp, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })
+    crate::private_file::write(path, &serde_json::to_vec(value)?)
 }
 
 /// Stages a file pasted into the composer in a slot of `captures` and returns its path. `name` is cut down to a safe

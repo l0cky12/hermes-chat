@@ -22,6 +22,7 @@
 
 import type { VoiceSetup } from "./pipe";
 import { failureOf } from "./toolsets";
+import { textOrEmpty } from "./values";
 
 export type VoiceKind = "stt" | "tts";
 export const KINDS: readonly VoiceKind[] = ["stt", "tts"];
@@ -194,7 +195,6 @@ export class VoiceUnsupportedError extends Error {}
 
 type Json = Record<string, unknown>;
 const obj = (v: unknown): Json => (v && typeof v === "object" && !Array.isArray(v) ? (v as Json) : {});
-const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const noRoute = (status: number | undefined, reason: string) => status === 405 || (status === 404 && reason === "Not Found");
 
 export const KIND_LABEL: Record<VoiceKind, string> = { stt: "Speech-to-text", tts: "Text-to-speech" };
@@ -235,20 +235,20 @@ function providersFrom(kind: VoiceKind, res: unknown): VoiceProvider[] {
   if (body.has_category === false || !Array.isArray(body.providers)) throw new VoiceUnsupportedError(`Hermes has no ${KIND_LABEL[kind].toLowerCase()} providers to pick from.`);
   return body.providers.flatMap((r): VoiceProvider[] => {
     const row = obj(r);
-    const name = str(row.name);
+    const name = textOrEmpty(row.name);
     if (!name) return [];
-    const managed = !!str(row.managed_nous_feature) || row.requires_nous_auth === true;
-    const section = managed ? undefined : kind === "tts" ? str(row.tts_provider) || undefined : STT_SECTION[name];
+    const managed = !!textOrEmpty(row.managed_nous_feature) || row.requires_nous_auth === true;
+    const section = managed ? undefined : kind === "tts" ? textOrEmpty(row.tts_provider) || undefined : STT_SECTION[name];
     return [
       {
         name,
         section,
-        badge: str(row.badge),
-        tag: str(row.tag),
-        status: str(row.status),
+        badge: textOrEmpty(row.badge),
+        tag: textOrEmpty(row.tag),
+        status: textOrEmpty(row.status),
         active: row.is_active === true,
         keys: (Array.isArray(row.env_vars) ? row.env_vars : []).map(obj).flatMap((e) =>
-          str(e.key) ? [{ env: str(e.key), prompt: str(e.prompt) || str(e.key), url: str(e.url) || undefined, set: e.is_set === true }] : [],
+          textOrEmpty(e.key) ? [{ env: textOrEmpty(e.key), prompt: textOrEmpty(e.prompt) || textOrEmpty(e.key), url: textOrEmpty(e.url) || undefined, set: e.is_set === true }] : [],
         ),
         managed,
       },

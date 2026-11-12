@@ -43,7 +43,6 @@ export function QueuePanel({ chat, queue, status, api }: { chat: Chat; queue?: C
   const [over, setOver] = useState<number | null>(null);
   const [dragging, setDragging] = useState<string>();
   const items = queue?.items ?? [];
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
   useEffect(() => {
     if (!focus) return;
     setFocus(undefined);
@@ -51,7 +50,7 @@ export function QueuePanel({ chat, queue, status, api }: { chat: Chat; queue?: C
     const row = rows.find((r) => r.dataset.queued === focus.id) ?? rows[Math.min(focus.index, rows.length - 1)];
     if (row) row.focus();
     else rootRef.current?.closest(".chat")?.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus();
-  });
+  }, [focus]);
   // The panel goes with its last message; the wrapper stays, so focus can be put back in the pane.
   if (!items.length) return <div ref={rootRef} />;
 
@@ -184,7 +183,7 @@ function QueueRow({
   const rowRef = useRef<HTMLLIElement>(null);
   const files = item.attachments?.length ?? 0;
   // Nothing in the queue goes while its words are being changed.
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- hold while an edit is open, release when it closes; `api` is a new object every render, so listing it would release and hold again on every render
   useEffect(() => (editing === undefined ? undefined : api.hold()), [editing === undefined]);
 
   const close = () => {

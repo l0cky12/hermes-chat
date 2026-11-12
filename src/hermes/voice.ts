@@ -2,6 +2,7 @@
 // microphone can't be used, and the WAV a recording is sent as. Hermes does the transcribing and the speaking with
 // the profile's own providers, on the server (research doc, "Voice"); this app only records and plays.
 import type { VoiceSetup } from "./pipe";
+import { errorText } from "./values";
 
 /** A provider as the Settings screen names it, and what it needs on the server. */
 export type ProviderInfo = { label: string; needs: string };
@@ -76,12 +77,6 @@ export const MAX_RECORDING_SECONDS = 300;
 /** The rate a recording is sent at: what Whisper and the cloud transcribers work at. */
 export const WAV_RATE = 16_000;
 
-/** An error's message, also for a DOMException from another realm (which isn't `instanceof Error`). */
-export function messageOf(e: unknown): string {
-  const message = e && typeof e === "object" && "message" in e ? e.message : undefined;
-  return typeof message === "string" && message ? message : String(e);
-}
-
 /** What `getUserMedia` failing means for the owner, by the error's name. */
 export function micProblem(e: unknown): string {
   const name = e && typeof e === "object" && "name" in e && typeof e.name === "string" ? e.name : "";
@@ -96,7 +91,7 @@ export function micProblem(e: unknown): string {
     case "AbortError":
       return "The microphone couldn't be opened. Another app may be using it, or the sound server isn't running.";
     default:
-      return `The microphone couldn't be started: ${messageOf(e)}`;
+      return `The microphone couldn't be started: ${errorText(e)}`;
   }
 }
 

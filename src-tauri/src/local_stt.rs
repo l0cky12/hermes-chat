@@ -300,17 +300,12 @@ fn read_settings(path: &Path) -> Result<Settings, String> {
     }
 }
 
-/// Writes the file whole (a temp file renamed over it), then reads it back: what is returned is what was stored.
+/// Writes the file whole (`private_file::write`), then reads it back: what is returned is what was stored.
 fn write_settings(path: &Path, settings: &Settings) -> Result<Settings, String> {
     let dir = path.parent().ok_or("No folder for the speech-to-text setting.")?;
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
     let text = serde_json::to_string(settings).map_err(|e| e.to_string())?;
-    std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("{}: {e}", path.display())
-    })?;
+    crate::private_file::write(path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
     let back = read_settings(path)?;
     if &back != settings {
         return Err("The speech-to-text setting didn't read back as it was saved.".into());

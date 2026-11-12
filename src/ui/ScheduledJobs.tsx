@@ -69,7 +69,7 @@ function useSequence() {
     live.current = true;
     return () => {
       live.current = false;
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- `seq` is a counter, not a DOM node: unmount bumps its latest value on purpose
       seq.current++;
     };
   }, []);
@@ -250,7 +250,7 @@ export function ScheduledJobs({
     const before = new Set(endedSeen.current.split(" "));
     endedSeen.current = endedKey;
     if (connected && endedKey.split(" ").some((k) => k && !before.has(k))) void load();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- reread only when a troubleshooting reply newly ends; `load` is rebuilt each render, so listing it would rerun this on every render
   }, [endedKey]);
 
   useEffect(() => {
@@ -261,7 +261,7 @@ export function ScheduledJobs({
       listing.current = false;
       setLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load only as the connection comes or goes; `load` is rebuilt each render, so listing it would refetch on every render
   }, [connected]);
 
   /** Moves to another view, putting focus where the owner can carry on with the keyboard. */
@@ -620,7 +620,7 @@ function JobDetail({
   };
   useEffect(() => {
     if (ask && troubleshoot && connected) prepare();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only: `ask` opens the Troubleshoot preview once as the detail opens, not again on a later change
   }, []);
   const startChat = async () => {
     if (!troubleshoot || typeof prep !== "object" || !("input" in prep)) return;
@@ -639,7 +639,7 @@ function JobDetail({
     if (!connected) return;
     const n = copyReads.next();
     void api.copiesOf(profile, job.id).then((c) => copyReads.current(n) && setCopies(c));
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- look for copies when the connection or job id changes; listing `api` and `profile` would also look again whenever either changes under the same job
   }, [connected, job.id]);
   const copyNote =
     copies.length > 0 &&
@@ -660,7 +660,7 @@ function JobDetail({
   useEffect(() => {
     if (connected) readRuns();
     else historyReads.next();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- reread history on a connection change, a new run, a bigger limit or an ended troubleshooting reply; `readRuns` is rebuilt each render, so listing it would refetch on every render
   }, [connected, job.lastRunAt, runLimit, trouble?.endedAt]);
 
   /** Each run's latest result read: a newer read, a Hide, or the run changing supersedes an older one. */
@@ -693,7 +693,7 @@ function JobDetail({
       seen.current[r.id] = now;
       if (was !== undefined && was !== now && results[r.id] !== undefined && connected) readResult(r);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- compare only when a history read lands; `readResult` is rebuilt each render and `results` changes as each result lands, so listing them would rerun this on every render
   }, [runs]);
 
   const act = async (what: NonNullable<typeof busy>, fn: () => Promise<void>) => {
@@ -1267,7 +1267,7 @@ function JobEditor({
       (names) => profileReads.current(n) && setProfiles(names.includes(profile) ? names : [profile, ...names]),
       () => {},
     );
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- list the server's profiles as the connection comes; `job` is a fresh object after each list read, so listing it would rerun this
   }, [connected]);
   const ctx = typeof context === "object" ? context : undefined;
   const zone = (ctx ?? loaded).zone;

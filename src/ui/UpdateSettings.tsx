@@ -7,10 +7,9 @@ import { getUIPrefs, setUIPrefs, subscribe } from "../hermes/uiPrefs";
 import { appUpdates } from "../hermes/tauriUpdates";
 import { stagedFiles } from "../hermes/unsaved";
 import type { Found, Updater, UpdateState } from "../hermes/updates";
-import { fmtSize } from "./bits";
 import { SettingRow, SettingsSection } from "./SettingRows";
+import { clockTime, formatBytes } from "../hermes/values";
 
-const time = (at: number) => new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
 function Notes({ found }: { found: Found }) {
   if (!found.notes.length) return <p className="muted small">No release notes came with this version.</p>;
@@ -84,7 +83,7 @@ function Status({ s, updates }: { s: UpdateState; updates: Updater }) {
     case "upToDate":
       return (
         <p className="muted">
-          Hermes Chat <span className="mono">{s.version}</span> is up to date. Checked at {time(s.checkedAt)}.{s.note && ` ${s.note}`}
+          Hermes Chat <span className="mono">{s.version}</span> is up to date. Checked at {clockTime(s.checkedAt)}.{s.note && ` ${s.note}`}
         </p>
       );
     case "unsupported":
@@ -126,8 +125,8 @@ function Status({ s, updates }: { s: UpdateState; updates: Updater }) {
           <progress className="update-progress" aria-label="Update download" value={s.verifying ? undefined : s.downloaded} max={s.verifying ? undefined : s.total} />
           {!s.verifying && (
             <p className="muted small">
-              {fmtSize(s.downloaded)}
-              {s.total ? ` of ${fmtSize(s.total)}` : ""}
+              {formatBytes(s.downloaded)}
+              {s.total ? ` of ${formatBytes(s.total)}` : ""}
             </p>
           )}
         </>

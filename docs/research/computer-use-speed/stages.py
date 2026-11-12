@@ -20,7 +20,7 @@ import statistics
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from analyze import attribute  # noqa: E402
+from analyze import attribute
 
 
 def main(run_path, log_path, label):
@@ -51,7 +51,7 @@ def main(run_path, log_path, label):
         if not t or not j:
             excluded += 1
             continue
-        ms = lambda x: (x - d["done"]) * 1000
+        ms = lambda x: (x - d["done"]) * 1000  # noqa: B023 - called only in this iteration
         rows.append({"msgs": len(t), "last_tx": ms(t[-1]), "channel": (j[-1] - t[-1]) * 1000, "paint": (glass - j[-1]) * 1000,
                      "app": (glass - t[-1]) * 1000, "glass": ms(glass)})
     if not rows:

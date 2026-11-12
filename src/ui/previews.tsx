@@ -5,8 +5,7 @@ import { Paperclip, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Attachment } from "../hermes/model";
 import { asError } from "../hermes/tauriPipe";
-import { fmtSize } from "./bits";
-import { errorText } from "../hermes/values";
+import { errorText, formatBytes } from "../hermes/values";
 
 /** A staged image's thumbnail once read, or why it couldn't be read. */
 export type Preview = { url: string } | { error: string };
@@ -82,7 +81,7 @@ export function AttachmentChip({ file, preview, onRemove }: { file: Attachment; 
     <span className="chip" title={why ? `${file.path}\nNo preview: ${why}` : file.path}>
       {url ? <img className="chip-thumb" src={url} alt="" onError={() => setBroken(true)} /> : <Paperclip size={12} />}
       <span className="chip-name">{file.name}</span>
-      <span className="chip-size">{fmtSize(file.size)}</span>
+      <span className="chip-size">{formatBytes(file.size)}</span>
       <button title="Remove" onClick={onRemove}>
         <X size={12} />
       </button>

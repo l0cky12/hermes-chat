@@ -12,7 +12,7 @@
 // that has started.
 import { invoke } from "@tauri-apps/api/core";
 import { findOption, isEffort, shortName, type Effort, type ModelCatalog, type ModelPick } from "./models";
-import { errorText, isObj } from "./values";
+import { errorText, isObj, nonBlankText } from "./values";
 
 /**
  * One project's defaults as this computer keeps them. `rev` counts the saves, so a save made from a screen opened
@@ -26,13 +26,11 @@ export type DefaultsDraft = Omit<ProjectDefaults, "rev">;
 /** The longest instructions kept. They go to the model with every new chat's first message, so a novel is a mistake. */
 export const INSTRUCTIONS_MAX = 20_000;
 
-const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() && v.length <= max ? v : undefined);
-
 /** A stored model pick, checked; undefined if it isn't one. */
 function toPick(v: unknown): ModelPick | undefined {
   if (!isObj(v)) return undefined;
-  const provider = str(v.provider, 200);
-  const model = str(v.model, 200);
+  const provider = nonBlankText(v.provider, 200);
+  const model = nonBlankText(v.model, 200);
   if (!provider || !model) return undefined;
   return { provider, model, ...(isEffort(v.effort) && { effort: v.effort }) };
 }
@@ -40,7 +38,7 @@ function toPick(v: unknown): ModelPick | undefined {
 /** One project's stored defaults, checked; anything that isn't valid is left out, and inherits. */
 export function toDefaults(v: unknown): ProjectDefaults | undefined {
   if (!isObj(v) || !Number.isSafeInteger(v.rev) || (v.rev as number) < 1) return undefined;
-  const instructions = str(v.instructions, INSTRUCTIONS_MAX);
+  const instructions = nonBlankText(v.instructions, INSTRUCTIONS_MAX);
   const model = toPick(v.model);
   const folder = typeof v.folder === "string" && v.folder.startsWith("/") && v.folder.length <= 4096 ? v.folder : undefined;
   return { rev: v.rev as number, ...(instructions && { instructions }), ...(model && { model }), ...(folder && { folder }) };

@@ -3,6 +3,7 @@
 // Bot Desktop, every step. The chat would keep it as text nobody can read, pretty-printed, and its Saved copy would
 // outgrow the local limit. So inline data is swapped for a short note saying what it was, as Hermes's own history does
 // with `inline_images=false`; everything else in the result is kept as it came.
+import { formatBytes } from "./values";
 
 /** Data shorter than this is left alone: it costs nothing and may be what the owner wants to read. */
 const MIN_DATA_CHARS = 1024;
@@ -14,8 +15,7 @@ const DATA_URL = /data:([a-z]+\/[\w.+-]+)?((?:;[\w.+-]+=[\w.+-]+)*);base64,([A-Z
 
 /** The note left in place of `chars` characters of base64. */
 function note(mime: string | undefined, chars: number): string {
-  const kb = Math.max(1, Math.round((chars * 3) / 4 / 1024));
-  return `[${mime ?? "data"}, ${kb} KB, not kept in the chat]`;
+  return `[${mime ?? "data"}, ${formatBytes(Math.round((chars * 3) / 4))}, not kept in the chat]`;
 }
 
 function withoutData(s: string): string {

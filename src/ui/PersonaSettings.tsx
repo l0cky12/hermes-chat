@@ -14,7 +14,7 @@ import { asReadBack, certainlyUnwritten, PersonaError, sameSoul, soulNotes, type
 import { LeavePersona } from "./LeavePersona";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
 import { EARLIER_KEPT, type EarlierSoul, type PersonaDraft, type PersonaStore } from "../hermes/personaStore";
-import { errorText } from "../hermes/values";
+import { clockTime, errorText } from "../hermes/values";
 
 /** Where SOUL.md is, as the screen names it. */
 export type PersonaWhere = {
@@ -97,7 +97,7 @@ export function PersonaPage({
   // Listed once connected; a list that failed for want of a connection is tried again once it is back.
   useEffect(() => {
     if (connected && !listed) void list();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- list again only as the connection comes back; listing `list` would also relist whenever `api` changes
   }, [connected]);
 
   const pick = (profile: string) => {
@@ -181,10 +181,9 @@ type Conflict = { server: Soul; written: boolean };
 type Ask = "reload" | "empty" | "overwrite";
 
 const chars = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "character" : "characters"}`;
-const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const when = (at: number) => {
   const d = new Date(at);
-  return d.toDateString() === new Date().toDateString() ? `today at ${clock(at)}` : `${d.toLocaleDateString()} at ${clock(at)}`;
+  return d.toDateString() === new Date().toDateString() ? `today at ${clockTime(at)}` : `${d.toLocaleDateString()} at ${clockTime(at)}`;
 };
 
 export function PersonaSettings({
@@ -277,7 +276,7 @@ export function PersonaSettings({
     return () => {
       current = false;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- wait on each earlier save once; listing `read` would drop and re-attach the wait whenever `api` changes
   }, [earlierSave]);
 
   const loaded = load.state === "loaded" ? load : undefined;
@@ -298,7 +297,7 @@ export function PersonaSettings({
   useEffect(() => {
     if (!loaded || recover) return;
     setKept(store.setDraft(storeKey, dirty ? { text, base: loaded.base, at: now() } : undefined));
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keep the draft when the text, base or pending restore changes; `loaded` also changes when a save meets a conflict and only the server copy moves, and rewriting then would restamp the kept edit's time
   }, [text, dirty, loaded?.base, recover]);
 
   const read = useCallback(
@@ -328,15 +327,14 @@ export function PersonaSettings({
         if (alive.current && mine === seq.current) setReloading(false);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
-    [api, profile],
+    [api, profile, now],
   );
 
   // Read once connected; a read that failed for want of a connection is tried again once it is back.
   useEffect(() => {
     if (!connected) return;
     if (load.state !== "loaded") void read();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- read again only as the connection comes back; listing `load.state` would reread after every failed read
   }, [connected]);
 
   // A kept edit that matches what Hermes has now is nothing to restore.
@@ -345,7 +343,7 @@ export function PersonaSettings({
       setRecover(undefined);
       store.setDraft(storeKey, undefined);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- check when the server's SOUL.md or the kept edit changes; `loaded` also changes when only its base or read time does, which would rerun this for nothing
   }, [loaded?.server, recover]);
 
   const reload = () => {
@@ -967,13 +965,13 @@ function NoticeLine({ notice, undoDisabled, onUndo }: { notice?: Notice; undoDis
   if (notice.kind === "saved")
     return (
       <p className="persona-saved small" role="status">
-        {notice.created ? "Created" : "Saved"} SOUL.md at {clock(notice.at)}, and read it back from Hermes. New chats on this profile use it.
+        {notice.created ? "Created" : "Saved"} SOUL.md at {clockTime(notice.at)}, and read it back from Hermes. New chats on this profile use it.
       </p>
     );
   if (notice.kind === "reloaded")
     return (
       <p className="muted small" role="status">
-        Reloaded from Hermes at {clock(notice.at)}.
+        Reloaded from Hermes at {clockTime(notice.at)}.
       </p>
     );
   if (notice.kind === "discarded")

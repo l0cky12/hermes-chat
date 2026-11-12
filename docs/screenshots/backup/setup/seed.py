@@ -1,5 +1,5 @@
 # Seeds a throwaway HERMES_HOME (and its "work" profile) with synthetic chats for the backup checks. No real data.
-import os, sys, time
+import os, time
 from pathlib import Path
 from hermes_state import SessionDB
 now = time.time()

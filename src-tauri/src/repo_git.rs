@@ -8,6 +8,7 @@
 //! ssh runs with `BatchMode=yes`: there is no terminal to answer a passphrase or a new host key, so ssh fails instead
 //! of waiting, and the screen says how to fix it (connect once in the Terminal, or load the key into the agent).
 
+use crate::ssh_guard::{self, Kind, Target};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
@@ -314,28 +315,12 @@ impl HelperDelivery {
     }
 }
 
-/// `ssh` to `target`, running the helper. The target is checked as the tunnel checks it: no leading '-', no whitespace.
+/// `ssh` to `target`, running the helper.
 pub fn ssh_command(target: &str) -> Result<Command, RepoError> {
-    let target = target.trim();
-    if target.is_empty() || target.starts_with('-') || target.contains(char::is_whitespace) {
-        return Err(RepoError::BadTarget);
-    }
+    let target = Target::parse(target).ok_or(RepoError::BadTarget)?;
+    let remote = HELPER_DELIVERY.remote_command();
     let mut command = crate::tunnel::background_ssh();
-    command.args([
-        "-T",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ConnectTimeout=15",
-        "-o",
-        "ServerAliveInterval=15",
-        // A LocalForward in the owner's config would clash with the sign-in tunnel, and isn't needed here.
-        "-o",
-        "ClearAllForwardings=yes",
-        "--",
-        target,
-    ]);
-    command.arg(HELPER_DELIVERY.remote_command());
+    command.args(ssh_guard::args(target, Kind::Command { remote: &[&remote] }, Some(Duration::from_secs(15))));
     Ok(command)
 }
 

@@ -1,0 +1,21 @@
+# The repo helper Rust runs on servers (repo_git.rs) and the probes, seed scripts and research tools beside the docs.
+# CI lints them for bugs, so ruff's style and idiom families stay off.
+
+[lint]
+ignore = [
+  "UP",   # syntax upgrades: 126 printf-style formats, none of them wrong
+  "I",    # import order
+  "SIM",  # rewrites; SIM115's bare open() is in scripts that exit right after
+  "PIE",  # idiom rewrites
+  "FURB", # idiom rewrites
+  "PLC",  # idiom rewrites
+  "RUF007", # idiom: itertools.pairwise over zip
+]
+
+[lint.per-file-ignores]
+# The helper's second half: Rust sends it after repo_git_helper.py as one program, and CI lints that program whole.
+"src-tauri/src/repo_worktree_helper.py" = ["F821"]
+
+[per-file-target-version]
+# The helper keeps to Python 3.8's standard library (repo_git_helper.py); the stdin name CI lints the whole program under matches too.
+"src-tauri/src/repo_*helper.py" = "py38"

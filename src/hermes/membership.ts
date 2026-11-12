@@ -1,4 +1,4 @@
-import { isObj } from "./values";
+import { isObj, nonEmptyText } from "./values";
 // Which chats are in which project, kept by Hermes so every computer shows the same (ADR 0109, #84).
 //
 // Hermes at the deployed `bf0203a`, and upstream at `9302ba9e` (2026-11-03), has no record linking a project to its
@@ -59,19 +59,18 @@ export class MembershipUnsupportedError extends Error {
   }
 }
 
-const str = (v: unknown, max = 400) => (typeof v === "string" && v.length > 0 && v.length <= max ? v : undefined);
 const STATUSES: readonly OpStatus[] = ["applied", "unchanged", "conflict", "no_project", "no_session"];
 
 function toLink(v: unknown): Link | undefined {
   if (!isObj(v)) return undefined;
-  const projectId = str(v.project_id);
-  const chatId = str(v.session_id);
+  const projectId = nonEmptyText(v.project_id, 400);
+  const chatId = nonEmptyText(v.session_id, 400);
   return projectId && chatId ? { projectId, chatId } : undefined;
 }
 
 function toResult(v: unknown): OpResult | undefined {
   if (!isObj(v)) return undefined;
-  const opId = str(v.op_id);
+  const opId = nonEmptyText(v.op_id, 400);
   const status = STATUSES.find((s) => s === v.status);
   return opId && status ? { opId, status, member: v.member === true, rev: Number(v.rev) || 0 } : undefined;
 }

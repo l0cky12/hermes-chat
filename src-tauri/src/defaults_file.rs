@@ -5,23 +5,17 @@
 //! what keeps one instance's save from silently replacing another's. Tags and Saved filters (ADR 0106) are kept the
 //! same way, in a file of their own.
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
+use crate::private_file::{self, owner_only};
+
 /// The files kept this way, by name: `<name>.json`, swapped under `<name>.lock`.
 const DEFAULTS: &str = "project-defaults";
 const TAGS: &str = "tags";
-
-/// Opens files only their owner can read: mode 0600 on Unix. On Windows a new file takes its folder's access list, and
-/// the app's data folder in the user's profile is already the user's own.
-pub(crate) fn owner_only(options: &mut OpenOptions) -> &mut OpenOptions {
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(options, 0o600);
-    options
-}
 
 /// What a swap did: `swapped`, or not because the file held `current` instead of what was expected.
 #[derive(Debug, Serialize, PartialEq)]
@@ -55,22 +49,8 @@ pub fn swap(dir: &Path, name: &str, expected: Option<&str>, next: &str) -> io::R
     if current.as_deref() != expected {
         return Ok(Swap { swapped: false, current });
     }
-    replace(&path, next.as_bytes())?;
+    private_file::write(&path, next.as_bytes())?;
     Ok(Swap { swapped: true, current: Some(next.to_owned()) })
-}
-
-/// Puts `bytes` at `path` (mode 0600) whole: written to a private temporary file beside it, then renamed over it, so a
-/// crash leaves the old file or the new one. The caller holds the lock that keeps other writers out.
-pub(crate) fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(format!(".{}.tmp", std::process::id()));
-    let tmp = PathBuf::from(tmp);
-    {
-        let mut f = owner_only(OpenOptions::new().write(true).create(true).truncate(true)).open(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-    }
-    fs::rename(&tmp, path)
 }
 
 fn dir(app: &AppHandle) -> Result<PathBuf, String> {

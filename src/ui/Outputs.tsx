@@ -18,8 +18,8 @@ import {
   type OutputType,
   type OutputsSnapshot,
 } from "../hermes/outputs";
-import { STATUS_LABEL, Spinner, fmtSize, storedTime } from "./bits";
-import { errorText } from "../hermes/values";
+import { STATUS_LABEL, Spinner, storedTime } from "./bits";
+import { errorText, formatBytes } from "../hermes/values";
 import { OUTPUT_PAGE } from "./outputPage";
 
 export type OutputsScope = "chat" | "project" | "profile";
@@ -338,7 +338,7 @@ export function OutputsScreen({
                       </td>
                       <td className="muted">{TYPE_LABEL[kind]}</td>
                       <td className="num muted" title={o.size === undefined ? "The tool didn't report a size" : "As the tool reported writing it"}>
-                        {o.size !== undefined ? fmtSize(o.size) : "—"}
+                        {o.size !== undefined ? formatBytes(o.size) : "—"}
                       </td>
                       <td>
                         <Availability o={o} pending={pending} busy={!connected || !!snapshot.checking} onRecheck={onRecheck && (() => onRecheck(o))} />

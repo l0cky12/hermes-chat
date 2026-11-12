@@ -10,6 +10,7 @@ import { fromKey, isEffort, type ModelPick } from "./models";
 import { SECTION_KEYS, isSectionKey, type SectionKey } from "./sectionKeys";
 import { toTemplates, type Template } from "./templates";
 import type { TerminalKind } from "./terminal";
+import { nonEmptyText } from "./values";
 
 export const UI_PREFS_KEY = "hermes-ui-prefs";
 /** The shape the document has now. Bump it, and add a step to UI_PREFS_MIGRATIONS, when a field changes meaning. */
@@ -158,15 +159,13 @@ export function migrateUIPrefs(raw: unknown, migrations: UIPrefsMigrations = UI_
   return { ...doc, v: Math.max(v, to) };
 }
 
-const str = (v: unknown, max = 200) => (typeof v === "string" && v.length > 0 && v.length <= max ? v : undefined);
-
 function toModelPick(v: unknown): StickyModelPick | null | undefined {
   if (v === null) return null;
   if (!isDoc(v)) return undefined;
-  const provider = str(v.provider);
-  const model = str(v.model);
+  const provider = nonEmptyText(v.provider, 200);
+  const model = nonEmptyText(v.model, 200);
   if (provider === undefined || model === undefined) return undefined;
-  const profile = str(v.profile);
+  const profile = nonEmptyText(v.profile, 200);
   return {
     provider,
     model,
@@ -180,7 +179,7 @@ function toModelPicks(v: unknown): Record<string, ModelPick> | undefined {
   if (!isDoc(v)) return undefined;
   return Object.fromEntries(Object.entries(v).slice(-100).flatMap(([scope, raw]) => {
     const pick = toModelPick(raw);
-    if (!str(scope) || !pick) return [];
+    if (!nonEmptyText(scope, 200) || !pick) return [];
     const { profile: _, ...model } = pick;
     return [[scope, model]];
   }));
@@ -188,12 +187,12 @@ function toModelPicks(v: unknown): Record<string, ModelPick> | undefined {
 
 function toFavorites(v: unknown): string[] | undefined {
   if (!Array.isArray(v)) return undefined;
-  return [...new Set(v.filter((k): k is string => str(k, 400) !== undefined && !!fromKey(k)))];
+  return [...new Set(v.filter((k): k is string => nonEmptyText(k, 400) !== undefined && !!fromKey(k)))];
 }
 
 function toStatusBar(v: unknown): string[] | undefined {
   if (!Array.isArray(v)) return undefined;
-  const items = v.filter((i): i is string => str(i, 60) !== undefined);
+  const items = v.filter((i): i is string => nonEmptyText(i, 60) !== undefined);
   return [...new Set(items)];
 }
 
@@ -235,7 +234,7 @@ const LAST_OPEN_LIMIT = 100;
 
 function toLastOpenChat(v: unknown): Record<string, string> | undefined {
   if (!isDoc(v)) return undefined;
-  const entries = Object.entries(v).filter(([profile, id]) => str(profile) !== undefined && str(id) !== undefined);
+  const entries = Object.entries(v).filter(([profile, id]) => nonEmptyText(profile, 200) !== undefined && nonEmptyText(id, 200) !== undefined);
   return Object.fromEntries(entries.slice(0, LAST_OPEN_LIMIT)) as Record<string, string>;
 }
 
@@ -245,7 +244,7 @@ const CHORDS_LIMIT = 8;
 function toKeybindings(v: unknown): Record<string, string[]> | undefined {
   if (!isDoc(v)) return undefined;
   const entries = Object.entries(v)
-    .filter(([id, chords]) => str(id, 60) !== undefined && Array.isArray(chords) && chords.length > 0 && chords.every((c) => str(c, 60) !== undefined))
+    .filter(([id, chords]) => nonEmptyText(id, 60) !== undefined && Array.isArray(chords) && chords.length > 0 && chords.every((c) => nonEmptyText(c, 60) !== undefined))
     .map(([id, chords]) => [id, (chords as string[]).slice(0, CHORDS_LIMIT)]);
   return Object.fromEntries(entries.slice(0, KEYBINDINGS_LIMIT));
 }

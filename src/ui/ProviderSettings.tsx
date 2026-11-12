@@ -77,7 +77,7 @@ export function ProviderSettings({ hermes, profile, connected, openModel }: { he
     setAddKey("");
     setNote(undefined);
     if (connected) void load();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- predates the hook lint (#493)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- reset and read again only when the api, profile or connection changes; `load` is new every render, so listing it would read again on every render
   }, [hermes, profile, connected]);
 
   const busy = ui.kind === "saving" || ui.kind === "removing";

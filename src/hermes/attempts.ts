@@ -1,6 +1,6 @@
 // The record of recent connection attempts (#270, ADR 0033). Each time the app opens a connection, at launch or to
 // reconnect, it keeps one line: every route tried, by kind and id (never its address), the steps each reached and how
-// long each took, and how it ended, with the error after `redact()` and with every address taken out. Rust keeps the
+// long each took, and how it ended, with the error redacted and with every address taken out. Rust keeps the
 // newest 50 in `connection-attempts.jsonl` in the app's data folder (src-tauri/src/connection_attempts.rs), and checks
 // each line again before writing it. Nothing is uploaded; Logs shows the lines, and the support bundle can include them.
 //
@@ -9,6 +9,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { clean, type Entry, type Level, type LogBuffer, type Snapshot, note } from "./logs";
+import { redactValues } from "./secrets";
 import { KIND_LABEL, type RouteDetails, type RouteKind, routesOf } from "./routes";
 import type { SignInDetails } from "./tauriPipe";
 import { errorText } from "./values";
@@ -78,7 +79,8 @@ const NOT_HOSTS = new Set(["gateway.ready"]);
 // Each replaces what it finds with `[address]` or `[host]`. They run before the connection's own addresses are taken
 // out, so that a saved value inside an address (a username `10` in 10.1.2.3) can't split it and leave part behind.
 const SHAPES: [RegExp, (m: string, ...g: string[]) => string][] = [
-  [/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>(){}]+/gi, () => "[address]"],
+  // A URL goes whole, with any secret already taken out of it (`[redacted token]` has a space).
+  [/\b[a-z][a-z0-9+.-]*:\/\/(?:\[redacted[^\]]*\]|[^\s"'<>(){}])+/gi, () => "[address]"],
   [/[^\s@"'<>(){}[\]]*@[^\s@"'<>(){}[\]:,;]*/g, () => "[address]"],
   // IPv6, with brackets, a zone or a port: hex and colons with `::` or three colons. A time like 10:00:00 has two.
   [/\[?(?=[0-9a-f]*:[0-9a-f]*:)(?=[0-9a-f:]*(?:::|:[0-9a-f]*:[0-9a-f]*:))[0-9a-f:.]+(?:%[\w.-]+)?\]?(?::\d{1,5})?/gi, () => "[address]"],
@@ -103,14 +105,14 @@ export function addressFree(text: string): boolean {
   return !text.split(/[^0-9a-fA-F:]/).some((t) => /[0-9a-f]/i.test(t) && (t.includes("::") || (t.match(/:/g)?.length ?? 0) >= 3));
 }
 
-/** What ends a word for a saved value: a short one matches only between these, so `ab` doesn't eat words. */
+/** What ends a word for a saved address: a short one matches only between these, so `ab` doesn't eat words. */
 const EDGE = `\\s"'(){}<>,;:/@\\[\\]`;
 
 /**
  * How error texts are cleaned for the file, for one sign-in: first, on the text as it came, every word that holds this
  * connection's password, token or a header value goes whole (before line breaks are folded, so a value with one in it
- * still matches); then terminal codes out, `redact()`'s secret shapes, control characters written out and line breaks
- * made spaces; then the shapes of any address; then this connection's own addresses and username; then a cut to
+ * still matches); then terminal codes out, every secret shape (secrets.ts), control characters written out and line
+ * breaks made spaces; then the shapes of any address; then this connection's own addresses and username; then a cut to
  * `TEXT_MAX`. A text that still looks like it holds an address is withheld.
  */
 export function scrubberFor(d: SignInDetails): (text: string) => string {
@@ -147,13 +149,10 @@ export function scrubberFor(d: SignInDetails): (text: string) => string {
   for (const h of d.headers ?? []) add(secrets, h.value);
   // Longest first, so a URL goes before the host inside it. A short value only as a whole word (a full stop may end it).
   const short = (v: string) => `(?<![^${EDGE}])${escape(v)}(?=\\.?(?:[${EDGE}]|$))`;
-  const literal = (set: Set<string>, long: (v: string) => string): RegExp[] =>
-    [...set].sort((a, b) => b.length - a.length).map((v) => new RegExp(v.length < 4 ? short(v) : long(v), "g"));
-  // A secret takes its whole word with it: what is left of a word around it could be part of an address.
-  const secretWords = literal(secrets, (v) => `[^${EDGE}]*${escape(v)}[^${EDGE}]*`);
-  const ownAddresses = literal(addresses, escape);
+  const ownAddresses = [...addresses].sort((a, b) => b.length - a.length).map((v) => new RegExp(v.length < 4 ? short(v) : escape(v), "g"));
   return (raw) => {
-    for (const re of secretWords) raw = raw.replace(re, "[redacted]");
+    // A secret takes its whole word with it: what is left of a word around it could be part of an address.
+    raw = redactValues(raw, [...secrets], { word: true }).text;
     // One line: ssh's and reqwest's messages can run over several, and the file keeps no control characters.
     let text = clean(raw.replace(/\r\n?/g, "\n")).text.replace(/\s*[\n\t]+\s*/g, " ");
     for (const [re, to] of SHAPES) text = text.replace(re, to as (m: string, ...g: string[]) => string);

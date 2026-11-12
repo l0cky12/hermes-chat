@@ -48,6 +48,7 @@ function die(msg, code = 1) {
 }
 async function wd(method, path, body) {
   const res = await fetch(base + path, { method, headers: { "content-type": "application/json" }, body: body && JSON.stringify(body) });
+  /** @type {{ value?: any }} */
   const out = await res.json().catch(() => ({}));
   if (!res.ok || out.value?.error) throw new Error(`${method} ${path}: ${res.status} ${JSON.stringify(out.value ?? out).slice(0, 400)}`);
   return out.value;
