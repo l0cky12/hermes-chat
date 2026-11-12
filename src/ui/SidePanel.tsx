@@ -60,25 +60,31 @@ export function SidePanel({
     if (tab && !made.includes(tab)) setMade((m) => [...m, tab]);
   }, [tab, made]);
   // Opened or shown again, the panel takes focus, so Escape and the keys reach it, unless something in it (a terminal,
-  // say) took it first. Covering the chat makes it inert, focus included, so focus moves in then too.
-  // The launcher puts focus on its first row, so the arrow keys and Enter work from the start.
+  // say) took it first. The launcher, when it shows, puts focus on its first row, so the arrows and Enter work at once.
   useEffect(() => {
     if (!shown) return;
-    const rows = launcherRows(root.current);
-    if (rows.length) {
-      if (!rows.includes(document.activeElement as HTMLButtonElement)) rows[0].focus();
-    } else if (!root.current?.contains(document.activeElement)) root.current?.focus();
-  }, [overlay, shown, tab]);
+    const first = launcherRows(root.current)[0];
+    if (first && !launcherRows(root.current).includes(document.activeElement as HTMLButtonElement)) first.focus();
+    else if (!root.current?.contains(document.activeElement)) root.current?.focus();
+  }, [shown, tab]);
+  // Covering the chat makes it inert, focus included, so focus moves in then too; a control in the panel keeps it.
+  useEffect(() => {
+    if (shown && !root.current?.contains(document.activeElement)) (launcherRows(root.current)[0] ?? root.current)?.focus();
+  }, [overlay, shown]);
 
   const onKey = (e: ReactKeyboardEvent) => {
     if (e.defaultPrevented) return;
-    // The launcher's keys: a tab's letter opens it. Only while the launcher shows, so they never reach a terminal or field.
-    const picked = tab === null && !e.ctrlKey && !e.altKey && !e.metaKey && TABS.find((t) => t.key === e.key.toUpperCase());
+    // The launcher's keys: a tab's letter opens it, by its character or, on a non-Latin layout, its key's position. Only
+    // while the launcher shows, so they never reach a terminal or field, and never with a modifier, so the app's own
+    // shortcuts (Alt+Up and Alt+Down among them) still work.
+    const launcher = tab === null && !e.ctrlKey && !e.altKey && !e.metaKey;
+    const letter = /^[a-z]$/i.test(e.key) ? e.key.toUpperCase() : e.key.length === 1 && e.code.startsWith("Key") ? e.code.slice(3) : "";
+    const picked = launcher && TABS.find((t) => t.key === letter);
     if (picked) {
       e.preventDefault();
       return onTab(picked.tab);
     }
-    if (tab === null && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+    if (launcher && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
       e.preventDefault();
       const rows = launcherRows(root.current);
       const at = rows.indexOf(document.activeElement as HTMLButtonElement);
@@ -126,7 +132,7 @@ export function SidePanel({
             </button>
           ))}
         </div>
-        <button className={`icon-btn panel-new ${tab === null ? "on" : ""}`} title="Open a surface" aria-pressed={tab === null} onClick={() => onTab(null)}>
+        <button className={`icon-btn panel-new ${tab === null ? "on" : ""}`} title="Open a surface" onClick={() => onTab(null)}>
           <Plus size={16} />
         </button>
         <button className="icon-btn panel-close" title="Close the side panel" onClick={onClose}>

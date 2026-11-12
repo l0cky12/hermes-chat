@@ -3,6 +3,7 @@
 // survives the owner going to another tab, the launcher (ADR 0159) or closing the panel; a tab with something running
 // says so.
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useEffect, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SidePanel, type PanelTab } from "./SidePanel";
@@ -116,15 +117,69 @@ describe("The side panel", () => {
       expect(screen.getByText("screen shown")).toBeTruthy();
     });
 
+    it("opens the focused row on Enter", async () => {
+      const user = userEvent.setup();
+      render(<Harness start={null} />);
+      await user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{Enter}");
+      expect(screen.getByText("screen shown")).toBeTruthy();
+    });
+
+    it("leaves Ctrl, Alt and Meta with the letters and arrows to the app's own shortcuts", () => {
+      render(<Harness start={null} />);
+      const first = rows()[0];
+      for (const mod of ["ctrlKey", "altKey", "metaKey"]) {
+        for (const key of ["ArrowDown", "ArrowUp", "t"]) {
+          expect(fireEvent.keyDown(first, { key, [mod]: true })).toBe(true);
+          expect(document.activeElement).toBe(first);
+        }
+      }
+      expect(screen.getByRole("heading", { name: "Open a surface" })).toBeTruthy();
+    });
+
+    it("takes a letter by its key's place on a non-Latin layout, and by its character on any Latin one", () => {
+      render(<Harness start={null} />);
+      fireEvent.keyDown(rows()[0], { key: "е", code: "KeyT" });
+      expect(screen.getByText("terminal shown")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Open a surface" }));
+      // Dvorak: the key in QWERTY's T place types Y, which opens nothing.
+      fireEvent.keyDown(rows()[0], { key: "y", code: "KeyT" });
+      expect(screen.getByRole("heading", { name: "Open a surface" })).toBeTruthy();
+      fireEvent.keyDown(rows()[0], { key: "f", code: "KeyU" });
+      expect(screen.getByText("files shown")).toBeTruthy();
+    });
+
+    it("keeps focus on a control in the panel when the window narrows or widens past the overlay width", () => {
+      const props = {
+        tab: null,
+        onTab: () => {},
+        shown: true,
+        width: 480,
+        maxWidth: 900,
+        onResize: () => {},
+        onHide: () => {},
+        onClose: () => {},
+        tabs: { preview: () => null, terminal: () => null, files: () => null, screen: () => null },
+      };
+      const { rerender } = render(<SidePanel {...props} overlay={false} />);
+      expect(document.activeElement).toBe(rows()[0]);
+      const close = screen.getByRole("button", { name: "Close the side panel" });
+      close.focus();
+      rerender(<SidePanel {...props} overlay />);
+      expect(document.activeElement).toBe(close);
+      rerender(<SidePanel {...props} overlay={false} />);
+      expect(document.activeElement).toBe(close);
+    });
+
     it("keeps what was made, hidden, while it shows again after +, and leaves the letters alone with a modifier or a tab shown", () => {
       mounts.length = unmounts.length = 0;
       render(<Harness />);
       fireEvent.keyDown(document.querySelector("aside")!, { key: "t" });
       expect(screen.getByText("preview shown")).toBeTruthy();
 
-      const plus = screen.getByRole("button", { name: "Open a surface", pressed: false });
+      const plus = screen.getByRole("button", { name: "Open a surface" });
+      expect(plus.classList.contains("on")).toBe(false);
       fireEvent.click(plus);
-      expect(plus.getAttribute("aria-pressed")).toBe("true");
+      expect(plus.classList.contains("on")).toBe(true);
       expect(screen.getByText("preview hidden")).toBeTruthy();
       expect(unmounts).toEqual([]);
       fireEvent.keyDown(document.activeElement!, { key: "t", ctrlKey: true });

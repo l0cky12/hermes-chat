@@ -1247,6 +1247,34 @@ describe("Hermes can't drive the Preview (issue #376)", () => {
 });
 
 describe("Closing and resizing", () => {
+  it("opens from the header on what it showed last: the launcher until a tab is picked, then that tab, and + brings the launcher back (ADR 0159)", async () => {
+    const { user } = await signedIn();
+    const launcher = () => within(pane()).queryByRole("heading", { name: "Open a surface" });
+    const selected = () => within(pane()).queryAllByRole("tab", { selected: true }).map((t) => t.textContent);
+    const reopen = async () => {
+      await user.click(within(pane()).getByRole("button", { name: "Close the side panel" }));
+      expect(paneOpen()).toBe(false);
+      await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    };
+
+    await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    expect(launcher()).toBeTruthy();
+    expect(selected()).toEqual([]);
+    await reopen();
+    expect(launcher()).toBeTruthy();
+
+    await user.keyboard("f");
+    expect(selected()).toEqual(["Files"]);
+    await reopen();
+    expect(launcher()).toBeNull();
+    expect(selected()).toEqual(["Files"]);
+
+    await user.click(within(pane()).getByRole("button", { name: "Open a surface" }));
+    await reopen();
+    expect(launcher()).toBeTruthy();
+    expect(selected()).toEqual([]);
+  });
+
   it("closes with its button, the header toggle, or Escape", async () => {
     const { user } = await signedIn();
     await user.click(screen.getByRole("link", { name: "the docs" }));
