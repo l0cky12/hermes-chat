@@ -2,7 +2,7 @@
 
 > **Proposed** (#100). Nothing here is built. The owner settles the open questions at the end. Each Delivery step waits only for the open questions it depends on, and step 3's manifest parser needs only questions 1 and 7.
 
-Issue #100 asks for a way to add optional integrations without adding privileged code to the app each time. Today every feature is app code, and app code has every power the app has. The app's webview can call all 127 Rust commands in `invoke_handler` (`src-tauri/src/lib.rs`), and no capability limits which ones. Among them, `password_load` returns the saved password, `terminal_open_local` starts the owner's login shell, which can read any local file, and `hermes_send_file` sends any file the owner attached (ADR 0129). So the question this ADR answers is where an extension's code runs so that it has none of these powers, and what it gets instead.
+Issue #100 asks for a way to add optional integrations without adding privileged code to the app each time. Today every feature is app code, and app code has every power the app has. The app's webview can call all 127 Rust commands in `invoke_handler` (`src-tauri/src/lib.rs`), and no capability limits which ones. Among them, `password_load` returns the saved password, `terminal_open_local` starts a local shell as the owner (their login shell on Linux, PowerShell or cmd on Windows), which can read any file the owner's account can read, and `hermes_send_file` sends any file the owner attached (ADR 0129). So the question this ADR answers is where an extension's code runs so that it has none of these powers, and what it gets instead.
 
 ## Words
 
