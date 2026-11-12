@@ -5,11 +5,11 @@ import { FIRST_DRAFT, exportPreview } from "./exportChat";
 import { redact as redactGatewayText } from "./gateways";
 import { clean } from "./logs";
 import type { Chat } from "./model";
-import { findSecrets, redactSecrets, redactValues } from "./secrets";
+import { findMarkdownSecrets, findSecrets, redactSecrets, redactValues } from "./secrets";
+import type { SignInDetails } from "./tauriPipe";
 
 // Discord's documented sample token, joined here so push protection doesn't take it for a live one.
 const DISCORD_TOKEN = ["MTk4NjIyNDgzNDcxOTI1MjQ4", "Cl2FMQ", "ZnCjm1XVW7vRze4b7Cq4se7kKWs"].join(".");
-import type { SignInDetails } from "./tauriPipe";
 
 const found = (text: string) => findSecrets(text).map((s) => [s.kind, s.text]);
 
@@ -258,5 +258,21 @@ describe("Redacting known values", () => {
     expect(redactValues(`x ${run} y`, ["abcd"], { word: true })).toEqual({ text: "x [redacted] y", places: 1 });
     expect(performance.now() - t0).toBeLessThan(100);
     expect(redactValues("pa:pa:pa end", ["pa:pa"], { word: true }).text).toBe("[redacted] end");
+  });
+});
+
+describe("Flagging likely secrets in Markdown a reader decodes", () => {
+  const key = "sk-ant-api03-Zx8Kq2LmN4pR7tVw9yBc";
+  const written = (md: string) => findMarkdownSecrets(md).map((s) => md.slice(s.start, s.start + s.text.length));
+
+  it("gives a secret spelled with escapes or references as written, wherever it is in the text", () => {
+    for (const spelling of ["sk\\-ant\\-api03\\-Zx8Kq2LmN4pR7tVw9yBc", "sk-ant-api03-Zx8K&#x71;2LmN4pR7tVw9yBc", "sk&#45;ant-api03-Zx8Kq2LmN4pR7tVw9yBc"])
+      for (const md of [spelling, `a\r\n\tb &lt; \\* ${spelling}\r\nend`, `[link](https://x.io/?k=${spelling})`, `\`${spelling}\``])
+        expect(written(md)).toEqual([spelling]);
+  });
+
+  it("flags a secret written plainly once, and leaves other escapes and unknown references alone", () => {
+    expect(written(`password=hunter\\2\\!x and ${key} &amp; \\*`)).toEqual(["hunter\\2\\!x", key]);
+    expect(written("sk-ant-api03-Zx8K&bogus;q2LmN4pR7tVw9yBc")).toEqual([]);
   });
 });

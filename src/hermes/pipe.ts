@@ -36,6 +36,20 @@ export class RestError extends Error {
   }
 }
 
+/**
+ * A command Rust refused itself, before or instead of calling the dashboard, named by `code` (src-tauri
+ * `RelayError::refused`), such as a context file that is there already. Tell refusals apart by `code`, never by
+ * `message`.
+ */
+export class RefusedError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 /** The status of a failed dashboard call, when it got an answer. */
 export const statusOf = (e: unknown): number | undefined => (e instanceof RestError ? e.status : undefined);
 

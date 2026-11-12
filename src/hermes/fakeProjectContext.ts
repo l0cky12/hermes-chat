@@ -1,8 +1,8 @@
 // The Rust commands for a project's context files (src-tauri `context_*`, ADR 0135), over a fake Hermes's disks.
 import type { FakeFile, FakeWorktree } from "./fakeHermes";
 import type { FakeServerFiles } from "./fakeServerFiles";
-import type { LocalFile as PickedFile } from "./pipe";
-import { MAX_FILE_BYTES, SSH_MAX_BYTES, SSH_REFUSED, bytesOf, nameProblem } from "./projectContext";
+import { RefusedError, RestError, type LocalFile as PickedFile } from "./pipe";
+import { CONTEXT_EXISTS, MAX_FILE_BYTES, SSH_MAX_BYTES, SSH_REFUSED, SSH_TEXT_ONLY, bytesOf, nameProblem } from "./projectContext";
 import type { ContextPipe, GitExclude } from "./projectContextFiles";
 
 const dirname = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
@@ -28,6 +28,8 @@ export class FakeProjectContext {
   extracted: Record<string, string> = {};
   /** Set: Hermes answers a write, but the file lands this many bytes short. */
   shortBy?: number;
+  /** Set: the server answers every write with this failure instead. */
+  failWrite?: RestError;
   /** Every file written, in order: where, and whether it replaced one. */
   readonly writes: { path: string; overwrite: boolean; ssh?: string }[] = [];
   readonly reads: string[] = [];
@@ -53,21 +55,22 @@ export class FakeProjectContext {
 
   private write(path: string, bytes: string, overwrite: boolean, ssh?: string) {
     this.target(path);
+    if (this.failWrite) throw this.failWrite;
     if (ssh !== undefined) {
       let text: string;
       try {
         text = fromBytes(bytes);
       } catch {
-        throw new Error(SSH_REFUSED);
+        throw new RefusedError(SSH_TEXT_ONLY, SSH_REFUSED);
       }
-      if (text.includes("\0") || bytes.length > SSH_MAX_BYTES) throw new Error(SSH_REFUSED);
+      if (text.includes("\0") || bytes.length > SSH_MAX_BYTES) throw new RefusedError(SSH_TEXT_ONLY, SSH_REFUSED);
       const dir = dirname(path);
       const there = this.disks.agentDirs().has(dir) || Object.keys(this.disks.agentFiles()).some((p) => p.startsWith(`${dir}/`));
-      if (!there) throw new Error(`The dashboard answered 400: {"detail":"Parent directory does not exist"}`);
+      if (!there) throw new RestError(400, '{"detail":"Parent directory does not exist"}');
       this.disks.agentFiles()[path] = text;
     } else {
       const { nodes } = this.disks.managed;
-      if (nodes[path] && !overwrite) throw new Error("exists");
+      if (nodes[path] && !overwrite) throw new RefusedError(CONTEXT_EXISTS, "A file is there already.");
       nodes[path] = { bytes: bytes.slice(0, bytes.length - (this.shortBy ?? 0)), mtime: ++this.stamp };
     }
     this.writes.push({ path, overwrite, ...(ssh !== undefined && { ssh }) });
@@ -94,7 +97,7 @@ export class FakeProjectContext {
       },
       remove: async (serverPath) => {
         this.target(serverPath);
-        if (!this.disks.managed.nodes[serverPath]) throw new Error(`The dashboard answered 404: {"detail":"Path not found"}`);
+        if (!this.disks.managed.nodes[serverPath]) throw new RestError(404, '{"detail":"Path not found"}');
         delete this.disks.managed.nodes[serverPath];
         this.removed.push(serverPath);
       },
@@ -119,7 +122,7 @@ export class FakeProjectContext {
       sshFile: async (serverPath) => {
         this.reads.push(serverPath);
         const f = this.disks.agentFiles()[serverPath];
-        if (typeof f !== "string") throw new Error(`The dashboard answered 404: {"detail":"File not found"}`);
+        if (typeof f !== "string") throw new RestError(404, '{"detail":"File not found"}');
         const size = bytesOf(f);
         // Hermes's read-text sends at most 512 KiB, and says so.
         return size <= 512 * 1024 && !f.slice(0, 4096).includes("\0") ? { size, text: f.replace(/^\uFEFF/, "") } : { size };

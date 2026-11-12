@@ -45,6 +45,10 @@ export const MAX_FILE_BYTES = 30 * 1024 * 1024;
 export const SSH_MAX_BYTES = 8 * 1024 * 1024;
 export const DEFAULT_LIMIT_TOKENS = 100_000;
 export const SSH_REFUSED = "can't add this file to a project on an SSH profile yet";
+/** The `RefusedError` codes of a context write (src-tauri project_context.rs): a file is there and `overwrite` is off. */
+export const CONTEXT_EXISTS = "exists";
+/** The file isn't UTF-8 text up to `SSH_MAX_BYTES`, the only kind Hermes writes where an SSH profile's tools run. */
+export const SSH_TEXT_ONLY = "ssh-text-only";
 
 export const CONTEXT_DIR = "context";
 export const joinPath = (dir: string, name: string) => (dir.endsWith("/") ? dir + name : `${dir}/${name}`);

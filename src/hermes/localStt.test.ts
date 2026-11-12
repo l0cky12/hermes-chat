@@ -5,7 +5,7 @@ const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a), Channel: class {} }));
 
 const { tauriLocalStt } = await import("./localStt");
-const { SttCancelled } = await import("./sttRoute");
+const { SttCancelled, SttFailed } = await import("./sttRoute");
 
 afterEach(() => invoke.mockReset());
 
@@ -20,6 +20,13 @@ describe("transcribing through Rust", () => {
     expect([cmd, body]).toEqual(["hermes_transcribe", audio]);
     expect(opts.headers).toMatchObject({ "x-mime": "audio%2Fwav", "x-profile": "work", "x-attempt": "conn-1", "x-stt-side": "local" });
     expect(opts.headers["x-stt-run"]).toBeTruthy();
+  });
+
+  it("rejects with what Rust said as an SttFailed, whatever its words (#517)", async () => {
+    invoke.mockRejectedValue("Hermes couldn't transcribe it: The chat connection is closed.");
+    const failed = tauriLocalStt.transcribe({ audio, mime: "audio/wav" });
+    await expect(failed).rejects.toBeInstanceOf(SttFailed);
+    await expect(failed).rejects.toThrow("Hermes couldn't transcribe it: The chat connection is closed.");
   });
 
   it("sends nothing for a recording already dropped, and leaves no rejection unhandled", async () => {

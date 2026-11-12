@@ -33,6 +33,7 @@ import {
 } from "../hermes/modelSettings";
 import { isEffort, type ModelCatalog, type ModelPick } from "../hermes/models";
 import { getUIPrefs, subscribe as subscribeUIPrefs, toggleModelFavorite } from "../hermes/uiPrefs";
+import { ModelCombobox } from "./ModelCombobox";
 import { ModelControls } from "./ModelPicker";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
 import { errorText } from "../hermes/values";
@@ -90,17 +91,14 @@ function ProviderSelect({ label, value, providers, onChange }: { label: string; 
 function ModelSelect({ label, value, provider, providers, onChange }: { label: string; value: string; provider: string; providers: CatalogProvider[]; onChange: (m: string) => void }) {
   const models = providers.find((p) => p.slug === provider)?.models ?? [];
   return (
-    <select className="select wide" aria-label={label} value={value} disabled={!provider} onChange={(e) => onChange(e.target.value)}>
-      <option value="" disabled>
-        {provider ? "Choose a model…" : "Choose a provider first"}
-      </option>
-      {value && !models.includes(value) && <option value={value}>{value}</option>}
-      {models.map((m) => (
-        <option key={m} value={m}>
-          {m}
-        </option>
-      ))}
-    </select>
+    <ModelCombobox
+      label={label}
+      value={value}
+      models={models}
+      disabled={!provider}
+      placeholder={provider ? "Choose a model…" : "Choose a provider first"}
+      onChange={onChange}
+    />
   );
 }
 
@@ -716,9 +714,7 @@ export function ModelSettings({
                       ))}
                     </select>
                     {auto ? (
-                      <select className="select wide" aria-label={`${t.label} model`} value="" disabled>
-                        <option value="">{saved.main.model || "main model"}</option>
-                      </select>
+                      <ModelCombobox label={`${t.label} model`} value="" models={[]} placeholder={saved.main.model || "main model"} disabled />
                     ) : (
                       <ModelSelect
                         label={`${t.label} model`}

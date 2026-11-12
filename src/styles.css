@@ -585,7 +585,7 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 .question-note { font-size: calc(12rem / 14); }
 
 .btn {
-  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: 9px;
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: 9px; white-space: nowrap;
   background: var(--raised-2); font-size: calc(13rem / 14); font-weight: 500; border: 1px solid var(--line);
 }
 .btn:hover:not(:disabled, [aria-disabled="true"]) { background: var(--raised-3); }
@@ -1263,7 +1263,7 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
   text-transform: uppercase; letter-spacing: 0.04em;
 }
 .settings-search-elsewhere { padding: 4px 0 14px; border-top: 1px solid var(--line); }
-.settings-search-elsewhere .btn { flex: none; white-space: nowrap; }
+.settings-search-elsewhere .btn { flex: none; }
 ::highlight(settings-search) { background-color: rgba(245, 184, 74, 0.32); }
 .settings-tab {
   display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border-radius: 8px; color: var(--muted);
@@ -1299,9 +1299,12 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 /* A section: its heading, at most one line under it, and a card of rows. Sections are spaced, not ruled apart. */
 .settings .set-section { padding: 0; border-top: 0; margin: 0 0 28px; }
 .settings-split-body { padding-top: 16px; }
-.set-head { display: flex; align-items: center; gap: 4px; min-height: 30px; margin-bottom: 6px; }
+/* The title and its (i) on the left, the section's buttons on the right. When both don't fit, the buttons wrap under the
+   title, at its start: space-between puts the only item on a line at the start. */
+.set-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; min-height: 30px; margin-bottom: 6px; }
+.set-head-title { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .settings .set-head h2 { margin: 0; font-size: calc(13.5rem / 14); font-weight: 600; color: var(--text-strong); }
-.set-head-action { margin-left: auto; display: flex; gap: 8px; }
+.set-head-action { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .set-intro { margin: -2px 0 10px; font-size: calc(12.5rem / 14); line-height: 1.5; color: var(--muted); }
 .set-section > .set-more { margin: 0 0 10px; }
 .set-card { background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius); }
@@ -1317,7 +1320,6 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .set-hint code, .set-more code { font-family: var(--mono); font-size: calc(11.5rem / 14); background: var(--raised-2); padding: 1px 5px; border-radius: 4px; }
 .set-more code { background: var(--raised-3); }
 .set-control { flex: none; margin-left: auto; max-width: 100%; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
-.set-control .btn { white-space: nowrap; }
 .set-sub { flex-basis: 100%; min-width: 0; display: flex; flex-direction: column; gap: 6px; font-size: calc(12.5rem / 14); line-height: 1.5; }
 .set-sub:empty { display: none; }
 .set-value { font-size: calc(13rem / 14); font-weight: 500; font-variant-numeric: tabular-nums; color: var(--text-2); }
@@ -1494,6 +1496,22 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .model-pick > .select { width: 180px; max-width: 100%; }
 .model-pick > .select.wide { width: 240px; }
 .model-pick > .select:disabled { opacity: 0.55; }
+/* A model field (#538): a .select to type into, with its list under it. */
+.model-pick > .model-combo { position: relative; width: 240px; max-width: 100%; }
+.model-combo > .select { width: 100%; padding-right: 28px; text-overflow: ellipsis; }
+.model-combo > .select:disabled { opacity: 0.55; }
+.model-combo > .select::placeholder { color: var(--faint); }
+.model-combo-chevron { position: absolute; right: 9px; top: 9px; color: var(--faint); pointer-events: none; }
+.model-combo-pop {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30; background: var(--raised); border: 1px solid var(--line-2);
+  border-radius: 10px; box-shadow: 0 16px 44px rgba(0, 0, 0, 0.5); animation: menu-in 0.1s ease-out;
+}
+.model-combo-list { max-height: min(320px, 50vh); overflow-y: auto; padding: 4px; }
+.model-combo-list:empty { padding: 0; }
+.model-combo-option { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 8px; border-radius: 7px; font-size: calc(13rem / 14); color: var(--text-2); cursor: default; }
+.model-combo-option.active { background: var(--raised-2); color: var(--text); }
+.model-combo-option .model-name { min-width: 0; }
+.model-combo-option .model-check { margin-left: auto; }
 .model-num { width: 90px; height: 32px; padding: 0 10px; border-radius: 8px; background: var(--raised-2); border: 1px solid var(--line); outline: none; font-size: calc(13rem / 14); }
 .model-num:focus-visible { border-color: var(--line-2); }
 .model-num.days { width: 72px; }
@@ -1580,7 +1598,7 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .folder-add { display: flex; align-items: flex-end; gap: 10px; }
 .folder-add .field { flex: 1; }
 .folder-add .field input { font-family: var(--mono); font-size: calc(12.5rem / 14); }
-.project-screen .settings-row > .btn { flex: none; white-space: nowrap; }
+.project-screen .settings-row > .btn { flex: none; }
 .project-screen .settings-row > p { margin: 0; }
 
 .project-head { display: flex; align-items: center; gap: 10px; }
@@ -2034,7 +2052,6 @@ div.setup-body { display: flex; flex-direction: column; gap: 16px; }
 .memory-text[readonly] { color: var(--muted); }
 .memory-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .memory-actions .confirm-actions { flex-wrap: wrap; }
-.memory-actions .btn { white-space: nowrap; }
 .memory-editor > .btn { align-self: flex-start; }
 .memory-leave { max-width: none; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: var(--radius); }
 .memory-editor .confirm { max-width: none; }

@@ -70,14 +70,18 @@ function missingOption(key: string): ModelOption | undefined {
   return p && { ...p, providerName: p.provider, available: false, ...guessCapabilities(p.model) };
 }
 
-const matches = (o: ModelOption, words: string[]) => {
-  const text = `${o.model} ${o.provider} ${o.providerName}`.toLowerCase();
-  return words.every((w) => text.includes(w));
+/** A model search's words. Every model search matches the same way: the text holds each word, in any order or case. */
+export const searchWords = (query: string) => query.toLowerCase().split(/\s+/).filter(Boolean);
+export const hasWords = (text: string, words: string[]) => {
+  const lower = text.toLowerCase();
+  return words.every((w) => lower.includes(w));
 };
+
+const matches = (o: ModelOption, words: string[]) => hasWords(`${o.model} ${o.provider} ${o.providerName}`, words);
 
 /** The rows the picker lists for `query`: Favorites first, then each provider's other models. */
 export function pickerRows(catalog: ModelCatalog | undefined, favorites: string[], query: string): { title: string; rows: Row[] }[] {
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const words = searchWords(query);
   const starred = new Set(favorites);
   const favRows = favorites
     .map((key) => ({ key, option: findOption(catalog, fromKey(key)) ?? missingOption(key) }))

@@ -2174,6 +2174,22 @@ fn a_pasted_file_name_stays_a_plain_basename() {
     let long = transport::stage_clipboard_file(&root.1, &format!("{}.png", "é".repeat(300)), b"x").unwrap();
     let name = long.file_name().unwrap().to_str().unwrap();
     assert!(name.len() <= 255 && name.ends_with(".png"), "{name}");
+    // Windows opens a name it reserves for a device as that device, whatever follows its first dot.
+    let mut devices: Vec<String> = ["CON", "PRN", "AUX", "NUL"].map(String::from).to_vec();
+    for port in ["COM", "LPT"] {
+        devices.extend("123456789¹²³".chars().map(|n| format!("{port}{n}")));
+    }
+    for device in devices {
+        for name in [device.clone(), device.to_lowercase(), format!("{device}.png"), format!("{device}.tar.gz"), format!("{device} .txt")] {
+            let p = transport::stage_clipboard_file(&root.1, &name, b"x").unwrap();
+            assert_eq!(p.file_name().unwrap().to_str().unwrap(), format!("_{name}"), "{name:?}");
+            assert_eq!(std::fs::read(&p).unwrap(), b"x", "{name:?}");
+        }
+    }
+    for plain in ["CONSOLE.png", "con-fig.txt", "COM10.log", "LPT.txt", "LPT0", "nul_backup.txt", "auxiliary", "icon.png"] {
+        let p = transport::stage_clipboard_file(&root.1, plain, b"x").unwrap();
+        assert_eq!(p.file_name().unwrap(), plain, "{plain:?}");
+    }
 }
 
 #[tokio::test]
@@ -2207,6 +2223,18 @@ async fn a_connection_test_stops_where_a_gateway_turns_it_away() {
     assert!(failed.message.contains("answered 403"), "{}", failed.message);
     // It went no further: the password was never sent.
     assert_eq!(seen.locked().iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(), ["/api/status"]);
+}
+
+#[tokio::test]
+async fn a_connection_test_the_dashboard_answered_carries_its_status_and_body() {
+    let page = "upstream said: The dashboard answered 401: Unauthorized";
+    let app = Router::new().route("/api/status", get(move || async move { (StatusCode::BAD_GATEWAY, page).into_response() }));
+    let failed = transport::probe(&serve(app).await, &sign_in("hunter2"), "default").await.unwrap_err();
+    assert_eq!(failed.stage, Stage::Reach);
+    assert_eq!(failed.answered, Some(transport::Answered { status: 502, body: page.into() }));
+    let unanswered =
+        transport::probe(&serve(Router::new().route("/api/status", get(|| async { "<html>" }))).await, &sign_in("hunter2"), "default").await.unwrap_err();
+    assert_eq!(unanswered.answered, None, "{}", unanswered.message);
 }
 
 #[tokio::test]

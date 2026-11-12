@@ -241,7 +241,7 @@ async fn an_upload_lands_in_the_context_folder_and_a_taken_name_is_refused_as_ex
 
     std::fs::write(&local, b"newer").unwrap();
     let err = project_context::upload(&dashboard, AttachedFile::check(&attachable, &local).unwrap(), &to, false, None, |_, _| {}).await.unwrap_err();
-    assert_eq!(err, "exists");
+    assert_eq!(err.code, Some(project_context::EXISTS), "{err:?}");
     assert_eq!(disk.text("/srv/plan/context/spec.md").as_deref(), Some("# Spec\nThe answer is 42.\n"), "nothing was replaced");
     project_context::upload(&dashboard, AttachedFile::check(&attachable, &local).unwrap(), &to, true, None, |_, _| {}).await.expect("replaced");
     assert_eq!(disk.text("/srv/plan/context/spec.md").as_deref(), Some("newer"));
@@ -272,7 +272,7 @@ async fn text_content_is_written_as_a_file_and_a_taken_name_is_refused_as_exists
     project_context::write_text(&dashboard, &path("/srv/plan/context/Ideas.md"), "- one\n- two\n".into(), false, None).await.expect("written");
     assert_eq!(disk.text("/srv/plan/context/Ideas.md").as_deref(), Some("- one\n- two\n"));
     let err = project_context::write_text(&dashboard, &path("/srv/plan/context/Notes.md"), "new".into(), false, None).await.unwrap_err();
-    assert_eq!(err, "exists");
+    assert_eq!(err.code, Some(project_context::EXISTS), "{err:?}");
     assert_eq!(disk.text("/srv/plan/context/Notes.md").as_deref(), Some("old"));
 }
 
@@ -297,7 +297,7 @@ async fn remove_deletes_one_file_never_recursively() {
     assert_eq!(disk.text("/srv/plan/context/keep.md").as_deref(), Some("keep"));
     assert_eq!(disk.writes(), ["delete /srv/plan/context/old.pdf recursive=false"]);
     let err = project_context::remove(&dashboard, &path("/srv/plan/context/old.pdf")).await.unwrap_err();
-    assert!(err.contains("404") && err.contains("Path not found"), "{err}");
+    assert_eq!((err.status, err.body.as_deref()), (Some(404), Some(r#"{"detail":"Path not found"}"#)), "{err:?}");
 }
 
 #[tokio::test]
@@ -311,11 +311,11 @@ async fn on_an_ssh_profile_only_text_goes_through_write_text_and_binary_is_refus
     let image = attached(&attachable, &dir, "logo.png", b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR");
     let to = path("/srv/plan/context/logo.png");
     let err = project_context::upload(&dashboard, AttachedFile::check(&attachable, &image).unwrap(), &to, false, Some("work"), |_, _| {}).await.unwrap_err();
-    assert_eq!(err, "can't add this file to a project on an SSH profile yet");
+    assert_eq!((err.code, err.message.as_str()), (Some(project_context::SSH_TEXT_ONLY), "can't add this file to a project on an SSH profile yet"));
     let big = attached(&attachable, &dir, "big.txt", &vec![b'a'; transport::AGENT_TEXT_MAX_BYTES as usize + 1]);
     let to_big = path("/srv/plan/context/big.txt");
     let err = project_context::upload(&dashboard, AttachedFile::check(&attachable, &big).unwrap(), &to_big, true, Some("work"), |_, _| {}).await.unwrap_err();
-    assert_eq!(err, project_context::SSH_BINARY_REFUSED);
+    assert_eq!(err.code, Some(project_context::SSH_TEXT_ONLY), "{err:?}");
     assert!(disk.writes().is_empty(), "nothing was written: {:?}", disk.writes());
 
     let notes = attached(&attachable, &dir, "notes.md", "naïve ✓\n".as_bytes());
@@ -325,7 +325,7 @@ async fn on_an_ssh_profile_only_text_goes_through_write_text_and_binary_is_refus
     assert_eq!(disk.writes(), ["write-text /srv/plan/context/notes.md profile=work"]);
 
     let err = project_context::write_text(&dashboard, &path("/srv/plan/context/taken.md"), "new".into(), false, Some("work")).await.unwrap_err();
-    assert_eq!(err, "exists", "write-text always replaces, so a taken name is looked for first");
+    assert_eq!(err.code, Some(project_context::EXISTS), "write-text always replaces, so a taken name is looked for first");
     assert_eq!(disk.text("/srv/plan/context/taken.md").as_deref(), Some("old"));
     project_context::write_text(&dashboard, &path("/srv/plan/context/taken.md"), "new".into(), true, Some("work")).await.expect("replaced");
     assert_eq!(disk.text("/srv/plan/context/taken.md").as_deref(), Some("new"));
@@ -381,7 +381,7 @@ async fn read_text_extracts_what_it_can_and_says_none_for_the_rest() {
     assert_eq!(project_context::read_text(&dashboard, &md, huge, None).await.unwrap(), None);
     assert_eq!(disk.reads().len(), 4, "a file listed over 30 MB isn't read");
     let err = project_context::read_text(&dashboard, &path("/srv/p/context/gone.md"), 3, None).await.unwrap_err();
-    assert_eq!(err, "gone.md isn't in the context folder any more.");
+    assert_eq!(err.message, "gone.md isn't in the context folder any more.");
 }
 
 #[tokio::test]
@@ -428,7 +428,7 @@ async fn git_exclude_writes_nothing_outside_a_repository() {
     let disk = Disk::with(&[("/home/me/proj/.git", "gitdir: /home/me/.ssh\n"), ("/home/me/.ssh/id_ed25519", "secret")]);
     let dashboard = stub(&disk).await;
     let err = project_context::git_exclude(&dashboard, "/home/me/proj", None).await.unwrap_err();
-    assert!(err.contains("isn't /home/me/proj's own Git folder"), "{err}");
+    assert!(err.message.contains("isn't /home/me/proj's own Git folder"), "{err:?}");
     assert!(disk.writes().is_empty(), "a .git file naming another folder gets nothing written there");
 }
 
@@ -447,7 +447,7 @@ async fn git_exclude_writes_nothing_to_another_repository_a_git_file_or_commondi
     for (disk, main) in [(named_by_gitdir, "/proj"), (by_commondir, "/wt"), (main_with_commondir, "/proj")] {
         let dashboard = stub(&disk).await;
         let err = project_context::git_exclude(&dashboard, main, None).await.unwrap_err();
-        assert!(err.contains("own Git folder"), "{main}: {err}");
+        assert!(err.message.contains("own Git folder"), "{main}: {err:?}");
         assert!(disk.writes().is_empty(), "{main}: {:?}", disk.writes());
         assert_eq!(disk.text("/other/.git/info/exclude").as_deref(), Some("keep\n"));
     }
@@ -460,14 +460,14 @@ async fn git_exclude_leaves_a_linked_or_non_utf8_info_exclude_alone() {
         disk.links.locked().insert("/r/.git/info/exclude".into(), "/etc/target".into());
         let dashboard = stub(&disk).await;
         let err = project_context::git_exclude(&dashboard, "/r", ssh).await.unwrap_err();
-        assert!(err.contains("is a link"), "{ssh:?}: {err}");
+        assert!(err.message.contains("is a link"), "{ssh:?}: {err:?}");
         assert!(disk.writes().is_empty(), "{ssh:?}: {:?}", disk.writes());
     }
     let disk = Disk::with(&[("/r/.git/HEAD", "ref: refs/heads/main\n")]);
     disk.put("/r/.git/info/exclude", b"caf\xe9\n");
     let dashboard = stub(&disk).await;
     let err = project_context::git_exclude(&dashboard, "/r", None).await.unwrap_err();
-    assert!(err.contains("isn't UTF-8 text"), "{err}");
+    assert!(err.message.contains("isn't UTF-8 text"), "{err:?}");
     assert_eq!(disk.file("/r/.git/info/exclude").as_deref(), Some(&b"caf\xe9\n"[..]), "left byte for byte");
 }
 

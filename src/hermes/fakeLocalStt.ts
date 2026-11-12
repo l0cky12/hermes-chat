@@ -5,8 +5,18 @@
 // Rust's own tests cover the same rules against the real code.
 import type { DownloadProgress, FoundEngine, LocalModels, LocalSttApi, LocalSttChange, LocalSttState, TranscribeRequest } from "./localStt";
 import type { Transcript } from "./pipe";
-import { SttCancelled, couldnt, other, untilAborted, type HeardTranscript, type SttPrefs, type SttSide } from "./sttRoute";
+import { SttCancelled, SttFailed, couldnt, other, untilAborted, type HeardTranscript, type SttPrefs, type SttSide } from "./sttRoute";
 import { errorText } from "./values";
+
+/** `why` without a "Hermes couldn't transcribe the recording:" start, as Rust's `reason` cuts it. */
+function reason(why: string): string {
+  for (const who of ["Hermes", "This computer"]) {
+    const start = `${who} couldn't transcribe`;
+    const colon = why.indexOf(":");
+    if (why.startsWith(start) && colon >= 0) return why.slice(colon + 1).trimStart();
+  }
+  return why.trim();
+}
 
 export const FAKE_MODELS = [
   { name: "tiny", bytes: 77_691_713 },
@@ -171,7 +181,7 @@ export class FakeLocalStt implements LocalSttApi {
     this.sideAsked.push(only);
     const { onThisComputer, backup, timeoutSeconds } = this.choice;
     const primary: SttSide = onThisComputer ? "local" : "server";
-    if (only === "server" && primary === "local" && !backup) throw new Error("Speech to text runs only on this computer, so the recording isn't sent to Hermes.");
+    if (only === "server" && primary === "local" && !backup) throw new SttFailed("Speech to text runs only on this computer, so the recording isn't sent to Hermes.");
     const order: SttSide[] = only ? [only] : backup ? [primary, other(primary)] : [primary];
     const tried: { side: SttSide; why: string }[] = [];
     for (const [i, s] of order.entries()) {
@@ -183,15 +193,15 @@ export class FakeLocalStt implements LocalSttApi {
       try {
         const got = await run;
         if (signal?.aborted) throw new SttCancelled();
-        return { ...got, ran: s, ...(tried.length && { fellBack: { from: tried[0].side, why: tried[0].why } }) };
+        return { ...got, ran: s, ...(tried.length && { fellBack: { from: tried[0].side, why: reason(tried[0].why) } }) };
       } catch (e) {
         if (e instanceof SttCancelled) throw e;
         tried.push({ side: s, why: errorText(e) });
       }
     }
     const [a, b] = tried;
-    if (!b) throw new Error(a.side === "server" || only ? a.why : couldnt(a.side, a.why));
-    throw new Error(`${couldnt(a.side, a.why)} ${couldnt(b.side, b.why).replace(" couldn't transcribe it:", " couldn't transcribe it either:")}`);
+    if (!b) throw new SttFailed(only ? a.why : couldnt(a.side, reason(a.why)));
+    throw new SttFailed(`${couldnt(a.side, reason(a.why))} ${couldnt(b.side, reason(b.why)).replace(" couldn't transcribe it:", " couldn't transcribe it either:")}`);
   }
 
   onChange = (fn: () => void) => {

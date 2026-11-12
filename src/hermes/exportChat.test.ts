@@ -359,6 +359,37 @@ describe("Flagging likely secrets in an export", () => {
     expect(bytes).toContain("./deploy.sh");
     expect(bytes).not.toContain("Mov3rs");
   });
+
+  describe("written with Markdown escapes, which a reader decodes back to the key", () => {
+    const spellings = {
+      "as it is": key,
+      "with a character reference": "sk-ant-api03-Zx8K&#113;2LmN4pR7tVw9yBc",
+      "with backslash escapes": "sk\\-ant\\-api03\\-Zx8Kq2LmN4pR7tVw9yBc",
+    };
+    /** What each format's file holds as written, and what a reader of it sees. */
+    const contents = (file: string) => (JSON.parse(file) as { messages: { content: string }[] }[])[0].messages.map((m) => m.content);
+    const formats = {
+      markdown: { written: (file: string) => file, shown: html },
+      json: { written: (file: string) => contents(file).join("\n"), shown: (file: string) => contents(file).map(html).join("\n") },
+      html: { written: (file: string) => file, shown: (file: string) => file },
+    };
+    for (const [how, spelling] of Object.entries(spellings))
+      for (const [format, { written, shown }] of Object.entries(formats))
+        it(`flags and redacts a key written ${how} in ${format}`, () => {
+          const said: Item[] = [{ kind: "user", id: "u", text: `My key is ${spelling} for now.` }];
+          const p = exportPreview(chat(said), FIRST_DRAFT, AT, format as keyof typeof formats);
+          expect(p.secrets).toEqual([{ text: spelling, kind: "API key", times: 1, redacted: true }]);
+          expect(p.problem).toBeUndefined();
+          expect(shown(p.text)).not.toContain(key);
+          expect(shown(p.text)).toContain("My key is [redacted] for now.");
+          expect(written(p.text)).not.toContain(spelling);
+        });
+
+    it("leaves escapes that aren't in a secret as written", () => {
+      const said = "Use `a\\-b` and 5 &lt; 6, not \\*bold\\*.";
+      expect(exportPreview(chat([{ kind: "user", id: "u", text: said }]), FIRST_DRAFT, AT).text).toContain(said);
+    });
+  });
 });
 
 describe("Redacting by hand", () => {

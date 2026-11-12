@@ -68,8 +68,10 @@ export function SettingsSection({
     <section className={`set-section ${className}`} aria-labelledby={titleId}>
       <div className="set-head">
         {/* The (i) stays outside the heading, so the heading's name is only its title. */}
-        <h2 id={titleId}>{title}</h2>
-        {button}
+        <div className="set-head-title">
+          <h2 id={titleId}>{title}</h2>
+          {button}
+        </div>
         {action && <div className="set-head-action">{action}</div>}
       </div>
       {intro && <div className="set-intro">{intro}</div>}

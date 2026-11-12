@@ -5,7 +5,7 @@
 // chat's session id, so an import of it is skipped where Hermes already has the chat.
 import { invoke } from "@tauri-apps/api/core";
 import type { ApprovalChoice, Chat, Item } from "./model";
-import { REDACTED, findSecrets, redactValues } from "./secrets";
+import { REDACTED, findMarkdownSecrets, redactValues } from "./secrets";
 import { asError } from "./tauriPipe";
 import { LOAD_ERROR_ID } from "./transport";
 import type { ImagePage } from "./exportImage";
@@ -290,7 +290,7 @@ function jsonSession(chat: Chat, exportedAt: Date, choice: Omit<ExportChoice, "r
 
 /** What the owner is choosing in the Export dialog. Every likely secret found is redacted unless the owner keeps it. */
 export type ExportDraft = Omit<ExportChoice, "redact"> & {
-  /** Likely secrets (`findSecrets`) the owner chose to keep in the file. */
+  /** Likely secrets (`findMarkdownSecrets`) the owner chose to keep in the file. */
   kept: ReadonlySet<string>;
   /** Text the owner picked to redact, in the order picked, as the chat has it (never with `[redacted]` in it). */
   picked: readonly string[];
@@ -317,7 +317,7 @@ export function exportPreview(chat: Chat, draft: ExportDraft, exportedAt: Date, 
   write(chat, exportedAt, draft, (s) => (texts.push(s), s), () => 0);
   const times = (text: string) => texts.reduce((n, s) => n + s.split(text).length - 1, 0);
   const secrets = new Map<string, ExportPreview["secrets"][number]>();
-  for (const s of texts.flatMap((t) => findSecrets(t)))
+  for (const s of texts.flatMap((t) => findMarkdownSecrets(t)))
     if (!secrets.has(s.text)) secrets.set(s.text, { text: s.text, kind: s.kind, times: times(s.text), redacted: !draft.kept.has(s.text) });
   const redact = [...[...secrets.values()].filter((s) => s.redacted).map((s) => s.text), ...draft.picked];
   const file = render(format, chat, exportedAt, { leftOut: draft.leftOut, toolCalls: draft.toolCalls, attachments: draft.attachments, redact });

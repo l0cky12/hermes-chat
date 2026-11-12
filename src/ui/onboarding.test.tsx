@@ -572,7 +572,7 @@ describe("A connection test explains each stage on its own", () => {
     expect(marks(result).map((m) => m.split(": ")[1])).toEqual(["ok", "ok", "bad", "skip"]);
 
     // A dashboard that offers no password sign-in is an authentication problem too, with its own fix.
-    backend.probeFailure = { stage: "sign-in", message: "The dashboard answered 404", status: '{"version":"0.22.5","auth_required":true,"auth_providers":["oidc"]}' };
+    backend.probeFailure = { stage: "sign-in", message: "The dashboard answered 404: ", answered: { status: 404, body: "" }, status: '{"version":"0.22.5","auth_required":true,"auth_providers":["oidc"]}' };
     result = await retest();
     expect(result.textContent).toContain("This dashboard doesn't offer username and password sign-in");
     expect(result.textContent).toContain("It offers: oidc.");
@@ -606,7 +606,7 @@ describe("A connection test explains each stage on its own", () => {
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.type(screen.getByLabelText("Dashboard username"), "liam");
     await user.type(screen.getByLabelText("Dashboard password"), "hunter2");
-    backend.probeFailure = { stage: "reach", message: "The dashboard answered 403: Forbidden by Access" };
+    backend.probeFailure = { stage: "reach", message: "The dashboard answered 403: Forbidden by Access", answered: { status: 403, body: "Forbidden by Access" } };
     await user.click(screen.getByRole("button", { name: "Test connection" }));
     const result = await screen.findByRole("alert");
     expect(result.textContent).toContain("Something in front of the dashboard at hermes.example.com turned Hermes Chat away.");
