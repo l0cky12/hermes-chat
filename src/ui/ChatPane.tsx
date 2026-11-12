@@ -143,6 +143,13 @@ export type FindTarget = { query: string; itemId?: string; at: number };
 /** How long a new find query may wait for the transcript to mark it in the background before a streamed delta marks it. */
 const FIND_WAITS_MS = 200;
 const sizeOf = (el: HTMLElement) => `${el.clientWidth}x${el.clientHeight}`;
+/** A key that scrolls the view up when nothing has focus: WebKit scrolls whatever the owner last clicked in. */
+const scrollsUp = (e: KeyboardEvent) =>
+  e.target === document.body &&
+  !e.ctrlKey &&
+  !e.altKey &&
+  !e.metaKey &&
+  (e.key === "ArrowUp" || e.key === "PageUp" || e.key === "Home" || (e.key === " " && e.shiftKey));
 
 /**
  * What to go to: a tool call, opened, by its call id (`Item.callId`), or a message by its stored row (`rowId`), as a
@@ -585,6 +592,8 @@ export function ChatPane({
   const canRetry = status === "connected" && !chat.loading && !chat.running;
   const findRef = useRef<HTMLInputElement>(null);
   const stickToBottom = useRef(true);
+  /** Where the view was at the last scroll event or pin, to tell the owner moving it up from a stale event. */
+  const lastTop = useRef(0);
   const itemsRef = useRef(chat.items);
   itemsRef.current = chat.items;
   /** Renders the chunk of the first block `has` picks, when it is far from the view, so a lookup in the DOM finds it. */
@@ -725,10 +734,28 @@ export function ChatPane({
     sideSeen.current = new Set(qs.map((q) => q.id));
   }, [chat.sideQuestions]);
 
+  // Keys scroll the view smoothly too, and a reply's render can cancel that before it moves, as it does the wheel's.
+  useEffect(() => {
+    let pressedIn = false;
+    const onDown = (e: PointerEvent) => void (pressedIn = !!scrollRef.current?.contains(e.target as Node));
+    const onKey = (e: KeyboardEvent) => {
+      if (pressedIn && scrollsUp(e) && scrollRef.current!.scrollTop > 0) stickToBottom.current = false;
+    };
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, []);
+
   // Follow the stream while the user is at the bottom.
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el && stickToBottom.current && !q) el.scrollTop = el.scrollHeight;
+    if (el && stickToBottom.current && !q) {
+      el.scrollTop = el.scrollHeight;
+      lastTop.current = el.scrollTop;
+    }
   });
 
   // Resizing the pane rewraps the transcript without a render; one at the bottom stays there.
@@ -741,7 +768,10 @@ export function ChatPane({
     if (!el || !inner || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => {
       observedSize.current = sizeOf(el);
-      if (stickToBottom.current && !qRef.current) el.scrollTop = el.scrollHeight;
+      if (stickToBottom.current && !qRef.current) {
+        el.scrollTop = el.scrollHeight;
+        lastTop.current = el.scrollTop;
+      }
     });
     ro.observe(el);
     ro.observe(inner);
@@ -893,12 +923,23 @@ export function ChatPane({
       <div
         className="transcript"
         ref={scrollRef}
+        onWheel={(e) => {
+          // A reply's render can pin the view back before the wheel's first scroll frame, which cancels the scroll (#544).
+          if (e.deltaY < 0 && e.currentTarget.scrollTop > 0) stickToBottom.current = false;
+        }}
         onScroll={(e) => {
           const el = e.currentTarget;
+          // A pin's scroll event comes a frame later, after a wheel up may have stopped following.
+          if (el.scrollTop === lastTop.current) return;
+          const up = el.scrollTop < lastTop.current;
+          lastTop.current = el.scrollTop;
           // WebKitGTK moves the view of a resized pane itself, and fires this before the ResizeObserver runs for the
           // new size (#512). That scroll isn't the owner's, and the observer puts a pane that follows back at the bottom.
           if (observedSize.current !== undefined && observedSize.current !== sizeOf(el)) return;
-          stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          // Smooth scrolling moves the view a few pixels a frame, so any move up stops following (#544). A transcript
+          // that got shorter moves the view up to its new bottom, and that one follows.
+          const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+          stickToBottom.current = gap < 1 || (gap < 40 && !up);
         }}
       >
         <JumpContext.Provider value={jumpTo}>
