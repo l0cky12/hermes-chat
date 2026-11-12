@@ -27,7 +27,7 @@ describe("The native page view's commands", () => {
     const failed: unknown[] = [];
     const first = tauriNativePages.open((e) => failed.push(e));
     first.go("https://www.google.com/" as ViewUrl);
-    first.place({ rect: { x: 800, y: 137, width: 480, height: 683 }, holes: [] });
+    first.place({ rect: { x: 800, y: 137, width: 480, height: 683 }, holes: [], viewport: { width: 1280, height: 820 } });
     first.reload();
     first.close();
     const second = tauriNativePages.open(() => {});

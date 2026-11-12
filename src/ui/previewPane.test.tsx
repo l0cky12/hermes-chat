@@ -503,6 +503,8 @@ describe("Web pages a site won't let the pane show (issue #55)", () => {
 });
 
 const BOX = { x: 800, y: 137, width: 480, height: 683 };
+/** jsdom's window, in CSS pixels. */
+const VIEWPORT = { width: innerWidth, height: innerHeight };
 const stubLayout = () => {
   vi.stubGlobal(
     "ResizeObserver",
@@ -544,7 +546,7 @@ describe("Web pages in the Preview's own view, on Linux (issue #254)", () => {
     expect(within(pane()).getByRole("status").textContent).toContain("Loading page");
 
     await act(async () => view.land(1));
-    expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [] });
+    expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [], viewport: VIEWPORT });
     expect(within(pane()).queryByRole("status")).toBeNull();
     expect(within(pane()).queryByRole("alert")).toBeNull();
 
@@ -600,7 +602,7 @@ describe("Web pages in the Preview's own view, on Linux (issue #254)", () => {
       [1, "reload"],
     ]);
     expect(view.made).toBe(1);
-    expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [] });
+    expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [], viewport: VIEWPORT });
     expect(button("Reload").className).toContain("preview-busy");
     await act(async () => view.say(1, at(GOOGLE, true)));
     expect(button("Reload").className).not.toContain("preview-busy");
@@ -855,14 +857,14 @@ describe("Back, Forward and Reload (issue #376)", () => {
     await user.click(button("Back"));
     expect(address().value).toBe(GOOGLE);
     expect(within(pane()).queryByRole("alert")).toBeNull();
-    expect(view.placed.get(1), "the view still holds www.google.com").toEqual({ rect: BOX, holes: [] });
+    expect(view.placed.get(1), "the view still holds www.google.com").toEqual({ rect: BOX, holes: [], viewport: VIEWPORT });
 
     await user.click(button("Forward"));
     expect(view.asked.at(-1)).toEqual([1, "go https://down.example/"]);
     await act(async () => view.say(1, { kind: "failed", message: "Could not connect: Connection refused" }));
     await user.click(button("Back"));
     expect(within(pane()).queryByRole("alert")).toBeNull();
-    expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [] });
+    expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [], viewport: VIEWPORT });
   });
 
   it("goes back, forward and reloads in the frame where there is no view (Windows)", async () => {
@@ -1659,7 +1661,7 @@ describe("Annotating a page in the Preview (issue #96)", () => {
     expect(await screen.findByText("annotation-1.png")).toBeTruthy();
     expect(annotator.discarded).toEqual([]);
     expect(sends(server)).toEqual([]);
-    await waitFor(() => expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [] }));
+    await waitFor(() => expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [], viewport: VIEWPORT }));
 
     // The page moves on: the staged annotation says it came from an earlier page, and still sends as it is.
     await act(async () => view.say(1, at("https://app.example/billing")));
@@ -1674,7 +1676,7 @@ describe("Annotating a page in the Preview (issue #96)", () => {
     await user.click(screen.getByRole("button", { name: "Cancel the annotation" }));
     await waitFor(() => expect(annotator.discarded).toEqual(["/c/1/1/still.png"]));
     expect(screen.queryByRole("dialog", { name: "Annotate the page" })).toBeNull();
-    await waitFor(() => expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [] }));
+    await waitFor(() => expect(view.placed.get(1)).toEqual({ rect: BOX, holes: [], viewport: VIEWPORT }));
 
     await user.click(button("Annotate"));
     const dialog = await screen.findByRole("dialog", { name: "Annotate the page" });
