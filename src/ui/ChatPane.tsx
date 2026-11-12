@@ -143,6 +143,19 @@ export type FindTarget = { query: string; itemId?: string; at: number };
 /** How long a new find query may wait for the transcript to mark it in the background before a streamed delta marks it. */
 const FIND_WAITS_MS = 200;
 const sizeOf = (el: HTMLElement) => `${el.clientWidth}x${el.clientHeight}`;
+/** Where the transcript's view was at its last scroll event or pin, and the furthest down it could go then. */
+type View = { top: number; max: number };
+const viewOf = (el: HTMLElement): View => ({ top: el.scrollTop, max: el.scrollHeight - el.clientHeight });
+const pinToBottom = (el: HTMLElement, seen: { current: View }) => {
+  el.scrollTop = el.scrollHeight;
+  seen.current = viewOf(el);
+};
+/** Whether scrolling up from `node` moves the transcript `el`, rather than a box in it that can still scroll up. */
+const movesUp = (el: HTMLElement, node: Element | null) => {
+  if (!node || !el.contains(node) || el.scrollTop === 0) return false;
+  for (let n: Element | null = node; n && n !== el; n = n.parentElement) if (n.scrollTop > 0) return false;
+  return true;
+};
 
 /**
  * What to go to: a tool call, opened, by its call id (`Item.callId`), or a message by its stored row (`rowId`), as a
@@ -585,6 +598,7 @@ export function ChatPane({
   const canRetry = status === "connected" && !chat.loading && !chat.running;
   const findRef = useRef<HTMLInputElement>(null);
   const stickToBottom = useRef(true);
+  const seen = useRef<View>({ top: 0, max: 0 });
   const itemsRef = useRef(chat.items);
   itemsRef.current = chat.items;
   /** Renders the chunk of the first block `has` picks, when it is far from the view, so a lookup in the DOM finds it. */
@@ -725,10 +739,32 @@ export function ChatPane({
     sideSeen.current = new Set(qs.map((q) => q.id));
   }, [chat.sideQuestions]);
 
+  // Keys scroll the view smoothly too, and a reply's render can cancel that before it moves, as it does the wheel's.
+  // WebKit scrolls from the focused element, or with nothing focused, from where the owner last clicked.
+  useEffect(() => {
+    let pressed: Element | null = null;
+    const onDown = (e: PointerEvent) => void (pressed = e.target as Element);
+    const onKey = (e: KeyboardEvent) => {
+      const el = scrollRef.current;
+      const t = e.target as HTMLElement;
+      const body = t === document.body;
+      if (!el || e.ctrlKey || e.altKey || e.metaKey || t.isContentEditable || t.closest("textarea, select, input:not([type=checkbox])")) return;
+      const space = e.key === " " && e.shiftKey && !t.closest("button, input, summary, [role=button]");
+      const up = e.key === "ArrowUp" || e.key === "PageUp" || e.key === "Home" || space;
+      if (up && movesUp(el, body ? pressed : t)) stickToBottom.current = false;
+    };
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, []);
+
   // Follow the stream while the user is at the bottom.
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el && stickToBottom.current && !q) el.scrollTop = el.scrollHeight;
+    if (el && stickToBottom.current && !q) pinToBottom(el, seen);
   });
 
   // Resizing the pane rewraps the transcript without a render; one at the bottom stays there.
@@ -741,7 +777,7 @@ export function ChatPane({
     if (!el || !inner || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => {
       observedSize.current = sizeOf(el);
-      if (stickToBottom.current && !qRef.current) el.scrollTop = el.scrollHeight;
+      if (stickToBottom.current && !qRef.current) pinToBottom(el, seen);
     });
     ro.observe(el);
     ro.observe(inner);
@@ -893,12 +929,24 @@ export function ChatPane({
       <div
         className="transcript"
         ref={scrollRef}
+        onWheel={(e) => {
+          // A reply's render can pin the view back before the wheel's first scroll frame, which cancels the scroll (#544).
+          // Shift turns the wheel sideways.
+          if (e.deltaY < 0 && !e.shiftKey && movesUp(e.currentTarget, e.target as Element)) stickToBottom.current = false;
+        }}
         onScroll={(e) => {
           const el = e.currentTarget;
+          // A pin's scroll event comes a frame later, after a wheel up may have stopped following.
+          const was = seen.current;
+          if (el.scrollTop === was.top) return;
+          seen.current = viewOf(el);
           // WebKitGTK moves the view of a resized pane itself, and fires this before the ResizeObserver runs for the
           // new size (#512). That scroll isn't the owner's, and the observer puts a pane that follows back at the bottom.
           if (observedSize.current !== undefined && observedSize.current !== sizeOf(el)) return;
-          stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          // Smooth scrolling moves the view a few pixels a frame, so any move up stops following (#544), except to a new
+          // bottom, when the transcript got shorter or the view taller.
+          const up = el.scrollTop < was.top && seen.current.max >= was.max;
+          stickToBottom.current = !up && el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
         <JumpContext.Provider value={jumpTo}>
