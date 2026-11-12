@@ -1,4 +1,4 @@
-// Everything this computer keeps for one profile of one connection, in one list, and the two walks over it (ADR 0144):
+// Everything this computer keeps for one profile of one connection, in one list, and the two walks over it (ADR 0156):
 // a rename moves it all from the old name to the new one (`renameProfileLocally`), and a delete forgets it
 // (`forgetProfileLocally`). Removing a connection forgets every profile's at once (forgetConnection.ts), through the same
 // list. Nothing here talks to Hermes.

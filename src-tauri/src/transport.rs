@@ -682,7 +682,8 @@ async fn within<T>(
 
 /// Opens one route at `base`: reads `/api/status` within `reach` and checks it is the Hermes `expect` names (before
 /// the password or token goes anywhere), signs in, and opens `/api/ws` for `profile`, each step within `limits` when
-/// given and reported to `steps`. Every frame goes to `on_event`.
+/// given and reported to `steps`. Every frame goes to `on_event`. A failure names the step it stopped at, as a
+/// connection test's does.
 #[allow(clippy::too_many_arguments)]
 pub async fn open_route(
     base: &Url,
@@ -693,17 +694,18 @@ pub async fn open_route(
     limits: Option<StepLimits>,
     steps: &Steps,
     on_event: impl Fn(PipeEvent) + Send + 'static,
-) -> Result<(Dashboard, Pipe, ServerSeen), TransportError> {
+) -> Result<(Dashboard, Pipe, ServerSeen), ProbeFailure> {
     // One client for this route attempt: the sign-in and its ticket reuse the connection the status read opened
     // (#271). It carries no credential, and the status check still passes before one is sent.
-    let http = client(&sign_in.headers)?;
-    let seen = steps.run(Step::Status, read_server(&http, base, &sign_in.headers, expect, reach)).await?;
-    offered(sign_in, Some(&seen.status))?;
+    let http = client(&sign_in.headers).map_err(|e| ProbeFailure::of(Stage::Address, e))?;
+    let seen = steps.run(Step::Status, read_server(&http, base, &sign_in.headers, expect, reach)).await.map_err(|e| ProbeFailure::of(Stage::Reach, e))?;
+    let failed = |stage, e| ProbeFailure { status: Some(seen.status.clone()), ..ProbeFailure::of(stage, e) };
+    offered(sign_in, Some(&seen.status)).map_err(|e| failed(Stage::SignIn, e))?;
     let signing_in = within(limits.map(|l| l.sign_in), Dashboard::sign_in(http, base, sign_in), |s| {
         TransportError::Unreachable(format!("the sign-in didn't answer within {s}s."))
     });
-    let dashboard = steps.run(Step::SignIn, signing_in).await?;
-    let pipe = dashboard.open_pipe_within(profile, on_event, limits, steps).await?;
+    let dashboard = steps.run(Step::SignIn, signing_in).await.map_err(|e| failed(Stage::SignIn, e))?;
+    let pipe = dashboard.open_pipe_within(profile, on_event, limits, steps).await.map_err(|e| failed(Stage::Chat, e))?;
     Ok((dashboard, pipe, seen))
 }
 
@@ -1560,7 +1562,7 @@ impl Dashboard {
     /// `PUT api/config`), the scheduled-job writes (`cron_write`), Settings → Persona's
     /// `PUT api/profiles/{name}/soul`, the Clone profile dialog's `POST api/profiles` (`profile_create_allowed`, ADR 0074),
     /// Settings → Profiles' description, model and written-for-me description (`profile_field_write`,
-    /// `profile_describe_auto`, ADR 0144),
+    /// `profile_describe_auto`, ADR 0156),
     /// and Settings → Toolsets' switch, `PUT api/tools/toolsets/<name>` with exactly
     /// `{"enabled": true|false}` (`toolset_toggle_allowed`), Settings → Skills' two writes, `PUT api/skills/toggle` and
     /// `PUT api/skills/content` with exactly their fields (`skill_write_allowed`), Settings → Skills' copy to another
@@ -1576,7 +1578,7 @@ impl Dashboard {
     /// `DELETE api/env` is refused whatever the body: a key leaves the server only through
     /// `Dashboard::remove_provider_key`, which checks that it is a model provider's (ADR 0095).
     /// `GET api/config` comes back without its credentials, and `GET` on the raw config and on the sign-in and endpoint
-    /// lists is refused (ADR 0138).
+    /// lists is refused (ADR 0154).
     /// Returns the response body on 2xx.
     pub async fn request(&self, method: &str, path_and_query: &str, body: Option<String>) -> Result<String, TransportError> {
         let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
@@ -1620,7 +1622,7 @@ impl Dashboard {
             return Err(TransportError::NotRelayed(format!("{method} {path}")));
         }
         let segments: Vec<&str> = routed.split('/').filter(|seg| !seg.is_empty()).collect();
-        // The config as written, and the two lists Rust reads without their previews (ADR 0133, ADR 0138).
+        // The config as written, and the two lists Rust reads without their previews (ADR 0133, ADR 0154).
         if method == Method::GET && matches!(segments.as_slice(), ["api", "config", "raw"] | ["api", "providers", "oauth" | "custom-endpoints"]) {
             return Err(TransportError::NotRelayed(format!("{method} {path}")));
         }
@@ -2380,7 +2382,7 @@ fn relay_url(base: &Url, path: &str, query: &str) -> Result<(Url, String), Trans
 }
 
 /// `GET api/config`'s answer without the values Hermes treats as credentials (`_is_secret_config_key` in
-/// `hermes_cli/config.py`): Hermes sends the config as written, provider keys and all (ADR 0138).
+/// `hermes_cli/config.py`): Hermes sends the config as written, provider keys and all (ADR 0154).
 fn config_without_credentials(text: &str) -> Result<String, TransportError> {
     fn drop_credentials(value: &mut serde_json::Value) {
         match value {
@@ -2778,7 +2780,7 @@ pub fn profile_create_allowed(body: Option<&str>) -> bool {
     name_ok && source_ok && known
 }
 
-/// Whether a `PUT` is Settings → Profiles' description or model write for one profile (ADR 0144):
+/// Whether a `PUT` is Settings → Profiles' description or model write for one profile (ADR 0156):
 /// `api/profiles/{id}/description` with exactly `{"description": string}`, or `api/profiles/{id}/model` with exactly
 /// `{"provider", "model"}`, both non-empty strings. `{id}` is a profile id, `default` included.
 pub fn profile_field_write(path: &str, body: Option<&str>) -> bool {
@@ -2802,7 +2804,7 @@ pub fn profile_field_write(path: &str, body: Option<&str>) -> bool {
 }
 
 /// Whether a `POST` is Settings → Profiles' "Write for me": `api/profiles/{id}/describe-auto` with exactly
-/// `{"overwrite": bool}` (ADR 0144). Hermes writes the description with an LLM; nothing else is sent.
+/// `{"overwrite": bool}` (ADR 0156). Hermes writes the description with an LLM; nothing else is sent.
 pub fn profile_describe_auto(path: &str, body: Option<&str>) -> bool {
     let Some(name) = path.strip_prefix("api/profiles/").and_then(|p| p.strip_suffix("/describe-auto")) else {
         return false;

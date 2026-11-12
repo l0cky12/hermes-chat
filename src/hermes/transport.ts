@@ -60,7 +60,7 @@ import { RemoteFilesError, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, previewSup
 import { isUnsecure } from "./unsecure";
 import { signInRefused } from "./account";
 import { AccountsApi } from "./accounts";
-import { providerKeys, readyProviders, type ProviderSetup, type SavedKey } from "./setup";
+import { providerKeys, readyProviders, SignInFailure, type ProviderSetup, type SavedKey } from "./setup";
 import { restartHold } from "./unsaved";
 import { hostFileView, readServerFile, type FileView } from "./preview";
 import type { DisplayLease, DisplayObserve, DisplayStatus, ScreenApi } from "./screen";
@@ -419,9 +419,9 @@ function parseFrame(text: string): RpcFrame | undefined {
   return frame && { ...frame, params: obj(frame.params) ?? {} };
 }
 
-export class ProtocolMismatchError extends Error {
+export class ProtocolMismatchError extends SignInFailure {
   constructor() {
-    super("This Hermes server speaks the canonical session protocol, which Hermes Chat doesn't support yet.");
+    super({ stage: "chat", message: "This Hermes server speaks the canonical session protocol, which Hermes Chat doesn't support yet." });
   }
 }
 
@@ -1207,7 +1207,7 @@ export class Hermes {
   /** The Clone profile dialog's profile list, create and delete (profileClone.ts, ADR 0074). Each call names its profiles. */
   readonly profileClone = new ProfileCloneApi((method, pathAndQuery, body) => this.rest(method, pathAndQuery, body), this.persona, this.skills);
   /**
-   * Settings → Profiles' list, create, rename, description, model and delete (profiles.ts, ADR 0144). Each call names its
+   * Settings → Profiles' list, create, rename, description, model and delete (profiles.ts, ADR 0156). Each call names its
    * profile. Every list read keeps `default`'s display name for the rest of the app.
    */
   readonly manageProfiles = new ProfilesApi(async (method, pathAndQuery, body) => {
@@ -1299,7 +1299,7 @@ export class Hermes {
     const profile = this.profile;
     const onEvent = (e: PipeEvent) => {
       if (gen !== this.generation) return;
-      if (e.kind === "closed" && !up) this.abortDial?.(new Error(`The connection closed before Hermes was ready: ${e.reason}`));
+      if (e.kind === "closed" && !up) this.abortDial?.(new SignInFailure({ stage: "chat", message: `The connection closed before Hermes was ready: ${e.reason}` }));
       else this.handle(e);
     };
     const kept = this.socketClosed;
@@ -1316,7 +1316,7 @@ export class Hermes {
         ready,
         failed,
         new Promise<never>((_, rej) => {
-          timer = setTimeout(() => rej(new Error("Hermes didn't send gateway.ready in time.")), READY_TIMEOUT_MS);
+          timer = setTimeout(() => rej(new SignInFailure({ stage: "chat", message: "Hermes didn't send gateway.ready in time." })), READY_TIMEOUT_MS);
         }),
       ]);
       if (failure) throw failure;
@@ -1465,7 +1465,7 @@ export class Hermes {
 
   /**
    * The Queued and Failed messages holding text that this computer keeps for `profile`, which deleting the profile
-   * loses (Settings → Profiles, ADR 0144).
+   * loses (Settings → Profiles, ADR 0156).
    */
   heldMessagesIn(profile: string): number {
     const queues = profile === this.profile ? this.snapshot.queues : loadQueues(this.cache, profile);

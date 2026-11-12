@@ -40,7 +40,7 @@ import { reachRoute, tauriPipe, tauriProbe, tauriReach, type SignInDetails } fro
 import { AttemptLog, tauriAttemptStore } from "./hermes/attempts";
 import { readMethods } from "./hermes/signInMethods";
 import { PreferredRoutes, type RouteHealth, routesOf, sshAddressOf } from "./hermes/routes";
-import { testSignIn, type TestOutcome } from "./hermes/setup";
+import { signInError, testSignIn, type SignInError, type TestOutcome } from "./hermes/setup";
 import { isOutgoing, isWaiting, type Attachment, type Chat, type ConnectionStatus, type Found } from "./hermes/model";
 import { shortName, type ModelCatalog, type ModelPick } from "./hermes/models";
 import { ChatList, Rail, leavingNote } from "./ui/Sidebar";
@@ -301,7 +301,7 @@ const withKnownServer = (c: SavedConnection, d: SignInDetails): SignInDetails =>
  */
 type Launch = (
   | { hermes: Hermes; connection: SavedConnection; details: SignInDetails; turnedDown?: Promise<string | undefined> }
-  | { connection?: SavedConnection; initial: SignInDetails; error?: string; firstRun?: boolean }
+  | { connection?: SavedConnection; initial: SignInDetails; error?: SignInError; firstRun?: boolean }
 ) & {
   /** The other connections live when the app last ran, to open again in the background (ADR 0125). */
   reopen?: SavedConnection[];
@@ -335,7 +335,7 @@ function launch(): Promise<Launch> {
     try {
       return { ...(await launchOpen(c, saved, account)), connection: c, details: saved, reopen };
     } catch (e) {
-      return { connection: c, initial: saved, error: errorText(e), reopen };
+      return { connection: c, initial: saved, error: signInError(e), reopen };
     }
   })());
 }
@@ -387,7 +387,7 @@ function Screens({ links }: { links: LinkInbox }) {
   );
   // The sign-in screen's details; none while launch is signing in with the saved password.
   const [initial, setInitial] = useState<SignInDetails>();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<SignInError>();
   // Why the keyring couldn't save the password at sign-in, shown once signed in.
   const [notSaved, setNotSaved] = useState<string>();
   const [kept, setKept] = useState<Kept>({ password: true, headers: true });
@@ -461,7 +461,8 @@ function Screens({ links }: { links: LinkInbox }) {
         // would have without them, unless the owner has moved on meanwhile.
         void l.turnedDown?.then((why) => {
           if (why === undefined) return;
-          if (current.current === l.hermes) return showSignIn(l.connection, l.details, why);
+          // `turnedDown` passes on only the sign-in's refusals.
+          if (current.current === l.hermes) return showSignIn(l.connection, l.details, { stage: "sign-in", message: why });
           // The owner moved on meanwhile: the turned-down instance is closed, so it leaves the live set and asks later.
           if (registry.get(l.connection.id)?.hermes !== l.hermes) return;
           void closeLive(l.connection.id);
@@ -547,7 +548,7 @@ function Screens({ links }: { links: LinkInbox }) {
   }, [hermes, connection?.id, store]);
 
   /** The sign-in screen, for `c` with `d` filled in, or with none picked. */
-  const showSignIn = (c: SavedConnection | undefined, d: SignInDetails = BLANK, why?: string) => {
+  const showSignIn = (c: SavedConnection | undefined, d: SignInDetails = BLANK, why?: SignInError) => {
     // The connection asking to sign in again leaves the live set; any other stays live, in the background.
     const t = registry.target();
     if (t && t.connection.id === c?.id) void closeLive(t.connection.id);
@@ -604,7 +605,7 @@ function Screens({ links }: { links: LinkInbox }) {
           if (stale()) return void (await h.close().catch(() => {}));
           shownAs(h, d);
         } catch (e) {
-          if (!stale()) showSignIn(target, d, errorText(e));
+          if (!stale()) showSignIn(target, d, signInError(e));
         }
       } finally {
         if (!stale()) setSwitchingTo(undefined);
@@ -928,7 +929,7 @@ function Screens({ links }: { links: LinkInbox }) {
           try {
             await connectWith(connection, d);
           } catch (e) {
-            setError(errorText(e));
+            setError(signInError(e));
           }
         }}
       />
@@ -2075,7 +2076,7 @@ export function Main({
   };
   const switchProfile = (name: string) => guard(() => void switchProfileNow(name), "profile");
   /**
-   * Settings → Profiles' switch (ADR 0144): the switcher's guard, then the switch. Resolves whether the app is on `name`
+   * Settings → Profiles' switch (ADR 0156): the switcher's guard, then the switch. Resolves whether the app is on `name`
    * once the switch has gone through; false when the owner stayed. `keepSettings`: a delete goes on in Settings.
    */
   const switchFromProfiles = (name: string, keepSettings?: boolean) =>

@@ -1,4 +1,4 @@
-// Settings → Profiles (ADR 0144): every Hermes profile on the server, made, renamed, described, given a model and
+// Settings → Profiles (ADR 0156): every Hermes profile on the server, made, renamed, described, given a model and
 // deleted through Hermes's own profile routes. Nothing on the server is written by this app directly, and nothing is
 // written to find out what the server has.
 //

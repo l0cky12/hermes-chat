@@ -1,4 +1,4 @@
-// Settings → Profiles' calls (profiles.ts, ADR 0144) through the real transport against FakeHermes, whose profile routes
+// Settings → Profiles' calls (profiles.ts, ADR 0156) through the real transport against FakeHermes, whose profile routes
 // follow `hermes_cli/web_routers/profiles.py` at the deployed `f0d94882`. All data is synthetic.
 import { describe, expect, it } from "vitest";
 import { FakeHermes } from "./fakeHermes";

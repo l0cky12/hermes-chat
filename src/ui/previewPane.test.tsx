@@ -1189,7 +1189,7 @@ describe("The empty Preview (issue #376)", () => {
     const menu = within(pane()).getByRole("menu", { name: "More" });
     expect(menu.textContent).toContain("Pages here run on their own, with no access to Hermes Chat or your sign-in, and only you can use them.");
     expect(menu.textContent, "a frame can't report a link followed inside it").toContain("Links you follow inside a page don't change the address here.");
-    expect(menu.textContent, "a frame's origin is opaque, so its storage throws (ADR 0138)").toContain(
+    expect(menu.textContent, "a frame's origin is opaque, so its storage throws (ADR 0155)").toContain(
       "Pages here can't use their own storage, so some sites work only in your browser.",
     );
     await user.click(within(menu).getByRole("menuitem", { name: "Copy address" }));

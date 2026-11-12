@@ -264,11 +264,12 @@ async fn hermes_connect(
     ssh_route: Option<String>,
     on_step: Channel<connect_steps::Started>,
     live_limit: Option<usize>,
-) -> Result<Route, String> {
-    let id = ConnectionId::parse(&saved_connection)?;
+) -> Result<Route, ProbeFailure> {
+    // Neither is a step of signing in; `Reach` explains them as a connection that didn't open.
+    let id = ConnectionId::parse(&saved_connection).map_err(|e| ProbeFailure::new(Stage::Reach, e))?;
     let _opening = state.opening.lock().await;
     // Connects run one at a time under `opening`, so nothing is added between this check and `leave`.
-    state.slots.room_for(&id, live_limit).map_err(|e| e.to_string())?;
+    state.slots.room_for(&id, live_limit).map_err(|e| ProbeFailure::new(Stage::Reach, e.to_string()))?;
     // The connections this one replaces leave the map first, and their transfers and Screens stop after: whatever
     // registers on one checks it is still held, or its epoch, once it has, so nothing is left running on it.
     let mut evicted = Vec::new();
@@ -286,7 +287,7 @@ async fn hermes_connect(
         let opening = open_connection(target, credential, profile, on_event, expect_server, quick.unwrap_or(false), ssh_route, steps);
         tokio::time::timeout(CONNECT_TIMEOUT, opening)
             .await
-            .unwrap_or_else(|_| Err(format!("Hermes didn't finish connecting within {}s.", CONNECT_TIMEOUT.as_secs())))
+            .unwrap_or_else(|_| Err(ProbeFailure::new(Stage::Reach, format!("Hermes didn't finish connecting within {}s.", CONNECT_TIMEOUT.as_secs()))))
     })
     .await;
     // The replaced connections' server pages go with them. This connection's own stay only if it opened again
@@ -298,7 +299,7 @@ async fn hermes_connect(
         pages.close_for(&id, keep_target, why);
     };
     match opened {
-        Attempt::StoppedFirst => Err(CONNECT_STOPPED.into()),
+        Attempt::StoppedFirst => Err(ProbeFailure::new(Stage::Cancelled, CONNECT_STOPPED)),
         Attempt::Ran(Ok((live, route))) => {
             let ssh_target = live.ssh_target.clone();
             state.slots.insert(id.clone(), Slot::new(live::Attempt::new(name), live));
@@ -372,18 +373,34 @@ async fn hermes_reopen(
 }
 
 /// How an attempt `as_attempt` was given went: stopped by `hermes_connect_cancel` before it began, or run.
-enum Attempt<T> {
+enum Attempt<T, E> {
     StoppedFirst,
-    Ran(Result<T, String>),
+    Ran(Result<T, E>),
+}
+
+/// Why an opening's task ended without its result: it was stopped, or it failed outright.
+fn interrupted(e: tokio::task::JoinError) -> ProbeFailure {
+    if e.is_cancelled() {
+        ProbeFailure::new(Stage::Cancelled, CONNECT_STOPPED)
+    } else {
+        ProbeFailure::new(Stage::Reach, e.to_string())
+    }
+}
+
+/// A reopen's error is its text alone.
+impl From<ProbeFailure> for String {
+    fn from(f: ProbeFailure) -> Self {
+        f.message
+    }
 }
 
 /// Runs `begin`, then `opening` apart, as the attempt the webview names `attempt`, so `hermes_connect_cancel` can stop it.
-async fn as_attempt<T: Send + 'static>(
+async fn as_attempt<T: Send + 'static, E: From<ProbeFailure> + Send + 'static>(
     state: &AppState,
     attempt: String,
     begin: impl FnOnce(),
-    opening: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
-) -> Attempt<T> {
+    opening: impl std::future::Future<Output = Result<T, E>> + Send + 'static,
+) -> Attempt<T, E> {
     let task = {
         let mut connecting = state.connecting.locked();
         if let Some(i) = connecting.stopped.iter().position(|a| *a == attempt) {
@@ -397,11 +414,7 @@ async fn as_attempt<T: Send + 'static>(
     };
     let opened = task.await;
     state.connecting.locked().now.remove(&attempt);
-    Attempt::Ran(match opened {
-        Ok(opened) => opened,
-        Err(e) if e.is_cancelled() => Err(CONNECT_STOPPED.into()),
-        Err(e) => Err(e.to_string()),
-    })
+    Attempt::Ran(opened.unwrap_or_else(|e| Err(interrupted(e).into())))
 }
 
 /// Opens the tunnel or resolves the URL, checks the dashboard there is Hermes, and the one `expect_server` names, then
@@ -417,17 +430,17 @@ async fn open_connection(
     quick: bool,
     ssh_route: Option<String>,
     steps: Steps,
-) -> Result<(Live, Route), String> {
+) -> Result<(Live, Route), ProbeFailure> {
     let address = target.address();
-    let (credential, typed_token) = steps.run(Step::Keyring, credential.credential(&address)).await?;
-    let (base, tunnel, route, headers) = open_target(target, quick, &steps).await?;
+    // As a connection test's (`hermes_probe`): the saved token is the sign-in's, the address or tunnel the address's.
+    let (credential, typed_token) = steps.run(Step::Keyring, credential.credential(&address)).await.map_err(|e| ProbeFailure::new(Stage::SignIn, e))?;
+    let (base, tunnel, route, headers) = open_target(target, quick, &steps).await.map_err(|e| ProbeFailure::new(Stage::Address, e))?;
     let sign_in = SignIn { credential, headers };
     let limits = transport::StepLimits::of(quick);
     let (dashboard, pipe, seen) = transport::open_route(&base, &sign_in, &profile, expect_server.as_deref(), reach_within(quick), limits, &steps, move |e| {
         let _ = on_event.send(e);
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
     let route = route.with_server(seen.server);
     let ssh_target = match &route {
         Route::Ssh { target, .. } => Some(target.clone()),
@@ -2298,6 +2311,33 @@ mod tests {
         }
     }
 
+    /// #550: a sign-in that fails names the step it stopped at and what the dashboard answered, as a connection test
+    /// does, so a 503 from the sign-in isn't taken for one from the status check.
+    #[tokio::test]
+    async fn a_failed_sign_in_names_its_step_and_the_dashboards_answer() {
+        use axum::http::StatusCode;
+        use axum::routing::{get, post};
+        let status = || async { axum::Json(serde_json::json!({"version": "0.22.7", "auth_required": true, "auth_providers": ["basic"]})) };
+        let signing_in = |code: StatusCode| {
+            axum::Router::new().route("/api/status", get(status)).route("/auth/password-login", post(move || async move { (code, "provider unreachable") }))
+        };
+        for (app, stage, answered) in [
+            (signing_in(StatusCode::SERVICE_UNAVAILABLE), super::Stage::SignIn, Some(503)),
+            (signing_in(StatusCode::UNAUTHORIZED), super::Stage::SignIn, None),
+            (axum::Router::new().route("/api/status", get(|| async { (StatusCode::SERVICE_UNAVAILABLE, "down") })), super::Stage::Reach, Some(503)),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}/", listener.local_addr().unwrap());
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let target = super::Target::Url { url: base, headers: Vec::new() };
+            let password = super::SignInWith::Password { username: "liam".into(), password: "hunter2".into(), provider: None };
+            let on_event = tauri::ipc::Channel::new(|_| Ok(()));
+            let failed =
+                super::open_connection(target, password, "default".into(), on_event, None, false, None, super::Steps::default()).await.err().expect("refused");
+            assert_eq!((failed.stage, failed.answered.map(|a| a.status)), (stage, answered), "{}", failed.message);
+        }
+    }
+
     fn connecting_app() -> tauri::App<tauri::test::MockRuntime> {
         app_holding(AppState::default())
     }
@@ -2351,6 +2391,7 @@ mod tests {
             limit,
         )
         .await
+        .map_err(|f| f.message)
     }
 
     async fn reopen_command(app: &tauri::App<tauri::test::MockRuntime>, connection: &str, attempt: &str) -> Result<(), String> {

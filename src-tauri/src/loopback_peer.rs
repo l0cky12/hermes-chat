@@ -1,4 +1,4 @@
-//! Who is at the other end of a connection to a relay port on `127.0.0.1` (ADR 0105, ADR 0138, #355, #378). The
+//! Who is at the other end of a connection to a relay port on `127.0.0.1` (ADR 0105, ADR 0154, #355, #378). The
 //! sign-in tunnel and every server page relay through such a port (`server_page::serve`). Only this process may use
 //! the sign-in tunnel's; only the owner's own programs may use a server page's, which WebKit's network process loads.
 //!

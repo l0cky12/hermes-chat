@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeHermes } from "./fakeHermes";
+import type { OpenPipe } from "./pipe";
+import { explainSignIn, signInError } from "./setup";
+import type { SignInDetails } from "./tauriPipe";
 import { APP_SOURCE, ProtocolMismatchError, connect } from "./transport";
 
 async function signedIn() {
@@ -29,6 +32,21 @@ describe("Hermes transport", () => {
       route: { kind: "ssh", target: "liam@hermes" },
       unsecure: false,
     });
+  });
+
+  it("explains a chat connection that fails once signed in on the sign-in screen, at the chat stage (#550)", async () => {
+    const d: SignInDetails = { mode: "url", sshTarget: "", url: "https://hermes.example.com", username: "liam", password: "pw", headers: [{ name: "CF-Access-Client-Id", value: "id" }] };
+    const failure = (open: OpenPipe) => connect(open).catch((e: unknown) => explainSignIn(signInError(e), d));
+    const canonical = new FakeHermes();
+    canonical.readyPayload = { ...canonical.readyPayload, session_authority: true };
+    expect(await failure(canonical.openPipe)).toMatchObject({ stage: "chat", problem: "Hermes Chat can't talk to this server yet." });
+    const server = new FakeHermes();
+    const hidden: OpenPipe = async (onEvent, profile) => {
+      const pipe = await server.openPipe(onEvent, profile);
+      onEvent({ kind: "closed", reason: "closed by the server (1008 (not shown, as it may repeat your password or a request header))" });
+      return pipe;
+    };
+    expect(await failure(hidden)).toMatchObject({ stage: "chat", problem: "Something in front of the dashboard at hermes.example.com turned Hermes Chat away." });
   });
 
   it("refuses a server that speaks the canonical protocol", async () => {

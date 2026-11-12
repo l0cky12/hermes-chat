@@ -5,7 +5,7 @@ import type { SavedSignIn } from "./account";
 import type { Route } from "./pipe";
 import type { Reached, SignInDetails } from "./tauriPipe";
 import { isUnsecure } from "./unsecure";
-import { KIND_LABEL, routeTargetLabel, routesOf, singleRoute, type RouteDetails } from "./routes";
+import { KIND_LABEL, RoutesFailedError, routeTargetLabel, routesOf, singleRoute, type RouteDetails } from "./routes";
 import { errorText, textOrEmpty } from "./values";
 
 /**
@@ -27,6 +27,31 @@ export type ProbeFailure = { stage: Stage; message: string; status?: string | nu
 
 /** A call the dashboard answered with a failure: its HTTP status and the start of its body. */
 export type Answered = { status: number; body: string };
+
+/** A real sign-in that failed (src-tauri `hermes_connect`), as an Error that keeps the stage and answer Rust gave. */
+export class SignInFailure extends Error implements ProbeFailure {
+  readonly stage: Stage;
+  readonly status?: string | null;
+  readonly answered?: Answered;
+  constructor(f: ProbeFailure) {
+    super(f.message);
+    this.stage = f.stage;
+    this.status = f.status;
+    this.answered = f.answered;
+  }
+}
+
+/**
+ * What the sign-in screen explains: a sign-in that failed, every route of one failing, or a note Hermes Chat wrote
+ * itself (Sign out's, say), shown as it is.
+ */
+export type SignInError = ProbeFailure | RoutesFailedError | string;
+
+/** `e`, thrown by signing in, as the sign-in screen explains it: anything without a stage is shown as it is. */
+export const signInError = (e: unknown): SignInError => (e instanceof SignInFailure || e instanceof RoutesFailedError ? e : errorText(e));
+
+/** The text `e` was raised with. */
+export const signInErrorText = (e: SignInError) => (typeof e === "string" ? e : e.message);
 
 /**
  * Whether `re` matches the words of a failure that got no answer from the dashboard. An answered failure's message
@@ -305,39 +330,13 @@ export function explain(f: ProbeFailure, d: SignInDetails): TestOutcome & { ok: 
   }
 }
 
-/**
- * Why a real sign-in (at launch, or switching connection) failed, explained as a failed test is. Rust gives a sign-in
- * only its message, so the stage is read from that.
- */
-export function explainSignIn(message: string, d: SignInDetails): Extract<TestOutcome, { ok: false }> {
-  // Sign out's own note that the keyring kept the password (account.ts `signOut`): no sign-in failed, so it is shown
-  // as it is, not read as an unreachable server.
-  if (/^Signed out, but /.test(message)) return { ok: false, stage: "sign-in", problem: message, fixes: [], verdict: "failed" };
-  // Every route failed (routes.ts `RoutesFailedError`): each line says how one did.
-  if (/^No route reached Hermes\./.test(message))
-    return {
-      ok: false,
-      stage: "reach",
-      problem: "None of this connection's routes reached Hermes.",
-      fixes: message.split("\n").slice(1).map((l) => l.replace(/^• /, "")),
-      verdict: "unreachable",
-    };
-  // `hermes_connect` still rejects with text, so its status comes from Rust's own opening words
-  // (`TransportError::Unexpected`), never from the body after them. Like a test's, it is explained by that status.
-  const head = /^The dashboard answered (\d{3}): /.exec(message);
-  if (head) return explain({ stage: "reach", message, answered: { status: Number(head[1]), body: message.slice(head[0].length) } }, d);
-  const stage: Stage = /^Wrong server:/.test(message)
-    ? "reach"
-    : /^Plain http:\/\//.test(message)
-      ? "address"
-      : /Wrong username or password|Too many sign-in attempts|sign-in|\btoken\b/i.test(message)
-    ? "sign-in"
-    : /canonical session protocol|chat connection|ready/i.test(message)
-      ? "chat"
-      : /^SSH|ssh |Couldn't start ssh|couldn't look up|Enter the/i.test(message)
-        ? "address"
-        : "reach";
-  return explain({ stage, message }, d) as Extract<TestOutcome, { ok: false }>;
+/** Why a real sign-in (at launch, or switching connection) failed, explained as a failed test is. */
+export function explainSignIn(e: SignInError, d: SignInDetails): Extract<TestOutcome, { ok: false }> {
+  if (e instanceof RoutesFailedError)
+    return { ok: false, stage: "reach", problem: "None of this connection's routes reached Hermes.", fixes: e.lines, verdict: "unreachable" };
+  // A stop is shown in Rust's words ("Connecting was stopped."), not a test's.
+  if (typeof e === "string" || e.stage === "cancelled") return { ok: false, stage: "sign-in", problem: signInErrorText(e), fixes: [], verdict: "failed" };
+  return explain(e, d);
 }
 
 /** What each stage of a test checks, for the checklist setup shows. */

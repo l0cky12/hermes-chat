@@ -21,7 +21,7 @@ Issue #91 asks for Clone profile: a new profile made from an existing one, witho
 - **Make the full copy the default, with keys stripped by Hermes.** Not possible at `f0d94882`: no `ProfileCreate` field leaves `.env` or `config.yaml` out of a `clone_from` copy. A Hermes change would need one, for example `clone_secrets: false`.
 - **Copy memory into the fresh profile through the file routes.** Rejected, as in ADR 0118: no lock and no add-entry route.
 - **Copy toolsets and MCP servers one by one after the create.** Not built now. Toolsets have per-toolset routes (ADR 0021) and MCP servers a whole-map route (ADR 0121), but MCP servers carry their own secrets, and each would be one more stage to settle and read back. The dialog says they aren't copied; the full copy has them.
-- **A Profiles tab in Settings.** Rejected for now: Settings' profile pickers show one profile's parts each, and nowhere in Settings makes or removes a profile. The switcher's menu already lists every profile. (ADR 0144 later added one, which makes, renames and deletes profiles; Clone also opens from its rows.)
+- **A Profiles tab in Settings.** Rejected for now: Settings' profile pickers show one profile's parts each, and nowhere in Settings makes or removes a profile. The switcher's menu already lists every profile. (ADR 0156 later added one, which makes, renames and deletes profiles; Clone also opens from its rows.)
 
 ## Consequences
 

@@ -27,7 +27,11 @@ Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents
 
 ### Verify before PR
 
-Run the build and test suite after every code change, before committing. A failing build is a blocked task, not a note in the PR body.
+Run `npm run check` after every code change, before committing. It runs the CI checks that most often fail a PR: unique ADR numbers (`scripts/check-adrs.mjs`, which also prints the highest number in use), `cargo fmt --check`, `npm run build`, the test suite, and `cargo clippy --all-targets -- -D warnings`. A failing check is a blocked task, not a note in the PR body.
+
+The suite runs here as `npm run test:local`, which is `vitest run` with two workers, so a full run doesn't time out on a loaded machine. CI keeps `npm test`. If a file still times out, rerun it alone with `npx vitest run <file> --maxWorkers=1`.
+
+Turn on the pre-commit hook once per clone (all worktrees share it): `git config core.hooksPath .githooks`. It refuses a commit that stages Rust when `cargo fmt --check` fails.
 
 ### Releases
 

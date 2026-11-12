@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { FakeHermes, fakeEnv } from "./fakeHermes";
 import { connect } from "./transport";
-import { explain, explainSignIn, isSetUp, missing, providerKeys, readStatus, readyProviders, testConnection, type Probe, type ProbeFailure, type Probed } from "./setup";
+import { explain, explainSignIn, isSetUp, missing, providerKeys, readStatus, readyProviders, SignInFailure, testConnection, type Probe, type ProbeFailure, type Probed } from "./setup";
 import type { SignInDetails } from "./tauriPipe";
 import { RestError } from "./pipe";
 
@@ -139,9 +139,6 @@ describe("Explaining a failed test", () => {
     const hiddenBody = "(not shown, as it may repeat your password or a request header)";
     const hidden = { message: `The dashboard answered 403: ${hiddenBody}`, answered: { status: 403, body: hiddenBody } };
     const closed = "The chat connection closed before Hermes was ready: closed by the server (1008 (not shown, as it may repeat your password or a request header))";
-    // A hidden body or close reason doesn't move the failure to another stage.
-    expect(explainSignIn(closed, url).stage).toBe("chat");
-    expect(explainSignIn(awayHidden, url).stage).toBe("reach");
     for (const [stage, failure] of [["sign-in", hidden], ["chat", hidden], ["chat", { message: closed }]] as const) {
       expect(why({ stage, ...failure, status: STATUS }, withHeaders)).toMatchObject({
         problem: "Something in front of the dashboard at hermes.example.com:9119 turned Hermes Chat away.",
@@ -183,7 +180,7 @@ describe("Explaining a failure the dashboard answered (#517)", () => {
   it("reads a 502 whose body says 'answered 401' as a server error, not a refused sign-in", () => {
     const gateway = answer("reach", 502, "upstream said: The dashboard answered 401: Unauthorized");
     expect(explain(gateway, url)).toMatchObject({ problem: serverError, verdict: "unreachable" });
-    expect(explainSignIn(gateway.message, url).problem).toBe(serverError);
+    expect(explainSignIn(new SignInFailure(gateway), url).problem).toBe(serverError);
   });
 
   it("reads a gateway's 525 'SSL handshake failed' page as a server error, not an untrusted certificate", () => {
@@ -211,6 +208,23 @@ describe("Explaining a failure the dashboard answered (#517)", () => {
 });
 
 describe("Explaining what the sign-in screen shows", () => {
+  it("explains a sign-in's failure at the stage Rust names, not the status check's (#550)", () => {
+    const unavailable = "provider unreachable";
+    const failed = new SignInFailure({ stage: "sign-in", message: `The dashboard answered 503: ${unavailable}`, answered: { status: 503, body: unavailable }, status: STATUS });
+    expect(explainSignIn(failed, url)).toMatchObject({ stage: "sign-in", problem: "The dashboard's sign-in isn't available right now.", fixes: ["Try again in a moment."] });
+  });
+
+  it("takes an unanswered failure's stage from Rust, whatever its words say (#550)", () => {
+    const reset = new SignInFailure({ stage: "sign-in", message: "Can't reach the Hermes dashboard: connection reset by peer" });
+    expect(explainSignIn(reset, url)).toMatchObject({ stage: "sign-in", problem: "The dashboard's sign-in failed." });
+    const closed = new SignInFailure({ stage: "chat", message: "The chat connection closed before Hermes was ready: the sign-in token expired" });
+    expect(explainSignIn(closed, url)).toMatchObject({ stage: "chat", problem: "Signed in, but Hermes didn't get ready." });
+  });
+
+  it("says a stopped sign-in was stopped, in Rust's words rather than a test's", () => {
+    expect(explainSignIn(new SignInFailure({ stage: "cancelled", message: "Connecting was stopped." }), url).problem).toBe("Connecting was stopped.");
+  });
+
   it("shows Sign out's keyring note as it is, not as an unreachable server", () => {
     const note = "Signed out, but couldn't delete the saved password from the system keyring: no Secret Service on the bus";
     const why = explainSignIn(note, { mode: "url", sshTarget: "", url: "http://hermes:9119", username: "liam", password: "", headers: [] });
