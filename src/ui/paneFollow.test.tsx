@@ -9,7 +9,7 @@ const noScreenshots: ScreenshotApi = { capture: () => Promise.reject(new Error("
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 
-const VIEW = 600;
+let VIEW = 600;
 let width = 800;
 let content = 5000;
 
@@ -58,6 +58,7 @@ afterAll(() => {
 });
 beforeEach(() => {
   moved.clear();
+  VIEW = 600;
   width = 800;
   content = 5000;
 });
@@ -247,4 +248,40 @@ it("stops following when the first frame of a wheel scroll moves the view up les
   frame();
   grow(5);
   expect(fromBottom()).toBe(5.5);
+});
+
+it("follows again when the view grows taller and lands at the bottom, after the ResizeObserver has run", () => {
+  const { scroller, frame, fromBottom, grow } = pane(10);
+
+  scroller.scrollTop = content - VIEW - 100;
+  frame();
+  VIEW += 200;
+  scroller.scrollTop = content - VIEW;
+  runResizeObservers();
+  frame();
+  grow(300);
+  expect(fromBottom()).toBe(0);
+});
+
+it("keeps following when Shift turns the wheel sideways", () => {
+  const { scroller, frame, fromBottom, grow } = pane(10);
+
+  grow(5);
+  fireEvent.wheel(scroller, { deltaY: -87, shiftKey: true });
+  frame();
+  grow(5);
+  expect(fromBottom()).toBe(0);
+});
+
+it("stops following on a key that scrolls up from a checkbox in the transcript", () => {
+  const { scroller, frame, fromBottom, grow } = pane(10);
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  scroller.querySelector(".msg.assistant")!.append(box);
+
+  grow(5);
+  fireEvent.keyDown(box, { key: "PageUp" });
+  frame();
+  grow(5);
+  expect(fromBottom()).toBe(5);
 });

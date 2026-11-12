@@ -143,11 +143,12 @@ export type FindTarget = { query: string; itemId?: string; at: number };
 /** How long a new find query may wait for the transcript to mark it in the background before a streamed delta marks it. */
 const FIND_WAITS_MS = 200;
 const sizeOf = (el: HTMLElement) => `${el.clientWidth}x${el.clientHeight}`;
-/** Where the transcript's view was at its last scroll event or pin, and how tall the transcript was then. */
-type View = { top: number; height: number };
+/** Where the transcript's view was at its last scroll event or pin, and the furthest down it could go then. */
+type View = { top: number; max: number };
+const viewOf = (el: HTMLElement): View => ({ top: el.scrollTop, max: el.scrollHeight - el.clientHeight });
 const pinToBottom = (el: HTMLElement, seen: { current: View }) => {
   el.scrollTop = el.scrollHeight;
-  seen.current = { top: el.scrollTop, height: el.scrollHeight };
+  seen.current = viewOf(el);
 };
 /** Whether scrolling up from `node` moves the transcript `el`, rather than a box in it that can still scroll up. */
 const movesUp = (el: HTMLElement, node: Element | null) => {
@@ -597,7 +598,7 @@ export function ChatPane({
   const canRetry = status === "connected" && !chat.loading && !chat.running;
   const findRef = useRef<HTMLInputElement>(null);
   const stickToBottom = useRef(true);
-  const seen = useRef<View>({ top: 0, height: 0 });
+  const seen = useRef<View>({ top: 0, max: 0 });
   const itemsRef = useRef(chat.items);
   itemsRef.current = chat.items;
   /** Renders the chunk of the first block `has` picks, when it is far from the view, so a lookup in the DOM finds it. */
@@ -747,7 +748,7 @@ export function ChatPane({
       const el = scrollRef.current;
       const t = e.target as HTMLElement;
       const body = t === document.body;
-      if (!el || e.ctrlKey || e.altKey || e.metaKey || t.isContentEditable || t.closest("input, textarea, select")) return;
+      if (!el || e.ctrlKey || e.altKey || e.metaKey || t.isContentEditable || t.closest("textarea, select, input:not([type=checkbox])")) return;
       const up = e.key === "ArrowUp" || e.key === "PageUp" || e.key === "Home" || (body && e.key === " " && e.shiftKey);
       if (up && movesUp(el, body ? pressed : t)) stickToBottom.current = false;
     };
@@ -929,20 +930,21 @@ export function ChatPane({
         ref={scrollRef}
         onWheel={(e) => {
           // A reply's render can pin the view back before the wheel's first scroll frame, which cancels the scroll (#544).
-          if (e.deltaY < 0 && movesUp(e.currentTarget, e.target as Element)) stickToBottom.current = false;
+          // Shift turns the wheel sideways.
+          if (e.deltaY < 0 && !e.shiftKey && movesUp(e.currentTarget, e.target as Element)) stickToBottom.current = false;
         }}
         onScroll={(e) => {
           const el = e.currentTarget;
           // A pin's scroll event comes a frame later, after a wheel up may have stopped following.
           const was = seen.current;
           if (el.scrollTop === was.top) return;
-          seen.current = { top: el.scrollTop, height: el.scrollHeight };
+          seen.current = viewOf(el);
           // WebKitGTK moves the view of a resized pane itself, and fires this before the ResizeObserver runs for the
           // new size (#512). That scroll isn't the owner's, and the observer puts a pane that follows back at the bottom.
           if (observedSize.current !== undefined && observedSize.current !== sizeOf(el)) return;
-          // Smooth scrolling moves the view a few pixels a frame, so any move up stops following (#544), except the one a
-          // transcript that got shorter makes to its new bottom.
-          const up = el.scrollTop < was.top && el.scrollHeight >= was.height;
+          // Smooth scrolling moves the view a few pixels a frame, so any move up stops following (#544), except to a new
+          // bottom, when the transcript got shorter or the view taller.
+          const up = el.scrollTop < was.top && seen.current.max >= was.max;
           stickToBottom.current = !up && el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
