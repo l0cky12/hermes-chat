@@ -132,8 +132,24 @@ The chat list panel showing the bots in place of the chats, while the active pan
 _Avoid_: Bot Mode (that is Hermes's feature), bots sidebar
 
 **Connection**:
-A Hermes server this computer can sign in to, saved with a name, its Routes, its dashboard username, and when it was last used. Each keeps its own password and Extra request headers in the system keyring, and its own Drafts, Queued messages, Failed messages, Saved copies, profile shown, Model pick and chat to reopen on this computer, so the same profile name on two servers never shares them. One is in use at a time. Switching to another asks first when a reply is running or an Approval waiting; Hermes keeps the reply going, and switching back brings both back. Removing one deletes only what this computer keeps for it, after saying what that is; its chats stay on the server. Nothing picks a connection by its name, or on its own: launch signs in to the one in use, showing its saved chat list meanwhile, Connecting, when there is one (ADR 0089), and when that one is removed, the sign-in screen offers the others and waits (ADR 0112).
+A Hermes server this computer can sign in to, saved with a name, its Routes, its dashboard username, and when it was last used. Each keeps its own password and Extra request headers in the system keyring, and its own Drafts, Queued messages, Failed messages, Saved copies, profile shown, Model pick and chat to reopen on this computer, so the same profile name on two servers never shares them. Several can be Live at once, one of them the Composer target. With the limit at one, switching to another closes it and asks first when a reply is running or an Approval waiting; Hermes keeps the reply going, and switching back brings both back. Removing one deletes only what this computer keeps for it, after saying what that is; its chats stay on the server. Nothing picks a connection by its name, or on its own: launch signs in to the one in use, showing its saved chat list meanwhile, Connecting, when there is one (ADR 0089), and when that one is removed, the sign-in screen offers the others and waits (ADR 0112).
 _Avoid_: server (the machine itself), account, sign-in (the act of signing in), profile (an agent setup on the server)
+
+**Live connection**:
+A Connection that is open now, with its own socket, sign-in, route, keyring entries, chat cache and reconnect loop, held by Rust under the connection's id and by the webview as one `Hermes` instance (ADR 0125). Up to the owner's limit are live at once (Live at once, 3 by default, 1 to 8). One is the Composer target; the others are Background connections. Which are live is kept, so launch opens them again.
+_Avoid_: active connection, session (Hermes's chat)
+
+**Composer target**:
+The Live connection the owner works in: the composer, voice, Server files, Settings and slash commands act on it. Making another live connection the target is a pointer change: nothing closes or signs in again (ADR 0125).
+_Avoid_: current connection, active server
+
+**Background connection**:
+A Live connection that isn't the Composer target. It keeps its socket and the chats it held, shows their Approvals with its server's name in the Inbox and in notifications, and reads what runs and waits on its server every minute. It never sends, starts, branches, searches or drains a queue, and answers no server request it doesn't show (ADR 0125).
+_Avoid_: watched connection, idle connection (one that isn't live)
+
+**Chat reference** (`ChatRef`):
+A chat named by its Connection, profile and id together, since two servers can have the same profile and chat ids. Anything outside one connection's `Hermes` instance, such as an Inbox entry from a Background connection, names a chat this way (ADR 0125).
+_Avoid_: chat id (alone, outside an instance)
 
 **Connection attempt**:
 One time the app opens a Connection, at launch or to reconnect: the Routes it tried, each by its kind and id, the connect steps each reached (keyring, DNS or SSH tunnel, status, sign-in, ticket, WebSocket, ready) and how long each took, and how it ended, with the error after redaction and with every address taken out. The newest 50 are kept on this computer between launches, never uploaded, and shown in Logs → Connection attempts; one the app was closed during reads as unfinished at the step it was on (ADR 0033).

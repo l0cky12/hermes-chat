@@ -2866,6 +2866,23 @@ label.memory-pick { cursor: pointer; }
 .sign-in-raw { color: var(--muted); margin-top: 2px; }
 .leave-list { margin: 6px 0 8px; padding-left: 18px; color: var(--text-2); line-height: 1.55; }
 .leave-dialog.conn-remove { width: min(520px, 92vw); }
+/* Live connections (ADR 0125): the rail's summed count and outage mark, the overview's line, the limit, the server badge. */
+.conn-count {
+  position: absolute; top: 2px; right: 1px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px; background: var(--accent);
+  color: var(--bg); font-size: calc(10rem / 14); font-weight: 600; line-height: 15px; text-align: center;
+}
+.conn-down { position: absolute; bottom: 5px; right: 5px; }
+.badge.conn-status.is-connected { color: var(--ok); }
+.badge.conn-status.is-reconnecting, .badge.conn-status.is-connecting { color: var(--warn); }
+.badge.conn-status.is-offline, .badge.conn-status.is-needs-sign-in { color: var(--bad); }
+.conn-live-line { font-size: calc(11.5rem / 14); color: var(--text-2); overflow-wrap: anywhere; }
+.conn-limit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 10px; }
+.conn-limit select { background: var(--bg); border: 1px solid var(--line-2); border-radius: 7px; padding: 3px 6px; }
+.conn-limit .muted { flex-basis: 100%; font-size: calc(12rem / 14); }
+.leave-dialog.conn-at-limit { width: min(520px, 92vw); }
+.conn-at-limit-list { list-style: none; padding-left: 0; display: flex; flex-direction: column; gap: 6px; }
+.conn-at-limit-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.server-badge { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- search filters, tags and Saved filters (ADR 0106) ---------- */
 .palette-filters-btn {
@@ -3686,3 +3703,40 @@ div.export-preview.export-page { height: auto; padding: 10px 12px; background: v
 .preview-toolbar .icon-btn.active { color: var(--accent); }
 .annotate.reviewing .annotate-notes { border-bottom: 1px solid var(--line); }
 .chip-stale .chip-size { white-space: nowrap; }
+
+/* ---------- write or improve a project's instructions with AI (InstructionsAI.tsx, ADR 0152) ---------- */
+.defaults-instructions-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.defaults-instructions-head .btn.small { height: 26px; padding: 0 10px; font-size: calc(12.5rem / 14); }
+.leave-overlay .leave-dialog.instructions-ai { max-width: min(820px, calc(100% - 32px)); width: 100%; max-height: calc(100vh - 32px); overflow-y: auto; gap: 12px; }
+.instructions-ai-title svg { color: var(--accent, var(--text)); }
+.instructions-ai-ways { display: flex; flex-direction: column; gap: 8px; }
+.instructions-ai-way {
+  display: flex; align-items: flex-start; gap: 12px; text-align: left; padding: 12px 14px; border: 1px solid var(--line-2); background: var(--raised-2);
+  color: var(--text); font: inherit;
+}
+.instructions-ai-way:hover { border-color: var(--line-3); }
+.instructions-ai-way > svg { flex: none; margin-top: 2px; color: var(--muted); }
+.instructions-ai-way > span { display: flex; flex-direction: column; gap: 3px; }
+.instructions-ai-way-name { font-weight: 600; }
+.instructions-ai-form { display: flex; flex-direction: column; gap: 10px; }
+.instructions-ai-form textarea, .instructions-ai-note input {
+  font: inherit; color: var(--text); background: var(--input, var(--raised)); border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 10px;
+  line-height: 1.5; outline: none;
+}
+.instructions-ai-form textarea { resize: vertical; min-height: 96px; }
+.instructions-ai-form textarea:focus, .instructions-ai-note input:focus { border-color: var(--line-3); }
+.instructions-ai-question { color: var(--text); font-size: calc(14rem / 14); line-height: 1.5; }
+.instructions-ai-answers ol { margin: 6px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.instructions-ai-answers li { overflow-wrap: anywhere; }
+.instructions-ai-answers li .muted { display: block; }
+.instructions-ai-review { display: flex; flex-direction: column; gap: 10px; }
+.instructions-ai-view { align-self: flex-start; }
+.instructions-ai-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.instructions-ai-pane { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.instructions-ai-text {
+  white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; padding: 10px 12px; border: 1px solid var(--line-2); background: var(--code-bg);
+  max-height: 42vh; overflow-y: auto;
+}
+.instructions-ai-working { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--muted); }
+.instructions-ai-working .btn { margin-left: auto; }
+.instructions-ai-actions { justify-content: flex-end; }

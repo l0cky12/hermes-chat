@@ -1,14 +1,14 @@
 import { type ReactNode, type RefObject, Suspense, lazy, useCallback, useLayoutEffect, useMemo, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { ArrowLeft, ArrowRight, Columns2, FolderCog, GitBranch, PanelBottom, PanelLeft, PanelRight, PanelTop, X } from "lucide-react";
-import { CONNECT_STOPPED, LIVE_MIN_GAP_MS, RenameConflict, connect, openSaved, readSaved, toSource, type Delivery, type Hermes } from "./hermes/transport";
+import { CONNECT_STOPPED, LIVE_MIN_GAP_MS, RenameConflict, connect, openSaved, readSaved, toSource, type Delivery, type Hermes, type Notify } from "./hermes/transport";
 import { invoke } from "@tauri-apps/api/core";
 import type { CommandHost } from "./ui/SlashCommands";
 import { STEER, type ServerCommandList } from "./hermes/commands";
 import type { SkillCall, SkillCommands } from "./hermes/skillCommands";
 import { CHECK_EVERY_MS } from "./hermes/otherProfiles";
 import { type Account, type Kept, type SavedSignIn, launchOpen, launchSignIn, removeConnection, savedSignIn, savedSignInOrForm, signIn, signInForm, signOutToSignIn } from "./hermes/account";
-import { CONNECTIONS_KEY, Connections, type SavedConnection, addressLabel, defaultName, keptRouteHealth, prefScope } from "./hermes/connections";
+import { CONNECTIONS_KEY, Connections, type SavedConnection, type ScopeSource, addressLabel, defaultName, keptRouteHealth, prefScope } from "./hermes/connections";
 import { forgetConnectionData } from "./hermes/forgetConnection";
 import { clearRename, forgetProfileLocally, noteRename, renameProfileLocally, renamePending } from "./hermes/profileLocalData";
 import { serial as makeSerial } from "./hermes/serial";
@@ -29,7 +29,7 @@ import { desktopNotify } from "./hermes/tauriNotify";
 import { ScreenshotDesk, type ScreenshotApi } from "./hermes/screenshots";
 import { desktopSummon, type SummonApi } from "./hermes/summon";
 import { onDesktopScreenshot, screenshotSupport, showWindow, syncScreenshotOutbox, tauriScreenshots, type ScreenshotSupport } from "./hermes/tauriScreenshot";
-import { ConnectionManager, RailConnections, RemoveConnection, SwitchConnection } from "./ui/Connections";
+import { AtConnectionLimit, ConnectionManager, DisconnectConnection, RailConnections, RemoveConnection, SwitchConnection, atLimitText, liveCounts } from "./ui/Connections";
 import { checkShortcut, shortcutLabel, shortcutOf } from "./ui/shortcut";
 import { chordLabel, pickApp, useBindings } from "./ui/keybindings";
 
@@ -51,7 +51,8 @@ import { EMPTY_OFFICE_MEMORY } from "./ui/OfficeBuilding";
 import { officeRooms, type Desk, type Room } from "./hermes/office";
 import type { SubagentId } from "./hermes/subagents";
 import { botActivity, isBotChat, isBotChatTitle, newInBotChatNote, type Bot } from "./hermes/bots";
-import { blocksRestore, inboxAcks, inboxEntries, inboxScope, needsOwner, type InboxEntry } from "./hermes/inbox";
+import { blocksRestore, inboxAcks, inboxEntries, inboxScope, needsOwner, type InboxAcks, type InboxEntry } from "./hermes/inbox";
+import { LiveConnections, attention as attentionOf, withoutServer, type LiveSummary } from "./hermes/liveConnections";
 import { handoffs as handoffsOf, nextHandoffChange, outstandingIds, type Handoff, type StopWaiting } from "./hermes/dispatched";
 import { ChatPane, type Comparing, type FollowUpHost, type JumpTarget } from "./ui/ChatPane";
 import type { ChatPin } from "./ui/ChatMenu";
@@ -200,19 +201,52 @@ const healthOf = (id: string) => routeHealth.get(id) ?? routeHealth.set(id, kept
 const connectionAttempts = new AttemptLog(tauriAttemptStore);
 /**
  * A connection's pipe: its routes in order, and the server id the first route that names one reports kept (ADR 0120).
- * Each opening is kept in the record of connection attempts.
+ * Each opening is kept in the record of connection attempts. Rust is told the owner's limit, but never less than what
+ * is live now with this one: a lowered limit applies to the next Connect, and neither a live connection's reconnect nor
+ * signing in to one again closes the others.
  */
 const pipeFor = (c: SavedConnection, d: SignInDetails) =>
-  tauriPipe(d, c.id, { onServer: (server) => savedConnections().setServer(c.id, server), health: healthOf(c.id), attempts: connectionAttempts });
+  tauriPipe(d, c.id, { onServer: (server) => savedConnections().setServer(c.id, server), health: healthOf(c.id), attempts: connectionAttempts }, () =>
+    Math.max(savedConnections().liveLimit(), liveConnections().size + (liveConnections().has(c.id) ? 0 : 1)),
+  );
+
+/** Each connection's inbox dismissals, read once per connection (inbox.ts `inboxAcks`). */
+const acksByConnection = new Map<string, InboxAcks>();
+const acksFor = (c: ScopeSource) => {
+  const scope = inboxScope(c);
+  return acksByConnection.get(scope) ?? acksByConnection.set(scope, inboxAcks(localStorage, scope)).get(scope)!;
+};
+
+/** Each connection and profile's Stop waiting choices, for a background connection's dispatched work (dispatched.ts). */
+const stopsByScope = new Map<string, StopWaitingStore>();
+const backgroundHandoffs = (c: SavedConnection, profile: string, chats: Chat[]) => {
+  const scope = projectScope(c, profile);
+  const stops = stopsByScope.get(scope) ?? stopsByScope.set(scope, new StopWaitingStore(localStorage, scope)).get(scope)!;
+  // The main screen keeps its own copy while the connection is the target: read what it wrote.
+  stops.reread();
+  const now = Date.now();
+  return { handoffs: handoffsOf(chats, stops.getSnapshot(), now), next: nextHandoffChange(chats, stops.getSnapshot(), now) };
+};
+
+let liveStore: LiveConnections | undefined;
+/** The live connections and the composer target (ADR 0125); which are live is kept for launch to open them again. */
+const liveConnections = () => (liveStore ??= new LiveConnections((ids) => savedConnections().setLive(ids), acksFor, backgroundHandoffs));
+
+/**
+ * A connection's desktop notifications. With more than one connection live, each names its server, so an Approval
+ * from a background connection says where it waits.
+ */
+const notifyFor = (c: SavedConnection): Notify => (n) =>
+  desktopNotify(liveConnections().size > 1 ? { title: `${savedConnections().get(c.id)?.name ?? c.name}: ${n.title}`, body: n.body } : n);
 
 const account: Account = {
   get connections() {
     return savedConnections();
   },
   secrets: systemSecrets,
-  connect: (c, d, signal) => connect(pipeFor(c, d), undefined, localChatCache(c), desktopNotify, signal),
-  readSaved: (c, d, reason) => readSaved(pipeFor(c, d), reason, localChatCache(c), desktopNotify),
-  openSaved: (c, d) => openSaved(pipeFor(c, d), localChatCache(c), desktopNotify),
+  connect: (c, d, signal) => connect(pipeFor(c, d), undefined, localChatCache(c), notifyFor(c), signal),
+  readSaved: (c, d, reason) => readSaved(pipeFor(c, d), reason, localChatCache(c), notifyFor(c)),
+  openSaved: (c, d) => openSaved(pipeFor(c, d), localChatCache(c), notifyFor(c)),
 };
 
 /** The sign-in methods a connection's server offers, read without signing in (ADR 0058). */
@@ -262,9 +296,13 @@ const withKnownServer = (c: SavedConnection, d: SignInDetails): SignInDetails =>
  * `connection` absent there: none is in use (none saved, or the one in use was removed), so the owner picks one.
  * `firstRun`: nothing is saved on this computer, so setup opens instead of the sign-in screen.
  */
-type Launch =
+type Launch = (
   | { hermes: Hermes; connection: SavedConnection; details: SignInDetails; turnedDown?: Promise<string | undefined> }
-  | { connection?: SavedConnection; initial: SignInDetails; error?: string; firstRun?: boolean };
+  | { connection?: SavedConnection; initial: SignInDetails; error?: string; firstRun?: boolean }
+) & {
+  /** The other connections live when the app last ran, to open again in the background (ADR 0125). */
+  reopen?: SavedConnection[];
+};
 
 /**
  * Setup, open over whatever else shows: where it was opened from, the connection it saves (`target`, a new one not
@@ -285,14 +323,16 @@ let launching: Promise<Launch> | undefined;
 function launch(): Promise<Launch> {
   return (launching ??= (async () => {
     const c = account.connections.current();
-    if (!c) return { initial: BLANK, firstRun: !account.connections.recent().length };
+    // Read before the target opens, which keeps the live set anew.
+    const reopen = account.connections.liveLimit() > 1 ? account.connections.live().filter((x) => x.id !== c?.id) : [];
+    if (!c) return { initial: BLANK, firstRun: !account.connections.recent().length, reopen };
     const read = await savedSignInOrForm(c, account);
-    if ("form" in read) return { connection: c, initial: read.form };
+    if ("form" in read) return { connection: c, initial: read.form, reopen };
     const saved = read.saved;
     try {
-      return { ...(await launchOpen(c, saved, account)), connection: c, details: saved };
+      return { ...(await launchOpen(c, saved, account)), connection: c, details: saved, reopen };
     } catch (e) {
-      return { connection: c, initial: saved, error: errorText(e) };
+      return { connection: c, initial: saved, error: errorText(e), reopen };
     }
   })());
 }
@@ -358,6 +398,8 @@ function Screens({ links }: { links: LinkInbox }) {
   const signInAsks = useRef(0);
   const [confirmingSetup, setConfirmingSetup] = useState(false);
   const connectionGuard = useRef<((to: SavedConnection) => Promise<boolean>) | undefined>(undefined);
+  // Main's question about an unsaved edit before the main screen changes under it; true when there is none or it goes.
+  const editGuard = useRef<(() => Promise<boolean>) | undefined>(undefined);
   // A connection being switched to, for the screen shown meanwhile.
   const [switchingTo, setSwitchingTo] = useState<SavedConnection>();
   // Asked from the sign-in screen: remove this connection?
@@ -384,10 +426,24 @@ function Screens({ links }: { links: LinkInbox }) {
     return () => window.removeEventListener("storage", changed);
   }, [store]);
 
-  // Rust holds one connection, so anything that opens or closes one runs after the one before has finished: a later
-  // switch can never be overtaken by an earlier one, and the one left behind is closed before the next one opens.
-  // `stale()`: a newer change was asked for meanwhile, so this one stops at its next step.
+  // Anything that opens a connection, or changes which one is the composer target, runs after the one before has
+  // finished: a later switch can never be overtaken by an earlier one, and two openings of one connection never race,
+  // since Rust keeps only the newer. `stale()`: a newer change was asked for meanwhile, so this one stops at its next
+  // step. Disconnecting a background connection only closes it, so it doesn't wait here.
   const [serial] = useState(makeSerial);
+
+  // The live connections (ADR 0125). The target's `Hermes` is `hermes`; the others carry on in the background.
+  const registry = liveConnections();
+  useSyncExternalStore(registry.subscribe, registry.getSnapshot);
+  const overview = registry.overview();
+  // A message to open a chat on another live connection once it is the target: an inbox entry or a chat link for it.
+  const [opening, setOpening] = useState<{ link: ChatLink; at: number; connection: string }>();
+  // Connect asked at the limit: the live connections to choose one to disconnect from.
+  const [atLimit, setAtLimit] = useState<SavedConnection>();
+  // A background connection with work under way, asked about before Disconnect closes it.
+  const [disconnecting, setDisconnecting] = useState<{ s: LiveSummary; hermes: Hermes }>();
+  // The connections launch is opening again in the background, until each has opened or failed.
+  const [reopening, setReopening] = useState<string[]>([]);
 
   useEffect(() => {
     void launch().then((l) => {
@@ -396,24 +452,86 @@ function Screens({ links }: { links: LinkInbox }) {
         signedInWith.current = l.details;
         setHeaders(headerNames(l.details));
         current.current = l.hermes;
+        registry.add({ connection: l.connection, hermes: l.hermes, details: l.details }, true);
         setHermes(l.hermes);
         // The saved password or token was turned down while the saved chats showed: the sign-in screen asks, as it
         // would have without them, unless the owner has moved on meanwhile.
         void l.turnedDown?.then((why) => {
-          if (why !== undefined && current.current === l.hermes) showSignIn(l.connection, l.details, why);
+          if (why === undefined) return;
+          if (current.current === l.hermes) return showSignIn(l.connection, l.details, why);
+          // The owner moved on meanwhile: the turned-down instance is closed, so it leaves the live set and asks later.
+          if (registry.get(l.connection.id)?.hermes !== l.hermes) return;
+          void closeLive(l.connection.id);
+          registry.needsSignIn(l.connection, why);
         });
-        return;
+      } else {
+        setInitial(l.initial);
+        setError(l.error);
+        if (l.firstRun) setSetup({ mode: "first-run", initial: BLANK, target: store.draft(BLANK) });
       }
-      setInitial(l.initial);
-      setError(l.error);
-      if (l.firstRun) setSetup({ mode: "first-run", initial: BLANK, target: store.draft(BLANK) });
+      // Then the rest of the live set, one at a time, with saved passwords only: one that needs a password says so in
+      // the overview, and never asks by itself.
+      setReopening((l.reopen ?? []).map((c) => c.id));
+      for (const c of l.reopen ?? [])
+        void openInBackground(c)
+          .catch(() => {})
+          .finally(() => setReopening((ids) => ids.filter((id) => id !== c.id)));
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- launch runs once; `registry` is one for the app, and `showSignIn` and `openInBackground` are new functions each render
   }, [store]);
 
-  const use = (h: Hermes | null) => {
+  /** Makes `h`, the instance for `c` opened with `d`, the composer target, or none; the main screen starts afresh. */
+  const makeTarget = (h: Hermes | null, c?: SavedConnection, d?: SignInDetails) => {
+    if (h && c && d) registry.add({ connection: c, hermes: h, details: d }, true);
+    else if (!h) registry.setTarget(undefined);
     current.current = h;
     setHermes(h);
     setConnections((n) => n + 1);
+  };
+
+  /** Closes a live connection and takes it out of the live set. The caller decides what is shown instead. */
+  const closeLive = async (id: string | undefined) => {
+    if (id === undefined) return;
+    const m = registry.remove(id);
+    await m?.hermes.close().catch(() => {});
+  };
+
+  /** Whether connecting `c` would keep the others live: the owner allows more than one, and `c` isn't live already. */
+  const keepsOthers = () => store.liveLimit() > 1;
+  /**
+   * Whether connecting `c` is refused at the limit. At a limit of 1 a connect replaces the target, as before, unless
+   * background connections are still live from a higher limit: closing nothing to make room, it is refused then too.
+   */
+  const full = (c: SavedConnection) =>
+    !registry.has(c.id) && (keepsOthers() ? registry.size >= store.liveLimit() : registry.list().some((m) => m !== registry.target()));
+
+  /**
+   * Opens `c` with its saved sign-in as a background connection, leaving the target as it is. Without a saved password,
+   * or if it is turned down, it is listed as needing to sign in. Refused at the limit.
+   */
+  const openInBackground = (c: SavedConnection) =>
+    serial.after(async () => {
+      if (registry.has(c.id)) return;
+      if (full(c)) return setAtLimit(c);
+      const read = await savedSignInOrForm(c, account);
+      if ("form" in read) return registry.needsSignIn(c, `No ${c.method === "token" ? "token" : "password"} is saved for it.`);
+      try {
+        const h = await launchSignIn(c, read.saved, account);
+        if (registry.has(c.id)) return void (await h.close().catch(() => {}));
+        registry.add({ connection: store.get(c.id) ?? c, hermes: h, details: read.saved }, false);
+      } catch (e) {
+        registry.needsSignIn(c, errorText(e));
+      }
+    });
+
+  /** Disconnects a background connection: closes it alone. Nothing else changes: not the target, nor its drafts or queues. */
+  const disconnect = (c: SavedConnection) => {
+    if (registry.target()?.connection.id === c.id) return;
+    // What is under way there is named first, as before leaving a connection (ADR 0112); nothing waits otherwise.
+    const s = registry.overview().find((x) => x.id === c.id);
+    const m = registry.get(c.id);
+    if (s && m && (s.underWay.waiting || s.underWay.running)) return setDisconnecting({ s, hermes: m.hermes });
+    void closeLive(c.id);
   };
 
   // On a fallback route, the routes before it are checked now and then without the password, and the connection
@@ -427,6 +545,10 @@ function Screens({ links }: { links: LinkInbox }) {
 
   /** The sign-in screen, for `c` with `d` filled in, or with none picked. */
   const showSignIn = (c: SavedConnection | undefined, d: SignInDetails = BLANK, why?: string) => {
+    // The connection asking to sign in again leaves the live set; any other stays live, in the background.
+    const t = registry.target();
+    if (t && t.connection.id === c?.id) void closeLive(t.connection.id);
+    registry.setTarget(undefined);
     signedInWith.current = undefined;
     current.current = null;
     setHermes(null);
@@ -445,10 +567,31 @@ function Screens({ links }: { links: LinkInbox }) {
   const switchTo = (target: SavedConnection) =>
     serial(async (stale) => {
       if (stale()) return;
+      const shownAs = (h: Hermes, d: SignInDetails) => {
+        store.use(target.id);
+        signedInWith.current = d;
+        const c = store.get(target.id) ?? target;
+        setConnection(c);
+        setHeaders(headerNames(d));
+        setNotSaved(undefined);
+        setKept({ password: true, headers: true });
+        setError(undefined);
+        // The connection's own last open chat, in the profile it showed last.
+        setColdStart(true);
+        // A switch this one overtook, to a connection still opening, leaves no "Connecting to…" behind.
+        setSwitchingTo(undefined);
+        makeTarget(h, c, d);
+      };
+      // Live already: the target moves to it, and nothing closes or reconnects (ADR 0125).
+      const live = registry.get(target.id);
+      if (live) return shownAs(live.hermes, live.details);
+      if (full(target)) return setAtLimit(target);
       setSwitchingTo(target);
       try {
-        await current.current?.close().catch(() => {});
+        // With room for one connection only, the one in use closes first, as before.
+        if (!keepsOthers()) await closeLive(registry.target()?.connection.id);
         setHermes(null);
+        registry.setTarget(undefined);
         const read = await savedSignInOrForm(target, account);
         if (stale()) return;
         if ("form" in read) return showSignIn(target, read.form);
@@ -456,16 +599,7 @@ function Screens({ links }: { links: LinkInbox }) {
         try {
           const h = await launchSignIn(target, d, account);
           if (stale()) return void (await h.close().catch(() => {}));
-          store.use(target.id);
-          signedInWith.current = d;
-          setConnection(store.get(target.id) ?? target);
-          setHeaders(headerNames(d));
-          setNotSaved(undefined);
-          setKept({ password: true, headers: true });
-          setError(undefined);
-          // The connection's own last open chat, in the profile it showed last.
-          setColdStart(true);
-          use(h);
+          shownAs(h, d);
         } catch (e) {
           if (!stale()) showSignIn(target, d, errorText(e));
         }
@@ -496,15 +630,21 @@ function Screens({ links }: { links: LinkInbox }) {
     // Stopped while it waits its turn: it never starts, and the connection in use isn't touched.
     return serial.stoppable(signal, () => new Error(CONNECT_STOPPED), async (stale) => {
       if (stale()) throw new Error("A newer connection was selected.");
+      if (full(target)) throw new Error(atLimitText(store.liveLimit()));
       const before = current.current;
       const beforeConnection = connectionRef.current;
       const beforeDetails = signedInWith.current;
-      if (before) await before.close().catch(() => {});
+      // The connection signed in again closes first. Another one in use carries on in the background, unless there is
+      // room for only one.
+      // At a limit of 1 the target gives way to a connection that wasn't live; one live already replaces only itself.
+      const closesBefore = !!before && (beforeConnection?.id === target.id || (!keepsOthers() && !registry.has(target.id)));
+      if (closesBefore) await closeLive(beforeConnection?.id);
+      if (registry.has(target.id)) await closeLive(target.id);
       try {
         const { hermes: h, connection: c, notSaved, kept } = await signIn(target, d, account, name, signal);
         if (stale()) {
           await h.close().catch(() => {});
-          use(null);
+          makeTarget(null);
           throw new Error("A newer connection was selected.");
         }
         setNotSaved(notSaved);
@@ -515,10 +655,13 @@ function Screens({ links }: { links: LinkInbox }) {
         setColdStart(!before || beforeConnection?.id !== c.id);
         signedInWith.current = d;
         setConnection(c);
-        use(h);
+        makeTarget(h, c, d);
         return { notSaved, kept };
       } catch (e) {
-        if (!stale() && before && beforeConnection) {
+        if (!stale() && before && beforeConnection && !closesBefore && registry.get(beforeConnection.id)?.hermes === before) {
+          // It was never closed: it is the target again.
+          makeTarget(before, beforeConnection, beforeDetails ?? registry.get(beforeConnection.id)!.details);
+        } else if (!stale() && before && beforeConnection) {
           const read = beforeDetails ? { saved: beforeDetails } : await savedSignInOrForm(beforeConnection, account);
           const previous = "saved" in read ? read.saved : undefined;
           const back = previous ? await launchSignIn(beforeConnection, previous, account).catch(() => null) : null;
@@ -527,7 +670,7 @@ function Screens({ links }: { links: LinkInbox }) {
             signedInWith.current = undefined;
             setInitial("form" in read ? read.form : await signInForm(beforeConnection, account));
           }
-          use(back);
+          makeTarget(back, beforeConnection, previous);
         }
         throw e;
       }
@@ -541,14 +684,16 @@ function Screens({ links }: { links: LinkInbox }) {
   const removeSaved = (c: SavedConnection) =>
     serial(async () => {
       const inUse = connectionRef.current?.id === c.id;
+      // Live in the background: only it closes, before its keyring entries and data go (ADR 0125).
+      if (!inUse) await closeLive(c.id);
       let closed = false;
       try {
         await removeConnection(c, account, forgetLocal, inUse ? async () => {
-          await current.current?.close().catch(() => {});
+          await closeLive(c.id);
           closed = true;
           setRemovingActive(c);
           setInitial(undefined);
-          use(null);
+          makeTarget(null);
         } : undefined);
       } catch (e) {
         if (closed) showSignIn(c, await signInForm(c, account), `Couldn't finish removing this connection: ${errorText(e)}. Its remaining local data is still saved. Try removing it again, or sign in.`);
@@ -596,6 +741,67 @@ function Screens({ links }: { links: LinkInbox }) {
     return () => window.removeEventListener("focus", onFocus);
   }, []);
 
+  // A chat link for another live connection makes that one the target first (ADR 0125); Main then opens it. One for a
+  // connection launch is still opening in the background waits for it, so the target doesn't turn it away meanwhile.
+  const linkKey = goodLink && savedConnectionRefs.resolve(goodLink.link.connection);
+  const linkOwner = linkKey !== undefined ? registry.list().find((m) => connectionKey(m.connection) === linkKey) : undefined;
+  const linkElsewhere = !!linkOwner && linkOwner.connection.id !== connection?.id;
+  const linkAwaits = !linkOwner && linkKey !== undefined && reopening.some((id) => { const c = store.get(id); return !!c && connectionKey(c) === linkKey; });
+  useEffect(() => {
+    if (!linkOwner || !linkElsewhere || !goodLink) return;
+    const at = goodLink.at;
+    // An unsaved edit in Settings asks first, as any other way of leaving the main screen does; Keep editing drops the link.
+    void (editGuard.current?.() ?? Promise.resolve(true)).then((go) => {
+      // A newer link replaced this one while the owner was asked: it no longer moves anything.
+      if (links.getSnapshot()?.at !== at) return;
+      if (go) void switchTo(linkOwner.connection);
+      else links.clear(at);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- once per arrived link, and again once its connection is live
+  }, [goodLink?.at, linkOwner?.connection.id]);
+  const linkHere = opening && opening.connection === connection?.id ? opening : linkElsewhere || linkAwaits ? undefined : goodLink;
+
+  /** An inbox entry on a background connection: that connection becomes the target, and its chat opens there. */
+  const openElsewhere = (e: InboxEntry) => {
+    const m = e.server && registry.get(e.server.id);
+    if (!m) return;
+    setOpening({ link: { connection: savedConnectionRefs.refFor(m.connection), profile: e.profile, chatId: e.chatId }, at: Date.now(), connection: m.connection.id });
+    void switchTo(m.connection);
+  };
+  /** Dismisses background connections' entries in their own connections' dismissals. */
+  const dismissElsewhere = (es: InboxEntry[]) => {
+    for (const s of overview) {
+      const mine = es.filter((e) => e.server?.id === s.id);
+      const m = registry.get(s.id);
+      if (m && mine.length) acksFor(m.connection).dismissAll(mine.map(withoutServer), s.entries.map(withoutServer));
+    }
+  };
+  // The question is about one background instance: once that connection is the target, or opened again, it no longer
+  // applies, and Disconnect anyway closes nothing.
+  const stillAsked = (d: { s: LiveSummary; hermes: Hermes }) => registry.get(d.s.id)?.hermes === d.hermes && registry.target()?.connection.id !== d.s.id;
+  const disconnectAsk = disconnecting && stillAsked(disconnecting) && (
+    <DisconnectConnection
+      s={disconnecting.s}
+      onStay={() => setDisconnecting(undefined)}
+      onGo={() => {
+        setDisconnecting(undefined);
+        if (stillAsked(disconnecting)) void closeLive(disconnecting.s.id);
+      }}
+    />
+  );
+  const atLimitAsk = atLimit && (
+    <AtConnectionLimit
+      to={atLimit}
+      limit={store.liveLimit()}
+      live={overview.filter((o) => !o.target && o.status !== "needs-sign-in")}
+      onDisconnect={(id) => {
+        const c = store.get(id);
+        if (c) disconnect(c);
+      }}
+      onClose={() => setAtLimit(undefined)}
+    />
+  );
+
   if (hermes && connection && linksReady)
     return (
       <>
@@ -608,12 +814,20 @@ function Screens({ links }: { links: LinkInbox }) {
           headers={headers}
           notSaved={notSaved}
           kept={kept}
-          reopenLast={coldStart && !goodLink}
+          reopenLast={coldStart && !linkHere}
           covered={!!setup && !confirmingSetup}
-          link={goodLink}
+          link={linkHere}
           linkSuperseded={badLink?.at}
-          onLinkTaken={(at) => links.clear(at)}
+          onLinkTaken={(at) => (opening?.at === at ? setOpening(undefined) : links.clear(at))}
+          servers={overview}
+          liveLimit={store.liveLimit()}
+          onLiveLimit={(n) => store.setLiveLimit(n)}
+          onConnectBackground={(c) => void openInBackground(c)}
+          onDisconnect={disconnect}
+          onOpenElsewhere={openElsewhere}
+          onDismissElsewhere={dismissElsewhere}
           connectionGuard={connectionGuard}
+          editGuard={editGuard}
           onSetUp={() => void editConnection(connection)}
           onSwitchConnection={(c) => void switchTo(c)}
           onAddConnection={() => setSetup({ mode: "add", initial: BLANK, target: store.draft(BLANK) })}
@@ -631,6 +845,7 @@ function Screens({ links }: { links: LinkInbox }) {
           onSignOut={() =>
             serial(async () => {
               // Everything is read first, then shown at once: the sign-in screen keeps the details it mounts with.
+              registry.remove(connection.id);
               const { initial, error } = await signOutToSignIn(hermes, connection, account);
               setColdStart(false);
               showSignIn(connection, initial, error);
@@ -639,6 +854,8 @@ function Screens({ links }: { links: LinkInbox }) {
         />
         {setupLayer}
         {linkNotice}
+        {atLimitAsk}
+        {disconnectAsk}
       </>
     );
   // Setup keeps Main's slot order (Main, then setup), so finishing sign-in doesn't remount it at its first step.
@@ -686,8 +903,11 @@ function Screens({ links }: { links: LinkInbox }) {
             setSetup({ mode: "edit", initial: d, target: c, name: c.name });
           });
         }}
+        live={overview}
         onPick={(c) => {
           signInAsks.current++;
+          // A live connection is in use at once: picking it makes it the target (ADR 0125).
+          if (registry.has(c.id)) return void switchTo(c);
           void serial(async (stale) => {
             const read = await savedSignInOrForm(c, account);
             const d = "saved" in read ? read.saved : read.form;
@@ -709,6 +929,8 @@ function Screens({ links }: { links: LinkInbox }) {
           }
         }}
       />
+      {atLimitAsk}
+      {disconnectAsk}
       {removing && (
         <RemoveConnection
           c={removing}
@@ -818,6 +1040,7 @@ export function Main({
   onRemoveConnection,
   onTestConnection,
   connectionGuard,
+  editGuard,
   localFiles = tauriLocalFiles,
   webPages = tauriWebPages,
   serverPages = tauriServerPages,
@@ -834,7 +1057,30 @@ export function Main({
   tray = tauriTray,
   repoApi = tauriRepo,
   localStt = tauriLocalStt,
+  servers = [],
+  liveLimit,
+  onLiveLimit,
+  onConnectBackground,
+  onDisconnect,
+  onOpenElsewhere,
+  onDismissElsewhere,
 }: {
+  /**
+   * Every live connection's summary, this one first (ADR 0125): the overview, the rail's counts, and the background
+   * connections' inbox entries. One entry, or none, when only this connection is live.
+   */
+  servers?: LiveSummary[];
+  /** How many connections may be live at once, and setting it. */
+  liveLimit?: number;
+  onLiveLimit?: (n: number) => void;
+  /** Opens `c` in the background, leaving this connection the target. */
+  onConnectBackground?: (c: SavedConnection) => void;
+  /** Closes a background connection. */
+  onDisconnect?: (c: SavedConnection) => void;
+  /** An inbox entry on a background connection: makes that connection the target and opens the chat there. */
+  onOpenElsewhere?: (e: InboxEntry) => void;
+  /** Dismisses background connections' entries. */
+  onDismissElsewhere?: (es: InboxEntry[]) => void;
   hermes: Hermes;
   /** The saved connection in use (connections.ts); a bare sign-in (in tests) is keyed by its address, as before. */
   connection: SavedConnection | SavedSignIn;
@@ -854,6 +1100,8 @@ export function Main({
   onTestConnection?: (c: SavedConnection) => Promise<TestOutcome>;
   /** Setup asks the current screen immediately before replacing its connection. */
   connectionGuard?: RefObject<((to: SavedConnection) => Promise<boolean>) | undefined>;
+  /** Asks about an unsaved edit before the main screen is replaced by another live connection's (ADR 0125). */
+  editGuard?: RefObject<(() => Promise<boolean>) | undefined>;
   /** The names of the extra request headers the connection sends. */
   headers?: string[];
   notSaved?: string;
@@ -1423,12 +1671,15 @@ export function Main({
   useEffect(() => {
     if (inboxAutoDismissDays !== null) acks.expire(inbox.entries, inboxAutoDismissDays * 86_400_000);
   });
-  const inboxCount = inboxShown.filter(needsOwner).length;
+  // Background connections' entries (ADR 0125), each carrying its server; the rail and the tray count every live one.
+  const background = servers.filter((s) => !s.target);
+  const elsewhere = background.flatMap((s) => s.entries);
+  const inboxCount = inboxShown.filter(needsOwner).length + background.reduce((n, s) => n + attentionOf(s), 0);
   // A restore reloads the app on what it wrote, so it waits for replies and Approvals, here or in another profile, and
   // for any draft or queue this computer couldn't keep (ADR 0038).
   const workingRef = useRef(false);
   const working =
-    chats.some((c) => c.running || c.items.some(isWaiting)) || inbox.entries.some(blocksRestore);
+    chats.some((c) => c.running || c.items.some(isWaiting)) || inbox.entries.some(blocksRestore) || background.some((s) => s.busy);
   workingRef.current = working;
   // Read when the restore dialog renders and again just before it writes: sends and refused writes aren't React state.
   const restoreBusy = () => restoreBlocked({ working: workingRef.current, unsaved: unsaved.size, sending: sending.size });
@@ -1850,14 +2101,31 @@ export function Main({
       else go();
     }, "connection", stay);
   if (connectionGuard) connectionGuard.current = (to) => new Promise((resolve) => leaveConnection(to, () => resolve(true), () => resolve(false)));
+  if (editGuard) editGuard.current = () => new Promise((resolve) => guard(() => resolve(true), "connection", () => resolve(false)));
   const openConnections = () => guard(openSettings);
+  // A switch closes this connection only when no more than one can be live (ADR 0125); otherwise it stays live in the
+  // background, so there is nothing to ask about leaving.
+  const keepsLive = (liveLimit ?? 1) > 1;
+  const switchConnection = (c: SavedConnection) =>
+    keepsLive || servers.some((s) => s.id === c.id && s.status !== "needs-sign-in") ? guard(() => onSwitchConnection?.(c)) : leaveConnection(c, () => onSwitchConnection?.(c));
+  /** What is under way on a background connection, for the question before removing it. */
+  const backgroundNotes = (id: string): string[] => {
+    const s = servers.find((x) => x.id === id && !x.target);
+    const counts = s && liveCounts(s);
+    return counts ? [`It's live in the background with ${counts}.`] : [];
+  };
   const connectionManager = onSwitchConnection && (
     <ConnectionManager
       connections={saved}
       currentId={connection.id}
       unsaved={savedUnsaved}
+      live={servers}
+      liveLimit={liveLimit}
+      onLiveLimit={onLiveLimit}
+      onUse={switchConnection}
+      onDisconnect={onDisconnect}
       onTest={(c) => (onTestConnection ? onTestConnection(c) : Promise.reject(new Error("Testing isn't available here.")))}
-      onConnect={(c) => leaveConnection(c, () => onSwitchConnection(c))}
+      onConnect={(c) => (keepsLive && onConnectBackground ? onConnectBackground(c) : switchConnection(c))}
       onEdit={(c) => (c.id === connection.id ? guard(() => onEditConnection?.(c)) : leaveConnection(c, () => onEditConnection?.(c)))}
       onRemove={(c) => (c.id === connection.id ? guard(() => setRemoveAsk(c), "signout") : setRemoveAsk(c))}
       onRename={(c, name) => onRenameConnection?.(c, name)}
@@ -2254,6 +2522,8 @@ export function Main({
   const linkRan = useRef("");
   const isCurrent = (job: LinkJob) => linkJobRef.current?.at === job.at && linkJobRef.current.attempt === job.attempt;
   const hereLabel = connectionLabel(connectionKey(connection));
+  // With more than one connection live, every chat says which server and profile it is on (ADR 0125).
+  const serverBadge = servers.length > 1 ? `${"name" in connection ? connection.name : hereLabel} · ${profile}` : undefined;
   const failLink = (text: string, actions?: LinkNoticeView["actions"]) => {
     linkJobRef.current = undefined;
     setLinkJob(undefined);
@@ -2614,6 +2884,7 @@ export function Main({
           snoozedUntil={snoozedNow(chat.id)}
           shownProject={shownProject && { name: shownProject.name, defaults: proj.defaults[shownProject.id], has: !!listed && !!proj.chats[shownProject.id]?.includes(chat.id) }}
           where={where}
+          server={serverBadge}
           connectionName={hereLabel}
           repoApi={repoApi}
           scope={scope}
@@ -2818,7 +3089,8 @@ export function Main({
             <RailConnections
               connections={saved}
               currentId={connection.id}
-              onSwitch={(c) => leaveConnection(c, () => onSwitchConnection(c))}
+              live={servers}
+              onSwitch={switchConnection}
               onAdd={() => onAddConnection?.()}
               onManage={openConnections}
             />
@@ -2974,7 +3246,7 @@ export function Main({
       )}
       {inboxOpen && (
         <Inbox
-          entries={inboxShown}
+          entries={elsewhere.length ? [...inboxShown, ...elsewhere] : inboxShown}
           unmatched={inbox.unmatched}
           server={where ?? "the server"}
           profile={profile}
@@ -2983,9 +3255,15 @@ export function Main({
           live={live}
           checkTimes={hermes.checkTimes}
           leaving={leavingNote(profile, chats)}
-          onOpen={openEntry}
-          onDismiss={(e) => acks.dismiss(e, inbox.entries)}
-          onClearDone={(es) => acks.dismissAll(es, inbox.entries)}
+          onOpen={(e) => (e.server ? (setInboxOpen(false), guard(() => onOpenElsewhere?.(e))) : openEntry(e))}
+          onDismiss={(e) => (e.server ? onDismissElsewhere?.([e]) : acks.dismiss(e, inbox.entries))}
+          onClearDone={(es) => {
+            acks.dismissAll(
+              es.filter((e) => !e.server),
+              inbox.entries,
+            );
+            onDismissElsewhere?.(es.filter((e) => e.server));
+          }}
           onRefresh={() => void hermes.checkOtherProfiles()}
           onClose={() => setInboxOpen(false)}
           onGuide={() => openGuide(guideUrl("liveSessions"))}
@@ -3123,6 +3401,13 @@ export function Main({
                     if (draft.folder && status === "connected") await hermes.projects.checkFolder(profile, draft.folder);
                     return projects.saveDefaults(shownProject.id, base, draft);
                   },
+                  writer:
+                    status === "connected"
+                      ? {
+                          ask: (c) => hermes.askForEdit({ profile, ...c }).then((r) => r.text),
+                          model: () => hermes.modelSettings.textModel(),
+                        }
+                      : undefined,
                 }}
               />
             ) : settingsOpen ? (
@@ -3404,7 +3689,7 @@ export function Main({
                   <PreviewPane
                     history={previewHistory}
                     onStep={stepPreview}
-                    serverLabel={serverLabel(route)}
+                    serverLabel={serverBadge ? `${serverBadge}, ${serverLabel(route)}` : serverLabel(route)}
                     readServer={(path, host, session) => (host ? hermes.readHostFile(path) : hermes.readServerFile(path, session))}
                     local={localFiles}
                     web={previewWeb}
@@ -3570,7 +3855,7 @@ export function Main({
         <RemoveConnection
           c={removeAsk}
           inUse={removeAsk.id === connection.id}
-          notes={removeAsk.id === connection.id ? leavingConnection() : []}
+          notes={removeAsk.id === connection.id ? leavingConnection() : backgroundNotes(removeAsk.id)}
           onCancel={() => setRemoveAsk(undefined)}
           onRemove={async () => {
             await onRemoveConnection(removeAsk);
@@ -3623,6 +3908,7 @@ function ChatView({
   snoozedUntil,
   shownProject,
   where,
+  server,
   connectionName,
   repoApi,
   scope,
@@ -3685,6 +3971,8 @@ function ChatView({
   shownProject?: { name: string; defaults?: ProjectDefaults; has: boolean };
   /** The connection, as a folder on the server is shown beside it. */
   where?: string;
+  /** The server and profile, in the chat's header while more than one connection is live (ADR 0125). */
+  server?: string;
   /** The connection's name, as a worktree's record names who started a chat in it. */
   connectionName: string;
   repoApi: RepoApi;
@@ -4061,6 +4349,7 @@ function ChatView({
       key={`${profile}/${chat.id}`}
       chat={chat}
       projects={projectNames}
+      server={server}
       snoozedUntil={snoozedUntil}
       notice={
         !started && (shownProject || worktree) ? (

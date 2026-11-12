@@ -446,6 +446,29 @@ describe("Edit and Regenerate: when they can't be made", () => {
     expect(t.hermes.getSnapshot().branches.links[chatId].variant?.pending?.text).toBe("Clean up snapshots older than 90 days");
   });
 
+  it("finishes Send it now when the connection goes to the background meanwhile, and refuses to start one there", async () => {
+    const { hermes, chatId, submits, sent } = await unfinished();
+    const finishing = hermes.finishReplay(chatId);
+    // Another connection became the composer target while the copy was being taken back (ADR 0125).
+    hermes.setRole("background");
+    expect(await finishing).toEqual([]);
+    expect(submits().slice(sent).map((r) => r.params.text)).toEqual(["Clean up snapshots older than 90 days"]);
+    expect(hermes.getSnapshot().branches.links[chatId].variant?.pending).toBeUndefined();
+    await expect(hermes.finishReplay(chatId)).rejects.toThrow("background");
+  });
+
+  it("finishes an Edit started on the target when the connection goes to the background while it branches", async () => {
+    const { hermes, itemWith, submits } = await chatWithHistory();
+    const sent = submits().length;
+    const p = await hermes.previewReplay("c1", itemWith("Clean up"), "edit");
+    const editing = hermes.replay(p, "Clean up snapshots older than 90 days");
+    hermes.setRole("background");
+    const { chatId } = await editing;
+    expect(submits().slice(sent).map((r) => r.params.text)).toEqual(["Clean up snapshots older than 90 days"]);
+    expect(hermes.getSnapshot().branches.links[chatId].variant?.pending).toBeUndefined();
+    await expect(hermes.replay(p, "Again")).rejects.toThrow("background");
+  });
+
   it("stops, and drops nothing from the branch, when another message goes to it while it finishes", async () => {
     const { server, hermes, chat, chatId, submits, sent, undone } = await unfinished();
     const finishing = hermes.finishReplay(chatId);

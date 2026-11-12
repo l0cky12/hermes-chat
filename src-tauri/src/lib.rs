@@ -262,14 +262,17 @@ async fn hermes_connect(
     quick: Option<bool>,
     ssh_route: Option<String>,
     on_step: Channel<connect_steps::Started>,
+    live_limit: Option<usize>,
 ) -> Result<Route, String> {
     let id = ConnectionId::parse(&saved_connection)?;
     let _opening = state.opening.lock().await;
+    // Connects run one at a time under `opening`, so nothing is added between this check and `leave`.
+    state.slots.room_for(&id, live_limit).map_err(|e| e.to_string())?;
     // The connections this one replaces leave the map first, and their transfers and Screens stop after: whatever
     // registers on one checks it is still held, or its epoch, once it has, so nothing is left running on it.
     let mut evicted = Vec::new();
     let leave = || {
-        evicted = state.slots.evict_for(&id);
+        evicted = state.slots.evict_for(&id, live_limit).unwrap_or_default();
         for gone in &evicted {
             transfers.stop(gone);
             displays.close_for(gone);
@@ -2310,6 +2313,16 @@ mod tests {
 
     /// Signs in to `base` as the saved connection `saved`, opened as `attempt`.
     async fn connect_command(app: &impl tauri::Manager<tauri::test::MockRuntime>, base: &url::Url, saved: &str, attempt: &str) -> Result<super::Route, String> {
+        connect_within(app, base, saved, attempt, None).await
+    }
+
+    async fn connect_within(
+        app: &impl tauri::Manager<tauri::test::MockRuntime>,
+        base: &url::Url,
+        saved: &str,
+        attempt: &str,
+        limit: Option<usize>,
+    ) -> Result<super::Route, String> {
         let password = super::SignInWith::Password { username: "liam".into(), password: "hunter2".into(), provider: None };
         super::hermes_connect(
             app.state(),
@@ -2326,6 +2339,7 @@ mod tests {
             None,
             None,
             tauri::ipc::Channel::new(|_| Ok(())),
+            limit,
         )
         .await
     }
@@ -2558,6 +2572,32 @@ mod tests {
         assert!(call(&webview, "preview_server_open", page("A")).await.unwrap_err().contains("notConnected"));
         assert!(call(&webview, "preview_server_open", page("B")).await.unwrap_err().contains("noSshTarget"));
         assert_eq!(*to_a.locked(), ["FOR A"]);
+    }
+
+    /// ADR 0125: at the owner's limit a connect is refused before it opens anything, and the connections held keep
+    /// sending. Opening one of them again replaces only it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_connect_past_the_owners_limit_is_refused_and_closes_nothing() {
+        let (a, _, _, to_a) = counting_dashboard().await;
+        let (b, _, _, to_b) = counting_dashboard().await;
+        let (c, accepted_c, _, _) = counting_dashboard().await;
+        let app = connecting_app();
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
+        connect_within(&app, &a, "server-one", "A", Some(2)).await.expect("a signs in");
+        connect_within(&app, &b, "server-two", "B", Some(2)).await.expect("b signs in beside a");
+        let refused = connect_within(&app, &c, "server-three", "C", Some(2)).await.err().expect("a third connection opened at a limit of two");
+        assert!(refused.contains("2 connections open"), "refused for another reason: {refused}");
+        assert_eq!(accepted_c.load(std::sync::atomic::Ordering::SeqCst), 0, "the refused connect reached its server");
+
+        send(&webview, "A", "STILL A").await.expect("a is still held");
+        send(&webview, "B", "STILL B").await.expect("b is still held");
+        assert!(heard(&to_a, "STILL A").await && heard(&to_b, "STILL B").await);
+
+        connect_within(&app, &b, "server-two", "B2", Some(2)).await.expect("b opens again in its own place");
+        send(&webview, "A", "A AFTER B2").await.expect("opening b again left a alone");
+        assert!(send(&webview, "B", "OLD B").await.is_err(), "b's first opening still answers");
+        send(&webview, "B2", "NEW B").await.expect("b's new opening sends");
+        assert!(heard(&to_a, "A AFTER B2").await && heard(&to_b, "NEW B").await);
     }
 
     /// ADR 0125: a connect that waits on its server holds up no other connection's commands, and its own stop still

@@ -119,7 +119,8 @@ export function Inbox({
     setFocusAt(undefined);
   }, [focusAt]);
 
-  const open = (e: InboxEntry) => (e.profile !== profile && leaving ? setAsking(e) : onOpen(e));
+  // An entry on another live connection leaves nothing here behind: this connection carries on in the background.
+  const open = (e: InboxEntry) => (!e.server && e.profile !== profile && leaving ? setAsking(e) : onOpen(e));
   const dismiss = (e: InboxEntry) => {
     setFocusAt(shown.indexOf(e));
     onDismiss(e);
@@ -192,7 +193,7 @@ export function Inbox({
       )}
       <ul className="inbox-list" ref={list} aria-label={FILTER_LABEL[filter]}>
         {shown.map((e) => (
-          <Row key={e.key} entry={e} server={server} onOpen={() => open(e)} onDismiss={() => dismiss(e)} />
+          <Row key={e.key} entry={e} server={e.server?.name ?? server} onOpen={() => open(e)} onDismiss={() => dismiss(e)} />
         ))}
       </ul>
       {!shown.length && <div className="empty-hint inbox-empty">{emptyNote(filter)}</div>}
