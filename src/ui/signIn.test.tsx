@@ -3,6 +3,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SignInFailure } from "../hermes/setup";
 import type { SignInDetails } from "../hermes/tauriPipe";
 import { SignIn } from "./SignIn";
 const connection = { id: "00000000-0000-4000-8000-000000000001", name: "Hermes", mode: "url" as const, sshTarget: "liam@hermes", url: "https://hermes.example.com", username: "liam", addedAt: 1 };
@@ -111,5 +112,16 @@ describe("The real pipe", () => {
     expect(invoke).toHaveBeenLastCalledWith("hermes_connect", expect.objectContaining({ target: { kind: "url", url: blank.url, headers } }));
     await tauriPipe({ ...blank, mode: "ssh", headers }, "saved-connection-1")(() => {}, "default");
     expect(invoke).toHaveBeenLastCalledWith("hermes_connect", expect.objectContaining({ target: { kind: "ssh", target: "liam@hermes" } }));
+  });
+});
+
+describe("A failed sign-in on the sign-in screen (#550)", () => {
+  it("explains a 503 from the sign-in as the sign-in's, with Rust's words under it", () => {
+    const message = "The dashboard answered 503: provider unreachable";
+    const error = new SignInFailure({ stage: "sign-in", message, answered: { status: 503, body: "provider unreachable" } });
+    render(<SignIn connection={connection} initial={blank} error={error} onSignIn={async () => {}} />);
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("The dashboard's sign-in isn't available right now.");
+    expect(alert.textContent).toContain(message);
   });
 });

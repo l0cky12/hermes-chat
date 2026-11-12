@@ -4,6 +4,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SignInFailure } from "../hermes/setup";
 import type { Methods, SignInDetails } from "../hermes/tauriPipe";
 import { SignIn } from "./SignIn";
 import { Onboarding } from "./Onboarding";
@@ -89,7 +90,12 @@ describe("The sign-in screen", () => {
       <SignIn
         connection={{ ...connection, method: "token" }}
         initial={{ ...blank, method: "token" }}
-        error="Wrong token: the dashboard turned it down. A token stops working when HERMES_DASHBOARD_SESSION_TOKEN is replaced on the server."
+        error={
+          new SignInFailure({
+            stage: "sign-in",
+            message: "Wrong token: the dashboard turned it down. A token stops working when HERMES_DASHBOARD_SESSION_TOKEN is replaced on the server.",
+          })
+        }
         onSignIn={async () => {}}
       />,
     );

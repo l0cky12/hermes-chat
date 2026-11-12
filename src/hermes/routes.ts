@@ -221,8 +221,12 @@ export const TOKEN_REFUSED = /^(Wrong token:|The dashboard took the token as|Thi
 
 /** Every route failed; `failures` says how each did, in the order tried. */
 export class RoutesFailedError extends Error {
+  /** One line for each route: its kind, its address, and how it failed. */
+  readonly lines: string[];
   constructor(readonly failures: { route: RouteDetails; message: string }[]) {
-    super(`No route reached Hermes.\n${failures.map((f) => `• ${KIND_LABEL[f.route.kind]}, ${routeTargetLabel(f.route)}: ${f.message}`).join("\n")}`);
+    const lines = failures.map((f) => `${KIND_LABEL[f.route.kind]}, ${routeTargetLabel(f.route)}: ${f.message}`);
+    super(`No route reached Hermes.\n${lines.map((l) => `• ${l}`).join("\n")}`);
+    this.lines = lines;
   }
 }
 
@@ -301,7 +305,7 @@ export function routedPipe(d: SignInDetails, open: OpenRoute, hooks: RoutedHooks
     if (!on.length) throw new Error(NO_ROUTES);
     const quick = on.length > 1;
     const sshRoute = sshRouteOf(all);
-    const failures: { route: RouteDetails; message: string }[] = [];
+    const failures: { route: RouteDetails; message: string; error: unknown }[] = [];
     for (const r of hooks.health?.order(on) ?? on) {
       if (signal?.aborted) throw new Error(STOPPED);
       const trying = attempt?.route(r);
@@ -317,7 +321,7 @@ export function routedPipe(d: SignInDetails, open: OpenRoute, hooks: RoutedHooks
         trying?.failed(e);
         if (!quick || FINAL.test(message) || signal?.aborted) throw e;
         hooks.health?.failed(r.id);
-        failures.push({ route: r, message });
+        failures.push({ route: r, message, error: e });
         continue;
       }
       hooks.health?.ok(r.id);
@@ -332,7 +336,7 @@ export function routedPipe(d: SignInDetails, open: OpenRoute, hooks: RoutedHooks
       return reopenable({ ...pipe, route }, r);
     }
     // Every route turned the token down or couldn't use it: that is the failure, not the routes.
-    if (failures.length && failures.every((f) => TOKEN_REFUSED.test(f.message))) throw new Error(failures[0].message);
+    if (failures.length && failures.every((f) => TOKEN_REFUSED.test(f.message))) throw failures[0].error;
     throw new RoutesFailedError(failures);
   }
 

@@ -6,7 +6,8 @@ import { useEffect, useRef, useState } from "react";
 import { CircleAlert, KeyRound, PlugZap, Trash2 } from "lucide-react";
 import type { Methods, SignInDetails } from "../hermes/tauriPipe";
 import { type SavedConnection, addressLabel } from "../hermes/connections";
-import { explainSignIn } from "../hermes/setup";
+import { explainSignIn, signInErrorText, type SignInError } from "../hermes/setup";
+import { RoutesFailedError } from "../hermes/routes";
 import { isPicked, methodsNote, offered, withMethod } from "../hermes/signInMethods";
 import { ServerFields, withHeaders } from "./Onboarding";
 import { RouteSummary } from "./Routes";
@@ -30,7 +31,7 @@ export function SignIn({
 }: {
   /** The saved sign-in; the password is filled in when launch couldn't sign in with it. */
   initial: SignInDetails;
-  error?: string;
+  error?: SignInError;
   /** The saved connection the form is for; none when the owner hasn't picked one. */
   connection?: SavedConnection;
   /** Every saved connection, most recently used first, for the picker. */
@@ -184,7 +185,7 @@ export function SignIn({
                   <CircleAlert size={12} /> {why.problem}
                 </div>
                 {/* Every route's failure is listed below already (routes.ts `RoutesFailedError`). */}
-                {error !== why.problem && !/^No route reached Hermes\./.test(error ?? "") && <div className="small sign-in-raw">{error}</div>}
+                {error && signInErrorText(error) !== why.problem && !(error instanceof RoutesFailedError) && <div className="small sign-in-raw">{signInErrorText(error)}</div>}
                 {why.fixes.length > 0 && (
                   <ul className="sign-in-fixes">
                     {why.fixes.map((f) => (
