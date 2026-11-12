@@ -2174,6 +2174,22 @@ fn a_pasted_file_name_stays_a_plain_basename() {
     let long = transport::stage_clipboard_file(&root.1, &format!("{}.png", "é".repeat(300)), b"x").unwrap();
     let name = long.file_name().unwrap().to_str().unwrap();
     assert!(name.len() <= 255 && name.ends_with(".png"), "{name}");
+    // Windows opens a name it reserves for a device as that device, whatever follows its first dot.
+    let mut devices: Vec<String> = ["CON", "PRN", "AUX", "NUL"].map(String::from).to_vec();
+    for port in ["COM", "LPT"] {
+        devices.extend("123456789¹²³".chars().map(|n| format!("{port}{n}")));
+    }
+    for device in devices {
+        for name in [device.clone(), device.to_lowercase(), format!("{device}.png"), format!("{device}.tar.gz"), format!("{device} .txt")] {
+            let p = transport::stage_clipboard_file(&root.1, &name, b"x").unwrap();
+            assert_eq!(p.file_name().unwrap().to_str().unwrap(), format!("_{name}"), "{name:?}");
+            assert_eq!(std::fs::read(&p).unwrap(), b"x", "{name:?}");
+        }
+    }
+    for plain in ["CONSOLE.png", "con-fig.txt", "COM10.log", "LPT.txt", "LPT0", "nul_backup.txt", "auxiliary", "icon.png"] {
+        let p = transport::stage_clipboard_file(&root.1, plain, b"x").unwrap();
+        assert_eq!(p.file_name().unwrap(), plain, "{plain:?}");
+    }
 }
 
 #[tokio::test]

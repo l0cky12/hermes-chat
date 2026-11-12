@@ -1,6 +1,7 @@
 // Likely secrets in a chat export (exportChat.ts `exportPreview`), for the owner to redact before saving. Logs redact
 // on their own (logs.ts); here the owner decides, so a flag only has to be likely. Chat is prose and code, though, so a
 // value named like a password must also look like one: `password: required` and `api_key = os.environ` aren't flagged.
+import { decodeString } from "micromark-util-decode-string";
 import { PROVIDER_KEY } from "./logs";
 
 /** A likely secret: its kind, and the secret itself without what names it (in `password=hunter2!`, `hunter2!`). */
@@ -67,4 +68,48 @@ export function findSecrets(text: string): Secret[] {
     reach = f.end;
   }
   return kept;
+}
+
+// What a Markdown reader decodes, as micromark-util-decode-string finds it: a backslash before punctuation, and a
+// character reference (`&#45;`, `&lt;`). Code shows them as written, but a key spelled so there is still a key.
+const ESCAPE = /\\[!-/:-@[-`{-~]|&(?:#(?:\d{1,7}|x[\da-f]{1,6})|[\da-z]{1,31});/gi;
+
+/**
+ * The likely secrets in Markdown as written, and those a reader sees only once its escapes and character references
+ * (`\-`, `&#45;`) are decoded. One of those is given as written, from the start of the escape or reference it starts
+ * in to the end of the one it ends in, so redacting that text leaves none of it. In order.
+ */
+export function findMarkdownSecrets(markdown: string): Secret[] {
+  const found = findSecrets(markdown);
+  // Each escape or reference, in order: where in `shown` its decoded text starts, and where it's written.
+  const decoded: { at: number; length: number; start: number; end: number }[] = [];
+  let shown = "";
+  let from = 0;
+  for (const m of markdown.matchAll(ESCAPE)) {
+    const to = decodeString(m[0]);
+    if (to === m[0]) continue;
+    shown += markdown.slice(from, m.index);
+    decoded.push({ at: shown.length, length: to.length, start: m.index, end: m.index + m[0].length });
+    shown += to;
+    from = m.index + m[0].length;
+  }
+  if (!decoded.length) return found;
+  shown += markdown.slice(from);
+  // Where the character at `i` in `shown` is written, from its first code unit to just past its last. Asked in order.
+  let k = -1;
+  const written = (i: number): [number, number] => {
+    while (k + 1 < decoded.length && decoded[k + 1].at <= i) k++;
+    const d = decoded[k];
+    if (!d) return [i, i + 1];
+    if (i < d.at + d.length) return [d.start, d.end];
+    const at = d.end + i - d.at - d.length;
+    return [at, at + 1];
+  };
+  const more: Secret[] = [];
+  for (const s of findSecrets(shown)) {
+    const [start] = written(s.start);
+    const [, end] = written(s.start + s.text.length - 1);
+    if (!found.some((f) => f.start < end && start < f.start + f.text.length)) more.push({ kind: s.kind, text: markdown.slice(start, end), start });
+  }
+  return [...found, ...more].sort((a, b) => a.start - b.start);
 }
