@@ -2,7 +2,7 @@
 import { type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
-/** The flex gap of `.transcript-inner`, which a spacer makes up for between the chunks it stands in for. */
+/** The gap between `.transcript-inner`'s children, which a spacer makes up for between the chunks it stands in for. */
 const GAP = 22;
 /** A block's height before any chunk has been measured. */
 const BLOCK_HEIGHT = 120;
