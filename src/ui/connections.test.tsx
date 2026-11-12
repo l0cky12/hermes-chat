@@ -95,6 +95,10 @@ describe("Saved connections", () => {
     // mount of the main screen, takes about 0.7s on an idle machine, so findBy's 1s default runs out on a busy one (#322).
     expect(await screen.findByText("Alpha backups", {}, { timeout: 15_000 })).toBeTruthy();
     expect(connects).toEqual([{ url: ALPHA, password: "alpha-pass" }]);
+    // One live connection at a time, as before several could be (ADR 0125): a switch closes the one left.
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await userEvent.selectOptions(await screen.findByLabelText("Live at once"), "1");
+    await userEvent.click(screen.getByRole("button", { name: "Back to chat" }));
     await userEvent.type(composer(), "draft for alpha");
 
     // Add a second server through setup.

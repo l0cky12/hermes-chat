@@ -390,8 +390,9 @@ const WINDOW_OWNED = new Set(["preview.act", "preview.read", "terminal.read", "t
  * is showing (#313). There, only a window-owned request is declined, and only where Hermes counts that as a decline.
  * Unanswered, a request ends at Hermes's own deadline or when the owner stops the reply.
  */
-function unshownAnswer(method: string, facts: ServerFacts): { code: number; message: string } | undefined {
-  if (!sharesChats(facts)) return { code: NO_SUCH_METHOD, message: `Hermes Chat can't answer ${method} requests yet.` };
+function unshownAnswer(method: string, facts: ServerFacts, role: Role): { code: number; message: string } | undefined {
+  // A background connection answers nothing it doesn't show: a client that shows it can (ADR 0125).
+  if (!sharesChats(facts) && role === "target") return { code: NO_SUCH_METHOD, message: `Hermes Chat can't answer ${method} requests yet.` };
   if (facts.declinesNotShown && WINDOW_OWNED.has(method)) return { code: NOT_SHOWN, message: "No Hermes Chat window shows this chat's preview, terminal or tour." };
   return undefined;
 }
@@ -576,6 +577,19 @@ export type Snapshot = {
    */
   branchNews?: { text: string; chatId?: string; at: number };
 };
+
+/**
+ * What a connection is to the owner (ADR 0125). The composer target is the one they work in. A background one keeps
+ * its socket and the chats it holds, shows their Approvals, and changes nothing on the server.
+ */
+export type Role = "target" | "background";
+
+/** Why a background connection refused something only the composer target does (ADR 0125). */
+export class BackgroundRefused extends Error {
+  constructor() {
+    super("This server is open in the background. Make it the composer target to work in it.");
+  }
+}
 
 /** Why `connect` rejected when its `signal` stopped it. */
 export const CONNECT_STOPPED = "Connecting was stopped. Nothing was saved.";
@@ -1216,6 +1230,35 @@ export class Hermes {
     },
     () => this.generation,
   );
+
+  private role: Role = "target";
+
+  /** Whether this is the composer target or a background connection (ADR 0125). */
+  get roleNow(): Role {
+    return this.role;
+  }
+
+  /**
+   * Makes this the composer target or a background connection. Nothing closes or reconnects. In the background no
+   * chat counts as on screen, so nothing is marked read and every reply or Approval notifies; queues hold until it is
+   * the target again.
+   */
+  setRole(role: Role) {
+    if (this.role === role) return;
+    this.role = role;
+    if (role === "target") this.pumpSoon();
+    this.tellListeners();
+  }
+
+  /** Throws unless this is the composer target: a background connection never sends, starts, branches or searches. */
+  private foreground() {
+    if (this.role === "background") throw new BackgroundRefused();
+  }
+
+  /** When the last frame came over the socket, or 0 before any: the overview's last activity (ADR 0125). */
+  get lastFrameAt(): number {
+    return this.lastHeard;
+  }
 
   /** Rust's name for the connection open now, for a command made outside the pipe (`Pipe.connectionId`). */
   get connectionId(): string | undefined {
@@ -1865,6 +1908,7 @@ export class Hermes {
    * Hermes is asked for. `capped`: Hermes answered as many as asked, so more chats may match.
    */
   async searchPage(text: string, { archived = false, sources, limit = SEARCH_LIMIT }: { archived?: boolean; sources?: Source[]; limit?: number } = {}): Promise<{ found: Found[]; capped: boolean }> {
+    this.foreground();
     const q = text.trim();
     if (!q) return { found: [], capped: false };
     const profile = this.profile;
@@ -1901,6 +1945,7 @@ export class Hermes {
    * no words to search (chatFilter.ts). `capped`: the profile has more than the most pages read.
    */
   async browse({ archived, sources }: { archived: "exclude" | "only" | "include"; sources?: Source[] }): Promise<{ found: Found[]; capped: boolean }> {
+    this.foreground();
     const profile = this.profile;
     await this.knownBotChats();
     const { rows, more } = await this.readList(profile, archived, -Infinity, rawSources(sources));
@@ -2136,6 +2181,7 @@ export class Hermes {
 
   /** The chat is on screen in some pane. */
   private isViewing(chatId: string): boolean {
+    if (this.role === "background") return false;
     for (const id of this.viewing.values()) if (id === chatId) return true;
     return false;
   }
@@ -2165,6 +2211,7 @@ export class Hermes {
    * a second one after it, with the project's context files (ADR 0135).
    */
   async newChat(model?: ModelPick, start: { folder?: string; instructions?: string; context?: string } = {}): Promise<string> {
+    this.foreground();
     const { folder, instructions, context } = start;
     const seeded = [instructions, context].filter((text): text is string => !!text);
     const profile = this.profile;
@@ -2339,6 +2386,12 @@ export class Hermes {
    * with; branching from the same message again meanwhile returns the same branch.
    */
   async branch(preview: BranchPreview, title?: string, variant?: BranchVariant, whole?: string): Promise<{ chatId: string; warnings: string[] }> {
+    this.foreground();
+    return this.branchNow(preview, title, variant, whole);
+  }
+
+  /** `branch` once the owner started it: it finishes even if the connection goes to the background meanwhile. */
+  private async branchNow(preview: BranchPreview, title?: string, variant?: BranchVariant, whole?: string): Promise<{ chatId: string; warnings: string[] }> {
     const profile = this.profile;
     const { chat, spine, index } = await this.branchBoundary(preview.chatId, preview.itemId, profile);
     const count = index + 1;
@@ -2511,6 +2564,7 @@ export class Hermes {
    * top, with a way to finish it.
    */
   async replay(preview: ReplayPreview, words?: string): Promise<{ chatId: string; warnings: string[] }> {
+    this.foreground();
     const profile = this.profile;
     const text = preview.kind === "edit" ? withRefs(preview.refs, words ?? "") : resendText(preview.stored);
     if (preview.kind === "edit" && !words?.trim()) throw new Error("The edited message is empty. Type what to send, or Cancel.");
@@ -2531,10 +2585,11 @@ export class Hermes {
       turn: preview.turn,
       pending: { text, prefix: spineKey(withoutMarkers(spine.slice(0, count - 1))), through: spineKey(withoutMarkers(spine.slice(0, count))) },
     };
-    const made = await this.branch(preview.branch, undefined, variant, preview.spine);
+    // Started on the target: the steps after it finish even if the target changes meanwhile.
+    const made = await this.branchNow(preview.branch, undefined, variant, preview.spine);
     if (this.profile !== profile) return made;
     try {
-      made.warnings.push(...(await this.finishReplay(made.chatId)));
+      made.warnings.push(...(await this.finishStarted(made.chatId)));
     } catch (e) {
       made.warnings.push((e as Error).message);
     }
@@ -2547,6 +2602,12 @@ export class Hermes {
    * dropped connection without sending twice. Resolves to what the owner should know; rejects with why it couldn't.
    */
   finishReplay(chatId: string): Promise<string[]> {
+    if (this.role === "background") return Promise.reject(new BackgroundRefused());
+    return this.finishStarted(chatId);
+  }
+
+  /** `finishReplay` once the owner started it, from Send it now or from an Edit or Regenerate. */
+  private finishStarted(chatId: string): Promise<string[]> {
     // One at a time per branch: two panes asking at once would otherwise both take a message back.
     const running = this.finishing.get(chatId);
     if (running) return running;
@@ -2643,7 +2704,8 @@ export class Hermes {
     else this.cache.deleteTranscript(profile, chatId);
     // From here the message is the outbox's: a failed send shows in the branch with Retry, as any message does.
     this.setVariant(profile, chatId, ({ pending: _, ...v }) => v);
-    const sent = await this.send(chatId, pending.text);
+    // Not `send`: once the owner started this on the target, it finishes even if the target changed meanwhile.
+    const { delivery: sent } = await this.deliver(chatId, pending.text, []);
     return sent.delivery === "unsent" ? ["The message didn't go to the branch. It's in the branch, marked Not sent, with Retry."] : [];
   }
 
@@ -2891,6 +2953,8 @@ export class Hermes {
    * reply to that message and no other (ADR 0111). `itemId` is missing only when the chat isn't in the list.
    */
   sendTracked(chatId: string, text: string, attachments: Attachment[] = [], skill?: SkillCall): Promise<{ delivery: Delivery; itemId?: string }> {
+    // Refused as it starts, in the background (ADR 0125). A send the owner started on the target goes on after a switch.
+    if (this.role === "background") return Promise.resolve({ delivery: { delivery: "unsent", reason: new BackgroundRefused().message } });
     return this.deliver(chatId, text, attachments, undefined, skill);
   }
 
@@ -2900,6 +2964,7 @@ export class Hermes {
    * may have stays as it was. Does nothing while the chat has a reply running, or for a message still sending.
    */
   async retry(chatId: string, itemId: string): Promise<Delivery | undefined> {
+    if (this.role === "background") return { delivery: "unsent", reason: new BackgroundRefused().message };
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
     const first = chat?.items.find((i): i is OutgoingItem => i.id === itemId && isOutgoing(i));
     if (!chat || !first || first.outgoing.state === "sending" || chat.running || this.submitting.has(this.profile, chatId)) return undefined;
@@ -3019,7 +3084,7 @@ export class Hermes {
    * One Hermes may have is settled first by reading the chat's history back (ADR 0006), which loading the chat does.
    */
   private pump() {
-    if (this.closing || this.snapshot.status !== "connected" || restartHold.on) return;
+    if (this.closing || this.snapshot.status !== "connected" || restartHold.on || this.role === "background") return;
     for (const [chatId, q] of Object.entries(this.snapshot.queues)) {
       if (!q.items.length || q.paused !== undefined || this.queueHolds.has(chatId)) continue;
       const chat = this.snapshot.chats.find((c) => c.id === chatId);
@@ -4103,7 +4168,7 @@ export class Hermes {
   /** A question from Hermes. One the app shows (`QUESTIONS`) is a card in its chat. Any other gets `unshownAnswer`. */
   private onServerRequest(req: ServerRequest) {
     if (!questionCard(req)) {
-      const error = unshownAnswer(req.method, this.capabilities.getSnapshot().facts);
+      const error = unshownAnswer(req.method, this.capabilities.getSnapshot().facts, this.role);
       if (error) void this.pipe?.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, error })).catch(() => {});
       return;
     }
@@ -4574,7 +4639,7 @@ export class Hermes {
 
   /** A desktop notification, out of focus only. A missing notification service, or one that refuses, changes nothing. */
   private alert(n: { title: string; body: string }) {
-    if (!this.focused) this.track(Promise.resolve().then(() => this.notify(n)));
+    if (!this.focused || this.role === "background") this.track(Promise.resolve().then(() => this.notify(n)));
   }
 
   /**
