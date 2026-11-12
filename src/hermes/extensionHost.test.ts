@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 import { FRAME_CSP, PRELUDE, SHIM, SHIM_HASH, SRCDOC, startFrame } from "./extensionHost";
 
@@ -35,5 +36,41 @@ describe("the host frame", () => {
     expect(frame.getAttribute("aria-hidden")).toBe("true");
     host.remove();
     expect(mount.querySelector("iframe")).toBeNull();
+  });
+});
+
+describe("the prelude", () => {
+  // A stand-in worker global: Worker and SharedWorker as globals, caches as an accessor, as WebKit has them.
+  function worker() {
+    const ctx = vm.createContext({});
+    vm.runInContext(`globalThis.Worker = function Worker() {}; globalThis.SharedWorker = function SharedWorker() {}; Object.defineProperty(globalThis, "caches", { get() { return "real caches"; }, configurable: true });`, ctx);
+    return ctx;
+  }
+  const after = (ctx: vm.Context) => vm.runInContext(`[typeof Worker, typeof SharedWorker, (() => { try { return String(caches); } catch (e) { return "closed: " + e; } })()]`, ctx);
+
+  it("removes nested workers and closes caches", () => {
+    const ctx = worker();
+    vm.runInContext(PRELUDE + "self.x = 1;", Object.assign(ctx, { self: ctx }));
+    expect(after(ctx)).toEqual(["undefined", "undefined", "closed: caches is closed"]);
+  });
+
+  it("still does when the extension's hoisted declarations shadow the names it could have used", () => {
+    const ctx = worker();
+    vm.runInContext(PRELUDE + "function self() {} function Object() {} function globalThis() {} var Worker; let SharedWorker2;", ctx);
+    expect(after(ctx)).toEqual(["undefined", "undefined", "closed: caches is closed"]);
+  });
+
+  it("never lets a hoisted declaration of the same name reach the real caches or Worker", () => {
+    for (const name of ["caches", "Worker"]) {
+      const ctx = worker();
+      const probe = `function ${name}() {} globalThis.seen = (() => { try { return String(${name}); } catch (e) { return "closed"; } })();`;
+      // WebKit makes the declared name non-configurable, and the prelude's defineProperty then stops the script.
+      try {
+        vm.runInContext(PRELUDE + probe, ctx);
+      } catch {
+        continue;
+      }
+      expect(vm.runInContext("globalThis.seen", ctx)).not.toMatch(/real caches|function Worker\(\) \{\}/);
+    }
   });
 });

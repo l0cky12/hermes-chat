@@ -1,9 +1,9 @@
 // Settings → Extensions (ADR 0126, sections 3, 4 and 7): each extension the app offers, its permissions, whether it is
 // installed, enabled and running, why it stopped, and its commands. Until Delivery step 4 the app offers only the
 // extensions bundled with it; install from a file is not here.
-import { useState } from "react";
-import { COMMANDS } from "../hermes/commands";
-import { offeredCommands, type ExtensionState, type Runtime } from "../hermes/extensions";
+import { useEffect, useState } from "react";
+import { offeredCommands, takenName, type ExtensionState, type Runtime } from "../hermes/extensions";
+import type { SkillCommands } from "../hermes/skillCommands";
 import type { Permission } from "../hermes/extensionPermissions";
 import { SettingRow, SettingsSection } from "./SettingRows";
 import { useExtensions } from "./extensionsContext";
@@ -44,11 +44,18 @@ function statusText(s: ExtensionState): string {
   }
 }
 
-export function ExtensionsSettings() {
+/** `skills` reads the skills offered in the profile shown, so a command a skill's name hides says so. */
+export function ExtensionsSettings({ skills }: { skills?: () => Promise<SkillCommands | undefined> }) {
   const { store, states } = useExtensions();
   const [asking, setAsking] = useState<string>();
-  const appCommand = (name: string) => (COMMANDS.some((c) => c.name === name) ? `Hermes Chat has its own /${name}.` : undefined);
-  const { refused } = offeredCommands(states, appCommand);
+  const [offered, setOffered] = useState<SkillCommands>();
+  useEffect(() => {
+    let live = true;
+    skills?.().then((s) => live && setOffered(s), () => {});
+    return () => void (live = false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- read once as the tab opens; a new loader each render isn't a new profile
+  }, []);
+  const { refused } = offeredCommands(states, takenName(offered?.offered));
 
   return (
     <>

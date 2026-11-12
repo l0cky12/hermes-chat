@@ -46,6 +46,10 @@
   (async () => {
     frame("withPrelude", PRELUDE + ATTEMPTS(BEAT));
     frame("withoutPrelude", ATTEMPTS(BEAT));
+    // Hoisted declarations run before the prelude: they must not turn it against something other than the global.
+    frame("hoistedSelf", PRELUDE + "function self() {}\n" + ATTEMPTS(BEAT).replace("self.onmessage", "onmessage"));
+    frame("hoistedObject", PRELUDE + "function Object() {} function globalThis() {}\n" + ATTEMPTS(BEAT).replace("self.onmessage", "onmessage"));
+    frame("hoistedCaches", PRELUDE + "function caches() {}\n" + ATTEMPTS(BEAT).replace("self.onmessage", "onmessage"));
     await wait(2500);
     // Cache Storage across two opaque frames with the prelude: A tries to write, is removed, then B tries to read.
     const A = frame("cacheA", PRELUDE + `self.onmessage = async (m) => { const p = m.ports[0]; try { const c = await caches.open("shared"); await c.put("https://x/k", new Response("secret-from-A")); p.postMessage("wrote"); } catch (e) { p.postMessage(String(e)); } };`);

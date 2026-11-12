@@ -21,8 +21,11 @@ export const SRCDOC = `<!doctype html><meta http-equiv="Content-Security-Policy"
 /**
  * Runs in the worker before the extension's code. Removes `Worker` and `SharedWorker`, so a busy loop can't hide in a
  * nested worker while the outer one answers pings, and closes `caches`, which WebKitGTK shares between opaque frames.
+ * It shares one script with the extension, whose function declarations are hoisted above it, so it names no global:
+ * the global is the script's `this`, and `Object` is the one an object literal has. A property a hoisted declaration
+ * made non-configurable makes `defineProperty` throw, and the worker stops before the extension runs.
  */
-export const PRELUDE = `(()=>{const g=self;for(const n of["Worker","SharedWorker"])Object.defineProperty(g,n,{value:undefined,writable:false,configurable:false});for(let o=g;o;o=Object.getPrototypeOf(o))if(Object.getOwnPropertyDescriptor(o,"caches"))Object.defineProperty(o,"caches",{get(){throw new Error("caches is closed")},configurable:false})})();\n`;
+export const PRELUDE = `(()=>{const g=this,O=({}).constructor;for(const n of["Worker","SharedWorker"])O.defineProperty(g,n,{value:undefined,writable:false,configurable:false});for(let o=g;o;o=O.getPrototypeOf(o))if(O.getOwnPropertyDescriptor(o,"caches"))O.defineProperty(o,"caches",{get(){throw "caches is closed"},configurable:false})})();\n`;
 
 /** One running extension's frame, as the runtime sees it. `send` and `onMessage` carry JSON-RPC text. */
 export type Host = {

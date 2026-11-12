@@ -9,6 +9,8 @@ import { answer, authorize, parseIncoming, refusal, request, RPC_LIMITS, type Pa
 import type { StartHost, Host } from "./extensionHost";
 import { note as appNote, type Level } from "./logs";
 import type { Item } from "./model";
+import { COMMANDS } from "./commands";
+import type { SkillCommand } from "./skillCommands";
 
 export const TIMING = {
   activate: 5_000,
@@ -65,7 +67,8 @@ type Live = {
   ping?: ReturnType<typeof setInterval>;
   lastActive: number;
 };
-type Call = { id: string; ctx: ChatContext; label: string; updated: Set<string> };
+/** `request`: the number of the request that started the call, so a replaced call can be cancelled. */
+type Call = { id: string; ctx: ChatContext; label: string; updated: Set<string>; request?: number };
 
 const scopeOf = (c: ChatContext) => JSON.stringify([c.connection, c.profile, c.chat]);
 
@@ -181,11 +184,15 @@ export class Extensions {
     const label = action.kind === "command" ? `/${action.name}` : `its ${action.view} view`;
     const open = this.calls.get(id);
     if (open && open.ctx.still()) throw new Error(`${p.manifest.name} is still answering ${open.label}.`);
+    if (open) this.cancel(id, open);
+    // A running extension belongs to one chat (section 2): another chat gets a fresh worker and an empty view.
+    const bound = this.live.get(id);
+    if (bound && bound.scope !== scopeOf(ctx)) this.halt(id, { kind: "stopped", why: "it was run in another chat" });
     const call: Call = { id: crypto.randomUUID(), ctx, label, updated: new Set() };
     this.calls.set(id, call);
     try {
       const live = await this.ensure(id, ctx);
-      const result = await this.ask(id, live, action.kind === "command" ? "command.run" : "view.render", action.kind === "command" ? { call: call.id, name: action.name, arg: action.arg } : { call: call.id, id: action.view }, TIMING.call, label);
+      const result = await this.ask(id, live, action.kind === "command" ? "command.run" : "view.render", action.kind === "command" ? { call: call.id, name: action.name, arg: action.arg } : { call: call.id, id: action.view }, TIMING.call, label, call);
       if (!ctx.still()) return { views: [] };
       const text = typeof result === "object" && result !== null ? (result as { text?: unknown }).text : undefined;
       return { note: typeof text === "string" && text ? text.slice(0, RPC_LIMITS.note) : undefined, views: [...call.updated] };
@@ -206,13 +213,19 @@ export class Extensions {
   private packaged = (id: ExtensionId) => this.catalogue.find((p) => p.manifest.id === id);
   private record = (id: ExtensionId) => this.records.find((r) => r.id === id);
 
+  /** Ends a call whose pane has left its chat: its request is dropped, with its deadline, so a late answer is ignored. */
+  private cancel(id: ExtensionId, call: Call) {
+    this.calls.delete(id);
+    const live = this.live.get(id);
+    const waiting = call.request === undefined ? undefined : live?.pending.get(call.request);
+    if (!live || !waiting) return;
+    live.pending.delete(call.request!);
+    clearTimeout(waiting.timer);
+    waiting.reject(new Error(`${call.label} was cancelled: its pane left the chat.`));
+  }
+
   private async ensure(id: ExtensionId, ctx: ChatContext): Promise<Live> {
-    let live = this.live.get(id);
-    // A running extension belongs to one chat (section 2): another chat gets a fresh worker and an empty view.
-    if (live && live.scope !== scopeOf(ctx)) {
-      this.halt(id, { kind: "stopped", why: "it was run in another chat" });
-      live = undefined;
-    }
+    const live = this.live.get(id);
     if (live) {
       live.ctx = ctx;
       await live.ready;
@@ -247,8 +260,9 @@ export class Extensions {
     this.ask(id, live, "ping", {}, TIMING.ping, "ping").catch(() => {});
   }
 
-  private ask(id: ExtensionId, live: Live, method: string, params: object, ms: number, label: string): Promise<unknown> {
+  private ask(id: ExtensionId, live: Live, method: string, params: object, ms: number, label: string, call?: Call): Promise<unknown> {
     const n = ++live.next;
+    if (call) call.request = n;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => this.fail(id, `didn't answer ${label} within ${ms / 1000} s`), ms);
       live.pending.set(n, { resolve, reject, timer });
@@ -400,3 +414,9 @@ export function offeredCommands(states: readonly ExtensionState[], taken: (name:
   }
   return { offered, refused };
 }
+
+/** Why `name` belongs to the app or to one of `skills`, the skills offered where the menu is. */
+export const takenName =
+  (skills?: readonly SkillCommand[]) =>
+  (name: string): string | undefined =>
+    COMMANDS.some((c) => c.name === name) ? `Hermes Chat has its own /${name}.` : skills?.some((s) => s.key === name) ? `This profile has a skill called ${name}.` : undefined;

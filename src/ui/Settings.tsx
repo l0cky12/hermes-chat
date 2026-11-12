@@ -77,6 +77,7 @@ import { EndpointSettings, type EndpointApi } from "./EndpointSettings";
 import { useLocale } from "../i18n/locale";
 import { ProfileSettings, type ProfilesWiring } from "./ProfileSettings";
 import { ExtensionsSettings } from "./ExtensionsSettings";
+import type { SkillCommands } from "../hermes/skillCommands";
 import { errorText, formatBytes } from "../hermes/values";
 
 type Tab = "general" | "appearance" | "keyboard" | "model" | "providers" | "voice" | "toolsets" | "mcp" | "gateways" | "profiles" | "persona" | "memory" | "skills" | "diagnostics" | "extensions";
@@ -274,8 +275,8 @@ export function SettingsScreen({
   memoryDiscards?: number;
   /** The profile's skills on Hermes; the Skills tab shows only with it. */
   skills?: SkillsApi;
-  /** Shows Settings → Extensions (ADR 0126), where the window has its extensions. */
-  extensions?: boolean;
+  /** Shows Settings → Extensions (ADR 0126). `skills` reads the skills offered in the profile shown, whose names win. */
+  extensions?: { skills: () => Promise<SkillCommands | undefined> };
   /** Called with whether the Skills tab has an unsaved edit. */
   onSkillDirty?: (dirty: boolean) => void;
   /** Changes each time the owner discards the unsaved skill edit from App's question. */
@@ -875,7 +876,7 @@ export function SettingsScreen({
       case "keyboard":
         return <KeyboardSettings />;
       case "extensions":
-        return <ExtensionsSettings />;
+        return <ExtensionsSettings skills={extensions?.skills} />;
       case "model":
         // A draft lives only while this tab is open, and for one profile. Idle compaction is this computer's, and shows
         // whether or not Hermes is reachable.

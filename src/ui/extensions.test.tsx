@@ -11,6 +11,7 @@ import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
 import { BUNDLED } from "../hermes/bundledExtensions";
 import { Extensions } from "../hermes/extensions";
+import { parseManifest } from "../hermes/extensionManifest";
 import { fakeHosts } from "../hermes/fakeExtensionHost";
 import { ExtensionsContext } from "./extensionsContext";
 import { ExtensionsSettings } from "./ExtensionsSettings";
@@ -89,6 +90,40 @@ describe("Chat stats in the composer", () => {
   });
 });
 
+describe("an extension with chat.draft", () => {
+  const NOTER = parseManifest(
+    JSON.stringify({ manifest: 1, id: "dev.test.noter", name: "Noter", version: "1.0.0", api: 1, main: "main.js", commands: [{ name: "note", description: "Add a note to the Draft" }], views: [{ id: "main", title: "Noter" }], permissions: ["chat.draft"], needs: [] }),
+  );
+  const SOURCE = `self.onmessage = (first) => {
+    const port = first.ports[0]; let next = 1; const waiting = new Map();
+    const send = (m) => port.postMessage(JSON.stringify({ jsonrpc: "2.0", ...m }));
+    const call = (method, params) => new Promise((ok) => { const id = next++; waiting.set(id, ok); send({ id, method, params }); });
+    port.onmessage = async (e) => {
+      const m = JSON.parse(e.data);
+      if (m.method === undefined) { waiting.get(m.id)(m.result); return; }
+      if (m.id === undefined) return;
+      if (m.method === "command.run") {
+        await call("chat.draft", { call: m.params.call, text: "Remember the milk" });
+        await call("view.update", { id: "main", nodes: [{ kind: "button", label: "Add it again", command: "note" }] });
+      }
+      send({ id: m.id, result: null });
+    };
+  };`;
+
+  it("puts its text in the Draft in place of the typed command, from the composer and from its view's button", async () => {
+    if (!NOTER.ok) throw new Error("manifest");
+    const x = new Extensions({ catalogue: [{ manifest: NOTER.manifest, source: SOURCE }], startHost: fakeHosts(), storage: localStorage, log: () => {} });
+    x.install(NOTER.manifest.id);
+    const { server, user } = await launch(x);
+    await user.type(composer(), "/note{Enter}{Enter}");
+    await waitFor(() => expect(composer().value).toBe("Remember the milk"));
+    const view = await screen.findByRole("region", { name: "Noter, an extension's view" });
+    await user.click(within(view).getByRole("button", { name: "Add it again" }));
+    await waitFor(() => expect(composer().value).toBe("Remember the milk\n\nRemember the milk"));
+    expect(sent(server)).toEqual([]);
+  });
+});
+
 describe("Settings → Extensions", () => {
   const show = (x: Extensions) =>
     render(
@@ -96,6 +131,17 @@ describe("Settings → Extensions", () => {
         <ExtensionsSettings />
       </ExtensionsContext.Provider>,
     );
+
+  it("says when a skill of the profile shown has a command's name", async () => {
+    const x = store();
+    x.install(STATS);
+    render(
+      <ExtensionsContext.Provider value={x}>
+        <ExtensionsSettings skills={async () => ({ offered: [{ key: "stats", description: "A skill" }], listed: new Set(["stats"]) }) as never} />
+      </ExtensionsContext.Provider>,
+    );
+    expect(await screen.findByText("Not offered: This profile has a skill called stats.")).toBeTruthy();
+  });
 
   it("installs only after the owner reads what each permission means, then grants, disables and uninstalls", async () => {
     const x = store();

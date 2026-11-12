@@ -228,6 +228,28 @@ describe("calls and chats", () => {
     expect(state(x).boundTo).toBe("Chat c2");
   });
 
+  it("reads the new chat on the first call after a switch, and never the old one", async () => {
+    const x = one(`{ "command.run": async (p) => JSON.stringify(await self.call("chat.read", { call: p.call })) }`);
+    const a = chat("c1", { items: () => [{ kind: "user", id: "a", text: "from A" }] });
+    const b = chat("c2", { items: () => [{ kind: "user", id: "b", text: "from B" }] });
+    expect(JSON.parse((await x.run(ID, { kind: "command", name: "probe", arg: "" }, a)).note!).result).toEqual([{ role: "user", text: "from A", at: null }]);
+    expect(JSON.parse((await x.run(ID, { kind: "command", name: "probe", arg: "" }, b)).note!).result).toEqual([{ role: "user", text: "from B", at: null }]);
+  });
+
+  it("cancels a call whose pane left, so its deadline doesn't stop the extension once another call has answered", async () => {
+    const x = one(`{ "command.run": (p) => (self.n = (self.n || 0) + 1) === 1 ? NEVER : "second" }`);
+    const a = chat("c1");
+    const first = x.run(ID, { kind: "command", name: "probe", arg: "" }, a);
+    const seen = expect(first).rejects.toThrow("/probe was cancelled: its pane left the chat.");
+    await flush();
+    a.here.on = false;
+    expect((await x.run(ID, { kind: "command", name: "probe", arg: "" }, chat("c1"))).note).toBe("second");
+    await seen;
+    await vi.advanceTimersByTimeAsync(TIMING.call);
+    expect(state(x).runtime).toEqual({ kind: "running" });
+    expect(state(x).installed?.status).toEqual({ kind: "usable" });
+  });
+
   it("puts text in the call's Draft only with chat.draft, and accepts only declared views with valid nodes", async () => {
     const x = one(
       `{ "command.run": async (p) => JSON.stringify({
