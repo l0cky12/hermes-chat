@@ -4,7 +4,7 @@
 // The project and its folders are Hermes's; which chats are in it is Hermes's when it keeps it, and this computer's when
 // it doesn't (MembershipSync.tsx, ADR 0109).
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowUp, Check, ChevronDown, Ellipsis, FolderGit2, Folder, FolderKanban, GitBranch, Pencil, Plus, Settings2, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowUp, Check, ChevronDown, Ellipsis, FolderGit2, Folder, FolderKanban, GitBranch, Pencil, Plus, Settings2, Sparkles, Trash2, X } from "lucide-react";
 import { EFFORT_LABEL, shortName, type Effort, type ModelCatalog, type ModelPick } from "../hermes/models";
 import { DefaultsConflict, NewerDefaultsError, cleanDraft, draftProblem, sameDraft, type DefaultsDraft, type ProjectDefaults } from "../hermes/projectDefaults";
 import type { Project, ProjectFolder, Worktree } from "../hermes/projects";
@@ -12,6 +12,7 @@ import { Age, Spinner, composing, menuArrows, useDismiss, useReturnFocus } from 
 import { pick, typeNewLine } from "./keybindings";
 import { ModelControls } from "./ModelPicker";
 import { errorText } from "../hermes/values";
+import { InstructionsAI, type InstructionsWriter } from "./InstructionsAI";
 
 const baseName = (path: string) => path.split("/").filter(Boolean).pop() ?? path;
 const chatsText = (n: number) => `${n} ${n === 1 ? "chat" : "chats"}`;
@@ -305,7 +306,7 @@ export function ProjectScreen({
   /** Where the project's membership is kept and how far it is from Hermes (MembershipSync.tsx). */
   membership?: ReactNode;
   /** The project's defaults for new chats, and how to edit them. */
-  defaults: Omit<DefaultsProps, "folders" | "profile" | "connection">;
+  defaults: Omit<DefaultsProps, "project" | "folders" | "profile" | "connection">;
   project: Project;
   profile: string;
   /** The connection the folders are on, as the owner typed it. */
@@ -616,7 +617,7 @@ export function ProjectScreen({
           )}
 
           <div data-section="defaults" hidden={open?.section !== "defaults"}>
-            <DefaultsSection {...defaults} folders={project.folders} profile={profile} connection={connection} />
+            <DefaultsSection {...defaults} project={project.name} folders={project.folders} profile={profile} connection={connection} />
           </div>
 
           {open?.section === "delete" && (
@@ -736,6 +737,8 @@ export function ProjectScreen({
 type DefaultsProps = {
   /** As kept now; undefined when none were ever saved. */
   saved?: ProjectDefaults;
+  /** The project's name. */
+  project: string;
   folders: ProjectFolder[];
   profile: string;
   connection?: string;
@@ -747,6 +750,8 @@ type DefaultsProps = {
   onToggleFavorite: (key: string) => void;
   /** Checks and keeps the defaults over revision `base`; rejects with `DefaultsConflict` if another save landed. */
   onSave: (base: number, draft: DefaultsDraft) => Promise<ProjectDefaults>;
+  /** Writes or improves the instructions with Hermes (InstructionsAI.tsx); absent while Hermes isn't connected. */
+  writer?: InstructionsWriter;
 };
 
 const blank = (d?: ProjectDefaults): DefaultsDraft => cleanDraft({ instructions: d?.instructions, model: d?.model, folder: d?.folder });
@@ -756,7 +761,7 @@ const blank = (d?: ProjectDefaults): DefaultsDraft => cleanDraft({ instructions:
  * left empty comes from the profile. Edits wait for Save; Cancel puts back what is kept. Saving over a save made
  * elsewhere meanwhile is refused, and the owner chooses which to keep.
  */
-function DefaultsSection({ saved, folders, profile, connection, catalog, profilePick, profileEffort, favorites, onToggleFavorite, onSave }: DefaultsProps) {
+function DefaultsSection({ saved, project, folders, profile, connection, catalog, profilePick, profileEffort, favorites, onToggleFavorite, onSave, writer }: DefaultsProps) {
   // `shown`: the kept defaults the form started from, and their revision; `draft`: the owner's edits over them.
   const [shown, setShown] = useState(() => ({ rev: saved?.rev ?? 0, draft: blank(saved) }));
   const [draft, setDraft] = useState<DefaultsDraft>(shown.draft);
@@ -764,6 +769,9 @@ function DefaultsSection({ saved, folders, profile, connection, catalog, profile
   const [error, setError] = useState<string>();
   const [conflict, setConflict] = useState<ProjectDefaults | null>();
   const [done, setDone] = useState(false);
+  // The writer the dialog was opened with, kept while it's open: a dropped connection fails its calls instead of closing it.
+  const [writing, setWriting] = useState<InstructionsWriter>();
+  const aiButton = useRef<HTMLButtonElement>(null);
   const unsaved = !sameDraft(draft, shown.draft);
   const tooLong = draftProblem(draft);
 
@@ -820,9 +828,31 @@ function DefaultsSection({ saved, folders, profile, connection, catalog, profile
       </p>
 
       <div className="field">
-        <label className="field-label" htmlFor="defaults-instructions">
-          Instructions
-        </label>
+        <div className="defaults-instructions-head">
+          <label className="field-label" htmlFor="defaults-instructions">
+            Instructions
+          </label>
+          <button
+            ref={aiButton}
+            className="btn small"
+            disabled={!writer || saving}
+            title={writer ? "Hermes drafts them for you to review; nothing is saved until Save defaults" : "Connect to Hermes to write the instructions with AI"}
+            onClick={() => setWriting(writer)}
+          >
+            <Sparkles size={13} aria-hidden /> {draft.instructions?.trim() ? "Improve with AI" : "Write with AI"}
+          </button>
+        </div>
+        {writing && (
+          <InstructionsAI
+            project={{ name: project, folders: folders.map((f) => f.path) }}
+            profile={profile}
+            current={draft.instructions ?? ""}
+            writer={writing}
+            onUse={(text) => edit({ instructions: text })}
+            onClose={() => setWriting(undefined)}
+            returnTo={aiButton}
+          />
+        )}
         <textarea
           id="defaults-instructions"
           aria-describedby="defaults-instructions-hint"

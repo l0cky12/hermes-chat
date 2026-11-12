@@ -391,8 +391,11 @@ export class FakeHermes {
    * it first, so its history has it. `lost`: the frame never reached Hermes. Applies once.
    */
   dropOnPrompt?: "stored" | "lost";
-  /** What the model answers every `llm.oneshot` call with, unless `oneshotFailure` says why it failed. */
-  oneshotAnswer = "A new title";
+  /**
+   * What the model answers every `llm.oneshot` call with, unless `oneshotFailure` says why it failed. A function answers
+   * each call from what it was told and given.
+   */
+  oneshotAnswer: string | ((call: { instructions: string; input: string }) => string) = "A new title";
   /**
    * The profile's Bot Desktop (`display.*`, tui_gateway/methods_display.py at v2026.9.24; ADR 0039): its status and who
    * holds it. Undefined: a Hermes without it, which answers "method not found". `profiles`: fields that differ for the
@@ -1128,7 +1131,8 @@ export class FakeHermes {
       if (!String(r.params.instructions ?? "").trim() && !String(r.params.input ?? "").trim())
         return this.fail(r.id, 4030, "llm.oneshot requires a template or instructions/input");
       if (this.oneshotFailure !== undefined) return this.fail(r.id, 5030, `one-shot generation failed: ${this.oneshotFailure}`);
-      this.respond(r.id, { text: this.oneshotAnswer });
+      const answer = this.oneshotAnswer;
+      this.respond(r.id, { text: typeof answer === "string" ? answer : answer({ instructions: String(r.params.instructions ?? ""), input: String(r.params.input ?? "") }) });
     },
     "model.options": (r) => {
       if (!this.modelOptionsResult) return this.fail(r.id, -32601, "Method not found: model.options");
