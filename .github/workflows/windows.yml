@@ -67,7 +67,7 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
-      - name: The relay refuses a program run by another account
+      - name: No port of a tunnel serves a program run by another account
         shell: pwsh
         working-directory: src-tauri
         env:

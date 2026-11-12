@@ -17,7 +17,6 @@ pub mod links;
 pub mod live;
 pub mod local_stt;
 pub mod lock;
-mod loopback_owner;
 mod loopback_peer;
 pub mod main_window;
 pub mod markdown_image;

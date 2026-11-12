@@ -29,13 +29,13 @@ A URL sign-in (ADR 0004) has no SSH target. The page then says so, offers **Open
 
 - **`ssh -L 127.0.0.1:<port>:…` straight to TCP**, as the sign-in tunnel did until ADR 0098. Rejected for pages: it needs the free-port-then-release race above, and a page's port would be ssh's to keep after Rust thought it closed.
 - **One more forward on the sign-in tunnel's ssh.** Rejected: adding a forward to a running ssh needs a ControlMaster socket, which ADR 0022 also declined, and a page's forward would then live as long as the sign-in.
-- **`ssh -W host:port` for each connection.** It clears config forwards on its own, but each of the frame's connections would be a new SSH sign-in.
+- **`ssh -W host:port` for each connection.** It clears config forwards on its own, but each of the frame's connections would be a new SSH sign-in. Windows uses it since ADR 0148, because there ssh's `-L` port served every account (#506).
 - **Rust fetching the page and serving it from a custom scheme.** Rejected: the page would lose its origin, and a scheme the app serves is nearer the app than a cross-origin frame.
 - **The Terminal's target, passed by the webview**, as the Terminal and Repository take theirs. Rejected for now: see above.
 
 ## Consequences
 
-- Any program on this computer can connect to a tunnel's port while it is open, as with any `ssh -L`. On Linux and Windows, since ADR 0105, the relay closes a connection from a program run by another account unanswered. On Windows such a program can still connect to ssh's own `-L` port and reach that one port on the server's loopback (#506). The port is ephemeral and the tunnel lasts only while the page shows.
+- Any program on this computer can connect to a tunnel's port while it is open, as with any `ssh -L`. On Linux and Windows, since ADR 0105, the relay closes a connection from a program run by another account unanswered. On Windows ssh has no `-L` port: each connection is an `ssh -W` of its own (ADR 0148, #506). The port is ephemeral and the tunnel lasts only while the page shows.
 - A page that links or redirects to `http://localhost:3000/…` by its full address sends the frame to this computer's port 3000, since the frame can't be followed. Relative links stay in the tunnel.
 - The server's page sees requests for `Host: 127.0.0.1:<port>`. Dev servers allow loopback addresses by default (Vite, webpack, Django in debug).
 - The `HEAD /` that checks a new http tunnel reaches the page's server.
