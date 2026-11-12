@@ -302,6 +302,8 @@ export const FIRST_DRAFT: ExportDraft = { leftOut: new Set(), toolCalls: false, 
 export type ExportPreview = {
   /** Exactly what Save writes. */
   text: string;
+  /** The title as the file has it, redactions applied. */
+  title: string;
   fileName: string;
   /** Each different likely secret in what the draft includes, first found first, and how many times it is there. */
   secrets: { text: string; kind: string; times: number; redacted: boolean }[];
@@ -322,10 +324,12 @@ export function exportPreview(chat: Chat, draft: ExportDraft, exportedAt: Date, 
   const redact = [...[...secrets.values()].filter((s) => s.redacted).map((s) => s.text), ...draft.picked];
   const file = render(format, chat, exportedAt, { leftOut: draft.leftOut, toolCalls: draft.toolCalls, attachments: draft.attachments, redact });
   const page = kind === "page" ? snapshotPage({ markdown: file, redacted: redact }) : undefined;
+  const titled = title(file);
   return {
     text: !page ? file : "page" in page ? page.page.html : "",
+    title: titled,
     // The title as the file has it, so a redaction there is one in the name too.
-    fileName: exportFileName(title(file), extension),
+    fileName: exportFileName(titled, extension),
     secrets: [...secrets.values()],
     picked: draft.picked.map((t) => ({ text: t, times: t ? times(t) : 0 })),
     ...(page && "problem" in page && { problem: page.problem }),

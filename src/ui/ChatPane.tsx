@@ -1,7 +1,7 @@
 // Transcript, thinking, tool-call groups, Approval cards, find bar, composer and the Settle button, ported from the prototype.
 // Dictation and Read aloud come from Voice.tsx.
 import { createContext, memo, type ReactNode, type RefObject, useCallback, startTransition, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
-import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, Columns2, CornerDownRight, EyeOff, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Square, Trash2, Wrench, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, Columns2, CornerDownRight, EyeOff, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Share2, Square, Trash2, Wrench, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { decodeString } from "micromark-util-decode-string";
@@ -14,7 +14,7 @@ import { QuestionCard } from "./QuestionCard";
 import { Menu, PinItem, type ChatPin } from "./ChatMenu";
 import { isBotChat } from "../hermes/bots";
 import { DeleteChatDialog } from "./DeleteChat";
-import { ExportChatDialog } from "./ExportChat";
+import { ExportChatDialog, type ExportMode } from "./ExportChat";
 import { QueuePanel, type QueueApi } from "./Queue";
 import { SubagentsPanel, type SubagentsApi } from "./Subagents";
 import type { SubagentId } from "../hermes/subagents";
@@ -232,11 +232,13 @@ async function clipboardImages(): Promise<File[]> {
  * The header's More (⋯) menu: the chat's less-used actions, each with its name. It opens below its button, at the
  * button's right edge, and the arrow keys move between its items (ChatMenu.tsx's Menu). `onDelete`, left out while a
  * reply runs, adds Delete chat… last; it asks first (DeleteChat.tsx), and a reply starting meanwhile takes the question
- * away for good. Export… opens the Export dialog (ExportChat.tsx); `onExport` gets its notice once saved.
+ * away for good. Export… opens the Export dialog (ExportChat.tsx); `onExport` gets its notice once saved. Share snapshot…
+ * opens it to publish (ADR 0123); `onSnapshotSettings` opens Settings → Snapshots from it.
  */
 function MoreMenu({
   chat,
   onExport,
+  onSnapshotSettings,
   onCopyLink,
   pin,
   onSettle,
@@ -245,6 +247,7 @@ function MoreMenu({
 }: {
   chat: Chat;
   onExport?: (notice: string) => void;
+  onSnapshotSettings?: () => void;
   onCopyLink?: () => void;
   pin?: ChatPin;
   onSettle?: (settled: boolean) => void;
@@ -255,7 +258,7 @@ function MoreMenu({
   const close = useCallback(() => setAt(undefined), []);
   const button = useRef<HTMLButtonElement>(null);
   const [askDelete, setAskDelete] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [exporting, setExporting] = useState<ExportMode>();
   const noDelete = !onDelete;
   useEffect(() => {
     if (noDelete) setAskDelete(false);
@@ -279,7 +282,7 @@ function MoreMenu({
       <button
         ref={button}
         className={`icon-btn ${at ? "on" : ""}`}
-        title={isBotChat(chat) ? "More actions: export" : `More actions: export, copy link, ${pin ? "pin, " : ""}settle, archive${onDelete ? ", delete" : ""}`}
+        title={isBotChat(chat) ? "More actions: export, share" : `More actions: export, share, copy link, ${pin ? "pin, " : ""}settle, archive${onDelete ? ", delete" : ""}`}
         aria-label="More"
         aria-haspopup="menu"
         aria-expanded={!!at}
@@ -297,7 +300,8 @@ function MoreMenu({
       </button>
       {at && (
         <Menu label={`More actions for ${chat.title}`} x={at.x} y={at.y} onClose={close}>
-          {onExport && item("Export…", <FileDown size={15} />, () => setExporting(true))}
+          {onExport && item("Export…", <FileDown size={15} />, () => setExporting("export"))}
+          {onExport && onSnapshotSettings && item("Share snapshot…", <Share2 size={15} />, () => setExporting("share"), "Publish a copy of this chat that anyone with its link can read")}
           {/* A Bot Chat is opened from its bot's row, found by its title (ADR 0066): no link to it by id, and nothing
               that would retire it, which would leave its bot to start another. */}
           {onCopyLink && !isBotChat(chat) && item("Copy chat link", <Link2 size={15} />, onCopyLink, "Copy a link that opens this chat in Hermes Chat on this computer")}
@@ -317,7 +321,16 @@ function MoreMenu({
           )}
         </Menu>
       )}
-      {exporting && onExport && <ExportChatDialog chat={chat} returnTo={button} onSaved={onExport} onClose={() => setExporting(false)} />}
+      {exporting && onExport && (
+        <ExportChatDialog
+          chat={chat}
+          mode={exporting}
+          returnTo={button}
+          onSaved={onExport}
+          onSnapshotSettings={onSnapshotSettings}
+          onClose={() => setExporting(undefined)}
+        />
+      )}
       {askDelete && onDelete && (
         <DeleteChatDialog
           title={chat.title}
@@ -339,7 +352,8 @@ const savedWhen = (at: number) => new Date(at).toLocaleString(undefined, { dateS
 /**
  * `alsoPostsIn`: the Telegram or Discord chat Hermes will also post its replies in. `draft`: the composer's text, kept
  * outside the pane so it survives switching chats. `onAnswer` answers an Approval card, and `onQuestion` any other
- * Question card. `onSettle`, `onArchive`, `onExport` and `onCopyLink` are left out for a chat not started yet. `notLoaded`: the chat has no Saved copy and can't load until
+ * Question card. `onSettle`, `onArchive`, `onExport` and `onCopyLink` are left out for a chat not started yet. `onSnapshotSettings`
+ * opens Settings → Snapshots from Share snapshot. `notLoaded`: the chat has no Saved copy and can't load until
  * Hermes is connected. `onRetry`, `onEdit` and `onDismiss` act on failed or unconfirmed messages. `modelControls`
  * contains the model picker; `footer` contains the status bar. Only the active pane answers Ctrl+F and takes focus as
  * it opens. Native drops attach to the pane under the pointer. Export, Copy chat link, Settle and Archive are in the header's More menu.
@@ -379,6 +393,7 @@ export function ChatPane({
   onSettle,
   onArchive,
   onExport,
+  onSnapshotSettings,
   onCopyLink,
   onDelete,
   modelControls,
@@ -445,6 +460,7 @@ export function ChatPane({
   onArchive?: (archived: boolean) => void;
   /** Shows the notice for a chat exported with the Export dialog. */
   onExport?: (notice: string) => void;
+  onSnapshotSettings?: () => void;
   /** Copies the chat's link (chatLinks.ts). */
   onCopyLink?: () => void;
   /** Deletes the chat, once the owner has said yes in the header menu's question. */
@@ -831,7 +847,7 @@ export function ChatPane({
               <Search size={16} />
             </button>
             {(onExport || onCopyLink || (onSettle && !chat.archived) || (onArchive && !chat.running) || deleteHere) && (
-              <MoreMenu chat={chat} onExport={onExport} onCopyLink={onCopyLink} pin={pin} onSettle={onSettle} onArchive={onArchive} onDelete={deleteHere} />
+              <MoreMenu chat={chat} onExport={onExport} onSnapshotSettings={onSnapshotSettings} onCopyLink={onCopyLink} pin={pin} onSettle={onSettle} onArchive={onArchive} onDelete={deleteHere} />
             )}
           </div>
         </div>

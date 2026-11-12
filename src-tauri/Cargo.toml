@@ -36,6 +36,10 @@ tauri-plugin-dialog = "2"
 # Already comes with tauri-plugin-updater: backups are zips of stored JSON files (backup.rs).
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 lopdf = { version = "0.47", default-features = false }
+# All three already in the tree: SigV4 signing of snapshot requests, the S3 XML answers, and a snapshot's random id (snapshot.rs).
+hmac = "0.12"
+quick-xml = "0.42"
+getrandom = "0.3"
 # Already comes with tauri (`image-png`): cuts the Windows still from its capture, and marks and scales a staged
 # annotation (annotate.rs).
 image = { version = "0.25", default-features = false, features = ["png"] }
