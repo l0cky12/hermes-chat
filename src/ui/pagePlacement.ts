@@ -65,7 +65,8 @@ function drawnOver(layer: Element, box: Element, r: Rect): boolean {
  * Where the page goes: `box`'s rectangle in the window, less the layers drawn over it. A layer across a whole side of
  * the box (the pane's resize handle, a dialog's backdrop) moves that side in. Any other makes a hole, which only X11
  * can cut, so it is best kept for small layers such as a menu or a toast. A layer counts only where it is drawn over
- * the box, so one beneath the Preview when it covers the chat counts for nothing. `null`: the box has no size, or layers cover it.
+ * the box, so one beneath the Preview when it covers the chat counts for nothing. All in CSS pixels, with the window's
+ * CSS size as `viewport`, from which Rust finds how far WebKit zooms the app. `null`: the box has no size, or layers cover it.
  */
 export function placementOf(box: Element, layers: string): Placement | null {
   const r = box.getBoundingClientRect();
@@ -90,7 +91,10 @@ export function placementOf(box: Element, layers: string): Placement | null {
     else holes.push(h);
   }
   if (rect.width < 1 || rect.height < 1) return null;
-  return { rect, holes: holes.flatMap((h) => intersect(rect, h) ?? []) };
+  // The visual viewport's size keeps its fraction (853.33 at 1.5 times), where innerWidth rounds it off.
+  const view = box.ownerDocument.defaultView;
+  const viewport = { width: view?.visualViewport?.width ?? view?.innerWidth ?? 0, height: view?.visualViewport?.height ?? view?.innerHeight ?? 0 };
+  return { rect, holes: holes.flatMap((h) => intersect(rect, h) ?? []), viewport };
 }
 
 /** Keeps `page` placed over `box` while both are there, and hides it when either goes. */

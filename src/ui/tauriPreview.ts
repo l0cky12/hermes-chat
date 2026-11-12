@@ -79,7 +79,7 @@ export type DevServers = {
 /** A rectangle in the window's CSS pixels. */
 export type Rect = { x: number; y: number; width: number; height: number };
 /** Where a native page shows, and the parts of that the app's own layers cover, which the page leaves bare. */
-export type Placement = { rect: Rect; holes: Rect[] };
+export type Placement = { rect: Rect; holes: Rect[]; viewport: { width: number; height: number } };
 export type PageEvent = { kind: "at"; url: ViewUrl; replace: boolean } | { kind: "failed"; message: string; url?: ViewUrl } | { kind: "escaped" };
 /** `key`: the view's name in Rust, which annotation queries ask about. */
 export type NativePage = { key: string; go(url: ViewUrl): void; reload(): void; place(placement: Placement | null): void; close(): void };

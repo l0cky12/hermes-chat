@@ -10,14 +10,14 @@
 //!
 //! The webview names the page and where it shows; Rust checks the address as the pane does (`web_page::web_url`).
 
-use crate::annotate::{AnnotateError, Answer, Pick, Still};
+use crate::annotate::{AnnotateError, Answer, Pick, Still, Viewport};
 use crate::screenshot::Captures;
 use crate::server_page::Jar;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::ipc::Channel;
 
-/// A rectangle in the window's CSS pixels, which are GTK's logical pixels: the app's page is never zoomed.
+/// A rectangle in the window's CSS pixels, or, once `Placement::in_view` has scaled it, in GTK's logical pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub struct Rect {
     pub x: f64,
@@ -33,6 +33,18 @@ pub struct Placement {
     pub rect: Rect,
     #[serde(default)]
     pub holes: Vec<Rect>,
+    pub viewport: Viewport,
+}
+
+impl Placement {
+    /// This placement in GTK's logical pixels, over an app view `width` of them wide. WebKit zooms the app by the
+    /// screen's font DPI (`Xft.dpi: 144` makes it 1.5), so one CSS pixel can be more than one of GTK's.
+    pub fn in_view(&self, width: f64) -> Placement {
+        let by = width / self.viewport.width;
+        let by = if by.is_finite() && by > 0.0 { by } else { 1.0 };
+        let scaled = |r: &Rect| Rect { x: r.x * by, y: r.y * by, width: r.width * by, height: r.height * by };
+        Placement { rect: scaled(&self.rect), holes: self.holes.iter().map(scaled).collect(), viewport: self.viewport }
+    }
 }
 
 /// What the page says, sent to the webview as `{ kind, … }`.
@@ -427,6 +439,8 @@ mod imp {
             hide(overlay, view);
             return;
         };
+        let Some(app_view) = overlay.child() else { return };
+        let placement = &placement.in_view(f64::from(app_view.allocated_width()));
         AT.with(|at| at.set(pixels(&placement.rect)));
         overlay.queue_resize();
         let holes = holes_in_page(placement);
@@ -915,7 +929,9 @@ Object.defineProperty(document.getElementById('save'), 'innerText', {{ get() {{ 
             let l = loaded.clone();
             view.connect_load_changed(move |_, event| l.set(l.get() || event == LoadEvent::Finished));
             go(KEY, url::Url::parse(url).unwrap(), None);
-            show_at(&overlay, &view, Some(&Placement { rect: Rect { x: 100.0, y: 50.0, width: 640.0, height: 480.0 }, holes: vec![] }));
+            let app_width = f64::from(overlay.child().unwrap().allocated_width());
+            let viewport = Viewport { width: app_width, height: 700.0 };
+            show_at(&overlay, &view, Some(&Placement { rect: Rect { x: 100.0, y: 50.0, width: 640.0, height: 480.0 }, holes: vec![], viewport }));
             run_until(|| loaded.get(), 120, "the page loads");
             run_for(1000);
             (window, overlay, view)
@@ -1153,14 +1169,32 @@ mod tests {
                 // A menu beside the page, not over it.
                 rect(500.0, 100.0, 200.0, 300.0),
             ],
+            viewport: Viewport { width: 1280.0, height: 820.0 },
         };
         assert_eq!(holes_in_page(&placement), vec![(0, 500, 100, 40), (0, 0, 400, 600)]);
     }
 
     #[test]
+    fn a_zoomed_app_places_the_page_over_its_box_in_gtk_pixels() {
+        // Xft.dpi 144: WebKit zooms the 1280-pixel app view 1.5 times, so its CSS viewport is 853⅓ wide (as the
+        // webview measures it) and the Preview's box, 801 to 1280 on screen, starts at CSS 534.
+        let placement = Placement {
+            rect: rect(534.0, 57.33, 319.33, 489.33),
+            holes: vec![rect(534.0, 500.0, 100.0, 30.0)],
+            viewport: Viewport { width: 853.333_312_988_281_2, height: 546.666_687_011_718_8 },
+        };
+        let on_screen = placement.in_view(1280.0);
+        assert_eq!(pixels(&on_screen.rect), (801, 86, 479, 734));
+        assert_eq!(holes_in_page(&on_screen), vec![(0, 664, 150, 45)]);
+        assert_eq!(pixels(&placement.in_view(placement.viewport.width).rect), pixels(&placement.rect), "an unzoomed app is placed as it measures");
+        let no_size = Placement { viewport: Viewport { width: 0.0, height: 0.0 }, ..placement.clone() };
+        assert_eq!(pixels(&no_size.in_view(1280.0).rect), pixels(&placement.rect), "a viewport with no size leaves the place as it is");
+    }
+
+    #[test]
     fn placement_reads_the_webviews_json() {
-        let p: Placement = serde_json::from_str(r#"{"rect":{"x":1,"y":2,"width":3,"height":4}}"#).unwrap();
-        assert_eq!(p, Placement { rect: rect(1.0, 2.0, 3.0, 4.0), holes: vec![] });
+        let p: Placement = serde_json::from_str(r#"{"rect":{"x":1,"y":2,"width":3,"height":4},"viewport":{"width":5,"height":6}}"#).unwrap();
+        assert_eq!(p, Placement { rect: rect(1.0, 2.0, 3.0, 4.0), holes: vec![], viewport: Viewport { width: 5.0, height: 6.0 } });
         assert_eq!(
             serde_json::to_value(PageEvent::Failed { message: "m".into(), url: None }).unwrap(),
             serde_json::json!({ "kind": "failed", "message": "m" })
