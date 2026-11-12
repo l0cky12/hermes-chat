@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // The side panel's shell (SidePanel.tsx, ADR 0039): a tab is made when first opened and kept, so what runs in it
-// survives the owner going to another tab or closing the panel; a tab with something running says so.
+// survives the owner going to another tab, the launcher (ADR 0159) or closing the panel; a tab with something running
+// says so.
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useEffect, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,8 +19,8 @@ function Probe({ name, shown }: { name: string; shown: boolean }) {
   return <p>{`${name} ${shown ? "shown" : "hidden"}`}</p>;
 }
 
-function Harness({ onClose = () => {} }: { onClose?: () => void }) {
-  const [tab, setTab] = useState<PanelTab>("preview");
+function Harness({ start = "preview", onClose = () => {} }: { start?: PanelTab | null; onClose?: () => void }) {
+  const [tab, setTab] = useState<PanelTab | null>(start);
   const [shown, setShown] = useState(true);
   return (
     <>
@@ -70,5 +71,74 @@ describe("The side panel", () => {
     expect(screen.getByRole("tab", { name: /Files/ }).querySelector(".run-dot")).toBeNull();
     fireEvent.keyDown(screen.getByRole("tab", { name: /Files/ }), { key: "Escape" });
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  describe("launcher", () => {
+    const rows = () => screen.getAllByRole("listitem").map((li) => li.querySelector("button")!);
+
+    it("lists the four tabs with their keys, focused on the first, and makes no tab until one is picked", () => {
+      mounts.length = 0;
+      render(<Harness start={null} />);
+      expect(screen.getByRole("heading", { name: "Open a surface" })).toBeTruthy();
+      const list = screen.getByRole("list", { name: "Open a surface" });
+      expect(rows().map((b) => [b.textContent, b.getAttribute("aria-keyshortcuts")])).toEqual([
+        ["PreviewP", "P"],
+        ["TerminalT", "T"],
+        ["FilesF", "F"],
+        ["ScreenS", "S"],
+      ]);
+      expect(list.contains(document.activeElement)).toBe(true);
+      expect(document.activeElement).toBe(rows()[0]);
+      expect(screen.queryAllByRole("tab", { selected: true })).toEqual([]);
+      expect(mounts).toEqual([]);
+    });
+
+    it("opens a tab by click, by its letter in either case, and moves between rows with the arrows, wrapping", () => {
+      render(<Harness start={null} />);
+      const aside = document.querySelector("aside")!;
+      fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
+      expect(document.activeElement).toBe(rows()[3]);
+      fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+      expect(document.activeElement).toBe(rows()[0]);
+      fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+      expect(document.activeElement).toBe(rows()[1]);
+
+      fireEvent.keyDown(document.activeElement!, { key: "f" });
+      expect(screen.getByText("files shown")).toBeTruthy();
+      expect(screen.queryByRole("heading", { name: "Open a surface" })).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Open a surface" }));
+      fireEvent.keyDown(aside, { key: "T" });
+      expect(screen.getByText("terminal shown")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Open a surface" }));
+      fireEvent.click(rows()[3]);
+      expect(screen.getByText("screen shown")).toBeTruthy();
+    });
+
+    it("keeps what was made, hidden, while it shows again after +, and leaves the letters alone with a modifier or a tab shown", () => {
+      mounts.length = unmounts.length = 0;
+      render(<Harness />);
+      fireEvent.keyDown(document.querySelector("aside")!, { key: "t" });
+      expect(screen.getByText("preview shown")).toBeTruthy();
+
+      const plus = screen.getByRole("button", { name: "Open a surface", pressed: false });
+      fireEvent.click(plus);
+      expect(plus.getAttribute("aria-pressed")).toBe("true");
+      expect(screen.getByText("preview hidden")).toBeTruthy();
+      expect(unmounts).toEqual([]);
+      fireEvent.keyDown(document.activeElement!, { key: "t", ctrlKey: true });
+      expect(screen.getByRole("heading", { name: "Open a surface" })).toBeTruthy();
+      fireEvent.click(screen.getByRole("tab", { name: /Preview/ }));
+      expect(screen.getByText("preview shown")).toBeTruthy();
+      expect(mounts).toEqual(["preview"]);
+    });
+
+    it("closes on Escape", () => {
+      const onClose = vi.fn();
+      render(<Harness start={null} onClose={onClose} />);
+      fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+      expect(onClose).toHaveBeenCalledOnce();
+    });
   });
 });

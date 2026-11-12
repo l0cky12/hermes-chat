@@ -1,9 +1,9 @@
-// The side panel beside the chat (ADR 0039): Preview, Terminal, Files and Screen, one shown at a time. Each tab is made
-// the first time it is opened and kept from then on, so a shell or the screen keeps running while the owner is in
-// another tab, or the panel is hidden or closed. The panel is resizable from its left edge, and in a window too narrow
+// The side panel beside the chat (ADR 0039): Preview, Terminal, Files and Screen, one shown at a time, or the launcher
+// that picks one (ADR 0159). Each tab is made the first time it is opened and kept from then on, so a shell or the screen
+// keeps running while the owner is in another tab or the launcher, or the panel is hidden or closed. The panel is resizable from its left edge, and in a window too narrow
 // for both it covers the chat until the owner goes back.
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { ArrowLeft, Eye, FolderOpen, Monitor, SquareTerminal, X } from "lucide-react";
+import { ArrowLeft, Eye, FolderOpen, Monitor, Plus, SquareTerminal, X } from "lucide-react";
 
 export type PanelTab = "preview" | "terminal" | "files" | "screen";
 
@@ -11,11 +11,11 @@ export type PanelTab = "preview" | "terminal" | "files" | "screen";
 export const PANE_MIN_WIDTH = 300;
 const KEY_STEP = 32;
 
-const TABS: { tab: PanelTab; label: string; title: string; icon: ReactNode }[] = [
-  { tab: "preview", label: "Preview", title: "Pages, files and tool output", icon: <Eye size={14} /> },
-  { tab: "terminal", label: "Terminal", title: "A shell on the Hermes server or on this computer", icon: <SquareTerminal size={14} /> },
-  { tab: "files", label: "Files", title: "The files on the Hermes server", icon: <FolderOpen size={14} /> },
-  { tab: "screen", label: "Screen", title: "Hermes's screen, where its computer use and browser run", icon: <Monitor size={14} /> },
+const TABS: { tab: PanelTab; label: string; title: string; Icon: typeof Eye; key: string }[] = [
+  { tab: "preview", label: "Preview", title: "Pages, files and tool output", Icon: Eye, key: "P" },
+  { tab: "terminal", label: "Terminal", title: "A shell on the Hermes server or on this computer", Icon: SquareTerminal, key: "T" },
+  { tab: "files", label: "Files", title: "The files on the Hermes server", Icon: FolderOpen, key: "F" },
+  { tab: "screen", label: "Screen", title: "Hermes's screen, where its computer use and browser run", Icon: Monitor, key: "S" },
 ];
 
 export function SidePanel({
@@ -32,8 +32,10 @@ export function SidePanel({
   running = {},
   tabs,
 }: {
-  tab: PanelTab;
-  onTab: (t: PanelTab) => void;
+  /** The tab on screen, or null for the launcher. */
+  tab: PanelTab | null;
+  /** The owner picked a tab, or null: the launcher (the + button). */
+  onTab: (t: PanelTab | null) => void;
   /** False while the panel is closed or hidden: what runs in it keeps running. */
   shown: boolean;
   /** The window is too narrow for the panel beside the chat, so it covers the chat until `onHide`. */
@@ -51,20 +53,39 @@ export function SidePanel({
   /** Each tab's content. `shown`: whether it is the tab on screen. */
   tabs: Record<PanelTab, (shown: boolean) => ReactNode>;
 }) {
-  const [made, setMade] = useState<PanelTab[]>([tab]);
+  const [made, setMade] = useState<PanelTab[]>(tab ? [tab] : []);
   const [dragging, setDragging] = useState(false);
   const root = useRef<HTMLElement>(null);
   useEffect(() => {
-    if (!made.includes(tab)) setMade((m) => [...m, tab]);
+    if (tab && !made.includes(tab)) setMade((m) => [...m, tab]);
   }, [tab, made]);
   // Opened or shown again, the panel takes focus, so Escape and the keys reach it, unless something in it (a terminal,
   // say) took it first. Covering the chat makes it inert, focus included, so focus moves in then too.
+  // The launcher puts focus on its first row, so the arrow keys and Enter work from the start.
   useEffect(() => {
-    if (shown && !root.current?.contains(document.activeElement)) root.current?.focus();
+    if (!shown) return;
+    const rows = launcherRows(root.current);
+    if (rows.length) {
+      if (!rows.includes(document.activeElement as HTMLButtonElement)) rows[0].focus();
+    } else if (!root.current?.contains(document.activeElement)) root.current?.focus();
   }, [overlay, shown, tab]);
 
   const onKey = (e: ReactKeyboardEvent) => {
-    if (e.key !== "Escape" || e.defaultPrevented) return;
+    if (e.defaultPrevented) return;
+    // The launcher's keys: a tab's letter opens it. Only while the launcher shows, so they never reach a terminal or field.
+    const picked = tab === null && !e.ctrlKey && !e.altKey && !e.metaKey && TABS.find((t) => t.key === e.key.toUpperCase());
+    if (picked) {
+      e.preventDefault();
+      return onTab(picked.tab);
+    }
+    if (tab === null && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      e.preventDefault();
+      const rows = launcherRows(root.current);
+      const at = rows.indexOf(document.activeElement as HTMLButtonElement);
+      const next = at < 0 ? (e.key === "ArrowDown" ? 0 : rows.length - 1) : (at + (e.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length;
+      return rows[next]?.focus();
+    }
+    if (e.key !== "Escape") return;
     e.preventDefault();
     if (overlay) onHide();
     else onClose();
@@ -99,12 +120,15 @@ export function SidePanel({
               title={t.title}
               onClick={() => onTab(t.tab)}
             >
-              {t.icon}
+              <t.Icon size={14} />
               <span className="panel-tab-label">{t.label}</span>
               {running[t.tab] && <span className="dot run-dot" role="img" aria-label={typeof running[t.tab] === "string" ? (running[t.tab] as string) : "(running)"} />}
             </button>
           ))}
         </div>
+        <button className={`icon-btn panel-new ${tab === null ? "on" : ""}`} title="Open a surface" aria-pressed={tab === null} onClick={() => onTab(null)}>
+          <Plus size={16} />
+        </button>
         <button className="icon-btn panel-close" title="Close the side panel" onClick={onClose}>
           <X size={16} />
         </button>
@@ -114,7 +138,30 @@ export function SidePanel({
           {tabs[t.tab](shown && tab === t.tab)}
         </div>
       ))}
+      {tab === null && <Launcher onTab={onTab} />}
     </aside>
+  );
+}
+
+const launcherRows = (root: HTMLElement | null) => [...(root?.querySelectorAll<HTMLButtonElement>(".panel-launcher-row") ?? [])];
+
+/** What the panel shows before a tab is picked, and after +: each tab as a row with its key. */
+function Launcher({ onTab }: { onTab: (t: PanelTab) => void }) {
+  return (
+    <div className="panel-body panel-launcher">
+      <h2 id="panel-launcher-title">Open a surface</h2>
+      <ul aria-labelledby="panel-launcher-title">
+        {TABS.map((t) => (
+          <li key={t.tab}>
+            <button className="panel-launcher-row" title={t.title} aria-keyshortcuts={t.key} onClick={() => onTab(t.tab)}>
+              <t.Icon size={18} />
+              <span>{t.label}</span>
+              <kbd aria-hidden>{t.key}</kbd>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

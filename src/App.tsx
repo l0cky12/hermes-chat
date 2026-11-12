@@ -1413,17 +1413,17 @@ export function Main({
   const catalog = models?.profile === profile ? models : undefined;
   const sticky: ModelPick | undefined = modelPicks[pref] ?? (modelPicker?.profile === pref ? withoutProfile(modelPicker) : catalog?.defaultPick);
 
-  // The side panel beside the chat (ADR 0039): its tab, and whether it is open. Once opened it stays mounted for this
+  // The side panel beside the chat (ADR 0039): its tab (null: the launcher, ADR 0159), and whether it is open. Once opened it stays mounted for this
   // sign-in, hidden while closed, so a shell or the screen in it keeps running. `panelHidden`: in a window too narrow
   // for both, the panel covers the chat, and the owner has gone back to the chat without closing it.
-  const [panelTab, setPanelTab] = useState<PanelTab>("preview");
+  const [panelTab, setPanelTab] = useState<PanelTab | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelMounted, setPanelMounted] = useState(false);
   const [panelHidden, setPanelHidden] = useState(false);
   const [previewHistory, stepPreview] = useReducer(stepHistory, null);
   // The width while the owner drags the panel's edge; it is kept in the display preferences once they let go.
   const [dragWidth, setDragWidth] = useState<number | null>(null);
-  const openPanel = useCallback((tab: PanelTab) => {
+  const openPanel = useCallback((tab: PanelTab | null) => {
     setPanelTab(tab);
     setPanelOpen(true);
     setPanelMounted(true);
