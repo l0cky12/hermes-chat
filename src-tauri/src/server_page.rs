@@ -45,7 +45,8 @@ use tokio::process::{Child, Command};
 use tokio::sync::oneshot;
 use url::{Host, Url};
 
-/// How long ssh has to sign in and listen on its socket.
+/// How long a new tunnel has to be ready: on Linux for ssh to sign in and listen on its socket, on Windows for ssh to
+/// sign in and the page to send its first answer.
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long the first request through a new tunnel waits for any answer before the page is shown anyway.
 #[cfg(any(unix, test))]
@@ -234,11 +235,10 @@ pub fn ssh_args(target: &str, socket: &Path, page: &ServerPage) -> Result<Vec<Os
     Ok(forward_args(target, socket, page))
 }
 
-/// `ssh_args` for one connection on Windows: the same options, then `-W <host>:<port>`, so ssh carries the connection
-/// on its stdin and stdout and listens on nothing.
-pub fn stdio_ssh_args(target: &str, page: &ServerPage) -> Result<Vec<OsString>, ServerPageError> {
-    let target = checked_target(target).ok_or_else(|| ServerPageError::Ssh("The sign-in's SSH target isn't one ssh can take.".into()))?;
-    Ok(SSH_OPTIONS.iter().copied().chain(["-W", &page.far_end(), "--", target]).map(OsString::from).collect())
+/// ssh's arguments for one connection on Windows: `options`, then `-W <far_end> -- <target>`, so ssh carries the
+/// connection on its stdin and stdout and listens on nothing.
+pub fn stdio_args(options: impl IntoIterator<Item = OsString>, far_end: &str, target: &str) -> Vec<OsString> {
+    options.into_iter().chain(["-W", far_end, "--", target].map(OsString::from)).collect()
 }
 
 fn forward_args(target: &str, listen: &str, page: &ServerPage) -> Vec<OsString> {
@@ -308,9 +308,9 @@ pub(crate) struct Address {
 
 #[cfg(windows)]
 impl Address {
-    /// `program` with `args`, which end with `-W <host>:<port> -- <target>`.
-    pub(crate) fn new(program: &str, args: Vec<OsString>) -> Address {
-        Address { program: program.into(), args: args.into() }
+    /// Each connection starts `program` with `stdio_args(options, far_end, target)`.
+    pub(crate) fn new(program: &str, options: impl IntoIterator<Item = OsString>, far_end: &str, target: &str) -> Address {
+        Address { program: program.into(), args: stdio_args(options, far_end, target).into() }
     }
 }
 
@@ -358,8 +358,8 @@ pub(crate) async fn connect(address: &Address) -> std::io::Result<Through> {
         return Err(std::io::Error::other("ssh's input and output aren't connected"));
     };
     let said = Stderr::default();
-    said.drain(stderr);
-    Ok(Through { ssh, to: Some(to), from, said })
+    let drained = said.drain(stderr);
+    Ok(Through { ssh, to: Some(to), from, said, drained })
 }
 
 /// One connection through a Windows tunnel: `ssh -W`, whose stdin and stdout are the connection. Dropping it ends ssh
@@ -370,6 +370,7 @@ pub(crate) struct Through {
     to: Option<tokio::process::ChildStdin>,
     from: tokio::process::ChildStdout,
     said: Stderr,
+    drained: tokio::task::JoinHandle<()>,
 }
 
 /// Why a connection through a Windows tunnel closed with nothing sent back.
@@ -388,8 +389,7 @@ impl Through {
     /// open the forward, and names a forward the server refused (`channel 0: open failed: …`).
     pub(crate) async fn refusal(mut self) -> Refusal {
         let status = tokio::time::timeout(Duration::from_secs(2), self.ssh.wait()).await;
-        // Let the drain catch ssh's last words.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _ = tokio::time::timeout(Duration::from_secs(1), self.drained).await;
         if let Some(line) = self.said.open_failed() {
             return Refusal::NothingAnswered(Some(line));
         }
@@ -1134,7 +1134,8 @@ async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started
 /// has `READY_TIMEOUT` to sign in and the page to answer; no answer by then, with ssh still running, opens the page.
 #[cfg(windows)]
 async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started, ServerPageError> {
-    let address = Address::new(program, stdio_ssh_args(target, page)?);
+    let target = checked_target(target).ok_or_else(|| ServerPageError::Ssh("The sign-in's SSH target isn't one ssh can take.".into()))?;
+    let address = Address::new(program, SSH_OPTIONS.iter().map(OsString::from), &page.far_end(), target);
     let mut probe = connect(&address).await.map_err(|e| ServerPageError::Spawn(e.to_string()))?;
     if !answers(&mut probe, page, READY_TIMEOUT).await {
         return Err(match probe.refusal().await {
@@ -1182,20 +1183,30 @@ fn no_ipv6(e: &std::io::Error) -> bool {
 async fn answers(s: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin, page: &ServerPage, within: Duration) -> bool {
     let request =
         if page.url.scheme() == "https" { client_hello() } else { format!("HEAD / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", page.at()).into_bytes() };
-    first_byte(s, &request, within).await.unwrap_or(true)
+    first_byte(s, &request, within).await != Reply::Closed
 }
 
-/// Sends `request` on `s` and waits `within` for the first byte back: `Some(true)` if one came, `Some(false)` if `s`
-/// closed or reset first (ssh drops a connection that way when the server refused the forward), `None` if neither.
-pub(crate) async fn first_byte(mut s: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin, request: &[u8], within: Duration) -> Option<bool> {
+/// What came back on a new connection after a request.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Reply {
+    /// At least one byte.
+    Came,
+    /// The connection closed or was reset first: ssh drops a connection that way when the server refused the forward.
+    Closed,
+    /// Nothing yet.
+    Silent,
+}
+
+/// Sends `request` on `s` and waits `within` for the first byte back.
+pub(crate) async fn first_byte(mut s: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin, request: &[u8], within: Duration) -> Reply {
     if s.write_all(request).await.is_err() {
-        return Some(false);
+        return Reply::Closed;
     }
     let mut b = [0u8; 1];
     match tokio::time::timeout(within, s.read(&mut b)).await {
-        Ok(Ok(n)) => Some(n > 0),
-        Ok(Err(_)) => Some(false),
-        Err(_) => None,
+        Ok(Ok(1..)) => Reply::Came,
+        Ok(_) => Reply::Closed,
+        Err(_) => Reply::Silent,
     }
 }
 
@@ -1245,10 +1256,11 @@ async fn serve_with<A, F, T, G, S>(mut accept: A, through: T, peers: Peers) -> I
 where
     A: FnMut() -> F,
     F: std::future::Future<Output = std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)>>,
-    T: Fn() -> G,
+    T: Fn() -> G + Send + Sync + 'static,
     G: std::future::Future<Output = std::io::Result<S>> + Send + 'static,
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
+    let through = Arc::new(through);
     let mut conns = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
@@ -1261,12 +1273,12 @@ where
                         continue;
                     }
                 };
-                let other_end = through();
+                let through = Arc::clone(&through);
                 conns.spawn(async move {
                     if !loopback_peer::admits(peers, &tcp) {
                         return;
                     }
-                    if let Ok(mut far) = other_end.await {
+                    if let Ok(mut far) = through().await {
                         let _ = tokio::io::copy_bidirectional(&mut tcp, &mut far).await;
                     }
                 });
@@ -1449,12 +1461,11 @@ mod tests {
     #[test]
     fn on_windows_each_connection_is_an_ssh_with_the_same_options_that_listens_on_nothing() {
         let p = page("http://[::1]:8080/");
-        let stdio = stdio_ssh_args("liam@hermes", &p).unwrap();
+        let stdio = stdio_args(SSH_OPTIONS.iter().map(OsString::from), &p.far_end(), "liam@hermes");
         let socket = ssh_args("liam@hermes", Path::new("/tmp/d/s"), &p).unwrap();
         assert_eq!(stdio[..stdio.len() - 4], socket[1..socket.len() - 4], "the same options, without -N");
         assert_eq!(stdio[stdio.len() - 4..], ["-W", "[::1]:8080", "--", "liam@hermes"]);
         assert!(!stdio.iter().any(|a| a == "-L" || a == "-D" || a == "-R"), "ssh listens on nothing: {stdio:?}");
-        assert!(stdio_ssh_args("-oProxyCommand=x", &p).is_err());
     }
 
     #[test]

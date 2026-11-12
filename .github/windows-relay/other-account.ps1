@@ -2,7 +2,7 @@
 # (#378, #506, ADR 0105). Run from src-tauri on a disposable Windows runner: it adds a local account and writes the
 # runner account's ~/.ssh/config. Windows' own ssh signs in to a stand-in sshd on this computer, whose loopback serves
 # a stand-in dashboard and a stand-in page. The script lists every port held by the test process and the processes it
-# started (ssh among them). curl run as the new account must get nothing from any of them. curl run as this account must
+# started, which include any ssh running then. curl run as the new account must get nothing from any of them. curl run as this account must
 # get the page through its relay.
 $ErrorActionPreference = 'Stop'
 $dir = Join-Path $env:RUNNER_TEMP 'relay-other-account'

@@ -144,17 +144,16 @@ async fn reach(program: &str, options: Vec<OsString>, far_end: &str, target: &st
 /// Each connection runs `program` with `options` and `-W <far_end> -- <target>`. One such connection, asking `HEAD /`,
 /// waits until the dashboard answers through it, so a sign-in that fails says what ssh said.
 #[cfg(windows)]
-async fn reach(program: &str, mut options: Vec<OsString>, far_end: &str, target: &str, within: Duration) -> Result<(Forward, Address), TunnelError> {
-    options.extend(["-W", far_end, "--", target].map(OsString::from));
-    let address = Address::new(program, options);
+async fn reach(program: &str, options: Vec<OsString>, far_end: &str, target: &str, within: Duration) -> Result<(Forward, Address), TunnelError> {
+    let address = Address::new(program, options, far_end, target);
     let mut probe = server_page::connect(&address).await.map_err(|e| TunnelError::Spawn(e.to_string()))?;
     match server_page::first_byte(&mut probe, b"HEAD / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n", within).await {
-        Some(true) => Ok(((), address)),
-        Some(false) => Err(TunnelError::Ssh(match probe.refusal().await {
+        server_page::Reply::Came => Ok(((), address)),
+        server_page::Reply::Closed => Err(TunnelError::Ssh(match probe.refusal().await {
             server_page::Refusal::Ssh(said) => said,
             server_page::Refusal::NothingAnswered(said) => said.unwrap_or_else(|| "The dashboard closed the connection without answering.".into()),
         })),
-        None => Err(TunnelError::Timeout(within.as_secs())),
+        server_page::Reply::Silent => Err(TunnelError::Timeout(within.as_secs())),
     }
 }
 
