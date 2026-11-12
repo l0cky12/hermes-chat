@@ -124,6 +124,12 @@ describe("Flagging likely secrets", () => {
     expect(found("a-b-c-d-e-f-g-h-i-j-k-l-db_password=Tr0ub4dor!3")).toEqual([["password or key", "Tr0ub4dor!3"]]);
     expect(found("postgresql+asyncpg://app:Pa55w0rd!@db.internal/app")).toEqual([["password in a link", "app:Pa55w0rd!"]]);
   });
+
+  it("flags a password named inside a call that an outer name's value runs into", () => {
+    expect(found('token = get_token(password="Tr0ub4dor!3")')).toEqual([["password or key", "Tr0ub4dor!3"]]);
+    expect(found("token = get_token(password=Tr0ub4dor!3)")).toEqual([["password or key", "Tr0ub4dor!3"]]);
+    expect(found("api_key = load(secret='s3cr3t-Value-42', retries=3)")).toEqual([["password or key", "s3cr3t-Value-42"]]);
+  });
 });
 
 describe("Redacting secrets", () => {
@@ -174,6 +180,12 @@ describe("Redacting secrets", () => {
     expect(r.text).toBe("Authorization: [redacted]");
     expect(r.kinds).toEqual(["authorization header"]);
     expect(redactSecrets("api_key=sk-proj-AbCdEfGhIjKlMnOpQrStUv").text).toBe("api_key=[redacted key]");
+  });
+
+  it("hides a password named inside a call that an outer name's value runs into, and all of a value with a bracket", () => {
+    expect(redactSecrets('token = get_token(password="Tr0ub4dor!3")').text).toBe("token = [redacted][redacted])");
+    expect(redactSecrets("token = get_token(password=Tr0ub4dor!3)").text).toBe("token = [redacted]");
+    expect(redactSecrets("password=abc(def)").text).toBe("password=[redacted]");
   });
 });
 

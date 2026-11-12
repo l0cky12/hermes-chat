@@ -34,6 +34,11 @@ type Shape = {
   label?: string;
   /** The secret is the first group, or the whole match. Every one has the `d` flag. */
   re: RegExp;
+  /**
+   * What a chat export matches with, where it differs from `re`. A redacting surface matches with both, so what `re`
+   * runs past (`get_token(password=` in `token = get_token(password="…")`) can't hide a secret after it.
+   */
+  chatRe?: RegExp;
   /** What takes the secret's place. */
   mark: string;
   /**
@@ -42,6 +47,13 @@ type Shape = {
    */
   flag?: (value: string, bare: boolean) => string | undefined;
 };
+
+// A secret's name and what joins it to its value. Named by up to eight words joined by `-` or `_`, or by any number
+// joined by `_` (`aws_secret_access_key`).
+const NAMED_VALUE = String.raw`\b(?:[A-Za-z0-9]+_)*(?:[A-Za-z0-9]+[_-]){0,8}(?:api[_-]?key|apikey|token|secret(?:[_-]?key)?|password|passwd|pwd|passphrase|credentials?|private[_-]?key|access[_-]?key|session[_-]?(?:id|token)|signature)(?:\\?["'])?\s*[:=]\s*(?!\[redacted)`;
+// A quoted value runs to its closing quote, past escaped characters (`\"`) in it; failing that, to the next quote.
+// Inside a JSON string (`\"…\"`), an escaped backslash is `\\` and an escaped quote of the inner text is `\\\"`.
+const QUOTED_VALUE = String.raw`\\"(?:[^"\\\n]|\\\\\\"|\\\\)+\\"|"(?:[^"\\]|\\.)*"|"[^"]*"|'(?:[^'\\]|\\.)*'|'[^']*'`;
 
 // Order breaks ties: of two that take the same text, the first's mark and kind stand. A value already redacted isn't
 // matched again (`(?!\[redacted)`). `\\?["']` is a quote as written, or escaped in JSON, as a tool call's arguments are.
@@ -119,19 +131,15 @@ const SHAPES: Shape[] = [
   // and a shorter last row). The log follower also redacts shorter rows just above an END line it reads. Never flagged
   // in a chat, where such a line is as often a public key, a certificate or a hash.
   { kind: "key-like base64 line", re: /^[A-Za-z0-9+/]{16,}={0,2}$/dgm, mark: "[redacted base64]", flag: () => undefined },
-  // Named by up to eight words joined by `-` or `_`, or by any number joined by `_` (`aws_secret_access_key`). A quoted
-  // value runs to its closing quote, past escaped characters (`\"`) in it; failing that, to the next quote. Inside a JSON
-  // string (`\"…\"`), an escaped backslash is `\\` and an escaped quote of the inner text is `\\\"`. In a chat an
-  // unquoted value ends before a bracket, where code goes on (`get_token()`).
   {
     kind: "secret value",
     label: "password or key",
-    re: /\b(?:[A-Za-z0-9]+_)*(?:[A-Za-z0-9]+[_-]){0,8}(?:api[_-]?key|apikey|token|secret(?:[_-]?key)?|password|passwd|pwd|passphrase|credentials?|private[_-]?key|access[_-]?key|session[_-]?(?:id|token)|signature)(?:\\?["'])?\s*[:=]\s*(?!\[redacted)(\\"(?:[^"\\\n]|\\\\\\"|\\\\)+\\"|"(?:[^"\\]|\\.)*"|"[^"]*"|'(?:[^'\\]|\\.)*'|'[^']*'|[^\s,;&"'}\]]+)/dgi,
+    re: new RegExp(String.raw`${NAMED_VALUE}(${QUOTED_VALUE}|[^\s,;&"'}\]]+)`, "dgi"),
+    // A chat's unquoted value ends before a bracket, where code goes on, so a name inside the call
+    // (`token = get_token(password="…")`) is matched on its own.
+    chatRe: new RegExp(String.raw`${NAMED_VALUE}(${QUOTED_VALUE}|[^\s,;&"'}\]()[{<>${"`"}]+)`, "dgi"),
     mark: REDACTED,
-    flag: (v, bare) => {
-      const value = bare ? v.replace(/[()[\]{}<>`].*$/s, "") : v;
-      return looksSecret(value, bare) ? value : undefined;
-    },
+    flag: (v, bare) => (looksSecret(v, bare) ? v : undefined),
   },
 ];
 
@@ -140,13 +148,14 @@ export const REDACTED_KINDS = [...new Set(SHAPES.map((s) => s.kind))];
 
 type Match = { shape: Shape; order: number; start: number; end: number };
 
-function matches(text: string): Match[] {
-  return SHAPES.flatMap((shape, order) =>
-    [...text.matchAll(shape.re)].map((m) => {
+function matches(text: string, pick: (shape: Shape) => RegExp | undefined): Match[] {
+  return SHAPES.flatMap((shape, order) => {
+    const re = pick(shape);
+    return [...(re ? text.matchAll(re) : [])].map((m) => {
       const [start, end] = m.indices?.[1] ?? [m.index, m.index + m[0].length];
       return { shape, order, start, end };
-    }),
-  );
+    });
+  });
 }
 
 const firstThenLongest = <T extends { start: number; end: number }>(a: T, b: T) => a.start - b.start || b.end - a.end;
@@ -156,7 +165,7 @@ const firstThenLongest = <T extends { start: number; end: number }>(a: T, b: T) 
  * replacement, named for the one that starts first.
  */
 export function redactSecrets(text: string): { text: string; kinds: string[] } {
-  const found = matches(text).sort((a, b) => firstThenLongest(a, b) || a.order - b.order);
+  const found = [...matches(text, (s) => s.re), ...matches(text, (s) => s.chatRe)].sort((a, b) => firstThenLongest(a, b) || a.order - b.order);
   const replaced: Match[] = [];
   let out = "";
   let at = 0;
@@ -182,7 +191,7 @@ function unquoted(raw: string): { value: string; offset: number; bare: boolean }
 /** The likely secrets in `text`, in order, none overlapping another. A match inside one already found is dropped. */
 export function findSecrets(text: string): Secret[] {
   const found: (Secret & { end: number })[] = [];
-  for (const m of matches(text)) {
+  for (const m of matches(text, (s) => s.chatRe ?? s.re)) {
     const { value, offset, bare } = unquoted(text.slice(m.start, m.end));
     const flagged = m.shape.flag ? m.shape.flag(value, bare) : value;
     if (!flagged) continue;
