@@ -682,7 +682,8 @@ async fn within<T>(
 
 /// Opens one route at `base`: reads `/api/status` within `reach` and checks it is the Hermes `expect` names (before
 /// the password or token goes anywhere), signs in, and opens `/api/ws` for `profile`, each step within `limits` when
-/// given and reported to `steps`. Every frame goes to `on_event`.
+/// given and reported to `steps`. Every frame goes to `on_event`. A failure names the step it stopped at, as a
+/// connection test's does.
 #[allow(clippy::too_many_arguments)]
 pub async fn open_route(
     base: &Url,
@@ -693,17 +694,18 @@ pub async fn open_route(
     limits: Option<StepLimits>,
     steps: &Steps,
     on_event: impl Fn(PipeEvent) + Send + 'static,
-) -> Result<(Dashboard, Pipe, ServerSeen), TransportError> {
+) -> Result<(Dashboard, Pipe, ServerSeen), ProbeFailure> {
     // One client for this route attempt: the sign-in and its ticket reuse the connection the status read opened
     // (#271). It carries no credential, and the status check still passes before one is sent.
-    let http = client(&sign_in.headers)?;
-    let seen = steps.run(Step::Status, read_server(&http, base, &sign_in.headers, expect, reach)).await?;
-    offered(sign_in, Some(&seen.status))?;
+    let http = client(&sign_in.headers).map_err(|e| ProbeFailure::of(Stage::Address, e))?;
+    let seen = steps.run(Step::Status, read_server(&http, base, &sign_in.headers, expect, reach)).await.map_err(|e| ProbeFailure::of(Stage::Reach, e))?;
+    let failed = |stage, e| ProbeFailure { status: Some(seen.status.clone()), ..ProbeFailure::of(stage, e) };
+    offered(sign_in, Some(&seen.status)).map_err(|e| failed(Stage::SignIn, e))?;
     let signing_in = within(limits.map(|l| l.sign_in), Dashboard::sign_in(http, base, sign_in), |s| {
         TransportError::Unreachable(format!("the sign-in didn't answer within {s}s."))
     });
-    let dashboard = steps.run(Step::SignIn, signing_in).await?;
-    let pipe = dashboard.open_pipe_within(profile, on_event, limits, steps).await?;
+    let dashboard = steps.run(Step::SignIn, signing_in).await.map_err(|e| failed(Stage::SignIn, e))?;
+    let pipe = dashboard.open_pipe_within(profile, on_event, limits, steps).await.map_err(|e| failed(Stage::Chat, e))?;
     Ok((dashboard, pipe, seen))
 }
 

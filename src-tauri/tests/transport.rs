@@ -2795,7 +2795,7 @@ async fn a_route_whose_status_is_not_a_hermes_answer_never_gets_the_password() {
         let (base, logins) = without_status(status).await;
         for expect in [None, Some(home.as_str())] {
             let opened = transport::open_route(&base, &sign_in("hunter2"), "default", expect, wait, None, &Steps::default(), |_| {}).await;
-            assert!(opened.is_err(), "{status:?}, {expect:?}: the route opened");
+            assert_eq!(opened.err().map(|f| f.stage), Some(Stage::Reach), "{status:?}, {expect:?}: the route opened, or failed past its status");
             let failed = transport::probe_expecting(&base, &sign_in("hunter2"), "default", wait, wait, expect).await.unwrap_err();
             assert_eq!(failed.stage, Stage::Reach, "{status:?}, {expect:?}: {}", failed.message);
             let reached = transport::read_server(&transport::client(&HeaderMap::new()).unwrap(), &base, &HeaderMap::new(), expect, wait).await;
@@ -3172,7 +3172,7 @@ async fn stalling_at(path: &'static str) -> Url {
 
 type Opened = (Dashboard, transport::Pipe, transport::ServerSeen);
 
-async fn open_route(base: &Url, limits: Option<StepLimits>, on_event: impl Fn(PipeEvent) + Send + 'static) -> Result<Opened, TransportError> {
+async fn open_route(base: &Url, limits: Option<StepLimits>, on_event: impl Fn(PipeEvent) + Send + 'static) -> Result<Opened, ProbeFailure> {
     open_route_reporting(base, limits, &Steps::default(), on_event).await
 }
 
@@ -3181,7 +3181,7 @@ async fn open_route_reporting(
     limits: Option<StepLimits>,
     steps: &Steps,
     on_event: impl Fn(PipeEvent) + Send + 'static,
-) -> Result<Opened, TransportError> {
+) -> Result<Opened, ProbeFailure> {
     transport::open_route(base, &sign_in("hunter2"), "default", None, Duration::from_secs(5), limits, steps, on_event).await
 }
 
@@ -3203,11 +3203,11 @@ async fn opening_a_route_says_each_step_as_it_starts() {
 }
 
 /// Opens the route at `base` with the `SHORT` limits: its failure, which must come within `GIVE_UP`.
-async fn gives_up(base: &Url) -> String {
+async fn gives_up(base: &Url) -> ProbeFailure {
     match tokio::time::timeout(GIVE_UP, open_route(base, Some(SHORT), |_| {})).await {
         Err(_) => panic!("still waiting after {}s: the step has no limit of its own", GIVE_UP.as_secs()),
         Ok(Ok(_)) => panic!("opened a route that stalls"),
-        Ok(Err(e)) => e.to_string(),
+        Ok(Err(e)) => e,
     }
 }
 
@@ -3224,19 +3224,22 @@ async fn a_route_whose_name_lookup_stalls_gives_up_within_the_lookup_limit() {
 #[tokio::test]
 async fn a_route_whose_sign_in_stalls_gives_up_within_the_sign_in_limit() {
     let err = gives_up(&stalling_at("/auth/password-login").await).await;
-    assert!(err.starts_with("Can't reach the Hermes dashboard: the sign-in didn't answer within"), "{err}");
+    assert!(err.message.starts_with("Can't reach the Hermes dashboard: the sign-in didn't answer within"), "{}", err.message);
+    assert_eq!(err.stage, Stage::SignIn);
 }
 
 #[tokio::test]
 async fn a_route_whose_ws_ticket_stalls_gives_up_within_the_ticket_limit() {
     let err = gives_up(&stalling_at("/api/auth/ws-ticket").await).await;
-    assert!(err.starts_with("Can't reach the Hermes dashboard: the chat connection's ticket didn't answer within"), "{err}");
+    assert!(err.message.starts_with("Can't reach the Hermes dashboard: the chat connection's ticket didn't answer within"), "{}", err.message);
+    assert_eq!(err.stage, Stage::Chat);
 }
 
 #[tokio::test]
 async fn a_route_whose_websocket_stalls_gives_up_within_the_socket_limit() {
     let err = gives_up(&stalling_at("/api/ws").await).await;
-    assert!(err.starts_with("The chat connection failed: it didn't open within"), "{err}");
+    assert!(err.message.starts_with("The chat connection failed: it didn't open within"), "{}", err.message);
+    assert_eq!(err.stage, Stage::Chat);
 }
 
 #[tokio::test]

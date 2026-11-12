@@ -6,7 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeHermes } from "../hermes/fakeHermes";
 import type { OpenPipe } from "../hermes/pipe";
-import type { Probed, ProbeFailure } from "../hermes/setup";
+import { SignInFailure, type Probed, type ProbeFailure } from "../hermes/setup";
 import type { SignInDetails } from "../hermes/tauriPipe";
 import type { RoutedHooks } from "../hermes/routes";
 
@@ -66,7 +66,7 @@ function openOne(d: SignInDetails): OpenPipe {
           });
         });
       const r = reach(d);
-      if ("stage" in r) throw new Error(r.message);
+      if ("stage" in r) throw new SignInFailure(r);
       const pipe = await r.server.openPipe(onEvent, profile);
       if (!backend.echoKey) return pipe;
       return {

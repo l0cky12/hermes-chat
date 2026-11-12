@@ -4,8 +4,8 @@ import { type Account, type Keyring, savedSignIn, savedSignInOrForm, signIn, sig
 import { CONNECTIONS_KEY, Connections, addressKey, routesSummary } from "./connections";
 import { FakeHermes } from "./fakeHermes";
 import { memoryCache } from "./memoryCache";
-import { withRoutes, type RouteDetails } from "./routes";
-import { explain, explainSignIn, testRoutes, testSignIn, verdictOf, type Probe, type Probed } from "./setup";
+import { RoutesFailedError, withRoutes, type RouteDetails } from "./routes";
+import { explain, explainSignIn, testRoutes, testSignIn, verdictOf, SignInFailure, type Probe, type Probed } from "./setup";
 import type { SignInDetails } from "./tauriPipe";
 import { connect, readSaved } from "./transport";
 
@@ -237,7 +237,10 @@ describe("Explaining a route", () => {
     expect(wrong).toMatchObject({ verdict: "wrong server", problem: expect.stringContaining("A different Hermes server answered at 192.168.1.10:9119") });
     const other = explain({ stage: "reach", message: "Wrong server: something answered at this address, but it isn't a Hermes dashboard. Hermes Chat didn't send it the password." }, lan);
     expect(other).toMatchObject({ verdict: "wrong server", problem: expect.stringContaining("isn't a Hermes dashboard") });
-    const plain = explainSignIn("Plain http:// is only used on this computer, a LAN or Tailscale, and 203.0.113.7 is a public address. Use https:// or SSH to reach it.", lan);
+    const plain = explainSignIn(
+      new SignInFailure({ stage: "address", message: "Plain http:// is only used on this computer, a LAN or Tailscale, and 203.0.113.7 is a public address. Use https:// or SSH to reach it." }),
+      lan,
+    );
     expect(plain).toMatchObject({ stage: "address", fixes: [expect.stringContaining("https://")] });
     expect(explain({ stage: "address", message: "SSH failed: Host key verification failed." }, ssh).verdict).toBe("wrong server");
   });
@@ -251,7 +254,11 @@ describe("Explaining a route", () => {
   });
 
   it("lists every route when none reached Hermes", () => {
-    const why = explainSignIn("No route reached Hermes.\n• LAN, http://192.168.1.10:9119: timed out\n• SSH, ssh://liam@hermes: SSH failed: refused", lan);
+    const failures = [
+      { route: LAN, message: "timed out" },
+      { route: SSH, message: "SSH failed: refused" },
+    ];
+    const why = explainSignIn(new RoutesFailedError(failures), lan);
     expect(why).toMatchObject({
       problem: "None of this connection's routes reached Hermes.",
       fixes: ["LAN, http://192.168.1.10:9119: timed out", "SSH, ssh://liam@hermes: SSH failed: refused"],
