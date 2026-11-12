@@ -153,7 +153,7 @@ wd fill 'textarea[data-composer]' -- "And the next one?" || true
 wd click button.send || true
 if wd wait .msg.user "And the next one?" 15000; then echo "BUTTON_MESSAGE_SHOWN=yes" >>"$EV/result.txt"; else echo "BUTTON_MESSAGE_SHOWN=no" >>"$EV/result.txt"; fi
 evidence 09-after-button-send
-# A page in the Preview can't call the app's commands (#466, ADR 0138). WebView2 gives every frame Tauri's IPC, so the
+# A page in the Preview can't call the app's commands (#466, ADR 0155). WebView2 gives every frame Tauri's IPC, so the
 # probe page tries, moves its frame to the app's own host on its port, and tries again with its own scripts there.
 PROBE_PORT=47992
 node "$HERE/ipc-probe-server.mjs" $PROBE_PORT "$EV/probe.log" >"$EV/probe-server.log" 2>&1 &

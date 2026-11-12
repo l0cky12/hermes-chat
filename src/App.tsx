@@ -2076,7 +2076,7 @@ export function Main({
   };
   const switchProfile = (name: string) => guard(() => void switchProfileNow(name), "profile");
   /**
-   * Settings → Profiles' switch (ADR 0144): the switcher's guard, then the switch. Resolves whether the app is on `name`
+   * Settings → Profiles' switch (ADR 0156): the switcher's guard, then the switch. Resolves whether the app is on `name`
    * once the switch has gone through; false when the owner stayed. `keepSettings`: a delete goes on in Settings.
    */
   const switchFromProfiles = (name: string, keepSettings?: boolean) =>

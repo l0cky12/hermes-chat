@@ -25,7 +25,7 @@ export function ProfilePicker({
   disabled?: boolean;
   /** What the list picks, for screen readers, e.g. "Profile whose skills are shown". */
   label: string;
-  /** The display name Hermes keeps for `default`, shown before its id (ADR 0144). */
+  /** The display name Hermes keeps for `default`, shown before its id (ADR 0156). */
   defaultName?: string;
 }) {
   const names = profileChoices(profiles, shown, value);

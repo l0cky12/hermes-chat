@@ -1,6 +1,6 @@
 # Sign-ins and custom endpoints are driven from Settings, and their secrets stay in Rust
 
-> **Partly superseded by [ADR 0138](0138-a-preview-page-reaches-only-its-own-tunnel-and-runs-in-webkits-sandbox.md)** (#478). The relay now refuses `GET` on the two lists Rust reads, and drops credentials from `GET api/config`, so the consequence "The relay still passes any `GET` the window sends" no longer holds. The rest of this ADR stands.
+> **Partly superseded by [ADR 0154](0154-a-preview-page-reaches-only-its-own-tunnel-and-runs-in-webkits-sandbox.md)** (#478). The relay now refuses `GET` on the two lists Rust reads, and drops credentials from `GET api/config`, so the consequence "The relay still passes any `GET` the window sends" no longer holds. The rest of this ADR stands.
 
 The owner wants to set up every way a profile reaches its models from the app, not only API keys (#241). Settings → Providers already lists, adds and removes Provider keys (ADR 0095). The investigation on #241 found that the deployed Hermes (`bf0203a`) already has the routes for the other two parts: device-code sign-in to subscription providers (`hermes_cli/web_routers/oauth.py`) and OpenAI-compatible custom endpoints (`config_env.py`). No new server API is needed.
 

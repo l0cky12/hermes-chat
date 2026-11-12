@@ -67,7 +67,7 @@ const SLOW_PAGE_MS = 15_000;
 /**
  * What a framed web page may use. It may run scripts and send forms. It may not navigate the app's window, open windows,
  * or download. Its origin is opaque, wherever it moves the frame: WebView2 gives every frame Tauri's IPC, and Tauri
- * turns down a call whose origin is `null` (ADR 0138).
+ * turns down a call whose origin is `null` (ADR 0155).
  */
 const WEB_SANDBOX = "allow-scripts allow-forms";
 const WEB_PERMISSIONS = [

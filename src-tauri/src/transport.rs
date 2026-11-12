@@ -1562,7 +1562,7 @@ impl Dashboard {
     /// `PUT api/config`), the scheduled-job writes (`cron_write`), Settings → Persona's
     /// `PUT api/profiles/{name}/soul`, the Clone profile dialog's `POST api/profiles` (`profile_create_allowed`, ADR 0074),
     /// Settings → Profiles' description, model and written-for-me description (`profile_field_write`,
-    /// `profile_describe_auto`, ADR 0144),
+    /// `profile_describe_auto`, ADR 0156),
     /// and Settings → Toolsets' switch, `PUT api/tools/toolsets/<name>` with exactly
     /// `{"enabled": true|false}` (`toolset_toggle_allowed`), Settings → Skills' two writes, `PUT api/skills/toggle` and
     /// `PUT api/skills/content` with exactly their fields (`skill_write_allowed`), Settings → Skills' copy to another
@@ -1578,7 +1578,7 @@ impl Dashboard {
     /// `DELETE api/env` is refused whatever the body: a key leaves the server only through
     /// `Dashboard::remove_provider_key`, which checks that it is a model provider's (ADR 0095).
     /// `GET api/config` comes back without its credentials, and `GET` on the raw config and on the sign-in and endpoint
-    /// lists is refused (ADR 0138).
+    /// lists is refused (ADR 0154).
     /// Returns the response body on 2xx.
     pub async fn request(&self, method: &str, path_and_query: &str, body: Option<String>) -> Result<String, TransportError> {
         let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
@@ -1622,7 +1622,7 @@ impl Dashboard {
             return Err(TransportError::NotRelayed(format!("{method} {path}")));
         }
         let segments: Vec<&str> = routed.split('/').filter(|seg| !seg.is_empty()).collect();
-        // The config as written, and the two lists Rust reads without their previews (ADR 0133, ADR 0138).
+        // The config as written, and the two lists Rust reads without their previews (ADR 0133, ADR 0154).
         if method == Method::GET && matches!(segments.as_slice(), ["api", "config", "raw"] | ["api", "providers", "oauth" | "custom-endpoints"]) {
             return Err(TransportError::NotRelayed(format!("{method} {path}")));
         }
@@ -2382,7 +2382,7 @@ fn relay_url(base: &Url, path: &str, query: &str) -> Result<(Url, String), Trans
 }
 
 /// `GET api/config`'s answer without the values Hermes treats as credentials (`_is_secret_config_key` in
-/// `hermes_cli/config.py`): Hermes sends the config as written, provider keys and all (ADR 0138).
+/// `hermes_cli/config.py`): Hermes sends the config as written, provider keys and all (ADR 0154).
 fn config_without_credentials(text: &str) -> Result<String, TransportError> {
     fn drop_credentials(value: &mut serde_json::Value) {
         match value {
@@ -2780,7 +2780,7 @@ pub fn profile_create_allowed(body: Option<&str>) -> bool {
     name_ok && source_ok && known
 }
 
-/// Whether a `PUT` is Settings → Profiles' description or model write for one profile (ADR 0144):
+/// Whether a `PUT` is Settings → Profiles' description or model write for one profile (ADR 0156):
 /// `api/profiles/{id}/description` with exactly `{"description": string}`, or `api/profiles/{id}/model` with exactly
 /// `{"provider", "model"}`, both non-empty strings. `{id}` is a profile id, `default` included.
 pub fn profile_field_write(path: &str, body: Option<&str>) -> bool {
@@ -2804,7 +2804,7 @@ pub fn profile_field_write(path: &str, body: Option<&str>) -> bool {
 }
 
 /// Whether a `POST` is Settings → Profiles' "Write for me": `api/profiles/{id}/describe-auto` with exactly
-/// `{"overwrite": bool}` (ADR 0144). Hermes writes the description with an LLM; nothing else is sent.
+/// `{"overwrite": bool}` (ADR 0156). Hermes writes the description with an LLM; nothing else is sent.
 pub fn profile_describe_auto(path: &str, body: Option<&str>) -> bool {
     let Some(name) = path.strip_prefix("api/profiles/").and_then(|p| p.strip_suffix("/describe-auto")) else {
         return false;

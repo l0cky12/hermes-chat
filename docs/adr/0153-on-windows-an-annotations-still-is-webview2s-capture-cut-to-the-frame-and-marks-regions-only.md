@@ -2,7 +2,7 @@
 
 **Status: accepted (#96).** ADR 0094 is the design of record for annotations. This ADR records how the still is taken on Windows, where the page isn't a view of its own.
 
-On Windows a web page in the Preview is a sandboxed frame in the app's own WebView2 (ADR 0007), with an opaque origin (ADR 0138). The Linux still is a WebKitGTK snapshot of the page's own view (`WebViewExt::snapshot`). Windows has no view to snapshot, and the app can't read the frame.
+On Windows a web page in the Preview is a sandboxed frame in the app's own WebView2 (ADR 0007), with an opaque origin (ADR 0155). The Linux still is a WebKitGTK snapshot of the page's own view (`WebViewExt::snapshot`). Windows has no view to snapshot, and the app can't read the frame.
 
 ## Decisions
 

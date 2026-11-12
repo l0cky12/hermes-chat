@@ -31,7 +31,7 @@ The still makes every surface the same. Only two things vary by platform: where 
 | Surface | Still | Element details |
 |---|---|---|
 | Linux, web page or Server page (native WebKitGTK view) | `WebViewExt::snapshot` of the visible area | Yes, through a fixed query function in an isolated world |
-| Windows, web page or Server page (sandboxed frame), when shown | WebView2 `CapturePreview` of the app's webview, cropped to the frame's box (`frame_still.rs`, `annotate::crop_frame`). The device scale is the capture's width over the window's CSS width. Run on `windows-latest` by the Windows smoke test (ADR 0153). | No: regions only at first (open question 1). "The app can't read this page on Windows." A framed page has an opaque origin (ADR 0138), which doesn't change this. |
+| Windows, web page or Server page (sandboxed frame), when shown | WebView2 `CapturePreview` of the app's webview, cropped to the frame's box (`frame_still.rs`, `annotate::crop_frame`). The device scale is the capture's width over the window's CSS width. Run on `windows-latest` by the Windows smoke test (ADR 0153). | No: regions only at first (open question 1). "The app can't read this page on Windows." A framed page has an opaque origin (ADR 0155), which doesn't change this. |
 | A frame from another site inside the page | Part of the page's still | No: the mark is the frame's box. "This part comes from `<host>`, which the app can't read." |
 | The Screen (Bot Desktop) | Not offered | See "Capability gap" |
 

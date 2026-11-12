@@ -3636,7 +3636,7 @@ div.export-preview.export-page { height: auto; padding: 10px 12px; background: v
 /* The button, the Add anyway question and the notes line up with the rows above them. */
 .si-add > :not(.set-row) { margin: 0 16px; }
 
-/* Settings → Profiles (ProfileSettings.tsx, ADR 0144): one row per profile in a listbox, and its dialogs. */
+/* Settings → Profiles (ProfileSettings.tsx, ADR 0156): one row per profile in a listbox, and its dialogs. */
 .profile-rows { display: flex; flex-direction: column; }
 .profile-rows.stale { opacity: 0.7; }
 .profile-row { display: flex; flex-direction: column; gap: 3px; padding: 10px 14px; border-top: 1px solid var(--line); outline: none; cursor: default; }

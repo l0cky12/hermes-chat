@@ -354,7 +354,7 @@ export class FakeHermes {
   gatewaysRunning = new Set<string>();
   /**
    * Settings → Profiles' routes this server lacks, each answering FastAPI's own 404 (`Not Found`) or, for a path that
-   * has another method, a 405: an older Hermes (ADR 0144).
+   * has another method, a 405: an older Hermes (ADR 0156).
    */
   profileRoutesMissing = new Set<"rename" | "describe" | "describeAuto" | "setModel" | "remove">();
   /** While set, `DELETE /api/profiles/{name}` removes the folder and answers `settlement_pending` with this `retry_command`. */

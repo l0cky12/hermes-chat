@@ -651,7 +651,7 @@ function OtherBadge({ info }: { info?: OtherProfile }) {
  * waiting, or a reply running. Hermes keeps running the reply; a Question waits only until Hermes stops waiting (its
  * timeout).
  */
-/** A profile's name as the switcher shows it: `default`'s display name first, when Hermes keeps one (ADR 0144). */
+/** A profile's name as the switcher shows it: `default`'s display name first, when Hermes keeps one (ADR 0156). */
 export const profileLabel = (l: Locale, name: string, defaultName?: string) => (name === "default" && defaultName ? l.profiles.named(defaultName, name) : name);
 
 /** What switching away from `profile` leaves behind, in `words` (the catalogue's; English where the screen isn't converted). */
@@ -680,7 +680,7 @@ function ProfileSwitcher({
   clone,
 }: {
   profile: string;
-  /** The display name Hermes keeps for `default`, shown before its id (ADR 0144). */
+  /** The display name Hermes keeps for `default`, shown before its id (ADR 0156). */
   defaultName?: string;
   others: OtherProfiles;
   checkTimes: CheckTimesStore;
@@ -1086,7 +1086,7 @@ export function ChatList({
   onCopyLink?: (chat: Chat) => void;
   /** Opens Settings → Model at the Text generation model, the model titles are made with. */
   onTextGenerationSettings?: () => void;
-  /** The display name Hermes keeps for `default` (ADR 0144). */
+  /** The display name Hermes keeps for `default` (ADR 0156). */
   defaultName?: string;
   onListProfiles: () => Promise<string[]>;
   onCheckOthers: () => void;

@@ -1,4 +1,4 @@
-// Settings → Profiles (ADR 0144): every profile Hermes lists, made, cloned, renamed, described, given a model and
+// Settings → Profiles (ADR 0156): every profile Hermes lists, made, cloned, renamed, described, given a model and
 // deleted from one place. Switching stays in the chat list's header (ADR 0001): Open here goes through the same
 // question and guard. Every word comes from the catalogue (ADR 0100).
 import { useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode, type RefObject } from "react";

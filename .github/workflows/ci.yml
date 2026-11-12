@@ -22,6 +22,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Every ADR has a number of its own
+        run: node scripts/check-adrs.mjs
       - run: npm ci
       - run: npm test
       - run: npm test

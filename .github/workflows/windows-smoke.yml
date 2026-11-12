@@ -4,13 +4,31 @@ name: windows-smoke
 # the window config), starts the stand-in Hermes dashboard, attaches msedgedriver to the app's WebView2 and drives the
 # verify skill's sign-in and send recipes through wd.mjs, then checks that a page in the Preview can't call the app's
 # commands (#466). Screenshots, the page's errors, the WebView2 console log, the driver log, the stand-in's request log
-# and the Preview probe's log are uploaded as artifacts. Started by hand: about ten minutes on a warm cache.
+# and the Preview probe's log are uploaded as artifacts. Runs on every PR that touches the app, its build or the scripts
+# it drives (#560), and by hand: about ten minutes on a warm cache. It informs; main has no required checks.
 
 on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "src-tauri/**"
+      - "bench/**"
+      - "index.html"
+      - "vite.config.ts"
+      - "tsconfig*.json"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/windows-smoke/**"
+      - ".github/workflows/windows-smoke.yml"
+      - ".claude/skills/verify-hermes-chat/**"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: windows-smoke-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   smoke:
