@@ -365,7 +365,7 @@ A snapshot is one chat's HTML page, the page Export's **HTML page** format saves
 
 **Links last at most 7 days**, the longest a presigned S3 link can. A link carries the bucket's host, the bucket and the access key's id. The host refuses it after its expiry, even with this app closed. **Copy link** signs a fresh link that ends at the same time. **Revoke** deletes every version of the snapshot and checks that none is left; if one is, the row stays and says so. An expired snapshot is deleted the next time the list loads. A page someone downloaded stays with them.
 
-If an upload's answer is lost, the same upload is sent again, and the page counts as published only once it is read back with the same SHA-256. "Not published" means the host refused the only upload and nothing is in the bucket; "may have been sent" means check the list before publishing again. Publish, Copy link and Revoke go only to the host the screen showed: if the settings changed meanwhile, in another window for example, nothing is sent and the screen says so. Attachments are never uploaded: a snapshot holds at most their names.
+If an upload's answer is lost, the same upload is sent again, and the page counts as published only once it is read back with the same SHA-256. "Not published" means the host refused the only upload and nothing is in the bucket; "may have been sent" means check the list before publishing again. Test, the list, Publish, Copy link and Revoke go only to the host the screen showed: if the settings changed meanwhile, in another window for example, nothing is sent and the screen says so. Attachments are never uploaded: a snapshot holds at most their names.
 
 ### Backup and restore
 

@@ -60,14 +60,15 @@ export type SnapshotApi = {
   /** Saves the settings with their secret, which is always typed again, and gives back what was saved. */
   saveHost: (host: SnapshotHost, secret: string) => Promise<SnapshotHost>;
   clearHost: () => Promise<void>;
-  /** Lists the prefix's versions and writes nothing. Rejects with what the host answered. */
-  testHost: () => Promise<void>;
+  /** Lists the prefix's versions of `host`, the host shown, and writes nothing. Rejects with what the host answered, or when the saved host is no longer `host`. */
+  testHost: (host: SnapshotHost) => Promise<void>;
   /**
    * Uploads exactly `html` to `host`, the host the owner was shown. Rejects only when no host is saved, the saved one
    * is no longer `host`, or the keyring fails, so nothing was sent.
    */
   publish: (host: SnapshotHost, html: string, title: string, expiry: Expiry) => Promise<Published>;
-  list: () => Promise<SnapshotList>;
+  /** Lists `host`'s snapshots, deleting expired ones. Rejects when the saved host is no longer `host`, before any request. */
+  list: (host: SnapshotHost) => Promise<SnapshotList>;
   /** A freshly signed link to a Live snapshot that ends when it does. Rejects when the saved host is no longer `host`. */
   link: (host: SnapshotHost, id: string) => Promise<string>;
   /** Resolves only once no version of the snapshot is left in the bucket. Rejects when the saved host is no longer `host`. */
@@ -78,9 +79,9 @@ export const tauriSnapshots: SnapshotApi = {
   host: () => invoke<SnapshotHost | null>("snapshot_host").catch(asError),
   saveHost: (host, secret) => invoke<SnapshotHost>("snapshot_host_save", { host, secret }).catch(asError),
   clearHost: () => invoke<void>("snapshot_host_clear").catch(asError),
-  testHost: () => invoke<void>("snapshot_host_test").catch(asError),
+  testHost: (host) => invoke<void>("snapshot_host_test", { host }).catch(asError),
   publish: (host, html, title, expiry) => invoke<Published>("snapshot_publish", { host, html, title, expiry }).catch(asError),
-  list: () => invoke<SnapshotList>("snapshot_list").catch(asError),
+  list: (host) => invoke<SnapshotList>("snapshot_list", { host }).catch(asError),
   link: (host, id) => invoke<string>("snapshot_link", { host, id }).catch(asError),
   revoke: (host, id) => invoke<void>("snapshot_revoke", { host, id }).catch(asError),
 };

@@ -69,11 +69,15 @@ export function SnapshotSettings({ api = tauriSnapshots, copyText = clipboardTex
 
   /** Reads the list for the host shown. An answer read with other settings, or after a newer read, is dropped. */
   const readList = () => {
+    const from = shown.current;
+    if (!from) return;
     const read = ++reads.current;
     setList((l) => ({ ...l, loading: true, error: undefined }));
-    api.list().then(
+    api.list(from).then(
       (l) => {
-        if (!alive.current || read !== reads.current || !shown.current || !sameHost(l.host, shown.current)) return;
+        if (!alive.current || read !== reads.current) return;
+        if (!shown.current || !sameHost(l.host, shown.current))
+          return setList({ loading: false, error: "The snapshot host changed while the list was read. Refresh to read it again." });
         setList({ snapshots: l.snapshots, loading: false });
       },
       (e: unknown) => {
@@ -129,10 +133,11 @@ export function SnapshotSettings({ api = tauriSnapshots, copyText = clipboardTex
   };
 
   const test = async () => {
+    if (!host) return;
     setHostOp("testing");
     setNote(undefined);
     try {
-      await api.testHost();
+      await api.testHost(host);
       if (alive.current) setNote({ where: "host", ok: true, text: "The host answered, and the key can list the bucket's snapshots." });
     } catch (e) {
       if (alive.current) setNote({ where: "host", ok: false, text: `The test failed: ${errorText(e)}` });

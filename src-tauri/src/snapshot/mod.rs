@@ -345,8 +345,8 @@ pub async fn snapshot_host_clear() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn snapshot_host_test() -> Result<(), String> {
-    saved_bucket().await?.test(unix_now()).await
+pub async fn snapshot_host_test(host: SnapshotHost) -> Result<(), String> {
+    shown_bucket(&host).await?.test(unix_now()).await
 }
 
 #[tauri::command]
@@ -355,8 +355,9 @@ pub async fn snapshot_publish(host: SnapshotHost, html: String, title: String, e
 }
 
 #[tauri::command]
-pub async fn snapshot_list() -> Result<SnapshotList, String> {
-    let bucket = saved_bucket().await?;
+pub async fn snapshot_list(host: SnapshotHost) -> Result<SnapshotList, String> {
+    // The list deletes expired snapshots, so it too may act only on the host the owner was shown.
+    let bucket = shown_bucket(&host).await?;
     let snapshots = bucket.list(unix_now()).await?;
     Ok(SnapshotList { host: bucket.host().clone(), snapshots })
 }

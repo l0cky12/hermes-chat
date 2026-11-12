@@ -95,9 +95,10 @@ describe("Settings → Snapshots, the host card", () => {
 
   it("says what a Test found, either way", async () => {
     let fail = false;
-    const { user } = fake({ testHost: vi.fn(async () => (fail ? Promise.reject(new Error("The host refused the key (403).")) : undefined)) });
+    const { api, user } = fake({ testHost: vi.fn(async () => (fail ? Promise.reject(new Error("The host refused the key (403).")) : undefined)) });
     await user.click(await screen.findByRole("button", { name: "Test" }));
     expect((await screen.findByText(/The host answered/)).getAttribute("role")).toBe("status");
+    expect(api.testHost).toHaveBeenCalledWith(HOST);
     fail = true;
     await user.click(screen.getByRole("button", { name: "Test" }));
     expect((await screen.findByRole("alert")).textContent).toBe("The test failed: The host refused the key (403).");
@@ -180,11 +181,13 @@ describe("Settings → Snapshots, the list", () => {
     expect(api.list).toHaveBeenCalledTimes(2);
   });
 
-  it("drops a list read with other host settings than the card shows", async () => {
-    fake({ list: vi.fn(async () => ({ host: { ...HOST, bucket: "someone-elses" }, snapshots: [LIVE] })) });
+  it("drops a list read with other host settings than the card shows, and lets Refresh read it again", async () => {
+    const { api } = fake({ list: vi.fn(async () => ({ host: { ...HOST, bucket: "someone-elses" }, snapshots: [LIVE] })) });
     await screen.findByText("s3.us-east-1.amazonaws.com");
     await act(async () => {});
+    expect(api.list).toHaveBeenCalledWith(HOST);
     expect(screen.queryByText("Moving house")).toBeNull();
-    expect(screen.getByText(/Reading the bucket/)).toBeTruthy();
+    expect(screen.getByText(/The snapshot host changed while the list was read/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: /Refresh/ }) as HTMLButtonElement).disabled).toBe(false);
   });
 });
