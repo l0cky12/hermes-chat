@@ -285,3 +285,21 @@ it("stops following on a key that scrolls up from a checkbox in the transcript",
   grow(5);
   expect(fromBottom()).toBe(5);
 });
+
+it("stops following on Shift+Space from a link in the transcript, but not from a button, which Space presses", () => {
+  const { scroller, frame, fromBottom, grow } = pane(10);
+  const link = document.createElement("a");
+  link.href = "https://example.com";
+  scroller.querySelector(".msg.assistant")!.append(link);
+
+  grow(5);
+  fireEvent.keyDown(scroller.querySelector("button")!, { key: " ", shiftKey: true });
+  frame();
+  grow(5);
+  expect(fromBottom()).toBe(0);
+
+  fireEvent.keyDown(link, { key: " ", shiftKey: true });
+  frame();
+  grow(5);
+  expect(fromBottom()).toBe(5);
+});

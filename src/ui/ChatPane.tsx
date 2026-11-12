@@ -749,7 +749,8 @@ export function ChatPane({
       const t = e.target as HTMLElement;
       const body = t === document.body;
       if (!el || e.ctrlKey || e.altKey || e.metaKey || t.isContentEditable || t.closest("textarea, select, input:not([type=checkbox])")) return;
-      const up = e.key === "ArrowUp" || e.key === "PageUp" || e.key === "Home" || (body && e.key === " " && e.shiftKey);
+      const space = e.key === " " && e.shiftKey && !t.closest("button, input, summary, [role=button]");
+      const up = e.key === "ArrowUp" || e.key === "PageUp" || e.key === "Home" || space;
       if (up && movesUp(el, body ? pressed : t)) stickToBottom.current = false;
     };
     window.addEventListener("pointerdown", onDown, true);
