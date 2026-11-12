@@ -211,6 +211,10 @@ function imagePage(chat: Chat, exportedAt: Date, choice: Omit<ExportChoice, "red
         const outcome = i.answer ? ANSWER[i.answer] : i.ended ? `No answer from here (${i.ended})` : "Waiting for an answer";
         return [{ who: "Approval", text: `${text(i.description)}\n${text(i.command)}\n${outcome}` }];
       }
+      // Hermes's history keeps a Clarify as the call that asked it; the other Questions say nothing worth keeping.
+      case "clarify":
+      case "sudo":
+      case "secret":
       case "error":
         return [];
     }
@@ -378,6 +382,10 @@ function block(i: Item, attachments: boolean): string[] {
       const outcome = i.answer ? ANSWER[i.answer] : i.ended ? `No answer from here (${i.ended})` : "Waiting for an answer";
       return [`**Approval asked:** ${i.description}\n\n${fenced(i.command)}\n\n_${outcome}_`];
     }
+    case "clarify":
+    case "sudo":
+    case "secret":
+      return [];
     case "error":
       // The app's own notices, not the conversation; they can name the connection.
       return [];

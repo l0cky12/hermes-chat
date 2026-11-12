@@ -1,0 +1,11 @@
+#!/bin/bash
+# Stand-in sudo for the #390 check: never the real one, and it runs nothing. `-n` fails like a sudo that needs a
+# password; `-S` reads the password line from stdin and reports only its length and the command it was given.
+if [ "$1" = "-n" ]; then echo "sudo: a password is required" >&2; exit 1; fi
+if [ "$1" = "-S" ]; then
+  shift; [ "$1" = "-p" ] && shift 2
+  IFS= read -r pw
+  echo "stand-in sudo: got a password of ${#pw} characters for: $*"
+  exit 0
+fi
+echo "stand-in sudo: no password given" >&2; exit 1

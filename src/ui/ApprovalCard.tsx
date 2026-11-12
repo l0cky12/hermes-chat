@@ -26,7 +26,7 @@ const ANSWERED_LABEL: Record<ApprovalChoice, string> = {
 const HIDDEN = /(?![\n\t])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u1160\u3164\uFFA0\u2800]/gu;
 
 /** Text from Hermes with its hidden characters written out, so what shows is what runs. */
-const visible = (text: string) => text.replace(HIDDEN, (c) => `\\u{${c.codePointAt(0)!.toString(16).toUpperCase()}}`);
+export const visible = (text: string) => text.replace(HIDDEN, (c) => `\\u{${c.codePointAt(0)!.toString(16).toUpperCase()}}`);
 
 /** More blank lines than this in a row show as one marker saying how many, so they can't push a line out of sight. */
 const BLANK_RUN = 2;
@@ -72,7 +72,7 @@ const ARM_MS = 400;
  * counts them; a keyboard press has none), and not within `ARM_MS` of the buttons appearing or of `movedAt`, when
  * the transcript last changed and may have moved them under the pointer.
  */
-function useDeliberate(movedAt: number) {
+export function useDeliberate(movedAt: number) {
   const [shownAt] = useState(() => performance.now());
   return (act: () => void) => (e: MouseEvent) => {
     if (e.detail <= 1 && e.timeStamp - Math.max(shownAt, movedAt) >= ARM_MS) act();
@@ -80,9 +80,10 @@ function useDeliberate(movedAt: number) {
 }
 
 /** What a closed card says when Hermes stopped waiting without an answer from this app. */
-function endedNote(reason: string): string {
+export function endedNote(reason: string): string {
   if (reason === "timeout") return "Timed out without an answer";
   if (reason === "resolved") return "Answered in another Hermes client";
+  if (reason === "expired") return "Hermes had stopped waiting before your answer reached it";
   return "Hermes stopped waiting for an answer";
 }
 

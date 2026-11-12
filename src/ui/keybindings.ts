@@ -1,4 +1,4 @@
-// Every keyboard shortcut of the app, as one table of commands (ADR 0143): each command's title, the Settings group it
+// Every keyboard shortcut of the app, as one table of commands (ADR 0147): each command's title, the Settings group it
 // is listed under, the scope its keys work in, the When condition the page shows, and its default chords. The owner's
 // overrides live in the display preferences (uiPrefs.ts `keybindings`), as a diff from the defaults, so a later
 // version's new default still reaches an owner who never changed that command. Each handler keeps its own guards and

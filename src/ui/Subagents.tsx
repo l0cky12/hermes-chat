@@ -15,6 +15,7 @@ import {
   type SubagentTree,
 } from "../hermes/subagents";
 import { composing } from "./bits";
+import type { QuestionKind } from "../hermes/model";
 
 /**
  * What the panel can ask Hermes about its chat's subagents. `refresh` reads the roster again. `blocked`: why Steer and
@@ -74,8 +75,8 @@ export function SubagentsPanel({
 }: {
   tree?: SubagentTree;
   api?: SubagentsApi;
-  /** The chat's reply waits for the owner's answer to an Approval. */
-  approvalWaiting: boolean;
+  /** What the chat's reply waits for the owner's answer to, if anything: an Approval or another Question. */
+  approvalWaiting?: QuestionKind;
   onGoToApproval: () => void;
   /** A subagent to open, from the agent office; `at` tells one request from the next. */
   show?: { id: SubagentId; at: number };
@@ -125,7 +126,7 @@ export function SubagentsPanel({
           <div className="subagents-body">
             {approvalWaiting && (
               <div className="subagents-approval" role="status">
-                <span>The chat's reply is waiting for your approval.</span>
+                <span>{approvalWaiting === "approval" ? "The chat's reply is waiting for your approval." : "The chat's reply is waiting for your answer to Hermes's question."}</span>
                 <button className="btn" onClick={onGoToApproval}>
                   Go to it
                 </button>

@@ -98,6 +98,7 @@ function statusText(s: ConversationState, settings: TurnSettings, playing: boole
       return "Opening the microphone…";
     case "listening":
       if (s.waitingOn === "approval") return "Hermes is waiting for your approval above. Listening starts again once it's answered.";
+      if (s.waitingOn === "question") return "Hermes is waiting for your answer above. Listening starts again once it's answered.";
       if (s.waitingOn === "other-reply") return "Hermes is replying to another message. Listening starts again when it's done.";
       if (s.muted) return "Muted: Hermes hears nothing until you unmute.";
       if (playing) return "Not listening while audio plays.";
@@ -107,7 +108,7 @@ function statusText(s: ConversationState, settings: TurnSettings, playing: boole
     case "sending":
       return "Sending what you said to the chat…";
     case "thinking":
-      return s.waitingOn === "approval" ? "Hermes is waiting for your approval above." : "Hermes is thinking…";
+      return s.waitingOn === "approval" ? "Hermes is waiting for your approval above." : s.waitingOn === "question" ? "Hermes is waiting for your answer above." : "Hermes is thinking…";
     case "speaking":
       return "Hermes is speaking. The microphone is shut until it finishes.";
     case "paused":

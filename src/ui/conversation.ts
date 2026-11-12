@@ -31,6 +31,12 @@ export const HEARD_LIMIT = 20;
 /** A manual Send needs at least this much of a turn. */
 const MIN_TURN_SECONDS = 0.3;
 
+/** What a waiting Question in `items` holds the conversation for: an Approval, or any other Question. */
+const waitingOnOwner = (items: Item[]) => {
+  const asked = items.find(isWaiting);
+  return asked && (asked.kind === "approval" ? ("approval" as const) : ("question" as const));
+};
+
 /**
  * Where the conversation is. `starting`: the microphone is opening. `listening`: waiting for the owner, or hearing
  * them. `transcribing`: Hermes is turning the turn into text. `sending`: the text is on its way to the chat.
@@ -61,7 +67,7 @@ export type ConversationState = {
   muted: boolean;
   hearing: boolean;
   playing: boolean;
-  waitingOn?: "reply" | "approval" | "other-reply";
+  waitingOn?: "reply" | "approval" | "question" | "other-reply";
   paused?: { why: string; canRetry: boolean };
   note?: string;
   heard: Heard[];
@@ -503,7 +509,7 @@ export class VoiceConversation {
     // Another message from the owner has gone since: this turn's reply is over, whether or not the chat still runs.
     const over = to < items.length;
     if (this.chat.running && !over) {
-      const waitingOn = after.some(isWaiting) ? "approval" : "reply";
+      const waitingOn = waitingOnOwner(after) ?? "reply";
       if (waitingOn !== this.state.waitingOn) this.set({ waitingOn });
       return;
     }
@@ -563,7 +569,7 @@ export class VoiceConversation {
   }
 
   private updateBusy() {
-    const waitingOn = this.chat.running ? "other-reply" : this.chat.items.some(isWaiting) ? "approval" : undefined;
+    const waitingOn = this.chat.running ? "other-reply" : waitingOnOwner(this.chat.items);
     if (waitingOn !== this.state.waitingOn) {
       if (waitingOn) this.dropTurn();
       this.set({ waitingOn, hearing: waitingOn ? false : this.state.hearing });
