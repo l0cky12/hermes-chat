@@ -7,12 +7,11 @@
 //!   the page's loopback host and port on the server: `ssh -N -L <socket>:<host>:<port> -- <target>`. Every argument is
 //!   one `Command` argument: the host is one of three fixed strings, the port a number, the socket a path this module
 //!   made, and the target is the one Rust signed in with, checked as the sign-in tunnel checks it. No shell runs.
-//!   Windows' OpenSSH can't listen on a Unix socket, so there ssh listens on a loopback port instead (`LocalEnd`), and
-//!   each connection to it is used only if ssh holds its far end (ADR 0140).
+//!   Windows' OpenSSH can't listen on a Unix socket, so there nothing on this computer listens for ssh: each connection
+//!   the relay takes is an `ssh -W <host>:<port>` of its own, carried on its stdin and stdout (`connect`, #506).
 //! - A TCP listener Rust binds on `127.0.0.1:0` and keeps, so the port is ephemeral and never released for another
-//!   program to take before ssh binds it. Each connection the frame makes is copied to and from ssh's socket. On
-//!   Linux and Windows, a connection from a program run by another account is closed unanswered (`loopback_peer`,
-//!   ADR 0105).
+//!   program to take. Each connection the frame makes is copied to and from ssh. On Linux and Windows, a connection
+//!   from a program run by another account is closed unanswered (`loopback_peer`, ADR 0105).
 //!
 //! The webview names only the page's address. Rust parses it again and refuses anything that isn't an http(s) address
 //! on the server's loopback, or is on a port that isn't for web pages; it never takes an ssh host, option or socket
@@ -49,6 +48,7 @@ use url::{Host, Url};
 /// How long ssh has to sign in and listen on its socket.
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long the first request through a new tunnel waits for any answer before the page is shown anyway.
+#[cfg(any(unix, test))]
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// The most server pages open at once, so a runaway webview can't start ssh after ssh.
 pub const MAX_OPEN: usize = 8;
@@ -156,6 +156,11 @@ impl ServerPage {
         format!("{host}:{}", self.port)
     }
 
+    /// Where ssh connects on the server: `localhost:3000`, `127.0.0.1:8000` or `[::1]:8080`.
+    pub fn far_end(&self) -> String {
+        format!("{}:{}", self.host.forward_host(), self.port)
+    }
+
     /// The same page through the tunnel's local end at `host`: only the host and port change.
     pub fn local_url(&self, host: &str, local_port: u16) -> Url {
         let mut u = self.url.clone();
@@ -229,17 +234,15 @@ pub fn ssh_args(target: &str, socket: &Path, page: &ServerPage) -> Result<Vec<Os
     Ok(forward_args(target, socket, page))
 }
 
-/// `ssh_args` with ssh listening on `127.0.0.1:<port>` of this computer instead of a socket, as on Windows.
-pub fn tcp_ssh_args(target: &str, port: u16, page: &ServerPage) -> Result<Vec<OsString>, ServerPageError> {
+/// `ssh_args` for one connection on Windows: the same options, then `-W <host>:<port>`, so ssh carries the connection
+/// on its stdin and stdout and listens on nothing.
+pub fn stdio_ssh_args(target: &str, page: &ServerPage) -> Result<Vec<OsString>, ServerPageError> {
     let target = checked_target(target).ok_or_else(|| ServerPageError::Ssh("The sign-in's SSH target isn't one ssh can take.".into()))?;
-    if port == 0 {
-        return Err(ServerPageError::Io("The tunnel's local port isn't usable.".into()));
-    }
-    Ok(forward_args(target, &format!("127.0.0.1:{port}"), page))
+    Ok(SSH_OPTIONS.iter().copied().chain(["-W", &page.far_end(), "--", target]).map(OsString::from).collect())
 }
 
 fn forward_args(target: &str, listen: &str, page: &ServerPage) -> Vec<OsString> {
-    let forward = format!("{listen}:{}:{}", page.host.forward_host(), page.port);
+    let forward = format!("{listen}:{}", page.far_end());
     let mut args: Vec<OsString> = ["-N"].iter().chain(SSH_OPTIONS).chain(&["-L"]).map(OsString::from).collect();
     args.push(forward.into());
     args.push("--".into());
@@ -278,38 +281,37 @@ const SSH_OPTIONS: &[&str] = &[
     "StreamLocalBindUnlink=yes",
 ];
 
-/// ssh said it couldn't listen on `127.0.0.1:<port>`: `bind [127.0.0.1]:<port>: Address already in use`, or
-/// `channel_setup_fwd_listener_tcpip: cannot listen to port: <port>`. With `ExitOnForwardFailure=no` it runs on, and
-/// whatever else holds the port must not be taken for it.
-pub fn cannot_listen_on(said: &str, port: u16) -> bool {
-    let (bind, listen) = (format!("]:{port}:"), format!("cannot listen to port: {port}"));
-    said.lines().any(|l| l.contains(&bind) || l.trim_end().ends_with(&listen))
-}
-
 /// A socket path ssh's `-L` reads as one path: absolute, short enough for `sun_path`, and only characters that can't
 /// split the forward spec (`:`) or be read as anything but a path.
 fn socket_path_ok(s: &str) -> bool {
     s.starts_with('/') && s.len() < 100 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"/_.-".contains(&b))
 }
 
-/// This computer's end of ssh's forward, for a server page and for the sign-in tunnel (tunnel.rs, ADR 0098). On Linux,
-/// a Unix socket in a private folder (`SocketDir`) that only the owner can connect to. On Windows, a loopback port
-/// picked just before ssh binds it: any program on this computer could connect to it, as to the relay's own port, and
-/// could take it before ssh binds it, so `connect` checks that ssh holds each connection's far end (ADR 0140).
+/// This computer's end of ssh's forward on Linux, for a server page and for the sign-in tunnel (tunnel.rs, ADR 0098):
+/// a Unix socket in a private folder (`SocketDir`) that only the owner can connect to.
 #[cfg(unix)]
 pub(crate) struct LocalEnd(SocketDir);
-#[cfg(windows)]
-pub(crate) struct LocalEnd(u16);
 
-/// What the relay connects each frame connection to.
+/// What the relay connects each frame connection to: ssh's socket.
 #[cfg(unix)]
 pub(crate) type Address = PathBuf;
-/// What the relay connects each frame connection to: ssh's port, and the ssh that must hold it.
+
+/// What the relay connects each frame connection to on Windows: the ssh to start for it, which carries it on its stdin
+/// and stdout. Windows' OpenSSH can't listen on a Unix socket, and a port it listened on would take every account's
+/// connections (#506), so ssh listens on nothing.
 #[cfg(windows)]
 #[derive(Clone)]
 pub(crate) struct Address {
-    port: u16,
-    ssh: crate::loopback_owner::SshProcess,
+    program: Arc<str>,
+    args: Arc<[OsString]>,
+}
+
+#[cfg(windows)]
+impl Address {
+    /// `program` with `args`, which end with `-W <host>:<port> -- <target>`.
+    pub(crate) fn new(program: &str, args: Vec<OsString>) -> Address {
+        Address { program: program.into(), args: args.into() }
+    }
 }
 
 #[cfg(unix)]
@@ -329,9 +331,9 @@ impl LocalEnd {
         ssh_args(target, &self.0.socket(), page)
     }
 
-    /// Where to reach `_ssh`'s end of the forward.
-    pub(crate) fn address(&self, _ssh: &Child) -> std::io::Result<Address> {
-        Ok(self.0.socket())
+    /// Where to reach ssh's end of the forward.
+    pub(crate) fn address(&self) -> Address {
+        self.0.socket()
     }
 
     /// ssh couldn't make this tunnel's socket (`unix_listener: cannot bind to path …`).
@@ -345,39 +347,93 @@ pub(crate) async fn connect(address: &Address) -> std::io::Result<UnixStream> {
     UnixStream::connect(address).await
 }
 
+/// A new connection through `address`: an ssh of its own, started now. Whether it signed in and reached the far end
+/// shows only once something comes back (`first_byte`), or ssh ends and says why (`Through::refusal`).
 #[cfg(windows)]
-impl LocalEnd {
-    pub(crate) const COULDNT: &str = "Couldn't find a free port for the tunnel";
+pub(crate) async fn connect(address: &Address) -> std::io::Result<Through> {
+    let mut command = Command::new(&*address.program);
+    command.args(&*address.args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut ssh = Ssh::start(&mut command)?;
+    let (Some(to), Some(from), Some(stderr)) = (ssh.stdin.take(), ssh.stdout.take(), ssh.stderr.take()) else {
+        return Err(std::io::Error::other("ssh's input and output aren't connected"));
+    };
+    let said = Stderr::default();
+    said.drain(stderr);
+    Ok(Through { ssh, to: Some(to), from, said })
+}
 
-    pub(crate) fn new() -> std::io::Result<Self> {
-        Ok(LocalEnd(std::net::TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port()))
-    }
+/// One connection through a Windows tunnel: `ssh -W`, whose stdin and stdout are the connection. Dropping it ends ssh
+/// and everything ssh started.
+#[cfg(windows)]
+pub(crate) struct Through {
+    ssh: Ssh,
+    to: Option<tokio::process::ChildStdin>,
+    from: tokio::process::ChildStdout,
+    said: Stderr,
+}
 
-    pub(crate) fn listen(&self) -> String {
-        format!("127.0.0.1:{}", self.0)
-    }
+/// Why a connection through a Windows tunnel closed with nothing sent back.
+#[cfg(windows)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// ssh signed in, and nothing on the server answered at the port: the line ssh printed about it, if any.
+    NothingAnswered(Option<String>),
+    /// ssh itself failed, signing in or starting: what it said.
+    Ssh(String),
+}
 
-    fn ssh_args(&self, target: &str, page: &ServerPage) -> Result<Vec<OsString>, ServerPageError> {
-        tcp_ssh_args(target, self.0, page)
-    }
-
-    /// Where to reach `ssh`'s end of the forward.
-    pub(crate) fn address(&self, ssh: &Child) -> std::io::Result<Address> {
-        Ok(Address { port: self.0, ssh: crate::loopback_owner::SshProcess::of(ssh)? })
-    }
-
-    fn named_in(&self, said: &str) -> bool {
-        cannot_listen_on(said, self.0)
+#[cfg(windows)]
+impl Through {
+    /// Why ssh closed this connection unanswered. ssh with `-W` exits 255 when it can't sign in or the server can't
+    /// open the forward, and names a forward the server refused (`channel 0: open failed: …`).
+    pub(crate) async fn refusal(mut self) -> Refusal {
+        let status = tokio::time::timeout(Duration::from_secs(2), self.ssh.wait()).await;
+        // Let the drain catch ssh's last words.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        if let Some(line) = self.said.open_failed() {
+            return Refusal::NothingAnswered(Some(line));
+        }
+        match status {
+            Ok(Ok(s)) if !s.success() => {
+                let said = self.said.text();
+                Refusal::Ssh(if said.is_empty() { format!("ssh exited with {s}.") } else { said })
+            }
+            _ => Refusal::NothingAnswered(None),
+        }
     }
 }
 
-/// A connection to ssh's port. Fails with `ErrorKind::PermissionDenied`, sending nothing, when another program holds
-/// its far end: one that bound the port before ssh did.
 #[cfg(windows)]
-pub(crate) async fn connect(address: &Address) -> std::io::Result<tokio::net::TcpStream> {
-    let stream = tokio::net::TcpStream::connect(("127.0.0.1", address.port)).await?;
-    crate::loopback_owner::check(&stream, address.ssh)?;
-    Ok(stream)
+impl tokio::io::AsyncRead for Through {
+    fn poll_read(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &mut tokio::io::ReadBuf<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.from).poll_read(cx, buf)
+    }
+}
+
+#[cfg(windows)]
+impl tokio::io::AsyncWrite for Through {
+    fn poll_write(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
+        match self.to.as_mut() {
+            Some(to) => std::pin::Pin::new(to).poll_write(cx, buf),
+            None => std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into())),
+        }
+    }
+
+    fn poll_flush(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        match self.to.as_mut() {
+            Some(to) => std::pin::Pin::new(to).poll_flush(cx),
+            None => std::task::Poll::Ready(Ok(())),
+        }
+    }
+
+    /// Closes ssh's stdin, which ssh passes on as the end of what this side sends.
+    fn poll_shutdown(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        if let Some(to) = self.to.as_mut() {
+            std::task::ready!(std::pin::Pin::new(to).poll_flush(cx))?;
+        }
+        self.to = None;
+        std::task::Poll::Ready(Ok(()))
+    }
 }
 
 /// A private folder for one tunnel's socket: `$XDG_RUNTIME_DIR` (the owner's own, 0700) when it is usable, else the
@@ -790,12 +846,49 @@ fn key_ok(key: &str) -> bool {
 
 /// What `start` made, handed to the task that keeps the tunnel.
 struct Started {
-    child: Ssh,
-    end: LocalEnd,
+    forward: Forward,
     address: Address,
-    stderr: Stderr,
     listener: TcpListener,
     ipv6: Option<TcpListener>,
+}
+
+/// What a page's tunnel keeps running between connections. On Linux, ssh forwarding the socket in its private folder,
+/// ended with the folder when dropped. On Windows nothing: each connection is an ssh of its own (`connect`).
+#[cfg(unix)]
+struct Forward {
+    ssh: Ssh,
+    _end: LocalEnd,
+    stderr: Stderr,
+}
+
+#[cfg(windows)]
+struct Forward;
+
+impl Forward {
+    /// What to tell the page once ssh ends on its own. Never, on Windows.
+    async fn ended(&mut self) -> String {
+        #[cfg(unix)]
+        {
+            let status = self.ssh.wait().await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let said = self.stderr.text();
+            match status {
+                Ok(s) if said.is_empty() => format!("ssh ended ({s})."),
+                _ => format!("ssh ended: {said}"),
+            }
+        }
+        #[cfg(windows)]
+        std::future::pending().await
+    }
+
+    /// Ends ssh now, and waits for it.
+    async fn stop(&mut self) {
+        #[cfg(unix)]
+        {
+            let _ = self.ssh.start_kill();
+            let _ = self.ssh.wait().await;
+        }
+    }
 }
 
 impl ServerPages {
@@ -846,7 +939,7 @@ impl ServerPages {
             started = start(program, &target, &page) => started,
             why = &mut stopped => Err(ServerPageError::Closed(why.unwrap_or(None))),
         };
-        let Started { mut child, end, address, stderr, listener, ipv6 } = match started {
+        let Started { mut forward, address, listener, ipv6 } = match started {
             Ok(s) => s,
             Err(e) => {
                 self.open.locked().remove(&key);
@@ -865,7 +958,6 @@ impl ServerPages {
         tokio::spawn(async move {
             // Everything the tunnel holds lives in this task: ending it drops the listener, the copies, ssh (killed on
             // drop) and the socket's folder.
-            let _end = end;
             let peers = Peers::Account(loopback_peer::this_account());
             let on_ipv6 = {
                 let address = address.clone();
@@ -884,17 +976,9 @@ impl ServerPages {
             };
             tokio::pin!(serving);
             let why = tokio::select! {
-                status = child.wait() => {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    let said = stderr.text();
-                    Some(match status {
-                        Ok(s) if said.is_empty() => format!("ssh ended ({s})."),
-                        _ => format!("ssh ended: {said}"),
-                    })
-                }
+                said = forward.ended() => Some(said),
                 why = stopped => {
-                    let _ = child.start_kill();
-                    let _ = child.wait().await;
+                    forward.stop().await;
                     why.unwrap_or(None)
                 }
                 never = &mut serving => match never {},
@@ -1005,30 +1089,27 @@ async fn read_kept(mut from: impl tokio::io::AsyncRead + Unpin, kept: u64, into:
 
 /// Starts ssh for `page` through `target` and waits until it listens and the page's port answers. Everything made is
 /// dropped, ending ssh, if this fails or is dropped part-way.
+#[cfg(unix)]
 async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started, ServerPageError> {
     let end = LocalEnd::new().map_err(|e| ServerPageError::Io(format!("{}: {e}", LocalEnd::COULDNT)))?;
-    let mut child = spawn_ssh(program, &end.ssh_args(target, page)?, Stdio::null()).await?;
-    let address = end.address(&child).map_err(|e| ServerPageError::Spawn(e.to_string()))?;
+    let mut ssh = spawn_ssh(program, &end.ssh_args(target, page)?, Stdio::null()).await?;
+    let address = end.address();
     let stderr = Stderr::default();
-    if let Some(e) = child.stderr.take() {
+    if let Some(e) = ssh.stderr.take() {
         stderr.drain(e);
     }
 
     // Ready once ssh accepts on its socket; then one try finds out whether anything answers on the port.
     let deadline = tokio::time::Instant::now() + READY_TIMEOUT;
     let probe = loop {
-        if child.try_wait().map_err(|e| ServerPageError::Spawn(e.to_string()))?.is_some() {
+        if ssh.try_wait().map_err(|e| ServerPageError::Spawn(e.to_string()))?.is_some() {
             // Let the drain catch ssh's last words.
             tokio::time::sleep(Duration::from_millis(50)).await;
             let said = stderr.text();
             return Err(ServerPageError::Ssh(if said.is_empty() { "ssh exited without saying why.".into() } else { said }));
         }
-        match connect(&address).await {
-            Ok(s) => break s,
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                return Err(ServerPageError::Io(format!("The page didn't open through the SSH tunnel: {e}")));
-            }
-            Err(_) => {}
+        if let Ok(s) = connect(&address).await {
+            break s;
         }
         // ssh couldn't make this tunnel's socket (`unix_listener: cannot bind to path …`); it keeps running for the
         // rest, so say so now rather than at the timeout.
@@ -1041,17 +1122,28 @@ async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
-    if !answers(probe, page).await {
+    if !answers(probe, page, PROBE_TIMEOUT).await {
         tokio::time::sleep(Duration::from_millis(100)).await;
         return Err(ServerPageError::PortClosed { at: page.at(), detail: stderr.open_failed() });
     }
-    // On Windows something else may have held the port while ssh failed to bind it; the probe would have reached that.
-    let said = stderr.text();
-    if end.named_in(&said) {
-        return Err(ServerPageError::Ssh(said));
+    let (listener, ipv6) = listen(false).await.map_err(|e| ServerPageError::Io(e.to_string()))?;
+    Ok(Started { forward: Forward { ssh, _end: end, stderr }, address, listener, ipv6 })
+}
+
+/// Windows: one connection through ssh finds out whether ssh signs in and anything answers on the page's port. ssh
+/// has `READY_TIMEOUT` to sign in and the page to answer; no answer by then, with ssh still running, opens the page.
+#[cfg(windows)]
+async fn start(program: &str, target: &str, page: &ServerPage) -> Result<Started, ServerPageError> {
+    let address = Address::new(program, stdio_ssh_args(target, page)?);
+    let mut probe = connect(&address).await.map_err(|e| ServerPageError::Spawn(e.to_string()))?;
+    if !answers(&mut probe, page, READY_TIMEOUT).await {
+        return Err(match probe.refusal().await {
+            Refusal::NothingAnswered(detail) => ServerPageError::PortClosed { at: page.at(), detail },
+            Refusal::Ssh(said) => ServerPageError::Ssh(said),
+        });
     }
-    let (listener, ipv6) = listen(cfg!(windows)).await.map_err(|e| ServerPageError::Io(e.to_string()))?;
-    Ok(Started { child, end, address, stderr, listener, ipv6 })
+    let (listener, ipv6) = listen(true).await.map_err(|e| ServerPageError::Io(e.to_string()))?;
+    Ok(Started { forward: Forward, address, listener, ipv6 })
 }
 
 /// The tunnel's listeners: on `127.0.0.1`, and with `ipv6` on `[::1]` at the same port. On Windows a page's name under
@@ -1084,22 +1176,26 @@ fn no_ipv6(e: &std::io::Error) -> bool {
 }
 
 /// Whether anything answers through a new tunnel. ssh closing the connection with nothing said means the server
-/// couldn't connect to the port. Any bytes back, or no answer within `PROBE_TIMEOUT` (a slow server), count.
+/// couldn't connect to the port. Any bytes back, or no answer `within` (a slow server), count.
 ///
 /// A TLS server may drop plain text without a word but answers a ClientHello at once, with its ServerHello or an alert.
-async fn answers(mut s: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin, page: &ServerPage) -> bool {
+async fn answers(s: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin, page: &ServerPage, within: Duration) -> bool {
     let request =
         if page.url.scheme() == "https" { client_hello() } else { format!("HEAD / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", page.at()).into_bytes() };
-    if s.write_all(&request).await.is_err() {
-        return false;
+    first_byte(s, &request, within).await.unwrap_or(true)
+}
+
+/// Sends `request` on `s` and waits `within` for the first byte back: `Some(true)` if one came, `Some(false)` if `s`
+/// closed or reset first (ssh drops a connection that way when the server refused the forward), `None` if neither.
+pub(crate) async fn first_byte(mut s: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin, request: &[u8], within: Duration) -> Option<bool> {
+    if s.write_all(request).await.is_err() {
+        return Some(false);
     }
     let mut b = [0u8; 1];
-    match tokio::time::timeout(PROBE_TIMEOUT, s.read(&mut b)).await {
-        Ok(Ok(0)) => false,
-        Ok(Ok(_)) => true,
-        // A reset: ssh dropped it as it does for a refused forward.
-        Ok(Err(_)) => false,
-        Err(_) => true,
+    match tokio::time::timeout(within, s.read(&mut b)).await {
+        Ok(Ok(n)) => Some(n > 0),
+        Ok(Err(_)) => Some(false),
+        Err(_) => None,
     }
 }
 
@@ -1127,19 +1223,31 @@ fn client_hello() -> Vec<u8> {
 /// How long the relay waits after a failed accept before the next, so running out of file descriptors doesn't spin.
 const ACCEPT_RETRY: Duration = Duration::from_millis(100);
 
-/// Accepts connections on `listener` and copies each one to and from ssh's `socket`, until dropped: it never returns.
+/// Accepts connections on `listener` and copies each one to and from ssh at `address`, until dropped: it never returns.
 /// A failed accept (a connection reset before it was taken, or no file descriptors left) passes, so it is logged and
-/// the next tried a moment later. A connection from anyone but `peers` is closed unanswered (ADR 0105, ADR 0138).
-pub(crate) async fn serve(listener: TcpListener, socket: Address, peers: Peers) -> Infallible {
+/// the next tried a moment later. A connection from anyone but `peers` is closed unanswered (ADR 0105, ADR 0138), before
+/// anything reaches ssh.
+pub(crate) async fn serve(listener: TcpListener, address: Address, peers: Peers) -> Infallible {
     let listener = &listener;
-    serve_with(move || listener.accept(), socket, peers).await
+    serve_with(
+        move || listener.accept(),
+        move || {
+            let address = address.clone();
+            async move { connect(&address).await }
+        },
+        peers,
+    )
+    .await
 }
 
-/// `serve`, taking each connection from `accept`.
-async fn serve_with<A, F>(mut accept: A, socket: Address, peers: Peers) -> Infallible
+/// `serve`, taking each connection from `accept` and making its other end with `through`.
+async fn serve_with<A, F, T, G, S>(mut accept: A, through: T, peers: Peers) -> Infallible
 where
     A: FnMut() -> F,
     F: std::future::Future<Output = std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)>>,
+    T: Fn() -> G,
+    G: std::future::Future<Output = std::io::Result<S>> + Send + 'static,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     let mut conns = tokio::task::JoinSet::new();
     loop {
@@ -1153,13 +1261,13 @@ where
                         continue;
                     }
                 };
-                let socket = socket.clone();
+                let other_end = through();
                 conns.spawn(async move {
                     if !loopback_peer::admits(peers, &tcp) {
                         return;
                     }
-                    if let Ok(mut unix) = connect(&socket).await {
-                        let _ = tokio::io::copy_bidirectional(&mut tcp, &mut unix).await;
+                    if let Ok(mut far) = other_end.await {
+                        let _ = tokio::io::copy_bidirectional(&mut tcp, &mut far).await;
                     }
                 });
             }
@@ -1238,9 +1346,8 @@ mod tests {
         assert_eq!(ipv6.local_addr().unwrap(), (std::net::Ipv6Addr::LOCALHOST, port).into());
         assert!(TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)).await.is_err(), "no other program can listen at [::1] on the port");
 
-        let (address, _end) = ssh_answering("the page").await;
         let peers = Peers::Account(loopback_peer::this_account());
-        let (ipv4, ipv6) = (tokio::spawn(serve(ipv4, address.clone(), peers)), tokio::spawn(serve(ipv6, address, peers)));
+        let (ipv4, ipv6) = (relay_answering(ipv4, "the page", peers).await, relay_answering(ipv6, "the page", peers).await);
         for host in ["127.0.0.1", "[::1]"] {
             let mut s = tokio::net::TcpStream::connect(format!("{host}:{port}")).await.unwrap();
             s.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await.unwrap();
@@ -1340,15 +1447,14 @@ mod tests {
     }
 
     #[test]
-    fn on_windows_ssh_listens_on_a_loopback_port_with_the_same_options() {
+    fn on_windows_each_connection_is_an_ssh_with_the_same_options_that_listens_on_nothing() {
         let p = page("http://[::1]:8080/");
-        let tcp = tcp_ssh_args("liam@hermes", 51234, &p).unwrap();
+        let stdio = stdio_ssh_args("liam@hermes", &p).unwrap();
         let socket = ssh_args("liam@hermes", Path::new("/tmp/d/s"), &p).unwrap();
-        assert_eq!(tcp[..tcp.len() - 3], socket[..socket.len() - 3]);
-        assert_eq!(tcp[tcp.len() - 3], "127.0.0.1:51234:[::1]:8080");
-        assert_eq!(tcp[tcp.len() - 2..], ["--", "liam@hermes"]);
-        assert!(tcp_ssh_args("-oProxyCommand=x", 51234, &p).is_err());
-        assert!(tcp_ssh_args("hermes", 0, &p).is_err());
+        assert_eq!(stdio[..stdio.len() - 4], socket[1..socket.len() - 4], "the same options, without -N");
+        assert_eq!(stdio[stdio.len() - 4..], ["-W", "[::1]:8080", "--", "liam@hermes"]);
+        assert!(!stdio.iter().any(|a| a == "-L" || a == "-D" || a == "-R"), "ssh listens on nothing: {stdio:?}");
+        assert!(stdio_ssh_args("-oProxyCommand=x", &p).is_err());
     }
 
     #[test]
@@ -1360,17 +1466,6 @@ mod tests {
         assert!(!listing.iter().any(|a| a == "-L" || a == "-N"));
         assert_eq!(listing[..listing.len() - 4], tunnel[1..tunnel.len() - 4]);
         assert!(listening_args("-oProxyCommand=x").is_err());
-    }
-
-    #[test]
-    fn ssh_failing_to_listen_on_the_port_is_noticed() {
-        // What Windows' OpenSSH prints when the port was taken meanwhile.
-        let said = "bind [127.0.0.1]:51234: Address already in use\r\nchannel_setup_fwd_listener_tcpip: cannot listen to port: 51234\r\nCould not request local forwarding.";
-        assert!(cannot_listen_on(said, 51234));
-        assert!(cannot_listen_on("channel_setup_fwd_listener_tcpip: cannot listen to port: 51234", 51234));
-        assert!(!cannot_listen_on(said, 5123));
-        assert!(!cannot_listen_on("bind [127.0.0.1]:3000: Address already in use", 51234));
-        assert!(!cannot_listen_on("channel 2: open failed: connect failed: Connection refused", 51234));
     }
 
     #[cfg(unix)]
@@ -1896,7 +1991,7 @@ while True:
             server.write_all(&TLS_ALERT).await.unwrap();
         });
         let start = std::time::Instant::now();
-        assert!(answers(probe, &page("https://localhost:8443/")).await);
+        assert!(answers(probe, &page("https://localhost:8443/"), PROBE_TIMEOUT).await);
         assert!(start.elapsed() < Duration::from_secs(1), "{:?}", start.elapsed());
     }
 
@@ -1986,31 +2081,28 @@ while True:
         std::fs::remove_dir_all(&base).unwrap();
     }
 
-    /// The relay's port, in front of a stand-in for ssh's end that answers every request with `body`, serving programs
-    /// run by `account`. The second value keeps the stand-in's end open.
-    async fn relay_for(body: &'static str, account: loopback_peer::Account) -> (u16, impl Sized) {
-        let (address, end) = ssh_answering(body).await;
+    /// The relay's port, in front of a stand-in for ssh that answers every request with `body`, serving programs run by
+    /// `account`.
+    async fn relay_for(body: &'static str, account: loopback_peer::Account) -> u16 {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        tokio::spawn(serve(listener, address, Peers::Account(account)));
-        (port, end)
+        relay_answering(listener, body, Peers::Account(account)).await;
+        port
     }
 
-    /// A stand-in for ssh's end of a tunnel, answering every request with `body`.
-    async fn ssh_answering(body: &'static str) -> (Address, impl Sized) {
-        #[cfg(unix)]
-        let (ssh, address, end) = {
-            let dir = SocketDir::new().unwrap();
-            (tokio::net::UnixListener::bind(dir.socket()).unwrap(), dir.socket(), dir)
-        };
-        #[cfg(windows)]
-        let (ssh, address, end) = {
-            let ssh = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-            let port = ssh.local_addr().unwrap().port();
-            // The stand-in runs in this process, so this process is the ssh the relay checks for.
-            let this = crate::loopback_owner::SshProcess { pid: std::process::id(), started: 0 };
-            (ssh, Address { port, ssh: this }, ())
-        };
+    /// The relay on `listener`, for `peers`, in front of a stand-in for ssh that answers every request with `body`.
+    async fn relay_answering(listener: TcpListener, body: &'static str, peers: Peers) -> tokio::task::JoinHandle<Infallible> {
+        let ssh = ssh_answering(body).await;
+        tokio::spawn(async move {
+            let listener = &listener;
+            serve_with(|| listener.accept(), move || tokio::net::TcpStream::connect(("127.0.0.1", ssh)), peers).await
+        })
+    }
+
+    /// A stand-in for ssh's end of a tunnel, answering every request with `body`: its port.
+    async fn ssh_answering(body: &'static str) -> u16 {
+        let ssh = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = ssh.local_addr().unwrap().port();
         tokio::spawn(async move {
             while let Ok((mut s, _)) = ssh.accept().await {
                 tokio::spawn(async move {
@@ -2021,7 +2113,7 @@ while True:
                 });
             }
         });
-        (address, end)
+        port
     }
 
     /// A failed accept (a connection reset before it was taken, or no file descriptors left) doesn't end the relay: the
@@ -2029,7 +2121,7 @@ while True:
     #[cfg(any(target_os = "linux", windows))]
     #[tokio::test]
     async fn the_relay_outlives_a_failed_accept() {
-        let (address, _end) = ssh_answering("the dashboard").await;
+        let ssh = ssh_answering("the dashboard").await;
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
@@ -2044,7 +2136,7 @@ while True:
                     listener.accept().await
                 }
             };
-            serve_with(accept, address, Peers::Account(loopback_peer::this_account())).await
+            serve_with(accept, move || tokio::net::TcpStream::connect(("127.0.0.1", ssh)), Peers::Account(loopback_peer::this_account())).await
         });
         let got = tokio::time::timeout(Duration::from_secs(5), get(&format!("http://127.0.0.1:{port}/"))).await.expect("the relay didn't answer");
         assert!(got.as_deref().is_ok_and(|g| g.ends_with("the dashboard")), "{got:?}");
@@ -2062,12 +2154,12 @@ while True:
     #[cfg(any(target_os = "linux", windows))]
     #[tokio::test]
     async fn the_relay_answers_this_accounts_programs_and_closes_on_any_other_accounts() {
-        let (port, _end) = relay_for("the dashboard", loopback_peer::this_account()).await;
+        let port = relay_for("the dashboard", loopback_peer::this_account()).await;
         let mine = get(&format!("http://127.0.0.1:{port}/")).await.unwrap();
         assert!(mine.ends_with("the dashboard"), "this account's program is relayed: {mine:?}");
 
         // A relay that serves another account: this program's real connection is then a stranger's.
-        let (port, _end) = relay_for("the dashboard", another_account()).await;
+        let port = relay_for("the dashboard", another_account()).await;
         let theirs = get(&format!("http://127.0.0.1:{port}/")).await.unwrap_or_default();
         assert_eq!(theirs, "", "another account's program gets nothing");
     }
@@ -2075,7 +2167,9 @@ while True:
     /// A real sign-in tunnel and a real server page, through the `ssh` on PATH to `$TUNNEL_TARGET`, for
     /// `.github/windows-relay/other-account.ps1`. The tunnel reaches the server's port `$TUNNEL_DASHBOARD_PORT`, the
     /// page `http://127.0.0.1:$TUNNEL_PAGE_PORT/`. It writes this process's id and both relay ports to
-    /// `$RELAY_DIR/ports`, and keeps both open until the script writes `$RELAY_DIR/done`.
+    /// `$RELAY_DIR/ports`, and keeps both open until the script writes `$RELAY_DIR/done`. First, a page on
+    /// `$TUNNEL_CLOSED_PORT`, where nothing listens, and a tunnel and a page through `$TUNNEL_UNREACHABLE_TARGET`,
+    /// where no sshd listens, must each fail and say why.
     #[cfg(windows)]
     #[tokio::test]
     #[ignore = "run by .github/windows-relay/other-account.ps1"]
@@ -2083,11 +2177,22 @@ while True:
         let var = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name} isn't set"));
         let dir = std::path::PathBuf::from(var("RELAY_DIR"));
         let target = var("TUNNEL_TARGET");
-        let dashboard = crate::tunnel::open(&target, var("TUNNEL_DASHBOARD_PORT").parse().unwrap()).await.expect("the sign-in tunnel opens");
         let pages = Arc::new(ServerPages::default());
-        let starting = pages.begin("probe", &one(), &target).unwrap();
-        let raw = format!("http://127.0.0.1:{}/", var("TUNNEL_PAGE_PORT"));
-        let opened = pages.open("ssh", starting, page(&raw), |_| {}).await.expect("the page opens");
+        let open = |key: &str, target: &str, raw: String| {
+            let starting = pages.begin(key, &one(), target).unwrap();
+            pages.open("ssh", starting, page(&raw), |_| {})
+        };
+
+        let closed = open("closed", &target, format!("http://127.0.0.1:{}/", var("TUNNEL_CLOSED_PORT"))).await.unwrap_err();
+        assert!(matches!(&closed, ServerPageError::PortClosed { detail: Some(d), .. } if d.contains("open failed")), "{closed:?}");
+        let unreachable = var("TUNNEL_UNREACHABLE_TARGET");
+        let no_sshd = open("no-sshd", &unreachable, format!("http://127.0.0.1:{}/", var("TUNNEL_PAGE_PORT"))).await.unwrap_err();
+        assert!(matches!(&no_sshd, ServerPageError::Ssh(said) if said.contains("port")), "{no_sshd:?}");
+        let no_sshd = crate::tunnel::open(&unreachable, 8765).await.err().expect("no tunnel opens without an sshd");
+        assert!(matches!(&no_sshd, crate::tunnel::TunnelError::Ssh(said) if said.contains("port")), "{no_sshd:?}");
+
+        let dashboard = crate::tunnel::open(&target, var("TUNNEL_DASHBOARD_PORT").parse().unwrap()).await.expect("the sign-in tunnel opens");
+        let opened = open("probe", &target, format!("http://127.0.0.1:{}/", var("TUNNEL_PAGE_PORT"))).await.expect("the page opens");
         let page_port = Url::parse(&opened.url).unwrap().port().unwrap();
         std::fs::write(dir.join("ports"), format!("{} {} {page_port}", std::process::id(), dashboard.local_port)).unwrap();
         for _ in 0..600 {

@@ -29,12 +29,18 @@ Host hvprobe
   User probe
   StrictHostKeyChecking no
   UserKnownHostsFile $($dir -replace '\\', '/')/known_hosts
+Host hvnowhere
+  HostName 127.0.0.1
+  Port 9
+  User probe
 "@ | Out-File -Encoding ascii (Join-Path $sshDir 'config')
 
 $env:RELAY_DIR = $dir
 $env:TUNNEL_TARGET = 'hvprobe'
 $env:TUNNEL_DASHBOARD_PORT = '8765'
 $env:TUNNEL_PAGE_PORT = '8766'
+$env:TUNNEL_CLOSED_PORT = '8767'
+$env:TUNNEL_UNREACHABLE_TARGET = 'hvnowhere'
 $test = 'server_page::tests::real_tunnels_for_a_program_run_by_another_account'
 $relay = Start-Process cargo -ArgumentList 'test', '--lib', $test, '--', '--ignored', '--exact', $test, '--nocapture' -PassThru -NoNewWindow -RedirectStandardOutput "$dir\relay.out" -RedirectStandardError "$dir\relay.err"
 for ($i = 0; $i -lt 900 -and -not (Test-Path "$dir\ports") -and -not $relay.HasExited; $i++) { Start-Sleep 1 }
