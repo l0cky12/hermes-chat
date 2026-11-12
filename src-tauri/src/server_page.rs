@@ -2072,15 +2072,24 @@ while True:
         assert_eq!(theirs, "", "another account's program gets nothing");
     }
 
-    /// The relay, serving this account, for `.github/windows-relay/other-account.ps1`: it writes the port to
-    /// `$RELAY_DIR/port` and serves until the script writes `$RELAY_DIR/done`.
+    /// A real sign-in tunnel and a real server page, through the `ssh` on PATH to `$TUNNEL_TARGET`, for
+    /// `.github/windows-relay/other-account.ps1`. The tunnel reaches the server's port `$TUNNEL_DASHBOARD_PORT`, the
+    /// page `http://127.0.0.1:$TUNNEL_PAGE_PORT/`. It writes this process's id and both relay ports to
+    /// `$RELAY_DIR/ports`, and keeps both open until the script writes `$RELAY_DIR/done`.
     #[cfg(windows)]
     #[tokio::test]
-    #[ignore]
-    async fn the_relay_for_a_program_run_by_another_account() {
-        let (port, _end) = relay_for("the dashboard", loopback_peer::this_account()).await;
-        let dir = std::path::PathBuf::from(std::env::var("RELAY_DIR").expect("RELAY_DIR"));
-        std::fs::write(dir.join("port"), port.to_string()).unwrap();
+    #[ignore = "run by .github/windows-relay/other-account.ps1"]
+    async fn real_tunnels_for_a_program_run_by_another_account() {
+        let var = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name} isn't set"));
+        let dir = std::path::PathBuf::from(var("RELAY_DIR"));
+        let target = var("TUNNEL_TARGET");
+        let dashboard = crate::tunnel::open(&target, var("TUNNEL_DASHBOARD_PORT").parse().unwrap()).await.expect("the sign-in tunnel opens");
+        let pages = Arc::new(ServerPages::default());
+        let starting = pages.begin("probe", &one(), &target).unwrap();
+        let raw = format!("http://127.0.0.1:{}/", var("TUNNEL_PAGE_PORT"));
+        let opened = pages.open("ssh", starting, page(&raw), |_| {}).await.expect("the page opens");
+        let page_port = Url::parse(&opened.url).unwrap().port().unwrap();
+        std::fs::write(dir.join("ports"), format!("{} {} {page_port}", std::process::id(), dashboard.local_port)).unwrap();
         for _ in 0..600 {
             if dir.join("done").exists() {
                 return;
