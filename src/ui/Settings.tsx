@@ -1,6 +1,7 @@
-// The Settings screen, in twelve tabs. General, ported from the prototype: the connection and Sign out, what shows on
+// The Settings screen, in thirteen tabs. General, ported from the prototype: the connection and Sign out, what shows on
 // launch, screenshots, updates, the local cache, older history, importing transcripts, and backups. Appearance: how the app looks on this
-// computer (AppearanceSettings.tsx). Model: the profile's models on Hermes (ModelSettings.tsx), and Idle compaction on this computer
+// computer (AppearanceSettings.tsx). Keyboard Shortcuts: every command and its keys, changed here (KeyboardSettings.tsx).
+// Model: the profile's models on Hermes (ModelSettings.tsx), and Idle compaction on this computer
 // (IdleCompactSettings.tsx). Providers: the profile's model provider API keys on Hermes, listed, added, replaced and removed
 // (ProviderSettings.tsx, ADR 0095), its subscription sign-ins (SignInSettings.tsx) and custom endpoints
 // (EndpointSettings.tsx, ADR 0133). Voice: Dictation, Read aloud and voice
@@ -14,17 +15,19 @@
 // Profiles are switched in the list's header, not here (ADR 0001); Profiles' Open goes through the same question. The search box (Ctrl+F) shows the sections of every
 // tab whose text holds what was typed (settingsSearch.ts).
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowLeft, AudioLines, Brain, Camera, Cpu, Database, Download, HardDrive, KeyRound, Lock, LogOut, MessagesSquare, NotebookPen, Palette, PlugZap, Power, Puzzle, RadioTower, ScrollText, Search, Server, Settings2, ShieldCheck, Sparkles, Stethoscope, Trash2, User, Users, Wrench, X } from "lucide-react";
+import { ArrowLeft, AudioLines, Brain, Camera, Cpu, Database, Download, HardDrive, Keyboard, KeyRound, Lock, LogOut, MessagesSquare, NotebookPen, Palette, PlugZap, Power, Puzzle, RadioTower, ScrollText, Search, Server, Settings2, ShieldCheck, Sparkles, Stethoscope, Trash2, User, Users, Wrench, X } from "lucide-react";
 import type { MemorySource } from "../hermes/memory";
 import { SubNav, type SubNavItem } from "./SubNav";
 import { SettingRow, SettingsSearching, SettingsSection } from "./SettingRows";
+import { pickApp } from "./keybindings";
 import type { Chat, ConnectionStatus } from "../hermes/model";
 import type { Route } from "../hermes/pipe";
 import { viaLabel } from "../hermes/routes";
 import { TRANSCRIPT_LIMIT_BYTES } from "../hermes/chatCache";
-import { STATUS_LABEL, arrowSelect, fmtSize, routeLabel } from "./bits";
+import { STATUS_LABEL, arrowSelect, composing, fmtSize, routeLabel } from "./bits";
 import type { AppearanceStore, Fonts } from "./appearance";
 import { AppearanceSettings } from "./AppearanceSettings";
+import { KeyboardSettings } from "./KeyboardSettings";
 import type { ModelSettingsApi } from "../hermes/modelSettings";
 import { ModelSettings } from "./ModelSettings";
 import { IdleCompactSettings } from "./IdleCompactSettings";
@@ -75,7 +78,7 @@ import { useLocale } from "../i18n/locale";
 import { ProfileSettings, type ProfilesWiring } from "./ProfileSettings";
 import { errorText } from "../hermes/values";
 
-type Tab = "general" | "appearance" | "model" | "providers" | "voice" | "toolsets" | "mcp" | "gateways" | "profiles" | "persona" | "memory" | "skills" | "diagnostics";
+type Tab = "general" | "appearance" | "keyboard" | "model" | "providers" | "voice" | "toolsets" | "mcp" | "gateways" | "profiles" | "persona" | "memory" | "skills" | "diagnostics";
 /**
  * General's five groups, shown one at a time beside a sub-nav (ADR 0113); a search shows every group's sections at once.
  * Voice moved to its own tab with the speech providers (ADR 0115), so the third group holds screenshots.
@@ -98,6 +101,7 @@ const memSelOf = (id: string): MemSel => (id.startsWith("file:") ? { kind: "file
 const TABS = [
   { id: "general", Icon: Settings2 },
   { id: "appearance", Icon: Palette },
+  { id: "keyboard", Icon: Keyboard },
   { id: "model", Icon: Cpu },
   { id: "providers", Icon: KeyRound },
   { id: "voice", Icon: AudioLines },
@@ -112,7 +116,7 @@ const TABS = [
 ] as const;
 
 /** The tabs whose sections a search shows in place. */
-const SEARCHED: readonly Tab[] = ["general", "appearance", "model", "providers", "voice", "toolsets"];
+const SEARCHED: readonly Tab[] = ["general", "appearance", "keyboard", "model", "providers", "voice", "toolsets"];
 /**
  * The tabs a search names instead: each edits one thing Hermes keeps (a file, a list of entries), so it's opened to
  * search rather than mounted beside the others with its unsaved edit.
@@ -489,11 +493,11 @@ export function SettingsScreen({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || document.querySelector('[aria-modal="true"]')) return;
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "f") {
+      if (pickApp(e) === "find") {
         e.preventDefault();
         searchBox.current?.focus();
         searchBox.current?.select();
-      } else if (e.key === "Escape" && searchingRef.current) {
+      } else if (e.key === "Escape" && searchingRef.current && !composing(e)) {
         const at = document.activeElement;
         if (at && at !== document.body && !screenRef.current?.contains(at)) return;
         e.preventDefault();
@@ -855,6 +859,8 @@ export function SettingsScreen({
         );
       case "appearance":
         return <AppearanceSettings store={appearance} listFonts={listFonts} />;
+      case "keyboard":
+        return <KeyboardSettings />;
       case "model":
         // A draft lives only while this tab is open, and for one profile. Idle compaction is this computer's, and shows
         // whether or not Hermes is reachable.

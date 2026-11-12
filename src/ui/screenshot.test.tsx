@@ -581,7 +581,7 @@ describe("Setting the screenshot shortcut", () => {
     const { rust, user, key } = await inSettings();
     await user.click(key);
     await user.keyboard("{Control>}k{/Control}");
-    expect(screen.getByRole("alert").textContent).toContain("Ctrl+K: Ctrl+K already opens Search in Hermes Chat.");
+    expect(screen.getByRole("alert").textContent).toContain("Ctrl+K: Ctrl+K already runs Search all chats in Hermes Chat (Settings → Keyboard Shortcuts).");
     // Search didn't open, and the recorder is still waiting.
     expect(screen.queryByPlaceholderText(/Search all chats/)).toBeNull();
     expect(key.textContent).toContain("Press the shortcut…");

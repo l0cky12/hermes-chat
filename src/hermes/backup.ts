@@ -315,7 +315,7 @@ const grouping = (part: unknown): ScopeLinks | undefined => {
 };
 
 /** The display and startup settings a backup holds. Each profile's chat to reopen isn't: it's a copy of the server's list. */
-const SETTINGS_FIELDS = ["theme", "reopenLastChat", "checkUpdatesOnLaunch", "modelPicker", "modelFavorites", "statusBar", "screenshotShortcut", "previewWidth", "terminalKind"];
+const SETTINGS_FIELDS = ["theme", "reopenLastChat", "checkUpdatesOnLaunch", "modelPicker", "modelFavorites", "statusBar", "screenshotShortcut", "previewWidth", "terminalKind", "keybindings"];
 const prefsDoc = (s: BackupStorage): Record<string, unknown> => {
   try {
     const d: unknown = JSON.parse(s.getItem(UI_PREFS_KEY) ?? "{}");

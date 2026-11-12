@@ -42,7 +42,7 @@ afterEach(() => {
 
 describe("reading", () => {
   it("is the defaults when nothing is stored", () => {
-    expect(getUIPrefs()).toEqual({ theme: "system", reopenLastChat: true, checkUpdatesOnLaunch: true, lastOpenChat: {}, modelPicker: null, modelPicks: {}, modelFavorites: [], statusBar: ["context", "model", "status"], previewWidth: null, screenshotShortcut: "Ctrl+Shift+S", templates: [], terminalKind: "server", followUp: "queue", idleCompact: { enabled: false, percent: 70, idleMinutes: 15 }, chatSectionsShown: ["pinned", "inbox", "snoozed", "working", "settled"], chatSectionsCollapsed: ["snoozed", "archived", "settled"], agentOffice: "building", officeQuality: "normal", inboxAutoDismissDays: null });
+    expect(getUIPrefs()).toEqual({ theme: "system", reopenLastChat: true, checkUpdatesOnLaunch: true, lastOpenChat: {}, modelPicker: null, modelPicks: {}, modelFavorites: [], statusBar: ["context", "model", "status"], previewWidth: null, screenshotShortcut: "Ctrl+Shift+S", templates: [], terminalKind: "server", followUp: "queue", idleCompact: { enabled: false, percent: 70, idleMinutes: 15 }, chatSectionsShown: ["pinned", "inbox", "snoozed", "working", "settled"], chatSectionsCollapsed: ["snoozed", "archived", "settled"], agentOffice: "building", officeQuality: "normal", inboxAutoDismissDays: null, keybindings: {} });
     expect(getUIPrefs()).toEqual(DEFAULT_UI_PREFS);
   });
 
@@ -74,6 +74,7 @@ describe("reading", () => {
         agentOffice: "floor",
         officeQuality: "ultra",
         inboxAutoDismissDays: "7",
+        keybindings: { search: ["Ctrl+J"], bad: [], worse: "Ctrl+K", nope: [7] },
       }),
     );
     expect(getUIPrefs()).toEqual({
@@ -93,7 +94,20 @@ describe("reading", () => {
       agentOffice: "building",
       officeQuality: "normal",
       inboxAutoDismissDays: null,
+      keybindings: { search: ["Ctrl+J"] },
     });
+  });
+
+  it("keeps the keyboard shortcuts the owner changed, by shape only, and drops anything that isn't lists of strings", () => {
+    expect(getUIPrefs().keybindings).toEqual({});
+    setUIPrefs({ keybindings: { search: ["Ctrl+J"], findNext: ["Enter", "ArrowDown"] } });
+    expect(stored().keybindings).toEqual({ search: ["Ctrl+J"], findNext: ["Enter", "ArrowDown"] });
+    setUIPrefs({ keybindings: {} });
+    expect(stored().keybindings).toEqual({});
+    for (const bad of ["Ctrl+K", ["Ctrl+K"], null, 7]) {
+      localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ v: UI_PREFS_VERSION, keybindings: bad }));
+      expect(getUIPrefs().keybindings).toEqual({});
+    }
   });
 
   it("keeps message templates, checked, and says when the change couldn't be stored", () => {

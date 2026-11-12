@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Settings' search box against the fake dashboard: it shows the sections of every tab whose text holds the query,
 // fills in tabs that read from Hermes, names the editor tabs instead of mounting them, and ends where the owner picks.
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -231,6 +231,17 @@ describe("Searching Settings", () => {
     await user.click(screen.getByRole("tab", { name: /Model/ }));
     expect(box().value).toBe("");
     expect(screen.getByRole("tabpanel").id).toBe("settings-panel-model");
+  });
+
+  it("keeps the search when Escape only ends an input method's composition", async () => {
+    const { user } = await shown();
+    await user.click(box());
+    await user.paste("tray");
+    fireEvent.keyDown(box(), { key: "Escape", isComposing: true });
+    fireEvent.keyDown(box(), { key: "Escape", keyCode: 229 });
+    expect(box().value).toBe("tray");
+    await user.keyboard("{Escape}");
+    expect(box().value).toBe("");
   });
 
   it("ends with Escape when the focus has moved into the results", async () => {

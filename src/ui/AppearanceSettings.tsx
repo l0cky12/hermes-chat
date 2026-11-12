@@ -10,6 +10,7 @@ import { Markdown } from "./Markdown";
 import { SettingRow, SettingsSection } from "./SettingRows";
 import { StatusBarSetting } from "./StatusBar";
 import { ThemeSettings } from "./ThemePicker";
+import { useChordLabel } from "./keybindings";
 
 const CODE_SAMPLE = [
   "```ts",
@@ -123,6 +124,7 @@ function LanguageSetting({ store, a }: { store: AppearanceStore; a: Appearance }
 export function AppearanceSettings({ store, listFonts }: { store: AppearanceStore; listFonts: () => Promise<Fonts> }) {
   const a = useSyncExternalStore(store.subscribe, store.get);
   const { fonts: t, wordWrap: wrap } = useLocale().appearance;
+  const searchKey = useChordLabel("search");
   const [fonts, setFonts] = useState<Fonts>({ all: [], mono: [] });
   useEffect(() => {
     let live = true;
@@ -150,7 +152,7 @@ export function AppearanceSettings({ store, listFonts }: { store: AppearanceStor
           <SizeSelect label={t.uiSize} value={a.uiSize} sizes={UI_SIZES} onChange={(uiSize) => set({ uiSize })} />
         </FontRow>
         <div className="set-block">
-          <div className="appearance-preview ui-preview">{t.uiSample}</div>
+          <div className="appearance-preview ui-preview">{t.uiSample(searchKey)}</div>
         </div>
 
         <FontRow

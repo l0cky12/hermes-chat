@@ -4,6 +4,7 @@
 // and attachments are as they were when it comes back.
 import { createContext, useContext, Fragment, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { chordLabel, useBindings } from "./keybindings";
 
 /** The narrowest a pane gets beside another. Narrower than two of these, the panes take turns. */
 export const MIN_PANE_PX = 320;
@@ -41,6 +42,7 @@ const clamp = (r: number, min: number) => Math.min(1 - min, Math.max(min, r));
  */
 export function Split({ panes, activeKey, onActivate, covered = false, dir = "row" }: { panes: PaneSlot[]; activeKey: string; onActivate: (key: string) => void; covered?: boolean; dir?: SplitDir }) {
   const row = dir === "row";
+  const keys = useBindings();
   const minPx = row ? MIN_PANE_PX : MIN_PANE_HEIGHT_PX;
   const names = paneNames(dir);
   const box = useRef<HTMLDivElement>(null);
@@ -111,7 +113,7 @@ export function Split({ panes, activeKey, onActivate, covered = false, dir = "ro
               aria-selected={p.key === activeKey}
               tabIndex={p.key === activeKey ? 0 : -1}
               className={`pane-tab ${p.key === activeKey ? "on" : ""}`}
-              title={`${names[i]} pane: ${p.title} (Ctrl+${i + 1})`}
+              title={`${names[i]} pane: ${p.title} (${chordLabel(keys[i === 0 ? "focusLeft" : "focusRight"][0])})`}
               onClick={() => onActivate(p.key)}
               onKeyDown={(e) => {
                 const next = e.key === "ArrowLeft" || e.key === "ArrowRight" ? 1 - i : e.key === "Home" ? 0 : e.key === "End" ? 1 : undefined;

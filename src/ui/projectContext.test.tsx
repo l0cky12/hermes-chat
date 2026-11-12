@@ -11,6 +11,7 @@ import { savedDefaults } from "../hermes/projectDefaults";
 import { DEFAULT_LIMIT_TOKENS } from "../hermes/projectContext";
 import { Main } from "../App";
 import { RestError } from "../hermes/pipe";
+import { setUIPrefs } from "../hermes/uiPrefs";
 
 type DropEvent = { payload: { type: "drop"; paths: string[]; position: { x: number; y: number } } };
 const dropListeners = vi.hoisted(() => new Set<(e: DropEvent) => void>());
@@ -247,6 +248,19 @@ describe("the project page", () => {
     await app.user.click(screen.getByTitle("Project settings for Budget Tracker"));
     expect(within(screen.getByRole("region", { name: "Chats" })).getByRole("button", { name: /What's the rent\?/ })).toBeTruthy();
     expect((screen.getByRole("textbox", { name: "Message to start a new chat in Budget Tracker" }) as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("starts a chat on Send's chord as the owner set it, where Enter then only breaks the line (#285)", async () => {
+    setUIPrefs({ keybindings: { send: ["Ctrl+J"] } });
+    const s = server();
+    const app = await launch(s);
+    await app.openPage();
+    const box = screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message to start a new chat in Budget Tracker" });
+    await app.user.type(box, "What's the rent?{Enter}in euros");
+    expect(box.value).toBe("What's the rent?\nin euros");
+    expect(app.prompts()).toEqual([]);
+    await app.user.keyboard("{Control>}j{/Control}");
+    await waitFor(() => expect(app.prompts()).toEqual(["What's the rent?\nin euros"]));
   });
 
   it("shows the start of the instructions, and the pencil opens their editor", async () => {

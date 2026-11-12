@@ -9,6 +9,7 @@ import { EFFORT_LABEL, shortName, type Effort, type ModelCatalog, type ModelPick
 import { DefaultsConflict, NewerDefaultsError, cleanDraft, draftProblem, sameDraft, type DefaultsDraft, type ProjectDefaults } from "../hermes/projectDefaults";
 import type { Project, ProjectFolder, Worktree } from "../hermes/projects";
 import { Age, Spinner, composing, menuArrows, useDismiss, useReturnFocus } from "./bits";
+import { pick, typeNewLine } from "./keybindings";
 import { ModelControls } from "./ModelPicker";
 import { errorText } from "../hermes/values";
 
@@ -429,9 +430,10 @@ export function ProjectScreen({
                 onChange={(e) => setName(e.target.value)}
                 onFocus={(e) => e.currentTarget.select()}
                 onKeyDown={(e) => {
-                  if (composing(e)) return;
-                  if (e.key === "Enter") void rename();
-                  else if (e.key === "Escape") {
+                  const command = pick(e, "rename");
+                  if (command) e.preventDefault();
+                  if (command === "renameSave") void rename();
+                  else if (command === "renameCancel") {
                     setName(project.name);
                     setRenaming(false);
                     setError(undefined);
@@ -665,7 +667,9 @@ export function ProjectScreen({
                 value={draft}
                 onChange={(e) => onDraft(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key !== "Enter" || e.shiftKey || composing(e)) return;
+                  const command = pick(e, "composer");
+                  if (command === "newLine") return typeNewLine(e);
+                  if (command !== "send" && command !== "sendOther") return;
                   e.preventDefault();
                   if (canStart) onStartChat();
                 }}

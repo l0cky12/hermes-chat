@@ -132,6 +132,8 @@ The interface is being translated screen by screen. Settings → Appearance, the
 
 ### Keyboard shortcuts
 
+These are the defaults. Settings → **Keyboard Shortcuts** lists every command with its keys, and you can change any of them there; a change applies at once and is kept on this computer ([ADR 0147](docs/adr/0147-shortcuts-are-a-command-table-each-handler-asks-and-the-owners-changes-are-a-diff-in-the-display-preferences.md)).
+
 | Shortcut | Action |
 | --- | --- |
 | Ctrl+K | Search chats |

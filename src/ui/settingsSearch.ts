@@ -29,9 +29,17 @@ function sectionsOf(root: Element): HTMLElement[] {
 /** Names a control carries only as an attribute, such as a size picker's "Interface font size", searched with the text. */
 export const NAMED = ["aria-label", "title", "placeholder"];
 
-/** The text a section is searched by: what it shows, and its controls' names. */
+/**
+ * The text a section is searched by: what it shows, and its controls' names. The names are read off every element in
+ * turn, not found with an attribute selector, which jsdom's selector engine makes slow enough to time tests out.
+ */
 export function searchText(el: Element): string {
-  const names = [...el.querySelectorAll(NAMED.map((a) => `[${a}]`).join(","))].flatMap((n) => NAMED.map((a) => n.getAttribute(a) ?? ""));
+  const names: string[] = [];
+  for (const n of el.getElementsByTagName("*"))
+    for (const a of NAMED) {
+      const name = n.getAttribute(a);
+      if (name) names.push(name);
+    }
   return [el.textContent ?? "", ...names].join(" ");
 }
 
@@ -58,12 +66,19 @@ export function lowered(text: string): { low: string; start: number[]; end: numb
   return { low, start, end };
 }
 
+const UNDRAWN = new Set(["OPTION", "SCRIPT", "STYLE"]);
+/** Whether text node `n` sits in an element whose text isn't drawn: a walk up by tag name, as a `closest` selector is slow in jsdom. */
+function undrawn(n: Node): boolean {
+  for (let e = n.parentElement; e; e = e.parentElement) if (UNDRAWN.has(e.tagName)) return true;
+  return false;
+}
+
 /** The ranges of each word in the text under `el`, for marking. Text inside a select's options isn't drawn, so isn't marked. */
 function wordRanges(el: Element, words: string[]): Range[] {
   const ranges: Range[] = [];
   const doc = el.ownerDocument;
   const walk = doc.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
-    acceptNode: (n) => (n.parentElement?.closest("option, script, style") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    acceptNode: (n) => (undrawn(n) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
   });
   for (let n = walk.nextNode(); n; n = walk.nextNode()) {
     const { low, start, end } = lowered(n.textContent ?? "");

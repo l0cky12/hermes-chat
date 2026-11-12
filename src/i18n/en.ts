@@ -28,6 +28,7 @@ export const en = {
     tabs: {
       general: "General",
       appearance: "Appearance",
+      keyboard: "Keyboard Shortcuts",
       model: "Model",
       providers: "Providers",
       voice: "Voice",
@@ -127,7 +128,7 @@ export const en = {
       uiHint: "Everything outside code blocks and tool output.",
       uiSize: "Interface font size",
       resetUi: "Reset interface font",
-      uiSample: "Chats that need attention sit at the top; settled ones wait below. Press Ctrl+K to search every chat.",
+      uiSample: (searchKey: string) => `Chats that need attention sit at the top; settled ones wait below. Press ${searchKey} to search every chat.`,
       code: "Code font",
       codeHint: "Code blocks, tool output, and commands waiting for approval.",
       codeSize: "Code font size",

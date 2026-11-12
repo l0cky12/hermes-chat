@@ -5,6 +5,7 @@ import { useSyncExternalStore } from "react";
 import { SECTION_KEYS, SECTION_LABEL, type SectionKey } from "../hermes/sectionKeys";
 import { getUIPrefs, setUIPrefs, subscribe } from "../hermes/uiPrefs";
 import { SettingRow, SettingsSection } from "./SettingRows";
+import { useChordLabel } from "./keybindings";
 
 const HINT: Readonly<Record<SectionKey, string>> = {
   pinned: "Chats you pinned, in the order you pinned them, whatever happens in them.",
@@ -16,12 +17,13 @@ const HINT: Readonly<Record<SectionKey, string>> = {
 };
 
 export function ChatSectionSettings() {
+  const searchKey = useChordLabel("search");
   const { chatSectionsShown: shown } = useSyncExternalStore(subscribe, getUIPrefs);
   const toggle = (k: SectionKey, on: boolean) => setUIPrefs({ chatSectionsShown: on ? [...shown, k] : shown.filter((s) => s !== k) });
   return (
     <SettingsSection
       title="Chat list sections"
-      intro="The sections the chat list shows. Search (Ctrl+K) still finds the chats in a hidden section."
+      intro={`The sections the chat list shows. Search (${searchKey}) still finds the chats in a hidden section.`}
     >
       {SECTION_KEYS.map((k) => {
         const on = shown.includes(k);
