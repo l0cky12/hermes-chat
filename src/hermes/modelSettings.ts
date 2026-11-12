@@ -332,6 +332,18 @@ export class ModelSettingsApi {
     return catalogFrom(await this.rest("GET", `api/model/options?${this.q()}`));
   }
 
+  /**
+   * The model a session-less `llm.oneshot` runs on: the Text generation task's, or the main model's when that task is
+   * left on `auto` (`followsMain`). Only `GET /api/model/auxiliary` is read.
+   */
+  async textModel(): Promise<{ provider: string; model: string; followsMain: boolean }> {
+    const aux = await this.rest("GET", `api/model/auxiliary?${this.q()}`);
+    const task = auxFrom(aux).find((t) => t.task === TEXT_TASK);
+    if (task && task.provider !== AUX_AUTO) return { provider: task.provider, model: task.model, followsMain: false };
+    const main = obj(obj(aux).main);
+    return { provider: textOrEmpty(main.provider), model: textOrEmpty(main.model), followsMain: true };
+  }
+
   /** `GET /api/model/options`, `/api/model/auxiliary`, `/api/config` and `/api/delegation/routing`. */
   async load(): Promise<ModelSettings> {
     const [options, aux, config, routing] = await Promise.all([

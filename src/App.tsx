@@ -3115,6 +3115,13 @@ export function Main({
                     if (draft.folder && status === "connected") await hermes.projects.checkFolder(profile, draft.folder);
                     return projects.saveDefaults(shownProject.id, base, draft);
                   },
+                  writer:
+                    status === "connected"
+                      ? {
+                          ask: (c) => hermes.askForEdit({ profile, ...c }).then((r) => r.text),
+                          model: () => hermes.modelSettings.textModel(),
+                        }
+                      : undefined,
                 }}
               />
             ) : settingsOpen ? (

@@ -3635,6 +3635,43 @@ div.export-preview.export-page { height: auto; padding: 10px 12px; background: v
 .profile-dialog p { margin: 0 0 6px; }
 .profile-save-why { text-align: right; }
 
+/* ---------- write or improve a project's instructions with AI (InstructionsAI.tsx, ADR 0152) ---------- */
+.defaults-instructions-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.defaults-instructions-head .btn.small { height: 26px; padding: 0 10px; font-size: calc(12.5rem / 14); }
+.leave-overlay .leave-dialog.instructions-ai { max-width: min(820px, calc(100% - 32px)); width: 100%; max-height: calc(100vh - 32px); overflow-y: auto; gap: 12px; }
+.instructions-ai-title svg { color: var(--accent, var(--text)); }
+.instructions-ai-ways { display: flex; flex-direction: column; gap: 8px; }
+.instructions-ai-way {
+  display: flex; align-items: flex-start; gap: 12px; text-align: left; padding: 12px 14px; border: 1px solid var(--line-2); background: var(--raised-2);
+  color: var(--text); font: inherit;
+}
+.instructions-ai-way:hover { border-color: var(--line-3); }
+.instructions-ai-way > svg { flex: none; margin-top: 2px; color: var(--muted); }
+.instructions-ai-way > span { display: flex; flex-direction: column; gap: 3px; }
+.instructions-ai-way-name { font-weight: 600; }
+.instructions-ai-form { display: flex; flex-direction: column; gap: 10px; }
+.instructions-ai-form textarea, .instructions-ai-note input {
+  font: inherit; color: var(--text); background: var(--input, var(--raised)); border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 10px;
+  line-height: 1.5; outline: none;
+}
+.instructions-ai-form textarea { resize: vertical; min-height: 96px; }
+.instructions-ai-form textarea:focus, .instructions-ai-note input:focus { border-color: var(--line-3); }
+.instructions-ai-question { color: var(--text); font-size: calc(14rem / 14); line-height: 1.5; }
+.instructions-ai-answers ol { margin: 6px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.instructions-ai-answers li { overflow-wrap: anywhere; }
+.instructions-ai-answers li .muted { display: block; }
+.instructions-ai-review { display: flex; flex-direction: column; gap: 10px; }
+.instructions-ai-view { align-self: flex-start; }
+.instructions-ai-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.instructions-ai-pane { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.instructions-ai-text {
+  white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; padding: 10px 12px; border: 1px solid var(--line-2); background: var(--code-bg);
+  max-height: 42vh; overflow-y: auto;
+}
+.instructions-ai-working { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--muted); }
+.instructions-ai-working .btn { margin-left: auto; }
+.instructions-ai-actions { justify-content: flex-end; }
+
 /* Extensions (ADR 0126): the hidden host frames, Settings → Extensions, and an extension's view in the Preview. */
 .extension-host { position: absolute; width: 0; height: 0; border: 0; visibility: hidden; }
 .cmd-scope.extension { background: var(--raised-3); color: var(--text-2); }
