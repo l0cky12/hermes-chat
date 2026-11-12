@@ -192,6 +192,9 @@ export class Extensions {
     this.calls.set(id, call);
     try {
       const live = await this.ensure(id, ctx);
+      // The call may have been replaced, or its pane may have left, while the extension started.
+      if (this.calls.get(id) !== call) throw new Error(`${label} was cancelled: its pane left the chat.`);
+      if (!ctx.still()) return { views: [] };
       const result = await this.ask(id, live, action.kind === "command" ? "command.run" : "view.render", action.kind === "command" ? { call: call.id, name: action.name, arg: action.arg } : { call: call.id, id: action.view }, TIMING.call, label, call);
       if (!ctx.still()) return { views: [] };
       const text = typeof result === "object" && result !== null ? (result as { text?: unknown }).text : undefined;
@@ -241,13 +244,22 @@ export class Extensions {
     host.onMessage((d) => this.receive(id, fresh, d));
     host.onCrash((why) => this.live.get(id) === fresh && this.fail(id, `threw an uncaught error: ${why}`));
     this.log("INFO", `Extension ${id}: starting ${p.manifest.version} for a call`);
-    fresh.ready = this.ask(id, fresh, "activate", { api: EXTENSION_API, previousVersion: r.activated && r.activated !== p.manifest.version ? r.activated : null }, TIMING.activate, "activate").then(() => {
-      if (this.live.get(id) !== fresh) return;
-      r.activated = p.manifest.version;
-      this.runtimes.set(id, { kind: "running" });
-      fresh.ping = setInterval(() => this.tick(id, fresh), TIMING.pingEvery);
-      this.save();
-    });
+    fresh.ready = this.ask(id, fresh, "activate", { api: EXTENSION_API, previousVersion: r.activated && r.activated !== p.manifest.version ? r.activated : null }, TIMING.activate, "activate").then(
+      () => {
+        if (this.live.get(id) !== fresh) return;
+        r.activated = p.manifest.version;
+        this.runtimes.set(id, { kind: "running" });
+        fresh.ping = setInterval(() => this.tick(id, fresh), TIMING.pingEvery);
+        this.save();
+      },
+      (e: Error) => {
+        // An error answer to activate, as opposed to a stop that already removed the frame.
+        if (this.live.get(id) !== fresh) throw e;
+        const reason = `refused to activate: ${e.message}`;
+        this.fail(id, reason);
+        throw new Error(`${p.manifest.name} stopped: it ${reason}.`);
+      },
+    );
     await fresh.ready;
     return fresh;
   }

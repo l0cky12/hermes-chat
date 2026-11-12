@@ -6,7 +6,8 @@ import { BUNDLED } from "./bundledExtensions";
 import type { Item } from "./model";
 
 // A test extension: HANDLERS is JS source for an object of method handlers. `self.call(method, params)` resolves with
-// {result} or {error}; a handler that returns NEVER doesn't answer, and a string answers as the note.
+// {result} or {error}; a handler that returns NEVER doesn't answer, a string answers as the note, and a throw answers
+// with an error.
 const SDK = `
 self.onmessage = (first) => {
   const port = first.ports[0]; const waiting = new Map(); let next = 1;
@@ -19,7 +20,8 @@ self.onmessage = (first) => {
     const h = HANDLERS[m.method];
     if (m.id === undefined) return;
     if (!h) return send({ id: m.id, result: null });
-    const r = await h(m.params || {});
+    let r;
+    try { r = await h(m.params || {}); } catch (err) { return send({ id: m.id, error: { code: -32000, message: err.message } }); }
     if (r !== NEVER) send({ id: m.id, result: typeof r === "string" ? { text: r } : r });
   };
 };`;
@@ -248,6 +250,31 @@ describe("calls and chats", () => {
     await vi.advanceTimersByTimeAsync(TIMING.call);
     expect(state(x).runtime).toEqual({ kind: "running" });
     expect(state(x).installed?.status).toEqual({ kind: "usable" });
+  });
+
+  it("cancels a call replaced while the extension was starting, so its command never runs", async () => {
+    const x = one(`{ activate: () => new Promise((ok) => setTimeout(() => ok(null), 1000)), "command.run": () => { self.runs = (self.runs || 0) + 1; return String(self.runs); } }`);
+    const a = chat("c1");
+    const first = x.run(ID, { kind: "command", name: "probe", arg: "" }, a);
+    const seen = expect(first).rejects.toThrow("/probe was cancelled: its pane left the chat.");
+    await flush();
+    a.here.on = false;
+    const second = x.run(ID, { kind: "command", name: "probe", arg: "" }, chat("c1"));
+    await vi.advanceTimersByTimeAsync(1000);
+    await seen;
+    expect((await second).note).toBe("1");
+    await vi.advanceTimersByTimeAsync(TIMING.call);
+    expect(state(x).runtime).toEqual({ kind: "running" });
+  });
+
+  it("stops an extension that answers activate with an error, and starts it afresh next time", async () => {
+    (globalThis as { activations?: number }).activations = 0;
+    const x = one(`{ activate: () => { if (++globalThis.activations === 1) throw new Error("not ready"); return null; }, "command.run": () => "ran" }`);
+    await expect(x.run(ID, { kind: "command", name: "probe", arg: "" }, chat())).rejects.toThrow("Probe stopped: it refused to activate: not ready.");
+    expect(state(x).runtime).toMatchObject({ kind: "failed", reason: "refused to activate: not ready" });
+    expect(hosts.live()).toBe(0);
+    expect((await x.run(ID, { kind: "command", name: "probe", arg: "" }, chat())).note).toBe("ran");
+    expect(hosts.started).toBe(2);
   });
 
   it("puts text in the call's Draft only with chat.draft, and accepts only declared views with valid nodes", async () => {
