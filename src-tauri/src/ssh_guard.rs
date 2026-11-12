@@ -32,8 +32,19 @@ pub enum Kind<'a> {
     Terminal,
     /// `remote` run in the background (ADR 0110), forwarding nothing.
     Command { remote: &'a [&'a str] },
-    /// One forward from `listen` (ssh's `-L` spec) and no command, in the background.
-    Forward { listen: &'a str, host_keys: HostKeys, on_failure: ForwardFailure },
+    /// One forward from `local` on this computer to `far_end` (`host:port`) as the server sees it, and no command, in
+    /// the background.
+    Forward { local: Local<'a>, far_end: &'a str, host_keys: HostKeys, on_failure: ForwardFailure },
+}
+
+/// This computer's end of a forward.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Local<'a> {
+    /// ssh listens on this Unix socket (`-L`), in a folder only the owner can open (Linux, ADR 0098).
+    Socket(&'a str),
+    /// ssh listens on nothing and carries one connection on its stdin and stdout (`-W`): Windows' OpenSSH can't
+    /// listen on a Unix socket, and a port it listened on would take every account's connections (#506).
+    Stdio,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -75,7 +86,9 @@ pub fn args(target: Target, kind: Kind, connect_timeout: Option<Duration>) -> Ve
         // `-t`: a login shell in a terminal even if the owner's config sets a RemoteCommand.
         Kind::Terminal => push(&["-t"]),
         Kind::Command { .. } => push(&["-T"]),
-        Kind::Forward { .. } => push(&["-N", "-T"]),
+        // `-W` is `-N -T` already.
+        Kind::Forward { local: Local::Socket(_), .. } => push(&["-N", "-T"]),
+        Kind::Forward { local: Local::Stdio, .. } => {}
     }
     if background {
         push(&["-o", "BatchMode=yes"]);
@@ -95,7 +108,7 @@ pub fn args(target: Target, kind: Kind, connect_timeout: Option<Duration>) -> Ve
         Kind::Terminal => {}
         // A LocalForward in the owner's config would clash with the sign-in tunnel, and isn't needed here.
         Kind::Command { .. } => push(&["-o", "ClearAllForwardings=yes"]),
-        Kind::Forward { listen, host_keys, on_failure } => {
+        Kind::Forward { local, far_end, host_keys, on_failure } => {
             // The owner's config can't send a tunnel to the background, out of the app's reach and its death signal.
             // OpenSSH before 8.7 refuses this option outright, so the Terminal and commands, which ran on any ssh
             // before, go without it; a tunnel always needed 8.7.
@@ -104,8 +117,13 @@ pub fn args(target: Target, kind: Kind, connect_timeout: Option<Duration>) -> Ve
                 push(&["-o", "StrictHostKeyChecking=accept-new"]);
             }
             push(&["-o", if on_failure == ForwardFailure::Exit { "ExitOnForwardFailure=yes" } else { "ExitOnForwardFailure=no" }]);
-            // Only the owner can connect to a forwarded socket (its folder is 0700 as well).
-            push(&["-o", "StreamLocalBindMask=0177", "-o", "StreamLocalBindUnlink=yes", "-L", listen]);
+            match local {
+                // Only the owner can connect to a forwarded socket (its folder is 0700 as well).
+                Local::Socket(path) => push(&["-o", "StreamLocalBindMask=0177", "-o", "StreamLocalBindUnlink=yes", "-L", &format!("{path}:{far_end}")]),
+                // `-W` drops the config's forwards only while the config leaves `ClearAllForwardings` unset, and a
+                // config's `StdinNull yes` would stop ssh reading the connection, so both are set here.
+                Local::Stdio => push(&["-o", "ClearAllForwardings=yes", "-o", "StdinNull=no", "-W", far_end]),
+            }
         }
     }
     push(&["--", target.as_str()]);
@@ -119,12 +137,24 @@ pub fn args(target: Target, kind: Kind, connect_timeout: Option<Duration>) -> Ve
 mod tests {
     use super::*;
 
-    const KINDS: [Kind; 5] = [
+    const KINDS: [Kind; 7] = [
         Kind::Terminal,
         Kind::Command { remote: &["ss", "-ltnpH"] },
         Kind::Command { remote: &[] },
-        Kind::Forward { listen: "/run/user/1000/d/s:127.0.0.1:9119", host_keys: HostKeys::AcceptNew, on_failure: ForwardFailure::Exit },
-        Kind::Forward { listen: "127.0.0.1:51234:localhost:3000", host_keys: HostKeys::OwnersConfig, on_failure: ForwardFailure::KeepGoing },
+        Kind::Forward {
+            local: Local::Socket("/run/user/1000/d/s"),
+            far_end: "127.0.0.1:9119",
+            host_keys: HostKeys::AcceptNew,
+            on_failure: ForwardFailure::Exit,
+        },
+        Kind::Forward {
+            local: Local::Socket("/run/user/1000/p/s"),
+            far_end: "localhost:3000",
+            host_keys: HostKeys::OwnersConfig,
+            on_failure: ForwardFailure::KeepGoing,
+        },
+        Kind::Forward { local: Local::Stdio, far_end: "127.0.0.1:9119", host_keys: HostKeys::AcceptNew, on_failure: ForwardFailure::Exit },
+        Kind::Forward { local: Local::Stdio, far_end: "[::1]:8080", host_keys: HostKeys::OwnersConfig, on_failure: ForwardFailure::KeepGoing },
     ];
 
     fn strings(args: Vec<OsString>) -> Vec<String> {
@@ -158,7 +188,7 @@ mod tests {
                 for o in ["BatchMode=yes", "ForwardAgent=no", "ForwardX11=no"] {
                     assert!(options.contains(&o), "{kind:?} got -o {o}: {args:?}");
                 }
-                assert!(args.iter().any(|a| a == "-T"), "{kind:?} asks for no terminal");
+                assert!(args.iter().any(|a| a == "-T" || a == "-W"), "{kind:?} asks for no terminal (`-W` is `-T`)");
             }
         }
     }
@@ -206,17 +236,32 @@ mod tests {
     #[test]
     fn a_forward_is_one_l_and_nothing_after_the_target() {
         let target = Target::parse("liam@hermes").unwrap();
-        let listen = "/run/user/1000/d/s:127.0.0.1:9119";
-        let tunnel = strings(args(target, Kind::Forward { listen, host_keys: HostKeys::AcceptNew, on_failure: ForwardFailure::Exit }, None));
+        let local = Local::Socket("/run/user/1000/d/s");
+        let far_end = "127.0.0.1:9119";
+        let tunnel = strings(args(target, Kind::Forward { local, far_end, host_keys: HostKeys::AcceptNew, on_failure: ForwardFailure::Exit }, None));
         assert_eq!(tunnel[..2], ["-N", "-T"]);
-        assert_eq!(tunnel[tunnel.len() - 4..], ["-L", listen, "--", "liam@hermes"]);
+        assert_eq!(tunnel[tunnel.len() - 4..], ["-L", "/run/user/1000/d/s:127.0.0.1:9119", "--", "liam@hermes"]);
         let options = options(&tunnel);
         // `ClearAllForwardings` would clear this forward too.
         assert!(!options.iter().any(|o| o.starts_with("ClearAllForwardings") || o.starts_with("ConnectTimeout")), "{tunnel:?}");
         assert!(options.contains(&"StrictHostKeyChecking=accept-new") && options.contains(&"ExitOnForwardFailure=yes"));
 
-        let page = strings(args(target, Kind::Forward { listen, host_keys: HostKeys::OwnersConfig, on_failure: ForwardFailure::KeepGoing }, None));
+        let page = strings(args(target, Kind::Forward { local, far_end, host_keys: HostKeys::OwnersConfig, on_failure: ForwardFailure::KeepGoing }, None));
         assert!(!page.iter().any(|o| o.starts_with("StrictHostKeyChecking")));
         assert!(page.iter().any(|o| o == "ExitOnForwardFailure=no"));
+    }
+
+    #[test]
+    fn a_forward_over_stdio_listens_on_nothing_with_the_same_options_as_over_a_socket() {
+        let target = Target::parse("liam@hermes").unwrap();
+        let far_end = "[::1]:8080";
+        for (host_keys, on_failure) in [(HostKeys::AcceptNew, ForwardFailure::Exit), (HostKeys::OwnersConfig, ForwardFailure::KeepGoing)] {
+            let socket =
+                strings(args(target, Kind::Forward { local: Local::Socket("/tmp/d/s"), far_end, host_keys, on_failure }, Some(Duration::from_secs(5))));
+            let stdio = strings(args(target, Kind::Forward { local: Local::Stdio, far_end, host_keys, on_failure }, Some(Duration::from_secs(5))));
+            assert_eq!(stdio[..stdio.len() - 8], socket[2..socket.len() - 8], "the same options, without -N -T");
+            assert_eq!(stdio[stdio.len() - 8..], ["-o", "ClearAllForwardings=yes", "-o", "StdinNull=no", "-W", far_end, "--", "liam@hermes"]);
+            assert!(!stdio.iter().any(|a| ["-L", "-D", "-R", "-N"].contains(&a.as_str())), "ssh listens on nothing: {stdio:?}");
+        }
     }
 }

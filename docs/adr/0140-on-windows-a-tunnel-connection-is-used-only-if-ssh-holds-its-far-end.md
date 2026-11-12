@@ -1,5 +1,7 @@
 # On Windows a tunnel connection is used only if ssh holds its far end
 
+> **Superseded by [ADR 0148](0148-on-windows-each-tunnel-connection-is-an-ssh-of-its-own-that-listens-on-nothing.md)** (#506). On Windows ssh no longer listens on a port, so no port is released and no far end needs checking; `loopback_owner.rs` is gone. "Each ssh ends with its tunnel, shim's child included" still holds for every `ssh -W`.
+
 ADR 0098 gave the sign-in tunnel a local end no other program can take on Linux: ssh forwards a Unix socket in a private folder. Windows' OpenSSH can't forward a Unix socket, so on Windows `LocalEnd` still binds `127.0.0.1:0`, reads the port, closes it, and has ssh bind that port after it signs in. A program that bound the port in that gap got the relay's connections, among them the sign-in POST with the dashboard password (#354). A test on Windows showed it: the program that took the port received `POST /api/auth/password-login` with the password.
 
 ## Decisions

@@ -5,12 +5,16 @@
 //! and Rust binds `127.0.0.1:0`, keeps the listener and relays each connection to the socket. The port the sign-in
 //! sends the password to is never free for another program to take while ssh signs in. Only Rust uses that port, so
 //! the relay serves this process alone: a page in the Preview, loaded by WebKit's own process, can't (ADR 0138). On
-//! Windows ssh listens on a loopback port instead, and each connection to it is checked to reach ssh before anything
-//! is sent (ADR 0140).
+//! Windows, where ssh can't listen on a Unix socket, ssh listens on nothing: each connection is an `ssh -W` of its own
+//! (#506).
 
 use crate::loopback_peer::Peers;
-use crate::server_page::{self, LocalEnd, Ssh, Stderr};
-use crate::ssh_guard::{self, ForwardFailure, HostKeys, Kind, Target};
+use crate::server_page::{self, Address};
+#[cfg(unix)]
+use crate::server_page::{LocalEnd, Ssh, Stderr};
+use crate::ssh_guard::{self, ForwardFailure, HostKeys, Kind, Local, Target};
+use std::ffi::OsString;
+#[cfg(unix)]
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -28,18 +32,20 @@ pub enum TunnelError {
     Ssh(String),
     #[error("SSH didn't open the tunnel within {0}s.")]
     Timeout(u64),
-    /// The tunnel's port isn't known to be ssh's (Windows, ADR 0140): nothing, the password least of all, went to it.
-    #[error("Hermes Chat didn't sign in through the SSH tunnel: {0}")]
-    NotSsh(String),
 }
 
-/// A running `ssh -N -L` and the relay to it on `local_port`. Dropping it kills ssh and closes the relay.
+/// The relay on `local_port` and what it reaches the dashboard through. Dropping it closes the relay and ends ssh.
 pub struct Tunnel {
-    _ssh: Ssh,
-    _end: LocalEnd,
+    _forward: Forward,
     relay: tokio::task::AbortHandle,
     pub local_port: u16,
 }
+
+/// What a tunnel keeps running between connections: on Linux `ssh -N -L` and its socket's folder, on Windows nothing.
+#[cfg(unix)]
+type Forward = (Ssh, LocalEnd);
+#[cfg(windows)]
+type Forward = ();
 
 impl Drop for Tunnel {
     fn drop(&mut self) {
@@ -60,18 +66,39 @@ pub async fn open_within(target: &str, remote_port: u16, quick: Option<Duration>
 /// `open_within` with `program` as ssh.
 async fn open_through(program: &str, target: &str, remote_port: u16, quick: Option<Duration>) -> Result<Tunnel, TunnelError> {
     let target = Target::parse(target).ok_or(TunnelError::BadTarget)?;
-    let end = LocalEnd::new().map_err(|e| TunnelError::Spawn(format!("{}: {e}", LocalEnd::COULDNT)))?;
     let ready_within = quick.map_or(READY_TIMEOUT, |q| q * 2);
-    let forward = format!("{}:127.0.0.1:{remote_port}", end.listen());
-    let kind = Kind::Forward { listen: &forward, host_keys: HostKeys::AcceptNew, on_failure: ForwardFailure::Exit };
-    let mut child =
-        Ssh::start(background(program).args(ssh_guard::args(target, kind, quick)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()))
-            .map_err(|e| TunnelError::Spawn(e.to_string()))?;
+    let (forward, address) = reach(program, target, &format!("127.0.0.1:{remote_port}"), quick, ready_within).await?;
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| TunnelError::Spawn(e.to_string()))?;
+    let local_port = listener.local_addr().map_err(|e| TunnelError::Spawn(e.to_string()))?.port();
+    let relay = tokio::spawn(server_page::serve(listener, address, Peers::ThisProcess)).abort_handle();
+    Ok(Tunnel { _forward: forward, relay, local_port })
+}
 
-    let address = end.address(&child).map_err(|e| TunnelError::Spawn(e.to_string()))?;
+/// The sign-in's ssh from `local` to `far_end`: a host key ssh doesn't know yet is kept, since this is the first ssh to
+/// a server, and ssh ends when any forward fails. `quick` is ssh's TCP connect timeout.
+fn sign_in_args(target: Target, local: Local, far_end: &str, quick: Option<Duration>) -> Vec<OsString> {
+    let kind = Kind::Forward { local, far_end, host_keys: HostKeys::AcceptNew, on_failure: ForwardFailure::Exit };
+    ssh_guard::args(target, kind, quick)
+}
+
+/// Starts `program` forwarding a socket to `far_end` (`ssh_guard::Local::Socket`), and waits until its socket accepts.
+#[cfg(unix)]
+async fn reach(program: &str, target: Target<'_>, far_end: &str, quick: Option<Duration>, within: Duration) -> Result<(Forward, Address), TunnelError> {
+    let end = LocalEnd::new().map_err(|e| TunnelError::Spawn(format!("{}: {e}", LocalEnd::COULDNT)))?;
+    let listen = end.listen();
+    let mut child = Ssh::start(
+        background(program)
+            .args(sign_in_args(target, Local::Socket(&listen), far_end, quick))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped()),
+    )
+    .map_err(|e| TunnelError::Spawn(e.to_string()))?;
+
+    let address = end.address();
     let stderr = Stderr::default();
     let drained = child.stderr.take().map(|e| stderr.drain(e));
-    let deadline = tokio::time::Instant::now() + ready_within;
+    let deadline = tokio::time::Instant::now() + within;
     loop {
         if child.try_wait().map_err(|e| TunnelError::Spawn(e.to_string()))?.is_some() {
             if let Some(drained) = drained {
@@ -79,20 +106,31 @@ async fn open_through(program: &str, target: &str, remote_port: u16, quick: Opti
             }
             return Err(TunnelError::Ssh(stderr.text()));
         }
-        match server_page::connect(&address).await {
-            Ok(_) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return Err(TunnelError::NotSsh(e.to_string())),
-            Err(_) => {}
+        if server_page::connect(&address).await.is_ok() {
+            return Ok(((child, end), address));
         }
         if tokio::time::Instant::now() >= deadline {
-            return Err(TunnelError::Timeout(ready_within.as_secs()));
+            return Err(TunnelError::Timeout(within.as_secs()));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| TunnelError::Spawn(e.to_string()))?;
-    let local_port = listener.local_addr().map_err(|e| TunnelError::Spawn(e.to_string()))?.port();
-    let relay = tokio::spawn(server_page::serve(listener, address, Peers::ThisProcess)).abort_handle();
-    Ok(Tunnel { _ssh: child, _end: end, relay, local_port })
+}
+
+/// Each connection runs `program` carrying it to `far_end` over its stdin and stdout (`ssh_guard::Local::Stdio`). One
+/// such connection, asking `HEAD /`, waits until the dashboard answers through it, so a sign-in that fails says what
+/// ssh said.
+#[cfg(windows)]
+async fn reach(program: &str, target: Target<'_>, far_end: &str, quick: Option<Duration>, within: Duration) -> Result<(Forward, Address), TunnelError> {
+    let address = Address::new(program, sign_in_args(target, Local::Stdio, far_end, quick));
+    let mut probe = server_page::connect(&address).await.map_err(|e| TunnelError::Spawn(e.to_string()))?;
+    match server_page::first_byte(&mut probe, b"HEAD / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n", within).await {
+        server_page::Reply::Came => Ok(((), address)),
+        server_page::Reply::Closed => Err(TunnelError::Ssh(match probe.refusal().await {
+            server_page::Refusal::Ssh(said) => said,
+            server_page::Refusal::NothingAnswered(said) => said.unwrap_or_else(|| "The dashboard closed the connection without answering.".into()),
+        })),
+        server_page::Reply::Silent => Err(TunnelError::Timeout(within.as_secs())),
+    }
 }
 
 /// `ssh` run in the background: on Windows without a console window of its own, which the app (a windowed program)
@@ -121,9 +159,9 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
-    /// A stand-in for ssh: it writes the local end it was told to listen on (`-L <listen>:<host>:<port>`) to
-    /// `<dir>/listen`, takes a second to "sign in", then listens there and forwards each connection to `<host>:<port>`
-    /// here. As real ssh with `ExitOnForwardFailure=yes`, it exits 255 if it can't listen.
+    /// A stand-in for ssh: it takes a second to "sign in", then listens where it was told to (`-L <listen>:<host>:<port>`)
+    /// and forwards each connection to `<host>:<port>` here. As real ssh with `ExitOnForwardFailure=yes`, it exits 255
+    /// if it can't listen.
     #[cfg(unix)]
     const FAKE_SSH: &str = r#"
 import os, socket, sys, threading, time
@@ -132,9 +170,6 @@ with open(os.path.join(d, "args"), "w") as f:
     f.write("\n".join(args))
 chatty = os.path.exists(os.path.join(d, "chatty"))
 listen, host, port = args[args.index("-L") + 1].rsplit(":", 2)
-with open(os.path.join(d, "listen.tmp"), "w") as f:
-    f.write(listen)
-os.rename(os.path.join(d, "listen.tmp"), os.path.join(d, "listen"))
 time.sleep(1)
 if listen.startswith("/"):
     os.umask(0o177)
@@ -175,18 +210,41 @@ while True:
     threading.Thread(target=handle, args=(c,), daemon=True).start()
 "#;
 
-    /// The Windows stand-in for ssh, as `FAKE_SSH` is on Linux, with no Python: it writes the port it was told to listen
-    /// on to `listen` beside itself, waits a second, then listens there and forwards each connection, or exits 255 as
-    /// ssh does when the port is taken. Named `ssh-shim.exe`, it runs `ssh.exe` beside it as its child instead, as a
-    /// Scoop shim does. It exits after a minute, so a copy a test left running doesn't outlive the test run.
+    /// The Windows stand-in for ssh, with no Python. Each run adds its process id to `pids` beside itself. With
+    /// `-W <host>:<port>` it connects there and copies its stdin and stdout to and from the connection, or exits 255 as
+    /// ssh does when the server refuses the forward. With `-L <listen>:<host>:<port>` it waits a second, then listens
+    /// and forwards each connection, or exits 255 as ssh does when the port is taken. Named `ssh-shim.exe`, it runs
+    /// `ssh.exe` beside it as its child instead, as a Scoop shim does. It exits after a minute, so a copy a test left
+    /// running doesn't outlive the test run.
     #[cfg(windows)]
     const FAKE_SSH_RS: &str = r#"
+use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::{env, fs, process, thread, time::Duration};
 
 fn pump(mut a: TcpStream, mut b: TcpStream) {
     let _ = std::io::copy(&mut a, &mut b);
     let _ = b.shutdown(Shutdown::Write);
+}
+
+fn stdio(remote: &str) -> ! {
+    let Ok(mut down) = TcpStream::connect(remote) else {
+        eprintln!("channel 0: open failed: connect failed: Connection refused\nstdio forwarding failed");
+        process::exit(255);
+    };
+    let mut up = down.try_clone().unwrap();
+    thread::spawn(move || {
+        let _ = std::io::copy(&mut std::io::stdin(), &mut up);
+        let _ = up.shutdown(Shutdown::Write);
+    });
+    let mut out = std::io::stdout().lock();
+    let mut buf = [0u8; 65536];
+    while let Ok(n @ 1..) = down.read(&mut buf) {
+        if out.write_all(&buf[..n]).and_then(|_| out.flush()).is_err() {
+            break;
+        }
+    }
+    process::exit(0);
 }
 
 fn main() {
@@ -201,13 +259,16 @@ fn main() {
         let status = process::Command::new(dir.join("ssh.exe")).args(&args).status().unwrap();
         process::exit(status.code().unwrap_or(1));
     }
-    fs::write(dir.join("pid"), process::id().to_string()).unwrap();
+    let mut pids = fs::OpenOptions::new().create(true).append(true).open(dir.join("pids")).unwrap();
+    writeln!(pids, "{}", process::id()).unwrap();
+    drop(pids);
+    if let Some(i) = args.iter().position(|a| a == "-W") {
+        stdio(&args[i + 1]);
+    }
     let spec = &args[args.iter().position(|a| a == "-L").unwrap() + 1];
     let mut parts = spec.rsplitn(3, ':');
     let (port, host, listen) = (parts.next().unwrap(), parts.next().unwrap(), parts.next().unwrap().to_owned());
     let remote = format!("{host}:{port}");
-    fs::write(dir.join("listen.tmp"), &listen).unwrap();
-    fs::rename(dir.join("listen.tmp"), dir.join("listen")).unwrap();
     thread::sleep(Duration::from_secs(1));
     let srv = match TcpListener::bind(&listen) {
         Ok(srv) => srv,
@@ -288,14 +349,13 @@ fn main() {
             std::fs::read_to_string(self.dir.join("args")).unwrap().lines().map(str::to_owned).collect()
         }
 
-        async fn listen(&self) -> String {
-            for _ in 0..200 {
-                if let Ok(listen) = std::fs::read_to_string(self.dir.join("listen")) {
-                    return listen;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            panic!("the fake ssh never started");
+        /// The ids of the fake's runs that are still running.
+        #[cfg(windows)]
+        fn running(&self) -> Vec<u32> {
+            let pids = std::fs::read_to_string(self.dir.join("pids")).unwrap_or_default();
+            let out = std::process::Command::new("tasklist").args(["/NH", "/FO", "CSV"]).output().unwrap();
+            let tasks = String::from_utf8_lossy(&out.stdout).into_owned();
+            pids.lines().filter_map(|p| p.trim().parse().ok()).filter(|p| tasks.contains(&format!("\"{p}\""))).collect()
         }
     }
 
@@ -388,33 +448,19 @@ except OSError:
     struct SignIn {
         opened: Result<Tunnel, TunnelError>,
         dashboard: Vec<String>,
-        stolen: Vec<String>,
     }
 
-    /// Opens a tunnel to a Hermes-shaped dashboard through `ssh` and, if it opens, posts the password through it. With
-    /// `steal`, another program on this computer watches for the tunnel's local end and takes it while ssh signs in.
-    async fn sign_in(ssh: &FakeSsh, steal: bool) -> SignIn {
+    /// Opens a tunnel to a Hermes-shaped dashboard through `ssh` and, if it opens, posts the password through it.
+    async fn sign_in(ssh: &FakeSsh) -> SignIn {
         let dashboard = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let dashboard_port = dashboard.local_addr().unwrap().port();
         let dashboard = serve_http(dashboard);
-
-        let opening = tokio::spawn({
-            let program = ssh.program.clone();
-            async move { open_through(&program, "me@hermes", dashboard_port, None).await }
-        });
-        let listen = ssh.listen().await;
-        let mut thief = None;
-        if let Some(port) = listen.strip_prefix("127.0.0.1:").filter(|_| steal) {
-            thief = Some(serve_http(TcpListener::bind(("127.0.0.1", port.parse::<u16>().unwrap())).await.unwrap()));
-        }
-        let opened = opening.await.unwrap();
-
+        let opened = open_through(&ssh.program, "me@hermes", dashboard_port, None).await;
         if let Ok(tunnel) = &opened {
             post_password(tunnel.local_port).await;
         }
-        let stolen = thief.map(|t| t.locked().clone()).unwrap_or_default();
         let dashboard = dashboard.locked().clone();
-        SignIn { opened, dashboard, stolen }
+        SignIn { opened, dashboard }
     }
 
     async fn post_password(port: u16) {
@@ -431,24 +477,9 @@ except OSError:
     }
 
     #[tokio::test]
-    async fn a_program_that_takes_the_tunnels_port_first_never_gets_the_password() {
-        let ssh = FakeSsh::new("port-race");
-        let signed = sign_in(&ssh, true).await;
-        assert!(signed.stolen.iter().all(|r| !r.contains(PASSWORD)), "the password went to the program that took the port: {:?}", signed.stolen);
-        #[cfg(windows)]
-        assert!(matches!(signed.opened, Err(TunnelError::NotSsh(_))), "the sign-in says another program took the port: {:?}", signed.opened.err());
-        #[cfg(unix)]
-        {
-            let tunnel = signed.opened.expect("the tunnel opens");
-            assert!(signed.dashboard.iter().any(|r| r.contains(PASSWORD)), "the sign-in reached the dashboard through ssh");
-            assert!(TcpListener::bind(("127.0.0.1", tunnel.local_port)).await.is_err(), "the tunnel's port is held, so no other program can listen on it");
-        }
-    }
-
-    #[tokio::test]
     async fn the_sign_in_reaches_the_dashboard_through_ssh() {
         let ssh = FakeSsh::new("plain");
-        let signed = sign_in(&ssh, false).await;
+        let signed = sign_in(&ssh).await;
         let tunnel = signed.opened.expect("the tunnel opens");
         assert!(signed.dashboard.iter().any(|r| r.contains(PASSWORD)), "the sign-in reached the dashboard through ssh");
         assert!(TcpListener::bind(("127.0.0.1", tunnel.local_port)).await.is_err(), "the tunnel's port is held, so no other program can listen on it");
@@ -459,7 +490,7 @@ except OSError:
     #[tokio::test]
     async fn a_chatty_ssh_keeps_forwarding() {
         let ssh = FakeSsh::new("chatty").chatty();
-        let signed = sign_in(&ssh, false).await;
+        let signed = sign_in(&ssh).await;
         signed.opened.expect("the tunnel opens");
         assert!(signed.dashboard.iter().any(|r| r.contains(PASSWORD)), "the sign-in reached the dashboard through a chatty ssh");
     }
@@ -469,7 +500,7 @@ except OSError:
     #[tokio::test]
     async fn the_tunnels_ssh_takes_no_owner_option_that_would_outlive_it() {
         let ssh = FakeSsh::new("control-master");
-        let signed = sign_in(&ssh, false).await;
+        let signed = sign_in(&ssh).await;
         signed.opened.expect("the tunnel opens");
         let args = ssh.args();
         let target = args.iter().position(|a| *a == "--").expect("the target comes after --");
@@ -502,7 +533,7 @@ except OSError:
         post_password(tunnel.local_port).await;
         assert!(dashboard.locked().iter().any(|r| r.contains(PASSWORD)), "the sign-in reached the dashboard through ssh");
 
-        let forward = tunnel._end.listen();
+        let forward = tunnel._forward.1.listen();
         assert!(!running_with(&forward).is_empty(), "the tunnel's ssh is found by its forward");
         drop(tunnel);
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -513,26 +544,59 @@ except OSError:
         assert!(left.is_empty(), "ssh still holds the closed tunnel's forward: {left:?}");
     }
 
+    /// A connection through `tunnel` that stays open: a request whose head never ends.
+    #[cfg(windows)]
+    async fn held(tunnel: &Tunnel) -> TcpStream {
+        let mut s = TcpStream::connect(("127.0.0.1", tunnel.local_port)).await.unwrap();
+        s.write_all(b"GET /api/status HTTP/1.1\r\n").await.unwrap();
+        s
+    }
+
+    #[cfg(windows)]
+    async fn until(what: &str, mut f: impl FnMut() -> bool) {
+        for _ in 0..100 {
+            if f() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("{what}");
+    }
+
+    /// No other account can connect to anything ssh listens on, because it listens on nothing (#506): each
+    /// connection is an ssh of its own.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn on_windows_the_tunnels_ssh_listens_on_nothing() {
+        let ssh = FakeSsh::new("listens-on-nothing");
+        let signed = sign_in(&ssh).await;
+        let tunnel = signed.opened.expect("the tunnel opens");
+        assert!(signed.dashboard.iter().any(|r| r.contains(PASSWORD)), "the sign-in reached the dashboard through ssh");
+        let _held = held(&tunnel).await;
+        until("an ssh carries the held connection", || !ssh.running().is_empty()).await;
+
+        let running = ssh.running();
+        let out = std::process::Command::new("netstat").args(["-ano"]).output().unwrap();
+        let listening: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| l.contains("LISTENING") && running.iter().any(|p| l.split_whitespace().last() == Some(&p.to_string())))
+            .map(str::to_owned)
+            .collect();
+        assert!(listening.is_empty(), "ssh listens: {listening:?}");
+    }
+
     /// Scoop and Chocolatey put a shim named ssh.exe on PATH that runs the real ssh.exe as its child.
     #[cfg(windows)]
     #[tokio::test]
     async fn the_sign_in_reaches_the_dashboard_through_an_ssh_a_shim_starts_and_both_end_with_the_tunnel() {
         let ssh = FakeSsh::new("shim").through_shim();
-        let signed = sign_in(&ssh, false).await;
+        let signed = sign_in(&ssh).await;
         let tunnel = signed.opened.expect("the tunnel opens");
         assert!(signed.dashboard.iter().any(|r| r.contains(PASSWORD)), "the sign-in reached the dashboard through ssh");
 
-        let pid = std::fs::read_to_string(ssh.dir.join("pid")).unwrap();
-        let running = || {
-            let out = std::process::Command::new("tasklist").args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"]).output().unwrap();
-            String::from_utf8_lossy(&out.stdout).contains(&format!("\"{pid}\""))
-        };
-        assert!(running(), "the real ssh behind the shim runs while the tunnel is open");
+        let _held = held(&tunnel).await;
+        until("the real ssh behind the shim runs while a connection is open", || !ssh.running().is_empty()).await;
         drop(tunnel);
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while running() && std::time::Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        assert!(!running(), "the real ssh behind the shim ended with the tunnel");
+        until("the real ssh behind the shim ends with the tunnel", || ssh.running().is_empty()).await;
     }
 }
