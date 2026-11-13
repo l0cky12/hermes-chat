@@ -399,7 +399,7 @@ export function McpSettings({
     );
   };
 
-  // Under Settings' page header (ADR 0159) the profile, the read time, the page's buttons and when a change applies are
+  // Under Settings' page header (ADR 0160) the profile, the read time, the page's buttons and when a change applies are
   // the header's; every re-read in Settings is a Reload there.
   const inPage = useInPage();
   const reload = (

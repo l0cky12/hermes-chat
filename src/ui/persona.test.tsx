@@ -89,7 +89,7 @@ async function openPersona(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("tab", { name: /Persona/ }));
 }
 
-/** A chip in the page header, by its label: Server or File. The value is its <code>, in full in the code's title (ADR 0159). */
+/** A chip in the page header, by its label: Server or File. The value is its <code>, in full in the code's title (ADR 0160). */
 const chip = (label: string) =>
   [...document.querySelectorAll<HTMLElement>(".page-head .meta-chip")].find((c) => c.firstElementChild?.textContent === label)!.querySelector("code")!;
 /** The page header's profile slot, where Persona's picker sits. */
@@ -576,7 +576,7 @@ describe("leaving an unsaved persona edit", () => {
     server.otherProfiles.work = [row("deploy", 1, { title: "Deploy plan" })];
     await openPersona(user);
     await edit(user, "# Default, edited\n");
-    // The chat list's profile switcher is hidden while Settings is open (ADR 0159); a chat link to another profile's
+    // The chat list's profile switcher is hidden while Settings is open (ADR 0160); a chat link to another profile's
     // chat switches profile from here, through the same question.
     await openLink("work", "deploy");
     const ask = await screen.findByRole("alertdialog", { name: "Switch profile without saving the persona?" });
@@ -775,9 +775,9 @@ describe("editing another profile's persona (#190)", () => {
   });
 });
 
-describe("the row layout (#174, ADR 0059, ADR 0159)", () => {
+describe("the row layout (#174, ADR 0059, ADR 0160)", () => {
   const section = (heading: string) => screen.getByRole("heading", { name: heading, level: 2 }).closest("section")!;
-  /** Persona's own section: bare in Settings (ADR 0159), so named by its title, with the page header above it. */
+  /** Persona's own section: bare in Settings (ADR 0160), so named by its title, with the page header above it. */
   const persona = () => screen.getByRole("region", { name: "Persona" });
 
   it("draws each section as a heading and a card of rows, with the editor and its buttons in a block of the card", async () => {

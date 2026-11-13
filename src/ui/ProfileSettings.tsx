@@ -245,7 +245,7 @@ export function ProfileSettings({ wiring }: { wiring: ProfilesWiring }) {
   const inUseGone = rows !== undefined && !rows.some((p) => p.name === inUse);
   const newBlocked = blocked(l, connected, lacking, "create");
 
-  // Under Settings' page header (ADR 0159) New profile and Reload are the page's actions; every re-read is a labelled Reload.
+  // Under Settings' page header (ADR 0160) New profile and Reload are the page's actions; every re-read is a labelled Reload.
   const inPage = useInPage();
   const actions = (
     <>

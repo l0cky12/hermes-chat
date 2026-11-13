@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Settings' sidebar tree (ADR 0159): General, Memory and Diagnostics show one section at a time, picked under the page
+// Settings' sidebar tree (ADR 0160): General, Memory and Diagnostics show one section at a time, picked under the page
 // in the tree; a search shows every section of every page; and Memory's External memory picks its profile in the page
 // header.
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";

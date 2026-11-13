@@ -1,4 +1,4 @@
-// A Settings page's header (ADR 0159): the page or section title, the profile it edits, a one-line description, chips
+// A Settings page's header (ADR 0160): the page or section title, the profile it edits, a one-line description, chips
 // for what it reads (server, file, when it was read), its page-wide actions, and one box saying how a change reaches
 // chats. The header is drawn by Settings; the page's own component fills its parts through <HeadPart>, so the
 // component keeps the state behind them (a picker, a Reload that is busy). Outside a header (a component rendered on

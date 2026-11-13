@@ -228,7 +228,7 @@ describe("Logs in Settings → Diagnostics", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Settings" }));
     await user.click(screen.getByRole("tab", { name: /Diagnostics/ }));
-    // Server and Logs are Diagnostics' sections, under it in the sidebar's tree (ADR 0159).
+    // Server and Logs are Diagnostics' sections, under it in the sidebar's tree (ADR 0160).
     const groups = screen.getByRole("group", { name: "Diagnostics: sections" });
     // Server comes first, as Diagnostics opened before Logs moved here; Hermes's logs aren't read until Logs is picked.
     expect(within(groups).getAllByRole("button").map((b) => b.textContent)).toEqual(["Server", "Logs"]);

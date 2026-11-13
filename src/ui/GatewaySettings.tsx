@@ -1,5 +1,5 @@
 // Settings → Gateways (ADR 0073): a profile's Telegram and Discord gateways on the server, one platform at a time,
-// picked in Settings' tree (ADR 0159). Each shows its state as Hermes reports it, its on/off switch, and its settings. A token is write-only: the
+// picked in Settings' tree (ADR 0160). Each shows its state as Hermes reports it, its on/off switch, and its settings. A token is write-only: the
 // row shows Hermes's redacted preview, and Replace or Remove changes it only on Save; a row left alone keeps what Hermes
 // has. Save reads the platform first and sends nothing if it changed on the server, then reads it again to confirm.
 // Check status asks Hermes how the connection is; it sends no message (gateways.ts).
@@ -164,7 +164,7 @@ export function GatewaySettings({
   // eslint-disable-next-line react-hooks/exhaustive-deps -- tell Settings when the offered platforms change, not on every new callback
   }, [offered, !!list]);
 
-  // Under Settings' page header (ADR 0159) the profile, Reload and when a change applies are the header's.
+  // Under Settings' page header (ADR 0160) the profile, Reload and when a change applies are the header's.
   const profileRow = inPage ? (
     <HeadPart at="profile">
       <EditingProfile picker={picker ?? <span className="mono">{profile}</span>} inUse={!inUse || inUse === profile} />

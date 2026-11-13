@@ -51,7 +51,7 @@ describe("Settings → Snapshots, the host card", () => {
     await screen.findByRole("form", { name: "Set up a snapshot host" });
     expect(field("Prefix").value).toBe("hermes-chat-snapshots/");
     expect(field("Secret access key").type).toBe("password");
-    // The intro shows its first sentence; the private bucket and the key's permissions are behind More (ADR 0159).
+    // The intro shows its first sentence; the private bucket and the key's permissions are behind More (ADR 0160).
     expect(screen.getByText(/to an S3-compatible bucket you name/)).toBeTruthy();
     expect(screen.queryByText(/ListBucketVersions/)).toBeNull();
     await user.click(screen.getByRole("button", { name: "More" }));

@@ -135,7 +135,7 @@ export function DiagnosticsSettings({
   // Every check failed to get an answer, and the version couldn't be read: the server, not a feature, is the problem.
   const failed = !snap.checking && snap.checkedAt !== undefined && !!f.versionWhy && probed.every((c) => snap.caps[c.id].state === "unreachable");
 
-  // Under Diagnostics › Server's page header (ADR 0159) the first section's heading and intro would repeat it.
+  // Under Diagnostics › Server's page header (ADR 0160) the first section's heading and intro would repeat it.
   const inPage = useInPage();
   return (
     <div className="diagnostics">

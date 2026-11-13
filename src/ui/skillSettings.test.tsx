@@ -387,7 +387,7 @@ describe("Settings → Skills as cards of rows (#174, ADR 0059)", () => {
 
   it("draws the list as a card of rows under the page header, with a skill's Edit and switch as its row's control", async () => {
     await shown();
-    // In Settings the section is bare: the page header names it and holds the profile, the server and Reload (ADR 0159).
+    // In Settings the section is bare: the page header names it and holds the profile, the server and Reload (ADR 0160).
     const section = screen.getByRole("region", { name: "Skills" });
     expect(section.querySelector(":scope > .set-head")).toBeNull();
     const card = section.querySelector(":scope > .set-card")!;
@@ -433,7 +433,7 @@ describe("Settings → Skills as cards of rows (#174, ADR 0059)", () => {
     await user.click(screen.getByRole("tab", { name: /Skills/ }));
     await screen.findByRole("list", { name: "Skills" });
 
-    // In Settings the page header says what the page is (ADR 0159): the section's (i) ends the page's description, and
+    // In Settings the page header says what the page is (ADR 0160): the section's (i) ends the page's description, and
     // its help opens under it.
     const head = document.querySelector("header.page-head") as HTMLElement;
     expect(head.querySelector(".page-desc")!.textContent).toBe("Instructions Hermes loads for a kind of task. Changes apply to every client on this profile.");

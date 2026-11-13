@@ -207,7 +207,7 @@ export function SnapshotSettings({ api = tauriSnapshots, copyText = clipboardTex
   const hostSection = (children: ReactNode) => (
     <SettingsSection
       title="Snapshot host"
-      // A long intro shows its first sentence; the rest is behind More (ADR 0159).
+      // A long intro shows its first sentence; the rest is behind More (ADR 0160).
       intro={
         <MoreText
           first="Share snapshot publishes a chat's page to an S3-compatible bucket you name, such as Amazon S3, Cloudflare R2, Backblaze B2 or MinIO."

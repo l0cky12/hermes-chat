@@ -54,7 +54,7 @@ export function SettingsSection({
   bare = false,
   children,
 }: {
-  /** No heading or intro: the page header above says what the section is (ADR 0159). The section stays the unit search finds. */
+  /** No heading or intro: the page header above says what the section is (ADR 0160). The section stays the unit search finds. */
   bare?: boolean;
   title: string;
   /** The heading's id, which also names the section (a landmark), when something else points at it. */

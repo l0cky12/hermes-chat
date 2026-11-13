@@ -227,7 +227,7 @@ describe("Settings → Memory → External memory", () => {
       />,
     );
     await user.click(screen.getByRole("tab", { name: /Memory/ }));
-    // External memory is one of the Memory tab's sections in the sidebar's tree (ADR 0159); it opens on the profile in use.
+    // External memory is one of the Memory tab's sections in the sidebar's tree (ADR 0160); it opens on the profile in use.
     await user.click(within(screen.getByRole("group", { name: "Memory: sections" })).getByRole("button", { name: "External memory" }));
     await user.click(within(await providers("default")).getByRole("button", { name: /honcho/ }));
     await user.type(await screen.findByLabelText(/Peer name/), "x");

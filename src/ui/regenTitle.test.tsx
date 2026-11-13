@@ -95,7 +95,7 @@ describe("Regenerate title when Hermes isn't signed in to the Text generation mo
   it("keeps the row's note under Settings, and after Back it opens Settings on the Model tab", async () => {
     const { user } = await launch();
     const alert = await regenerate(user, "Lisbon trip");
-    // Settings hides the chat list while it's open (ADR 0159), so the note can't be clicked from there; the list stays
+    // Settings hides the chat list while it's open (ADR 0160), so the note can't be clicked from there; the list stays
     // mounted, and the note is still on the row after Back.
     await user.click(screen.getByRole("button", { name: "Settings" }));
     expect(screen.getByRole("tab", { name: /General/ }).getAttribute("aria-selected")).toBe("true");

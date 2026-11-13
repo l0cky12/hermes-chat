@@ -134,7 +134,7 @@ const scenes = {
 // Every Settings tab at 1920 × 1080 (#568): `settings-tab-<id>`, for a redesign's before and after.
 for (const [id, label] of Object.entries({ general: "General", appearance: "Appearance", keyboard: "Keyboard Shortcuts", snapshots: "Snapshots", model: "Model", providers: "Providers", voice: "Voice", toolsets: "Toolsets", mcp: "MCP servers", gateways: "Gateways", profiles: "Profiles", persona: "Persona", memory: "Memory", skills: "Skills", extensions: "Extensions", diagnostics: "Diagnostics" }))
   scenes[`settings-tab-${id}`] = { query: "?profiles=1", ...hd, steps: [openSettings, click("[role=tab]", label)] };
-// The sections a page shows one at a time, picked under it in the sidebar's tree (ADR 0159), and its narrow forms.
+// The sections a page shows one at a time, picked under it in the sidebar's tree (ADR 0160), and its narrow forms.
 const tab = (label) => click("[role=tab]", label);
 const sub = (label) => click(".settings-sub", label);
 const narrow = { width: 760, height: 600 };

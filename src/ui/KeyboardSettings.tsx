@@ -154,7 +154,7 @@ export const KeyboardSettings = memo(function KeyboardSettings() {
     />
   );
 
-  // Under Settings' page header (ADR 0159) Reset all is the page's action, and the page's description says how to
+  // Under Settings' page header (ADR 0160) Reset all is the page's action, and the page's description says how to
   // change a shortcut. The keys that can't be changed fold at the foot of each group's card; a search opens the folds.
   const inPage = useInPage();
   const resetAllBtn = (

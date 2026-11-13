@@ -51,7 +51,7 @@ it("turns the Appearance tab and the Settings tabs Spanish when Español is pick
   const { root, items } = settings(["en-GB"]);
   expect(root.lang).toBe("en-GB");
   await user.click(screen.getByRole("tab", { name: "Appearance" }));
-  // The page's headings are its jump links in the tree (ADR 0159); a language change renames them in place.
+  // The page's headings are its jump links in the tree (ADR 0160); a language change renames them in place.
   const jumps = () => within(screen.getByRole("group", { name: /: on this page$/ })).getAllByRole("button").map((b) => b.textContent);
   expect(jumps()).toContain("Fonts");
   await user.click(screen.getByRole("button", { name: "Create theme" }));

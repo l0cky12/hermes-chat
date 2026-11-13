@@ -558,7 +558,7 @@ export function PersonaSettings({
   const notes = editing ? soulNotes(text) : [];
   const canWrite = connected && !busy && !!loaded;
 
-  // Under Settings' page header (ADR 0159): the profile, server and file, Reload, and when a saved persona takes effect.
+  // Under Settings' page header (ADR 0160): the profile, server and file, Reload, and when a saved persona takes effect.
   const inPage = useInPage();
   const reloadBtn = (
     <button className="btn" disabled={!connected || saving || reloading} onClick={() => (dirty ? setAsk("reload") : reload())}>

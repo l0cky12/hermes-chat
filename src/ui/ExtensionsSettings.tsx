@@ -58,7 +58,7 @@ export function ExtensionsSettings({ skills }: { skills?: () => Promise<SkillCom
   }, []);
   const { refused } = offeredCommands(states, takenName(offered?.offered));
 
-  // Under Settings' page header (ADR 0159) the paragraph about extensions joins the page's description, its first
+  // Under Settings' page header (ADR 0160) the paragraph about extensions joins the page's description, its first
   // sentence shown and the rest behind More.
   const inPage = useInPage();
   const about = (

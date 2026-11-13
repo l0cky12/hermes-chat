@@ -204,7 +204,7 @@ export function VoiceProviderSettings({
   const setKey = (kind: VoiceKind, env: string, value: string) =>
     setDraft((d) => ({ ...d, keys: { ...d.keys, [kind]: { ...d.keys[kind], [env]: value } } }));
 
-  // Under Settings' page header (ADR 0159) Reload is the page's; every re-read in Settings is a Reload there.
+  // Under Settings' page header (ADR 0160) Reload is the page's; every re-read in Settings is a Reload there.
   const inPage = useInPage();
   const action = !connected || unsupported ? undefined : loadError ? (
     <button className="btn" onClick={load}>

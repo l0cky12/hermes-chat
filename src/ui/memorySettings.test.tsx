@@ -93,10 +93,10 @@ const named = (text: string | RegExp) => (typeof text === "string" ? new RegExp(
 const entry = (text: string | RegExp) => within(screen.getByRole("list", { name: /entries$/ })).getByRole("button", { name: named(text) });
 const editor = () => screen.getByRole<HTMLTextAreaElement>("textbox", { name: /Entry in/ });
 const button = (name: string | RegExp) => screen.getByRole("button", { name });
-/** A memory file's section, under the Memory tab in Settings' sidebar tree (ADR 0159). */
+/** A memory file's section, under the Memory tab in Settings' sidebar tree (ADR 0160). */
 const file = (name: RegExp) => within(screen.getByRole("group", { name: "Memory: sections" })).getByRole("button", { name });
 const current = (name: RegExp) => file(name).getAttribute("aria-current") === "page";
-/** The page header Settings draws above the Memory tab (ADR 0159), and one of its labelled chips: Server or File. */
+/** The page header Settings draws above the Memory tab (ADR 0160), and one of its labelled chips: Server or File. */
 const pageHead = () => document.querySelector<HTMLElement>("header.page-head")!;
 const chip = (label: string) => [...pageHead().querySelectorAll<HTMLElement>(".meta-chip")].find((c) => c.firstElementChild?.textContent === label)?.querySelector("code");
 const learning = (s: FakeHermes, method?: string) => s.requests.filter((r) => (method ? r.method === method : r.method.startsWith("learning.")));
@@ -777,7 +777,7 @@ async function launchApp({ openChat = false } = {}) {
   await user.type(editor(), " Unsaved words.");
   /**
    * A chat link arriving from outside the app (ADR 0037), as App hands it to Main. The chat list, with its rows and
-   * profile switcher, is hidden while Settings is open (ADR 0159), so a link is how a chat or profile opens from here.
+   * profile switcher, is hidden while Settings is open (ADR 0160), so a link is how a chat or profile opens from here.
    */
   const openLink = async (profile: string, chatId: string) => {
     const parsed = parseChatLink(formatChatLink({ connection: refs.refFor(connection), profile, chatId }));

@@ -43,7 +43,7 @@ export const en = {
       extensions: "Extensions",
       diagnostics: "Diagnostics",
     },
-    /** The sidebar's three groups of pages (ADR 0159). */
+    /** The sidebar's three groups of pages (ADR 0160). */
     groups: {
       app: "App",
       agent: "Agent",

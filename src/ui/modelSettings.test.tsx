@@ -69,7 +69,7 @@ describe("Settings → Model", () => {
     expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(
       expect.arrayContaining(["Main model", "Subagents", "Auxiliary models", "Idle compaction"]),
     );
-    // The guardrails are the page header's summary box (ADR 0159): one line, with the checks under "Safety checks".
+    // The guardrails are the page header's summary box (ADR 0160): one line, with the checks under "Safety checks".
     const guard = document.querySelector<HTMLElement>("header.page-head section.applies-box")!;
     expect(guard.querySelector(".applies-line")!.textContent).toBe("Hermes checks pinned helpers and the price before it switches the main model.");
     expect(guard.querySelector(".applies-more")!.textContent!.trim()).toBe("Safety checks");
@@ -261,7 +261,7 @@ describe("Settings → Model as cards of rows (#174, ADR 0059)", () => {
     await shown();
     for (const heading of ["Main model", "Text generation", "Subagents", "Auxiliary models", "Idle compaction"])
       expect(section(heading).querySelector(":scope > .set-card")).toBeTruthy();
-    // The guardrails are rows of a card in the header's summary box (ADR 0159).
+    // The guardrails are rows of a card in the header's summary box (ADR 0160).
     const guards = document.querySelectorAll("header.page-head .applies-box details > .set-card > .set-row.model-guard");
     expect(guards.length).toBeGreaterThan(0);
     for (const name of ["Main provider", "Main model", "Main reasoning effort"]) expect(inRow(select(name), "Main model")).toBe(true);

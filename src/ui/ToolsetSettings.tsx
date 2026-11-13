@@ -599,7 +599,7 @@ export function ToolsetSettings({
     />
   );
 
-  // Under Settings' page header (ADR 0159): Reload, when the list was read, and whether the profile has a list of its
+  // Under Settings' page header (ADR 0160): Reload, when the list was read, and whether the profile has a list of its
   // own with what this chat has, in the summary box. Every re-read in Settings is a Reload.
   const reload = (
     <button className="btn" disabled={!connected || locked || reading} onClick={() => (void read(true), void readChat())}>

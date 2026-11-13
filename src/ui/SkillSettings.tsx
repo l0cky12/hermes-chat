@@ -422,7 +422,7 @@ export function SkillSettings({
     </div>
   );
 
-  // Under Settings' page header (ADR 0159) the profile, the server, Reload and when a change applies are the header's.
+  // Under Settings' page header (ADR 0160) the profile, the server, Reload and when a change applies are the header's.
   const inPage = useInPage();
   const reloadBtn = (
     <button className="btn" disabled={!connected || loading || !!toggling || busyBulk} onClick={() => void load()} title="Read the skills from Hermes again.">

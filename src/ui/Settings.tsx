@@ -1,4 +1,4 @@
-// The Settings screen (ADR 0159): sixteen pages in a sidebar tree that takes the chat list's column, in three groups (App,
+// The Settings screen (ADR 0160): sixteen pages in a sidebar tree that takes the chat list's column, in three groups (App,
 // Agent, Server), each page under one header (SettingsPage.tsx); a narrow window has a bar that opens the tree as a sheet.
 // General, ported from the prototype: the connection and Sign out, what shows on
 // launch, screenshots, updates, the local cache, older history, importing transcripts, and backups. Appearance: how the app looks on this
@@ -140,7 +140,7 @@ const SECTION_INTRO: Record<string, string> = {
 type MemSel = { kind: "file"; source: MemorySource } | { kind: "profile"; name: string };
 const memKey = (m: MemSel) => (m.kind === "file" ? `file:${m.source}` : `profile:${m.name}`);
 const memSelOf = (id: string): MemSel => (id.startsWith("file:") ? { kind: "file", source: id.slice(5) as MemorySource } : { kind: "profile", name: id.slice(8) });
-/** The sidebar's three groups (ADR 0159): this app, the agent (the profile's setup on Hermes), and the server. */
+/** The sidebar's three groups (ADR 0160): this app, the agent (the profile's setup on Hermes), and the server. */
 const SIDEBAR_GROUPS: { id: "app" | "agent" | "server"; tabs: Tab[] }[] = [
   { id: "app", tabs: ["general", "appearance", "keyboard", "voice", "snapshots", "extensions"] },
   { id: "agent", tabs: ["model", "providers", "toolsets", "mcp", "gateways", "persona", "memory", "skills"] },
@@ -853,7 +853,7 @@ export function SettingsScreen({
     ),
   };
   // A search shows every group's sections together, so what's typed can be found in any of them. Otherwise the group
-  // picked in the sidebar's tree shows alone (ADR 0159).
+  // picked in the sidebar's tree shows alone (ADR 0160).
   const general = searching ? (
     <>
       {generalGroups.connection}
@@ -1035,7 +1035,7 @@ export function SettingsScreen({
           )
         );
       case "diagnostics":
-        // Server and Logs, one at a time, picked in the sidebar's tree as General's groups are (ADR 0159, 0087). Logs
+        // Server and Logs, one at a time, picked in the sidebar's tree as General's groups are (ADR 0160, 0087). Logs
         // reads Hermes only while it's shown; what it read goes when another group, tab or profile is shown.
         return diagShown === "server" ? (
           capabilities && (
@@ -1280,7 +1280,7 @@ export function SettingsScreen({
   );
 
   // Search's results, grouped by page: each names its page and, on a page that edits the profile in use, says so, as
-  // the page's header would (ADR 0159).
+  // the page's header would (ADR 0160).
   const results = (
     <div className="settings-results">
       <header className="page-head">
@@ -1435,7 +1435,7 @@ export function SettingsScreen({
   );
 }
 
-/** Whether the window is narrow: 900 px or less, where the sidebar gives way to the bar (ADR 0159). */
+/** Whether the window is narrow: 900 px or less, where the sidebar gives way to the bar (ADR 0160). */
 function useNarrow(): boolean {
   const query = typeof window !== "undefined" ? window.matchMedia?.("(max-width: 900px)") : undefined;
   const [narrow, setNarrow] = useState(!!query?.matches);

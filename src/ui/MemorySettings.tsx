@@ -653,7 +653,7 @@ export function MemorySettings({
     </>
   );
 
-  // Under Settings' page header (ADR 0159) the profile, the server and file, and Reload / Select are the header's; the
+  // Under Settings' page header (ADR 0160) the profile, the server and file, and Reload / Select are the header's; the
   // part Settings hides (External memory shown instead) leaves the header to it.
   const inPage = useInPage();
   const head = sourceProp !== undefined;

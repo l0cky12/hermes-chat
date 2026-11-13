@@ -48,7 +48,7 @@ export function ScreenshotSettings({ checkSupport }: { checkSupport?: () => Prom
     setRecording(false);
   };
 
-  // Under General › Screenshots' page header (ADR 0159) the section's own heading and intro would repeat it.
+  // Under General › Screenshots' page header (ADR 0160) the section's own heading and intro would repeat it.
   const inPage = useInPage();
   return (
     <SettingsSection

@@ -750,7 +750,7 @@ export function ModelSettings({
         />
       </SettingsSection>
 
-      {/* Guardrails: checked when a main model is applied, before anything is written. In the page header's box (ADR 0159). */}
+      {/* Guardrails: checked when a main model is applied, before anything is written. In the page header's box (ADR 0160). */}
       <HeadPart at="applies">
         <AppliesBox line="Hermes checks pinned helpers and the price before it switches the main model." more="Safety checks">
           <AppliesPart>

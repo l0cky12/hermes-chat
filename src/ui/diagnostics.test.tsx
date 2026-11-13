@@ -420,7 +420,7 @@ describe("in the app", () => {
     expect(screen.getByRole("tab", { name: /Diagnostics/, selected: true })).toBeTruthy();
     expect(screen.getByText(/liam@hermes/)).toBeTruthy();
     expect(screen.getByText(/^Dashboard username and password, through an SSH tunnel; the dashboard offers basic$/)).toBeTruthy();
-    // Arrow keys move along the tabs, as everywhere in Settings: up and down the sidebar's one list (ADR 0159), where
+    // Arrow keys move along the tabs, as everywhere in Settings: up and down the sidebar's one list (ADR 0160), where
     // Profiles comes before Diagnostics.
     screen.getByRole("tab", { name: /Diagnostics/ }).focus();
     await user.keyboard("{ArrowUp}");

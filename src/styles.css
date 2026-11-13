@@ -1221,7 +1221,7 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .crash-details summary { cursor: pointer; color: var(--muted); }
 .crash-details pre { max-height: 240px; overflow: auto; margin: 8px 0 0; padding: 10px; border-radius: 8px; background: var(--raised-2); white-space: pre-wrap; word-break: break-word; }
 .crash-actions { display: flex; gap: 8px; }
-/* Every select on a Settings page takes this style, classed or not (ADR 0159); :where keeps a page's own rules ahead. */
+/* Every select on a Settings page takes this style, classed or not (ADR 0160); :where keeps a page's own rules ahead. */
 .select, :where(.settings-main) select {
   height: 32px; padding: 0 8px; border-radius: 8px; background: var(--raised-2); border: 1px solid var(--line); color: var(--text);
   font: inherit; font-size: calc(13rem / 14); outline: none;
@@ -1271,7 +1271,7 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .settings h3 { font-size: calc(14rem / 14); font-weight: 600; margin: 0; }
 
 
-/* ---------- Settings: a sidebar tree of pages beside one page (ADR 0159) ---------- */
+/* ---------- Settings: a sidebar tree of pages beside one page (ADR 0160) ---------- */
 /* The sidebar takes the chat list's column: Back, the title and search stay put; the three groups of pages scroll, and
    the open page's sections (or its headings to jump to) sit under it. The page is one column, 64 px off the sidebar. */
 .list-slot:not([hidden]) { display: contents; }

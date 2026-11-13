@@ -688,7 +688,7 @@ export function MemoryProviderSettings({
   const shows = !unsupported && (connected || !!rows);
   // The settings show under their row only while the list does.
   const editorShown = !!editorBlock && !memoryError;
-  // Under Settings' page header (ADR 0159), while External memory is the part shown: the header names it, carries its
+  // Under Settings' page header (ADR 0160), while External memory is the part shown: the header names it, carries its
   // (i) and help, and Reload. Hidden behind the memory files, it leaves the header alone.
   const head = useInPage() && targetProp !== undefined;
   const reloadBtn = shows && (

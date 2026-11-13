@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Settings → Gateways on screen (GatewaySettings.tsx, ADR 0073), against the fake dashboard's messaging routes
-// (fakeGateways.ts): the platform given (picked in Settings' tree, ADR 0159), the state, token rows that keep, replace or
+// (fakeGateways.ts): the platform given (picked in Settings' tree, ADR 0160), the state, token rows that keep, replace or
 // remove, the switch, Save with its read back, a change on the server meanwhile, Check status, the three problems in
 // their own words, and answers for another profile dropped. Every token here is synthetic.
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
