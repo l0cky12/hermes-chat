@@ -136,14 +136,16 @@ describe("The side panel", () => {
       expect(screen.getByRole("heading", { name: "Open a surface" })).toBeTruthy();
     });
 
-    it("takes a letter by its key's place on a non-Latin layout, and by its character on any Latin one", () => {
+    it("takes a letter by its key's place on a non-Latin layout, and only by its character on a Latin one", () => {
       render(<Harness start={null} />);
       fireEvent.keyDown(rows()[0], { key: "е", code: "KeyT" });
       expect(screen.getByText("terminal shown")).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "Open a surface" }));
-      // Dvorak: the key in QWERTY's T place types Y, which opens nothing.
-      fireEvent.keyDown(rows()[0], { key: "y", code: "KeyT" });
-      expect(screen.getByRole("heading", { name: "Open a surface" })).toBeTruthy();
+      // Latin layouts go by the character: Dvorak's Y, BÉPO's è and Polish AltGr+S's ś are in QWERTY's T and S places.
+      for (const [key, code] of [["y", "KeyT"], ["è", "KeyT"], ["ś", "KeyS"]]) {
+        fireEvent.keyDown(rows()[0], { key, code });
+        expect(screen.getByRole("heading", { name: "Open a surface" })).toBeTruthy();
+      }
       fireEvent.keyDown(rows()[0], { key: "f", code: "KeyU" });
       expect(screen.getByText("files shown")).toBeTruthy();
     });

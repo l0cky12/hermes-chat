@@ -74,11 +74,12 @@ export function SidePanel({
 
   const onKey = (e: ReactKeyboardEvent) => {
     if (e.defaultPrevented) return;
-    // The launcher's keys: a tab's letter opens it, by its character or, on a non-Latin layout, its key's position. Only
+    // The launcher's keys: a tab's letter opens it, by its character or, for a letter outside the Latin script (a
+    // Cyrillic or Greek layout), its key's position; a Latin letter (é, ś) is never taken by position. Only
     // while the launcher shows, so they never reach a terminal or field, and never with a modifier, so the app's own
     // shortcuts (Alt+Up and Alt+Down among them) still work.
     const launcher = tab === null && !e.ctrlKey && !e.altKey && !e.metaKey;
-    const letter = /^[a-z]$/i.test(e.key) ? e.key.toUpperCase() : e.key.length === 1 && e.code.startsWith("Key") ? e.code.slice(3) : "";
+    const letter = /^[a-z]$/i.test(e.key) ? e.key.toUpperCase() : /^\p{L}$/u.test(e.key) && !/^\p{Script=Latin}$/u.test(e.key) && e.code.startsWith("Key") ? e.code.slice(3) : "";
     const picked = launcher && TABS.find((t) => t.key === letter);
     if (picked) {
       e.preventDefault();

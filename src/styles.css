@@ -3122,7 +3122,7 @@ label.memory-pick { cursor: pointer; }
 }
 .panel-launcher-row svg { flex: none; }
 .panel-launcher-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.panel-launcher-row kbd { flex: none; min-width: 24px; height: 24px; display: grid; place-items: center; padding: 0 6px; background: var(--raised-2); border: 0; font-family: var(--mono); }
+.panel-launcher-row kbd { flex: none; min-width: 24px; height: 24px; display: grid; place-items: center; padding: 0 6px; background: var(--raised-3); border: 0; font-family: var(--mono); }
 .panel-launcher-row:is(:hover, :focus-visible) { background: var(--hover-2); color: var(--text); }
 .panel-launcher-row:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
 
