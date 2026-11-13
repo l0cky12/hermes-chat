@@ -197,16 +197,24 @@ describe("Settings → General sections", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "General › Connection" }));
   });
 
-  it("moves through the narrow sheet's tabs with the arrows, keeping it open until one is clicked", async () => {
+  it("moves the focus through the narrow sheet's tabs with the arrows, and picks only on Enter or a click", async () => {
     vi.stubGlobal("matchMedia", (q: string) => ({ matches: q === "(max-width: 900px)", media: q, addEventListener() {}, removeEventListener() {} }));
-    const { user } = await shown();
+    const s = new FakeHermes();
+    const hermes = await connect(s.openPipe, "default");
+    running.push(hermes);
+    // A guard that always asks, as App's does over an unsaved edit: stepping through the list must never ask.
+    let asked = 0;
+    render(<Shell hermes={hermes} guard={(go) => (asked++, go())} />);
+    const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "General › Connection" }));
     await user.keyboard("{ArrowDown}{ArrowDown}");
     const sheet = screen.getByRole("dialog", { name: "Settings" });
     const keys = within(sheet).getByRole("tab", { name: "Keyboard Shortcuts" });
-    expect(keys.getAttribute("aria-selected")).toBe("true");
     expect(document.activeElement).toBe(keys);
-    await user.click(keys);
+    expect(keys.getAttribute("aria-selected")).toBe("false");
+    expect(asked).toBe(0);
+    await user.keyboard("{Enter}");
+    expect(asked).toBe(1);
     expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
     expect(screen.getByRole("button", { name: "Keyboard Shortcuts" })).toBeTruthy();
   });

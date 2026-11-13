@@ -1230,8 +1230,18 @@ export function SettingsScreen({
         if ((e.target as HTMLElement).getAttribute("role") !== "tab") return;
         const ids = groups.flatMap((g) => g.tabs.map((t) => t.id));
         const focused = ids.find((id) => (e.target as HTMLElement).id === `settings-tab-${id}`);
-        // Arrows pick without closing the narrow sheet, so they can go on to the next tab; a click or Enter closes it.
-        arrowSelect(e, ids, searching && focused ? focused : tab, pick);
+        // In the narrow sheet the arrows only move the focus, and Enter or a click picks (and closes the sheet): a pick can
+        // ask first about an unsaved edit, and that question belongs to a deliberate pick, not to a step through the list.
+        if (sheet) {
+          const at = ids.indexOf(focused ?? tab);
+          const step = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : e.key === "ArrowUp" || e.key === "ArrowLeft" ? -1 : 0;
+          const next = e.key === "Home" ? 0 : e.key === "End" ? ids.length - 1 : step ? (at + step + ids.length) % ids.length : -1;
+          if (next < 0) return;
+          e.preventDefault();
+          document.getElementById(`settings-tab-${ids[next]}`)?.focus();
+          return;
+        }
+        arrowSelect(e, ids, searching && focused ? focused : tab, pickTab);
       }}
     >
       {groups.map((g) => (
