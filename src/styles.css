@@ -570,7 +570,8 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 .question-locked::before { content: "✓ "; }
 .question-answer { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .question-choices { display: flex; flex-wrap: wrap; gap: 6px; }
-.question-choices .btn { white-space: pre-wrap; text-align: left; overflow-wrap: anywhere; max-width: 100%; }
+/* A long choice wraps, so the button grows with its lines instead of keeping .btn's one-line height. */
+.question-choices .btn { height: auto; min-height: 32px; padding-block: 6px; line-height: 1.4; white-space: pre-wrap; text-align: left; overflow-wrap: anywhere; max-width: 100%; }
 .question-choice { display: flex; align-items: flex-start; gap: 8px; width: 100%; font-size: calc(13rem / 14); overflow-wrap: anywhere; }
 .question-choice input { margin-top: 3px; }
 .question-own { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
