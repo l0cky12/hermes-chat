@@ -307,6 +307,7 @@ describe("Opening the preview pane", () => {
   it("opens empty from the chat header, where the owner types a server path or web address", async () => {
     const { user } = await signedIn();
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.click(screen.getByRole("button", { name: "Preview" }));
     expect(within(pane()).getByRole("heading", { name: "Nothing open" })).toBeTruthy();
     expect([button("Back").disabled, button("Forward").disabled, button("Reload").disabled]).toEqual([true, true, true]);
     const box = address();
@@ -330,6 +331,7 @@ describe("What the pane shows", () => {
   async function openPath(path: string) {
     const s = await signedIn();
     await s.user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await s.user.click(screen.getByRole("button", { name: "Preview" }));
     await s.user.type(address(), `${path}{Enter}`);
     return s;
   }
@@ -383,6 +385,7 @@ describe("What the pane shows", () => {
     });
     const { server, user } = await signedIn({ local });
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.click(screen.getByRole("button", { name: "Preview" }));
 
     local.next = null;
     await user.click(button("Open a file on this computer…"));
@@ -423,6 +426,7 @@ describe("Web pages a site won't let the pane show (issue #55)", () => {
   async function openWeb(url: string, web: ReturnType<typeof theWeb>) {
     const s = await signedIn({ web });
     await s.user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await s.user.click(screen.getByRole("button", { name: "Preview" }));
     await s.user.type(address(), `${url}{Enter}`);
     return s;
   }
@@ -532,6 +536,7 @@ describe("Web pages in the Preview's own view, on Linux (issue #254)", () => {
   async function openWeb(url: string) {
     const s = await withView();
     await s.user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await s.user.click(screen.getByRole("button", { name: "Preview" }));
     await s.user.type(address(), `${url}{Enter}`);
     return s;
   }
@@ -641,6 +646,7 @@ describe("A typed address opens over https first, as Chrome does (issue #441)", 
   async function typeIn(text: string, web = theWeb()) {
     const s = await withView({ web });
     await s.user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await s.user.click(screen.getByRole("button", { name: "Preview" }));
     await s.user.type(address(), `${text}{Enter}`);
     return s;
   }
@@ -846,6 +852,7 @@ describe("Back, Forward and Reload (issue #376)", () => {
     const GOOGLE = "https://www.google.com/";
     const { view, user } = await withView();
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.click(screen.getByRole("button", { name: "Preview" }));
     await user.type(address(), `${GOOGLE}{Enter}`);
     await act(async () => view.land(1));
     await user.clear(address());
@@ -1096,6 +1103,7 @@ describe("Pages on the Hermes server's own loopback (issue #171)", () => {
   it("opens a typed localhost address on the server, and refuses what isn't a web address, saying why", async () => {
     const { user, pages } = await signedIn();
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.click(screen.getByRole("button", { name: "Preview" }));
     const box = address();
     await user.type(box, "ftp://localhost:21/{Enter}");
     expect(within(pane()).getByRole("alert").textContent).toBe("Only http:// and https:// pages open in the preview, and ftp: isn't a web address.");
@@ -1127,6 +1135,7 @@ describe("The empty Preview (issue #376)", () => {
     web.devs = { server: { kind: "listed", ports: [{ port: 5173, process: "node" }, { port: 8000 }] }, local: [{ port: 3000, process: "next-server" }] };
     const { user, pages } = await signedIn({ web });
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.click(screen.getByRole("button", { name: "Preview" }));
     await within(devServers()).findByRole("button", { name: /localhost:5173/ });
     expect(within(devServers()).getAllByRole("button", { name: /^localhost:/ }).map((b) => b.textContent)).toEqual([
       "localhost:5173Servernode",
@@ -1145,6 +1154,7 @@ describe("The empty Preview (issue #376)", () => {
     web.devs = { server: { kind: "listed", ports: [{ port: 5173, process: "node" }] }, local: [] };
     const { user, pages } = await signedIn({ web });
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.click(screen.getByRole("button", { name: "Preview" }));
     await user.click(await within(devServers()).findByRole("button", { name: /localhost:5173/ }));
     expect((await within(pane()).findByTitle("Web page: http://localhost:5173/")).getAttribute("src")).toBe("http://127.0.0.1:41001/");
     expect(pages.opened).toEqual(["http://localhost:5173/"]);
@@ -1156,6 +1166,7 @@ describe("The empty Preview (issue #376)", () => {
     web.devs = { server: { kind: "noSshTarget" }, local: [] };
     const { user, server } = await signedIn({ web });
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.click(screen.getByRole("button", { name: "Preview" }));
     expect(await within(devServers()).findByText("Sign in through SSH to see the Hermes server's dev servers.")).toBeTruthy();
 
     web.devs = { server: { kind: "failed", message: "bash: line 1: ss: command not found" }, local: [] };
@@ -1176,6 +1187,7 @@ describe("The empty Preview (issue #376)", () => {
   it("takes a dev server's bare port in the address box, as a page on the server", async () => {
     const { user, pages } = await signedIn();
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.click(screen.getByRole("button", { name: "Preview" }));
     await user.type(address(), "5173{Enter}");
     expect((await within(pane()).findByTitle("Web page: http://localhost:5173/")).getAttribute("src")).toBe("http://127.0.0.1:41001/");
     expect(pages.opened).toEqual(["http://localhost:5173/"]);
@@ -1237,6 +1249,34 @@ describe("Hermes can't drive the Preview (issue #376)", () => {
 });
 
 describe("Closing and resizing", () => {
+  it("opens from the header on what it showed last: the launcher until a tab is picked, then that tab, and + brings the launcher back (ADR 0159)", async () => {
+    const { user } = await signedIn();
+    const launcher = () => within(pane()).queryByRole("heading", { name: "Open a surface" });
+    const selected = () => within(pane()).queryAllByRole("tab", { selected: true }).map((t) => t.textContent);
+    const reopen = async () => {
+      await user.click(within(pane()).getByRole("button", { name: "Close the side panel" }));
+      expect(paneOpen()).toBe(false);
+      await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    };
+
+    await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    expect(launcher()).toBeTruthy();
+    expect(selected()).toEqual([]);
+    await reopen();
+    expect(launcher()).toBeTruthy();
+
+    await user.keyboard("f");
+    expect(selected()).toEqual(["Files"]);
+    await reopen();
+    expect(launcher()).toBeNull();
+    expect(selected()).toEqual(["Files"]);
+
+    await user.click(within(pane()).getByRole("button", { name: "Open a surface" }));
+    await reopen();
+    expect(launcher()).toBeTruthy();
+    expect(selected()).toEqual([]);
+  });
+
   it("closes with its button, the header toggle, or Escape", async () => {
     const { user } = await signedIn();
     await user.click(screen.getByRole("link", { name: "the docs" }));
@@ -1268,6 +1308,7 @@ describe("Closing and resizing", () => {
   it("resizes from its edge with the keyboard, and keeps the width", async () => {
     const { user } = await signedIn();
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.click(screen.getByRole("button", { name: "Preview" }));
     const edge = screen.getByRole("separator", { name: "Resize the side panel" });
     expect(edge.getAttribute("aria-valuenow")).toBe("480");
     edge.focus();
@@ -1282,6 +1323,7 @@ describe("Closing and resizing", () => {
   it("resizes by dragging its edge", async () => {
     const { user } = await signedIn();
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.click(screen.getByRole("button", { name: "Preview" }));
     const edge = screen.getByRole("separator");
     fireEvent.pointerDown(edge, { button: 0, clientX: 800, pointerId: 1 });
     fireEvent.pointerMove(edge, { clientX: 700, pointerId: 1 });
@@ -1504,6 +1546,7 @@ describe("The link menu (issue #240)", () => {
     const { server, user } = await signedIn();
     server.serverFiles["/home/liam/app/GUIDE.md"] = "# Guide\n\nSee [Usage](#usage), [the site](https://guide.example.com/) and [the hosts file](file:///etc/hosts).\n\n## Usage\n\nRun it.\n";
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.click(screen.getByRole("button", { name: "Preview" }));
     await user.click(within(pane()).getByRole("textbox"));
     await user.paste("/home/liam/app/GUIDE.md");
     await user.keyboard("{Enter}");
@@ -1615,6 +1658,7 @@ describe("Annotating a page in the Preview (issue #96)", () => {
     const annotator = theAnnotator(PAGE);
     const s = await withView({ web: Object.assign(theWeb(), { annotate: annotator }) });
     await s.user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await s.user.click(screen.getByRole("button", { name: "Preview" }));
     await s.user.type(address(), `${PAGE}{Enter}`);
     await act(async () => s.view.land(1));
     s.server.files["/c/1/9/annotation-1.png"] = "\x89PNG\r\n\x1a\nmarked";
@@ -1810,6 +1854,7 @@ describe("Annotating a page in the Preview (issue #96)", () => {
     const { user, server } = await signedIn({ web: Object.assign(theWeb(), { annotate: annotator }) });
     server.files["/c/1/9/annotation-1.png"] = "\x89PNG\r\n\x1a\nmarked";
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
+    await user.click(screen.getByRole("button", { name: "Preview" }));
     await user.type(address(), `${url}{Enter}`);
     expect(button("Annotate").disabled).toBe(true);
     const frame = within(pane()).getByTitle(`Web page: ${url}`);

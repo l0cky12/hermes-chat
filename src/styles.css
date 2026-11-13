@@ -3211,14 +3211,32 @@ label.memory-pick { cursor: pointer; }
 .panel-tab[aria-selected="true"] { background: var(--raised-3); color: var(--text); }
 .panel-tab:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
 .run-dot { width: 6px; height: 6px; background: var(--ok); }
-.panel-close { flex: none; }
 /* No container query here: containment would trap the Files dialogs, which must cover the window, inside the panel. */
 .panel-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .panel-body[hidden] { display: none; }
 .preview-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-/* Too narrow for labels: the icons stay, with their titles. */
+/* Too narrow for labels beside the + and close buttons (and Back, over the chat): the icons stay, with their titles.
+   In rem, as the labels grow with the font size. */
 .side-panel .panel-tabs { container-type: inline-size; }
-@container (max-width: 380px) { .panel-tab-label { display: none; } }
+@container (max-width: 31rem) { .panel-tab-label { display: none; } }
+@container (max-width: 33.5rem) { .side-panel.overlay .panel-tab-label { display: none; } }
+.panel-new, .panel-close { flex: none; }
+.panel-new { margin-left: auto; }
+/* Pressed while the launcher shows: the selected tab's face, since .icon-btn.on is the panel's own colour in light themes. */
+.panel-new.on { background: var(--raised-3); color: var(--text); }
+/* The launcher (ADR 0159): each tab as a row with its key, centred in the panel. */
+.panel-launcher { align-items: center; justify-content: safe center; padding: 24px 16px 15vh; overflow-y: auto; }
+.panel-launcher h2 { margin: 0 0 18px; font-size: calc(16rem / 14); font-weight: 500; color: var(--text); }
+.panel-launcher ul { list-style: none; margin: 0; padding: 0; width: min(100%, 420px); display: flex; flex-direction: column; gap: 2px; }
+.panel-launcher-row {
+  width: 100%; display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 10px 0 12px; border-radius: 8px;
+  font-size: calc(14.5rem / 14); color: var(--text-2); text-align: left;
+}
+.panel-launcher-row svg { flex: none; }
+.panel-launcher-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-launcher-row kbd { flex: none; min-width: 24px; height: 24px; display: grid; place-items: center; padding: 0 6px; background: var(--raised-3); border: 0; font-family: var(--mono); }
+.panel-launcher-row:is(:hover, :focus-visible) { background: var(--hover-2); color: var(--text); }
+.panel-launcher-row:focus-visible { outline: 2px solid var(--line-3); outline-offset: -2px; }
 
 /* Terminal in the panel */
 .terminal-tab { flex: 1; min-height: 0; display: flex; flex-direction: column; }
