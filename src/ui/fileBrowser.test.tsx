@@ -60,7 +60,9 @@ const row_ = (name: string) => screen.getByRole("button", { name: new RegExp(`^$
 /** Server files is the side panel's Files tab (ADR 0039, 0116); the rail has no button for it. */
 async function openFiles(user: ReturnType<typeof userEvent.setup>) {
   if (document.querySelector("aside.side-panel:not([hidden])") === null) await user.click(screen.getByRole("button", { name: /^(Open|Show) the side panel$/ }));
-  await user.click(screen.getByRole("tab", { name: "Files" }));
+  // Its tab, or the launcher's Files row while no tab has been opened yet (ADR 0159).
+  const panel = document.querySelector<HTMLElement>("aside.side-panel")!;
+  await user.click(within(panel).queryByRole("tab", { name: "Files" }) ?? within(panel).getByRole("button", { name: "Files" }));
   await waitFor(() => expect(document.querySelector(".files-table")).not.toBeNull());
 }
 
