@@ -180,6 +180,23 @@ describe("Settings → General sections", () => {
     ]);
   });
 
+  it("keeps the narrow sheet modal: focus starts on the page shown, Tab stays in it, Escape closes it back to the bar", async () => {
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q === "(max-width: 900px)", media: q, addEventListener() {}, removeEventListener() {} }));
+    const { user } = await shown();
+    const crumb = screen.getByRole("button", { name: "General › Connection" });
+    await user.click(crumb);
+    const sheet = screen.getByRole("dialog", { name: "Settings" });
+    expect(sheet.getAttribute("aria-modal")).toBe("true");
+    expect(document.activeElement).toBe(within(sheet).getByRole("tab", { name: "General" }));
+    // Shift+Tab from the first stop wraps to the sheet's last one, never to the page behind.
+    within(sheet).getByRole("button", { name: "Close the list of settings" }).focus();
+    await user.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(sheet.contains(document.activeElement)).toBe(true);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "General › Connection" }));
+  });
+
   it("shows every section of every page while searching, and the section picked again after", async () => {
     const { user } = await shown();
     await user.click(item("General", "Chats"));

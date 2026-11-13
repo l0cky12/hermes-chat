@@ -25,6 +25,8 @@ import { EditingProfile, ProfileInUse, SearchHeads, SettingsPage } from "./Setti
 import type { PlatformId } from "../hermes/gateways";
 import { SettingRow, SettingsSearching, SettingsSection } from "./SettingRows";
 import { pickApp } from "./keybindings";
+import { isTextEdit } from "./editKeys";
+import { trapTab } from "./modal";
 import type { Chat, ConnectionStatus } from "../hermes/model";
 import type { Route } from "../hermes/pipe";
 import { viaLabel } from "../hermes/routes";
@@ -430,8 +432,10 @@ export function SettingsScreen({
   const [memSel, setMemSel] = useState<MemSel>({ kind: "file", source: "memory" });
   /** The profile whose external memory shows, picked in the header; the profile in use until another is. */
   const [memExternal, setMemExternal] = useState(profile);
-  /** The Gateways platform shown, picked in the sidebar's tree. */
+  /** The Gateways platform shown, picked in the sidebar's tree, among those the server offers once read. */
   const [gwPlatform, setGwPlatform] = useState<PlatformId>("telegram");
+  const [gwOffered, setGwOffered] = useState<PlatformId[]>();
+  const gwShown: PlatformId = !gwOffered || gwOffered.includes(gwPlatform) ? gwPlatform : (gwOffered[0] ?? gwPlatform);
   /** Every profile's name, once the Memory tab's provider overview has read them; until then only the shown profile. */
   const [memProfiles, setMemProfiles] = useState<string[]>();
   /** Picking a memory file or profile leaves any unsaved memory edit, so it asks first, as switching tabs does. */
@@ -1025,7 +1029,8 @@ export function SettingsScreen({
               connected={status === "connected"}
               picker={picker("gateways", "Profile whose gateways are shown")}
               openUrl={openUrl}
-              platform={gwPlatform}
+              platform={gwShown}
+              onPlatforms={setGwOffered}
             />
           )
         );
@@ -1080,8 +1085,11 @@ export function SettingsScreen({
           : undefined;
       case "diagnostics":
         return capabilities && logs ? { items: DIAG_GROUPS, selected: diagShown, onPick: (g) => setDiagGroup(g as DiagGroup) } : undefined;
-      case "gateways":
-        return gateways ? { items: GW_GROUPS, selected: gwPlatform, onPick: (g) => setGwPlatform(g as PlatformId) } : undefined;
+      case "gateways": {
+        // Only the platforms this Hermes offers; a pick it doesn't offer shows the first it does, named as such.
+        const items = GW_GROUPS.filter((g) => !gwOffered || gwOffered.includes(g.id as PlatformId));
+        return gateways && items.length ? { items, selected: gwShown, onPick: (g) => setGwPlatform(g as PlatformId) } : undefined;
+      }
     }
   };
   const sections = searching ? undefined : sectionsOf(shownTab);
@@ -1105,7 +1113,8 @@ export function SettingsScreen({
     };
     read();
     const seen = new MutationObserver(read);
-    seen.observe(root, { childList: true, subtree: true });
+    // Text changes too: a heading renamed in place (another interface language) renames its jump link.
+    seen.observe(root, { childList: true, subtree: true, characterData: true });
     return () => seen.disconnect();
   }, [shownTab, searching, sectioned]);
   useEffect(() => {
@@ -1151,6 +1160,26 @@ export function SettingsScreen({
   // tree as a sheet, and search sits behind an icon in it.
   const narrow = useNarrow();
   const [sheet, setSheet] = useState(false);
+  // The sheet is a modal dialog: focus moves to the page shown in it, Tab stays inside, Escape closes it, and focus goes
+  // back to the bar's page button.
+  const sideRef = useRef<HTMLElement>(null);
+  const crumbRef = useRef<HTMLButtonElement>(null);
+  const sheetWas = useRef(false);
+  useEffect(() => {
+    if (sheet) (sideRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? sideRef.current?.querySelector<HTMLElement>('[role="tab"]'))?.focus();
+    else if (sheetWas.current) crumbRef.current?.focus();
+    sheetWas.current = sheet;
+  }, [sheet]);
+  const onSheetKey = (e: ReactKeyboardEvent<HTMLElement>) => {
+    if (!sheet) return;
+    if (e.key === "Escape" && !composing(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return setSheet(false);
+    }
+    if (!isTextEdit(e)) e.stopPropagation();
+    trapTab(e, sideRef.current);
+  };
   useEffect(() => {
     if (!narrow) setSheet(false);
   }, [narrow]);
@@ -1324,7 +1353,7 @@ export function SettingsScreen({
                 </>
               ) : (
                 <>
-                  <button className="settings-crumb" aria-haspopup="dialog" aria-expanded={sheet} onClick={() => setSheet(true)}>
+                  <button ref={crumbRef} className="settings-crumb" aria-haspopup="dialog" aria-expanded={sheet} onClick={() => setSheet(true)}>
                     {crumb}
                   </button>
                   <button className="icon-btn settings-bar-search" aria-label={`${frame.search} (Ctrl+F)`} title={`${frame.search} (Ctrl+F)`} onClick={() => setSearchOpen(true)}>
@@ -1344,7 +1373,14 @@ export function SettingsScreen({
             )}
           </div>
         )}
-        <aside className={`settings-side ${sheet ? "sheet" : ""}`} role={sheet ? "dialog" : undefined} aria-modal={sheet || undefined} aria-label={sheet ? frame.title : undefined}>
+        <aside
+          ref={sideRef}
+          className={`settings-side ${sheet ? "sheet" : ""}`}
+          role={sheet ? "dialog" : undefined}
+          aria-modal={sheet || undefined}
+          aria-label={sheet ? frame.title : undefined}
+          onKeyDown={onSheetKey}
+        >
           <div className="settings-side-top">
             {narrow ? (
               <div className="settings-sheet-head">

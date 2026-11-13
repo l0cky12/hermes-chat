@@ -222,6 +222,47 @@ describe("Settings → Gateways", () => {
     expect(screen.queryByText(/Saved, and Hermes reads it back/)).toBeNull();
   });
 
+  it("offers in the tree only the platforms this Hermes returns, and names the one whose settings show", async () => {
+    const s = server();
+    const hermes = await connect(s.openPipe, "default");
+    running.push(hermes);
+    // A Hermes that offers Discord alone: picking Telegram (the default) must not title Discord's settings "Telegram".
+    const discordOnly = Object.create(hermes.gateways, {
+      list: { value: async (p: string) => { const l = await hermes.gateways.list(p); return { ...l, gateways: l.gateways.filter((g) => g.id === "discord") }; } },
+    }) as typeof hermes.gateways;
+    function Shell() {
+      const [appearance] = useState(() => appearanceStore({ getItem: () => null, setItem: () => {} }, document.createElement("html")));
+      return (
+        <SettingsScreen
+          status="connected"
+          unsecure={false}
+          username="liam"
+          passwordSaved
+          profile="default"
+          olderPulled={false}
+          cacheBytes={() => 0}
+          appearance={appearance}
+          listFonts={async () => ({ all: [], mono: [] })}
+          modelSettings={hermes.modelSettings}
+          gateways={discordOnly}
+          onClearCache={() => {}}
+          onPullOlder={async () => []}
+          onSignOut={async () => {}}
+          onClose={() => {}}
+        />
+      );
+    }
+    const user = userEvent.setup();
+    render(<Shell />);
+    await user.click(screen.getByRole("tab", { name: "Gateways" }));
+    await screen.findByText("Discord bot token");
+    const platforms = screen.getByRole("group", { name: "Gateways: sections" });
+    expect(within(platforms).getAllByRole("button").map((b) => b.textContent)).toEqual(["Discord"]);
+    expect(within(platforms).getByRole("button", { name: "Discord" }).getAttribute("aria-current")).toBe("page");
+    expect(within(document.querySelector("header.page-head") as HTMLElement).getByRole("heading", { level: 2 }).textContent).toBe("Discord");
+    expect(screen.queryByText("Telegram bot token")).toBeNull();
+  });
+
   it("is a Settings tab with its platforms in the tree and a profile picker starting on the profile in use", async () => {
     const s = server();
     s.gateways.env.bot = { DISCORD_BOT_TOKEN: "bot-profile-discord-token" };

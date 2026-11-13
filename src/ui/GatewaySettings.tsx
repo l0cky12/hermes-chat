@@ -102,6 +102,7 @@ export function GatewaySettings({
   picker,
   openUrl,
   platform = "telegram",
+  onPlatforms,
 }: {
   api: GatewaysApi;
   profile: string;
@@ -112,6 +113,8 @@ export function GatewaySettings({
   openUrl: (url: string) => Promise<void> | void;
   /** The platform shown, picked in Settings' tree. */
   platform?: PlatformId;
+  /** Told which platforms this Hermes offers, once read, so Settings' tree offers only those. */
+  onPlatforms?: (ids: PlatformId[]) => void;
 }) {
   const [list, setList] = useState<GatewayList>();
   const [problem, setProblem] = useState<{ unsupported: boolean; permission: boolean; text: string }>();
@@ -155,6 +158,11 @@ export function GatewaySettings({
 
   const gateways = list?.gateways ?? [];
   const g = gateways.find((x) => x.id === selected) ?? gateways[0];
+  const offered = gateways.map((x) => x.id).join(" ");
+  useEffect(() => {
+    if (list) onPlatforms?.(offered ? (offered.split(" ") as PlatformId[]) : []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- tell Settings when the offered platforms change, not on every new callback
+  }, [offered, !!list]);
 
   // Under Settings' page header (ADR 0159) the profile, Reload and when a change applies are the header's.
   const profileRow = inPage ? (

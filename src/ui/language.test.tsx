@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Settings → Appearance → Language (#353): picking Español turns the converted screens Spanish in place, and <html lang>
 // follows; System follows the desktop's languages.
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useSyncExternalStore, type ReactNode } from "react";
 import { afterEach, expect, it } from "vitest";
@@ -51,6 +51,9 @@ it("turns the Appearance tab and the Settings tabs Spanish when Español is pick
   const { root, items } = settings(["en-GB"]);
   expect(root.lang).toBe("en-GB");
   await user.click(screen.getByRole("tab", { name: "Appearance" }));
+  // The page's headings are its jump links in the tree (ADR 0159); a language change renames them in place.
+  const jumps = () => within(screen.getByRole("group", { name: /: on this page$/ })).getAllByRole("button").map((b) => b.textContent);
+  expect(jumps()).toContain("Fonts");
   await user.click(screen.getByRole("button", { name: "Create theme" }));
   const name = screen.getByRole<HTMLInputElement>("textbox", { name: "Theme name" });
   await user.clear(name);
@@ -65,6 +68,8 @@ it("turns the Appearance tab and the Settings tabs Spanish when Español is pick
   expect(screen.getByRole("button", { name: "Volver al chat" })).toBeTruthy();
   expect(screen.getByRole("tab", { name: "Apariencia" }).getAttribute("aria-selected")).toBe("true");
   expect(screen.getByRole("heading", { name: "Fuentes", level: 2 })).toBeTruthy();
+  await waitFor(() => expect(jumps()).toContain("Fuentes"));
+  expect(jumps()).not.toContain("Fonts");
   expect(screen.getByRole("switch", { name: "Ajuste de línea" })).toBeTruthy();
   expect(screen.getByRole("combobox", { name: "Idioma de la interfaz" })).toBeTruthy();
   expect(screen.getByRole("option", { name: "Sistema (English)" })).toBeTruthy();
