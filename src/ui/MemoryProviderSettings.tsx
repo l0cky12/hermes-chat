@@ -23,6 +23,7 @@ import {
 } from "../hermes/memoryProviders";
 import { linkTarget } from "../hermes/preview";
 import { SettingNote, SettingsSection } from "./SettingRows";
+import { HeadPart, useInPage } from "./SettingsPage";
 import { PreviewLink } from "./previewContext";
 import { errorText } from "../hermes/values";
 
@@ -687,9 +688,19 @@ export function MemoryProviderSettings({
   const shows = !unsupported && (connected || !!rows);
   // The settings show under their row only while the list does.
   const editorShown = !!editorBlock && !memoryError;
+  // Under Settings' page header (ADR 0159), while External memory is the part shown: the header names it, carries its
+  // (i) and help, and Reload. Hidden behind the memory files, it leaves the header alone.
+  const head = useInPage() && targetProp !== undefined;
+  const reloadBtn = shows && (
+    <button className="btn" disabled={!connected || !!busy} onClick={reload} title="Read every profile's provider from Hermes again.">
+      <RefreshCw size={14} /> Reload
+    </button>
+  );
   return (
     <>
+      {head && reloadBtn && <HeadPart at="actions">{reloadBtn}</HeadPart>}
       <SettingsSection
+        bare={head}
         title="External memory"
         titleId="external-memory-heading"
         className="external-memory"
@@ -701,13 +712,7 @@ export function MemoryProviderSettings({
             same Honcho account.
           </p>
         }
-        action={
-          shows && (
-            <button className="btn" disabled={!connected || !!busy} onClick={reload} title="Read every profile's provider from Hermes again.">
-              <RefreshCw size={14} /> Reload
-            </button>
-          )
-        }
+        action={!head && reloadBtn}
       >
         {unsupported ? (
           <SettingNote role="status">
@@ -782,7 +787,7 @@ export function MemoryProviderSettings({
                   <div className="provider-row-main">
                     <span className="provider-row-name">{BUILT_IN}</span>
                     {memory.active === "" && <span className="badge provider-status ok">In use</span>}
-                    <div className="muted small">Only the two memory files above. Turns off the external provider; what it stored stays where it is.</div>
+                    <div className="muted small">Only Agent notes and User profile, the two memory files. Turns off the external provider; what it stored stays where it is.</div>
                   </div>
                   {memory.active !== "" && (
                     <button className="btn" disabled={!connected || !!busy} onClick={() => leave(() => void use(""))}>

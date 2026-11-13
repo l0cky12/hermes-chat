@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // Settings → Gateways on screen (GatewaySettings.tsx, ADR 0073), against the fake dashboard's messaging routes
-// (fakeGateways.ts): the sub-nav of platforms, the state, token rows that keep, replace or remove, the switch, Save with
-// its read back, a change on the server meanwhile, Check status, the three problems in their own words, and answers for
-// another profile dropped. Every token here is synthetic.
+// (fakeGateways.ts): the platform given (picked in Settings' tree, ADR 0159), the state, token rows that keep, replace or
+// remove, the switch, Save with its read back, a change on the server meanwhile, Check status, the three problems in
+// their own words, and answers for another profile dropped. Every token here is synthetic.
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode, useState } from "react";
@@ -45,26 +45,33 @@ async function shown({ s = server(), profile = "default" } = {}) {
       <GatewaySettings api={hermes.gateways} profile={profile} connected openUrl={vi.fn()} />
     </StrictMode>,
   );
-  await screen.findByRole("navigation", { name: "Gateways" });
+  await screen.findByRole("heading", { name: "Telegram" });
   return { s, hermes, user, view };
 }
 
 const rowOf = (name: string) => screen.getByText(name, { selector: ".set-name, .set-name *" }).closest(".set-row") as HTMLElement;
 const save = () => screen.getByRole("button", { name: "Save" });
+/** The line under the settings with Discard and Save, and what a save came to. */
+const commit = () => save().closest(".set-commit") as HTMLElement;
 
 describe("Settings → Gateways", () => {
-  it("shows Telegram and Discord in a sub-nav, each with its state and the token's preview, never the token", async () => {
-    const { user, view } = await shown();
-    const nav = screen.getByRole("navigation", { name: "Gateways" });
-    expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toEqual(["Telegram", "Discord"]);
+  it("shows the platform it's given, Telegram or Discord, with its state and the token's preview, never the token", async () => {
+    const { hermes, view } = await shown();
+    // Telegram unless told otherwise; Settings' tree picks the platform.
     expect(screen.getByRole("heading", { name: "Telegram" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Discord" })).toBeNull();
     expect(within(rowOf("Status")).getByText("Gateway stopped")).toBeTruthy();
     expect(screen.getByText("hermes -p default gateway start")).toBeTruthy();
     expect(within(rowOf("Telegram bot token")).getByText("«redacted:1234...my00»")).toBeTruthy();
     expect((screen.getByLabelText("Allowed Telegram user IDs (comma-separated)") as HTMLInputElement).value).toBe("111");
     expect(view.container.innerHTML).not.toContain(TOKEN);
-    await user.click(within(nav).getByRole("button", { name: "Discord" }));
+    view.rerender(
+      <StrictMode>
+        <GatewaySettings api={hermes.gateways} profile="default" connected openUrl={vi.fn()} platform="discord" />
+      </StrictMode>,
+    );
     expect(screen.getByRole("heading", { name: "Discord" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Telegram" })).toBeNull();
     expect(within(rowOf("Status")).getByText("Off")).toBeTruthy();
     expect(within(rowOf("Discord bot token")).getByText("Not set.")).toBeTruthy();
   });
@@ -135,7 +142,7 @@ describe("Settings → Gateways", () => {
     await user.click(screen.getByLabelText("Telegram bot token"));
     await user.paste("not-a-token");
     await user.click(save());
-    const alert = await within(rowOf("Save")).findByRole("alert");
+    const alert = await within(commit()).findByRole("alert");
     expect(alert.textContent).toContain("Token turned down:");
     expect(alert.textContent).toContain("Paste a new token from Telegram's @BotFather.");
     // A refusal keeps what was typed, to fix and send again.
@@ -145,7 +152,7 @@ describe("Settings → Gateways", () => {
     s.gateways.refuse = { status: 403, detail: "platforms.telegram.enabled is locked by the managed level" };
     await user.click(screen.getByRole("switch", { name: "Turned on" }));
     await user.click(save());
-    await waitFor(() => expect(within(rowOf("Save")).getByRole("alert").textContent).toContain("Permission refused: platforms.telegram.enabled is locked by the managed level"));
+    await waitFor(() => expect(within(commit()).getByRole("alert").textContent).toContain("Permission refused: platforms.telegram.enabled is locked by the managed level"));
     expect(s.gateways.enabled.default.telegram).toBe(true);
   });
 
@@ -160,7 +167,7 @@ describe("Settings → Gateways", () => {
     expect(view.container.innerHTML).not.toContain(TOKEN);
   });
 
-  it("keeps a secret from a refused save out of Read again and Check status", async () => {
+  it("keeps a secret from a refused save out of Reload and Check status", async () => {
     const s = server();
     const { user, view } = await shown({ s });
     await user.click(screen.getByRole("button", { name: "Add Webhook secret" }));
@@ -168,9 +175,9 @@ describe("Settings → Gateways", () => {
     await user.paste("odd-hook-value");
     s.gateways.refuse = { status: 400, detail: "rejected" };
     await user.click(save());
-    await within(rowOf("Save")).findByRole("alert");
+    await within(commit()).findByRole("alert");
     s.gateways.gateway.default = { running: true, platforms: { telegram: { state: "fatal", error_code: "x", error_message: "webhook odd-hook-value refused" } } };
-    await user.click(screen.getByRole("button", { name: "Read again" }));
+    await user.click(screen.getByRole("button", { name: "Reload" }));
     await within(rowOf("Status")).findByText(/webhook \[redacted\] refused/);
     await user.click(screen.getByRole("button", { name: "Check status" }));
     await within(rowOf("Check status")).findByText(/webhook \[redacted\] refused/);
@@ -205,7 +212,7 @@ describe("Settings → Gateways", () => {
     running.push(hermes);
     const user = userEvent.setup();
     const view = render(<GatewaySettings key="default" api={hermes.gateways} profile="default" connected openUrl={vi.fn()} />);
-    await screen.findByRole("navigation", { name: "Gateways" });
+    await screen.findByRole("heading", { name: "Telegram" });
     await user.click(screen.getByRole("switch", { name: "Turned on" }));
     await user.click(save());
     view.rerender(<GatewaySettings key="bot" api={hermes.gateways} profile="bot" connected openUrl={vi.fn()} />);
@@ -215,7 +222,7 @@ describe("Settings → Gateways", () => {
     expect(screen.queryByText(/Saved, and Hermes reads it back/)).toBeNull();
   });
 
-  it("is a Settings tab with a profile picker starting on the profile in use", async () => {
+  it("is a Settings tab with its platforms in the tree and a profile picker starting on the profile in use", async () => {
     const s = server();
     s.gateways.env.bot = { DISCORD_BOT_TOKEN: "bot-profile-discord-token" };
     const hermes = await connect(s.openPipe, "default");
@@ -246,12 +253,23 @@ describe("Settings → Gateways", () => {
     }
     render(<Shell />);
     await user.click(screen.getByRole("tab", { name: "Gateways" }));
-    await screen.findByRole("heading", { name: "Telegram" });
-    const pick = screen.getByRole("combobox", { name: "Profile whose gateways are shown" }) as HTMLSelectElement;
+    // The platforms are the tab's sections in the tree; the page header names the one shown under its page.
+    const platforms = await screen.findByRole("group", { name: "Gateways: sections" });
+    expect(within(platforms).getAllByRole("button").map((b) => b.textContent)).toEqual(["Telegram", "Discord"]);
+    expect(within(platforms).getByRole("button", { name: "Telegram" }).getAttribute("aria-current")).toBe("page");
+    const head = document.querySelector("header.page-head") as HTMLElement;
+    expect(head.querySelector(".page-eyebrow")!.textContent).toBe("Gateways");
+    expect(within(head).getByRole("heading", { level: 2 }).textContent).toBe("Telegram");
+    // The picker is the header's profile slot, starting on the profile in use.
+    const pick = within(head.querySelector(".page-slot") as HTMLElement).getByRole("combobox", { name: "Profile whose gateways are shown" }) as HTMLSelectElement;
     expect(pick.value).toBe("default");
+    expect(head.querySelector(".page-slot .badge")).toBeNull();
     await waitFor(() => expect(pick.disabled).toBe(false));
     await user.selectOptions(pick, "bot");
-    await user.click(await screen.findByRole("button", { name: "Discord" }));
+    await waitFor(() => expect(document.querySelector("header.page-head .page-slot .badge")?.textContent).toBe("not in use"));
+    await user.click(within(platforms).getByRole("button", { name: "Discord" }));
+    expect(within(platforms).getByRole("button", { name: "Discord" }).getAttribute("aria-current")).toBe("page");
+    expect(within(document.querySelector("header.page-head") as HTMLElement).getByRole("heading", { level: 2 }).textContent).toBe("Discord");
     await screen.findByText("«redacted:bot-...oken»");
   });
 });

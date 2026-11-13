@@ -43,6 +43,34 @@ export const en = {
       extensions: "Extensions",
       diagnostics: "Diagnostics",
     },
+    /** The sidebar's three groups of pages (ADR 0159). */
+    groups: {
+      app: "App",
+      agent: "Agent",
+      server: "Server",
+    },
+    /** Each page's one-line description, under its title. */
+    pages: {
+      general: "Connections, the chat list, launch and tray, screenshots, and this computer's data.",
+      appearance: "How Hermes Chat looks on this computer.",
+      keyboard: "Click a shortcut, press the new keys, then Save. Ctrl means Ctrl or Cmd.",
+      snapshots: "The bucket Share snapshot publishes chat pages to, and the snapshots in it.",
+      model: "The models this profile's chats, subagents and helpers run on.",
+      providers: "API keys, subscription sign-ins and custom endpoints Hermes uses for models.",
+      voice: "Dictation, Read aloud and voice conversations.",
+      toolsets: "Which tools Hermes offers the model.",
+      mcp: "Tools from other programs and services that Hermes offers the model.",
+      gateways: "Reach this profile's Hermes from Telegram or Discord.",
+      profiles: "Every profile on this server: made, renamed, described, given a model, or deleted.",
+      persona: "Who Hermes is and how it speaks: the profile's SOUL.md.",
+      memory: "What Hermes remembers between chats.",
+      skills: "Instructions Hermes loads for a kind of task. Changes apply to every client on this profile.",
+      extensions: "Optional commands and views that run in a sandbox.",
+      diagnostics: "What the connected Hermes is and supports, and the logs.",
+    },
+    searchTitle: "Search",
+    done: "Done",
+    closeNav: "Close the list of settings",
   },
   appearance: {
     language: {
@@ -155,6 +183,8 @@ export const en = {
     more: "Profiles are switched in the chat list's header. Here they are made, renamed, described, given a model and deleted, whichever one is in use.",
     newProfile: "New profile",
     refresh: "Read the profiles again",
+    reload: "Reload",
+    keysTitle: "Keys for this list",
     list: "Profiles",
     loading: "Reading the server's profiles…",
     listFailed: (error: string) => `Couldn't read the server's profiles: ${error}`,

@@ -318,7 +318,7 @@ describe("The screenshot recorder", () => {
     const s = await signedIn({ search: ["Ctrl+J"] });
     await s.user.click(button("Settings"));
     await screen.findByRole("heading", { name: "Settings" });
-    await s.user.click(within(screen.getByRole("navigation", { name: "General" })).getByRole("button", { name: "Screenshots" }));
+    await s.user.click(within(screen.getByRole("group", { name: "General: sections" })).getByRole("button", { name: "Screenshots" }));
     const key = button("Screenshot shortcut");
     const shortcutRow = within(key.closest<HTMLElement>(".set-row")!);
     await s.user.click(key);

@@ -420,12 +420,15 @@ describe("in the app", () => {
     expect(screen.getByRole("tab", { name: /Diagnostics/, selected: true })).toBeTruthy();
     expect(screen.getByText(/liam@hermes/)).toBeTruthy();
     expect(screen.getByText(/^Dashboard username and password, through an SSH tunnel; the dashboard offers basic$/)).toBeTruthy();
-    // Arrow keys move along the tabs, as everywhere in Settings.
+    // Arrow keys move along the tabs, as everywhere in Settings: up and down the sidebar's one list (ADR 0159), where
+    // Profiles comes before Diagnostics.
     screen.getByRole("tab", { name: /Diagnostics/ }).focus();
-    await user.keyboard("{ArrowLeft}");
-    expect(screen.getByRole("tab", { name: /Skills/, selected: true })).toBeTruthy();
-    await user.keyboard("{ArrowRight}");
+    await user.keyboard("{ArrowUp}");
+    expect(screen.getByRole("tab", { name: /Profiles/, selected: true })).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: /Profiles/ }));
+    await user.keyboard("{ArrowDown}");
     expect(screen.getByRole("tab", { name: /Diagnostics/, selected: true })).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: /Diagnostics/ }));
   });
 
   it("shows a note in the side panel's Files tab on a server without the managed-files routes", { timeout: 15_000 }, async () => {

@@ -5,6 +5,7 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { RefreshCw, ShieldCheck, TriangleAlert } from "lucide-react";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { AppliesBox, AppliesPart, HeadPart, MetaChip, useInPage } from "./SettingsPage";
 import {
   UnsupportedServerError,
   changeableName,
@@ -233,6 +234,7 @@ export function ToolsetSettings({
   /** The chat open in the app's active pane, in this profile. */
   chat?: OpenChat;
 }) {
+  const inPage = useInPage();
   const [list, setList] = useState<ToolsetList>();
   const [write, setWrite] = useState<WriteSupport>();
   const [guards, setGuards] = useState<ToolsetGuards>();
@@ -597,17 +599,72 @@ export function ToolsetSettings({
     />
   );
 
+  // Under Settings' page header (ADR 0159): Reload, when the list was read, and whether the profile has a list of its
+  // own with what this chat has, in the summary box. Every re-read in Settings is a Reload.
+  const reload = (
+    <button className="btn" disabled={!connected || locked || reading} onClick={() => (void read(true), void readChat())}>
+      <RefreshCw size={14} /> {reading ? "Reloading…" : "Reload"}
+    </button>
+  );
+  const saved =
+    guards && list.toolsets.some((t) => t.platform === "cli")
+      ? guards.noMcpUnclear.includes("cli")
+        ? { line: "This app can't tell whether the profile has saved its own list.", text: "This app can't tell whether the profile has saved its own list: it's saved in a form this app can't read for certain." }
+        : guards.savedLists.includes("cli")
+          ? { line: "Saved in profile: the profile has its own list, shown here.", text: "Saved in profile: the profile has its own list, shown here." }
+          : {
+              line: "Inherited: this profile uses Hermes's default list until you change one.",
+              text: "Inherited: the profile hasn't saved a list of its own, so it has Hermes's default. The first change here saves the whole list, as shown, into the profile.",
+            }
+      : undefined;
+  const chatStatus = (
+    <SettingNote className="toolset-chat-status">
+      <div role="status" aria-label="This chat">
+        {!chat
+          ? "No chat is open, so there's no chat to compare with."
+          : !connected
+            ? `“${chat.title}”: what it has is read when Hermes is back.`
+            : !chat.runtimeId
+              ? `“${chat.title}” isn't open on Hermes yet, so it has no tools of its own: it gets the profile's list when Hermes opens it.`
+              : !chatShown?.read && !chatShown?.error
+                ? `Reading what “${chat.title}” has…`
+                : chatShown.error
+                  ? <span className="sign-in-error">Couldn't read what “{chat.title}” has: {chatShown.error}</span>
+                  : chatShown.read!.kind === "closed"
+                    ? `Hermes no longer has “${chat.title}” open: it gets the profile's list when it's opened again.`
+                    : chatShown.read!.kind === "unsupported"
+                      ? `${chatShown.read!.reason} Each toolset shows the profile's setting only.`
+                      : `“${chat.title}”: what Hermes offers it, read at ${clockTime(chatShown.read!.readAt)}, is under each toolset.`}
+        {chat?.running && connected && " A reply is running in it now; nothing here changes the tools it's using."}
+      </div>
+    </SettingNote>
+  );
   return (
     <>
+      {inPage && (
+        <>
+          {!reading && !loadError && (
+            <HeadPart at="meta">
+              <MetaChip label="Read" value={clockTime(list.readAt)} />
+            </HeadPart>
+          )}
+          <HeadPart at="actions">{reload}</HeadPart>
+          <HeadPart at="applies">
+            <AppliesBox line={saved?.line ?? "Which tools new chats in this profile get."} more="Details">
+              <AppliesPart>
+                {saved && <SettingNote role="status">{saved.text}</SettingNote>}
+                {chatStatus}
+              </AppliesPart>
+            </AppliesBox>
+          </HeadPart>
+        </>
+      )}
       <SettingsSection
+        bare={inPage}
         title="Toolsets"
         intro={intro}
         more={how}
-        action={
-          <button className="btn" disabled={!connected || locked || reading} onClick={() => (void read(true), void readChat())}>
-            <RefreshCw size={14} /> Refresh
-          </button>
-        }
+        action={!inPage && reload}
       >
         {guards?.codingFocus && (
           <SettingNote tone="warn" role="status">
@@ -644,44 +701,19 @@ export function ToolsetSettings({
             </span>
           </SettingNote>
         )}
-        {guards && list.toolsets.some((t) => t.platform === "cli") && (
-          <SettingNote role="status">
-            {guards.noMcpUnclear.includes("cli")
-              ? "This app can't tell whether the profile has saved its own list: it's saved in a form this app can't read for certain."
-              : guards.savedLists.includes("cli")
-                ? "Saved in profile: the profile has its own list, shown here."
-                : "Inherited: the profile hasn't saved a list of its own, so it has Hermes's default. The first change here saves the whole list, as shown, into the profile."}
-          </SettingNote>
-        )}
-        <SettingNote className="toolset-chat-status">
-          <div role="status" aria-label="This chat">
-            {!chat
-              ? "No chat is open, so there's no chat to compare with."
-              : !connected
-                ? `“${chat.title}”: what it has is read when Hermes is back.`
-                : !chat.runtimeId
-                  ? `“${chat.title}” isn't open on Hermes yet, so it has no tools of its own: it gets the profile's list when Hermes opens it.`
-                  : !chatShown?.read && !chatShown?.error
-                    ? `Reading what “${chat.title}” has…`
-                    : chatShown.error
-                      ? <span className="sign-in-error">Couldn't read what “{chat.title}” has: {chatShown.error}</span>
-                      : chatShown.read!.kind === "closed"
-                        ? `Hermes no longer has “${chat.title}” open: it gets the profile's list when it's opened again.`
-                        : chatShown.read!.kind === "unsupported"
-                          ? `${chatShown.read!.reason} Each toolset shows the profile's setting only.`
-                          : `“${chat.title}”: what Hermes offers it, read at ${clockTime(chatShown.read!.readAt)}, is under each toolset.`}
-            {chat?.running && connected && " A reply is running in it now; nothing here changes the tools it's using."}
-          </div>
-        </SettingNote>
+        {!inPage && saved && <SettingNote role="status">{saved.text}</SettingNote>}
+        {!inPage && chatStatus}
         {pending && pending.profile !== profile && (
           <SettingNote role="status">Waiting for a change in the {pending.profile} profile to finish before this one can change.</SettingNote>
         )}
-        <SettingNote role="status">
-          <span>
-            {reading ? "Reading the toolsets from Hermes…" : loadError ? null : `Read from Hermes at ${clockTime(list.readAt)}.`}
-            {loadError && <span className="sign-in-error">Couldn't read them again: {loadError}</span>}
-          </span>
-        </SettingNote>
+        {(!inPage || reading || loadError) && (
+          <SettingNote role="status">
+            <span>
+              {reading ? "Reading the toolsets from Hermes…" : loadError ? null : `Read from Hermes at ${clockTime(list.readAt)}.`}
+              {loadError && <span className="sign-in-error">Couldn't read them again: {loadError}</span>}
+            </span>
+          </SettingNote>
+        )}
         <div className="toolset-list" role="group" aria-label="Toolsets for this app's chats">
           {here.map(row)}
         </div>

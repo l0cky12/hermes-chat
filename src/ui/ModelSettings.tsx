@@ -36,6 +36,7 @@ import { getUIPrefs, subscribe as subscribeUIPrefs, toggleModelFavorite } from "
 import { ModelCombobox } from "./ModelCombobox";
 import { ModelControls } from "./ModelPicker";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { AppliesBox, AppliesPart, HeadPart } from "./SettingsPage";
 import { errorText } from "../hermes/values";
 
 const EFFORT_LABEL: Record<string, string> = {
@@ -140,7 +141,8 @@ function ApplyRow({
   onDiscard: () => void;
   onApply: () => void;
 }) {
-  const note = error ?? (changed ? (problem ?? "Not applied yet.") : done ? "Applied. New chats use it." : "Same as Hermes.");
+  // Beside Discard and Apply: a change waits on this screen until it's applied, and leaving Settings drops it.
+  const note = error ?? (changed ? (problem ?? "Not applied yet. Leaving Settings drops it.") : done ? "Applied. New chats use it." : "Same as Hermes. Changes wait here until you apply them.");
   // The card's last line: SettingsSection has no place under its card, and the part's state stays in view beside Apply.
   return (
     <SettingNote className="model-apply">
@@ -497,8 +499,7 @@ export function ModelSettings({
         title="Main model"
         intro={
           <>
-            The model new chats on the <span className="mono">{profile}</span> profile start with; chats already open keep theirs. Changes stay on
-            this screen until you apply them, and leaving Settings drops them.
+            The model new chats on the <span className="mono">{profile}</span> profile start with; chats already open keep theirs.
           </>
         }
       >
@@ -749,7 +750,21 @@ export function ModelSettings({
         />
       </SettingsSection>
 
-      <SettingsSection title="Guardrails" intro="Checked when you apply a main model, before anything is written.">
+      {/* Guardrails: checked when a main model is applied, before anything is written. In the page header's box (ADR 0159). */}
+      <HeadPart at="applies">
+        <AppliesBox line="Hermes checks pinned helpers and the price before it switches the main model." more="Safety checks">
+          <AppliesPart>
+            <Guardrails pins={pins} pinnedBy={pinnedBy} providers={providers} />
+          </AppliesPart>
+        </AppliesBox>
+      </HeadPart>
+    </>
+  );
+}
+
+function Guardrails({ pins, pinnedBy, providers }: { pins: AuxTask[]; pinnedBy: string[]; providers: CatalogProvider[] }) {
+  return (
+    <>
         <SettingRow
           className="model-guard"
           name={
@@ -772,7 +787,6 @@ export function ModelSettings({
           }
           hint="Hermes checks the price of the main model you apply. If it's above Hermes's safety threshold, nothing is switched until you choose Switch anyway or Keep current."
         />
-      </SettingsSection>
     </>
   );
 }

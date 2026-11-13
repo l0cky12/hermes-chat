@@ -783,7 +783,7 @@ describe("Split panes and Settings", () => {
     const s = await opened(server);
     await s.user.click(screen.getByRole("button", { name: "Settings" }));
     await s.user.click(await screen.findByRole("tab", { name: /Voice/ }));
-    const section = (await screen.findByRole("heading", { name: "Voice" })).closest("section")!;
+    const section = (await screen.findByRole("heading", { name: "Dictation and Read aloud" })).closest("section")!;
     await within(section).findByText("Ends a turn after 1.5 s of quiet");
     expect(section.textContent).toMatch(/1\.5 s of quiet \(voice\.silence_duration, the profile's\)/);
     expect(section.textContent).toMatch(/below loudness 350 \(voice\.silence_threshold, the profile's\)/);

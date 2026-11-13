@@ -16,6 +16,7 @@ import {
   type SnapshotHost,
 } from "../hermes/snapshots";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { MoreText } from "./SettingsPage";
 import { Spinner } from "./bits";
 import { errorText } from "../hermes/values";
 
@@ -77,7 +78,7 @@ export function SnapshotSettings({ api = tauriSnapshots, copyText = clipboardTex
       (l) => {
         if (!alive.current || read !== reads.current) return;
         if (!shown.current || !sameHost(l.host, shown.current))
-          return setList({ loading: false, error: "The snapshot host changed while the list was read. Refresh to read it again." });
+          return setList({ loading: false, error: "The snapshot host changed while the list was read. Reload to read it again." });
         setList({ snapshots: l.snapshots, loading: false });
       },
       (e: unknown) => {
@@ -206,13 +207,18 @@ export function SnapshotSettings({ api = tauriSnapshots, copyText = clipboardTex
   const hostSection = (children: ReactNode) => (
     <SettingsSection
       title="Snapshot host"
+      // A long intro shows its first sentence; the rest is behind More (ADR 0159).
       intro={
-        <>
-          Share snapshot publishes a chat's page to an S3-compatible bucket you name, such as Amazon S3, Cloudflare R2, Backblaze B2 or MinIO. The bucket
-          stays private: each page is reached by a signed link that lasts at most 7 days. Use a key limited to the prefix, with <code>GetObject</code>,{" "}
-          <code>PutObject</code>, <code>GetObjectVersion</code>, <code>DeleteObject</code>, <code>DeleteObjectVersion</code>, <code>ListBucket</code> and{" "}
-          <code>ListBucketVersions</code>. Reading back, links and Revoke need the version permissions.
-        </>
+        <MoreText
+          first="Share snapshot publishes a chat's page to an S3-compatible bucket you name, such as Amazon S3, Cloudflare R2, Backblaze B2 or MinIO."
+          rest={
+            <>
+              The bucket stays private: each page is reached by a signed link that lasts at most 7 days. Use a key limited to the prefix, with <code>GetObject</code>,{" "}
+              <code>PutObject</code>, <code>GetObjectVersion</code>, <code>DeleteObject</code>, <code>DeleteObjectVersion</code>, <code>ListBucket</code> and{" "}
+              <code>ListBucketVersions</code>. Reading back, links and Revoke need the version permissions.
+            </>
+          }
+        />
       }
     >
       {children}
@@ -449,7 +455,7 @@ export function SnapshotSettings({ api = tauriSnapshots, copyText = clipboardTex
         action={
           host && (
             <button className="btn" disabled={list.loading} onClick={readList}>
-              <RefreshCw size={14} aria-hidden /> Refresh
+              <RefreshCw size={14} aria-hidden /> Reload
             </button>
           )
         }

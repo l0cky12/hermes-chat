@@ -9,6 +9,7 @@ import { FakeHermes, row } from "../hermes/fakeHermes";
 import { memoryCache } from "../hermes/memoryCache";
 import { PersonaStore, personaKey } from "../hermes/personaStore";
 import { connect, type Hermes } from "../hermes/transport";
+import { connectionRefs, formatChatLink, parseChatLink } from "../hermes/chatLinks";
 import { Main } from "../App";
 import { queryWords, searchText, textMatches } from "./settingsSearch";
 import { RestError } from "../hermes/pipe";
@@ -52,10 +53,13 @@ async function launch({ souls = { default: SOUL, work: "# Work persona\n" } as R
   const close = vi.fn();
   const window = { ask: undefined as undefined | ((close: () => void) => void), close, guarded: 0 };
   const connection = { mode: "ssh" as const, sshTarget: `liam@hermes-${++launches}`, url: "", username: "liam" };
-  const view = render(
+  const refs = connectionRefs(localStorage);
+  const main = (link?: Parameters<typeof Main>[0]["link"]) => (
     <Main
       hermes={hermes}
       connection={connection}
+      refs={refs}
+      link={link}
       onSignOut={signOut}
       personaStore={store}
       guardClose={async (ask) => {
@@ -65,11 +69,19 @@ async function launch({ souls = { default: SOUL, work: "# Work persona\n" } as R
           window.ask = undefined;
         };
       }}
-    />,
+    />
   );
+  const view = render(main());
   await waitFor(() => expect(hermes.hasListed()).toBe(true));
   await act(async () => void (await hermes.idle()));
-  return { server, hermes, store, storage, connection, window, signOut, view, user: userEvent.setup() };
+  /** A chat link arriving from outside the app (ADR 0037), as App hands it to Main. */
+  const openLink = async (profile: string, chatId: string) => {
+    const parsed = parseChatLink(formatChatLink({ connection: refs.refFor(connection), profile, chatId }));
+    if (!parsed.ok) throw new Error("bad link");
+    view.rerender(main({ link: parsed.link, at: Date.now() }));
+    await act(async () => void (await hermes.idle()));
+  };
+  return { server, hermes, store, storage, connection, window, signOut, view, openLink, user: userEvent.setup() };
 }
 
 async function openPersona(user: ReturnType<typeof userEvent.setup>) {
@@ -77,8 +89,13 @@ async function openPersona(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("tab", { name: /Persona/ }));
 }
 
-/** A row of the Persona section's card, by its name: Server, Profile or File. */
-const fact = (name: string) => [...document.querySelectorAll<HTMLElement>(".persona .set-row")].find((r) => r.querySelector(".set-name")?.textContent === name)!;
+/** A chip in the page header, by its label: Server or File. The value is its <code>, in full in the code's title (ADR 0159). */
+const chip = (label: string) =>
+  [...document.querySelectorAll<HTMLElement>(".page-head .meta-chip")].find((c) => c.firstElementChild?.textContent === label)!.querySelector("code")!;
+/** The page header's profile slot, where Persona's picker sits. */
+const slot = () => document.querySelector<HTMLElement>(".page-head .page-slot")!;
+/** The page header's summary box: when a saved persona takes effect. */
+const applies = () => document.querySelector<HTMLElement>(".page-head section.applies-box")!;
 const editor = (profile = "default") => screen.findByRole<HTMLTextAreaElement>("textbox", { name: `SOUL.md for the ${profile} profile` });
 const writes = (server: FakeHermes) => server.restRequests.filter((r) => r.method === "PUT" && r.path.endsWith("/soul")).map((r) => [r.path, r.body?.content]);
 
@@ -97,10 +114,13 @@ describe("Settings → Persona", () => {
     await openPersona(user);
     const box = await editor();
     expect(box.value).toBe(SOUL);
-    expect(fact("Server").textContent).toContain("liam@hermes");
-    expect(within(fact("Profile")).getByRole<HTMLSelectElement>("combobox", { name: "Profile" }).value).toBe("default");
-    expect(fact("File").textContent).toContain("/home/liam/.hermes/SOUL.md");
-    expect(screen.getByText(/Hermes reads SOUL.md when a chat starts/).textContent).toMatch(/doesn't need to restart, and Hermes Chat never restarts it/);
+    expect(chip("Server").textContent).toContain("liam@hermes");
+    expect(within(slot()).getByRole<HTMLSelectElement>("combobox", { name: "Profile" }).value).toBe("default");
+    expect(slot().textContent!.trim()).toMatch(/^Editing profile/);
+    // The file shows from ~, and in full on hover.
+    expect(chip("File").textContent).toBe("~/.hermes/SOUL.md");
+    expect(chip("File").title).toBe("/home/liam/.hermes/SOUL.md");
+    expect(within(applies()).getByText(/Hermes reads SOUL.md when a chat starts/).textContent).toMatch(/doesn't need to restart, and Hermes Chat never restarts it/);
     // Plain text, never rendered: the Markdown shows as typed.
     expect(document.querySelector(".persona strong")).toBeNull();
     expect(screen.getByRole("button", { name: /^Save$/ }).hasAttribute("disabled")).toBe(true);
@@ -552,18 +572,20 @@ describe("leaving an unsaved persona edit", () => {
   });
 
   it("asks before switching profile, and the other profile's persona is its own", async () => {
-    const { server, hermes, user } = await launch();
+    const { server, hermes, openLink, user } = await launch();
+    server.otherProfiles.work = [row("deploy", 1, { title: "Deploy plan" })];
     await openPersona(user);
     await edit(user, "# Default, edited\n");
-    await user.click(document.querySelector<HTMLElement>(".profile-btn")!);
-    await user.click(within(await screen.findByRole("listbox", { name: "Profiles" })).getByRole("option", { name: /work/ }));
-    const ask = screen.getByRole("alertdialog", { name: "Switch profile without saving the persona?" });
+    // The chat list's profile switcher is hidden while Settings is open (ADR 0159); a chat link to another profile's
+    // chat switches profile from here, through the same question.
+    await openLink("work", "deploy");
+    const ask = await screen.findByRole("alertdialog", { name: "Switch profile without saving the persona?" });
     await user.click(within(ask).getByRole("button", { name: "Keep editing" }));
     expect(hermes.profile).toBe("default");
+    expect((await editor()).value).toBe("# Default, edited\n");
 
-    await user.click(document.querySelector<HTMLElement>(".profile-btn")!);
-    await user.click(within(await screen.findByRole("listbox", { name: "Profiles" })).getByRole("option", { name: /work/ }));
-    await user.click(screen.getByRole("button", { name: "Switch anyway" }));
+    await openLink("work", "deploy");
+    await user.click(await screen.findByRole("button", { name: "Switch anyway" }));
     await waitFor(() => expect(hermes.getSnapshot()).toMatchObject({ profile: "work", status: "connected" }));
     await waitFor(() => expect(hermes.getSnapshot().switching).toBeUndefined());
 
@@ -572,7 +594,7 @@ describe("leaving an unsaved persona edit", () => {
     expect(work.value).toBe("# Work persona\n");
     // The default profile's kept edit isn't offered here.
     expect(screen.queryByText(/Changes you didn't save/)).toBeNull();
-    expect(fact("File").textContent).toContain("/home/liam/.hermes/profiles/work/SOUL.md");
+    expect(chip("File").title).toBe("/home/liam/.hermes/profiles/work/SOUL.md");
     await edit(user, "# Work, edited\n", "work");
     await user.click(screen.getByRole("button", { name: /^Save$/ }));
     await screen.findByText(/Saved SOUL.md/);
@@ -654,11 +676,11 @@ describe("editing another profile's persona (#190)", () => {
     const work = await editor("work");
     expect(work.value).toBe("# Work persona\n");
     // The notes are the picked profile's: its file, its distribution, and that the app is using another profile.
-    expect(fact("File").textContent).toContain("/home/liam/.hermes/profiles/work/SOUL.md");
+    expect(chip("File").title).toBe("/home/liam/.hermes/profiles/work/SOUL.md");
     expect(await screen.findByText(/installed from the/)).toBeTruthy();
     expect(screen.getByText(/profile distribution/).textContent).toContain("acme-agents");
     expect(screen.getByText(/Hermes Chat is using the/).textContent).toMatch(/using the default profile.*chats on the work profile/s);
-    expect(screen.getByText(/Hermes reads SOUL.md when a chat starts/).textContent).toContain("use the work profile");
+    expect(within(applies()).getByText(/Hermes reads SOUL.md when a chat starts/).textContent).toContain("use the work profile");
 
     await edit(user, "# Work, edited\n", "work");
     await user.click(screen.getByRole("button", { name: /^Save$/ }));
@@ -753,8 +775,10 @@ describe("editing another profile's persona (#190)", () => {
   });
 });
 
-describe("the row layout (#174, ADR 0059)", () => {
+describe("the row layout (#174, ADR 0059, ADR 0159)", () => {
   const section = (heading: string) => screen.getByRole("heading", { name: heading, level: 2 }).closest("section")!;
+  /** Persona's own section: bare in Settings (ADR 0159), so named by its title, with the page header above it. */
+  const persona = () => screen.getByRole("region", { name: "Persona" });
 
   it("draws each section as a heading and a card of rows, with the editor and its buttons in a block of the card", async () => {
     const { user } = await launch();
@@ -763,15 +787,22 @@ describe("the row layout (#174, ADR 0059)", () => {
     await user.click(screen.getByRole("button", { name: /^Save$/ }));
     await screen.findByText(/Saved SOUL.md/);
 
-    const persona = section("Persona");
-    expect(persona.classList).toContain("set-section");
-    const card = persona.querySelector(":scope > .set-card")!;
-    expect([...card.querySelectorAll(":scope > .set-row .set-name")].map((n) => n.textContent)).toEqual(["Server", "Profile", "File"]);
-    expect(within(fact("Profile")).getByRole("combobox", { name: "Profile" })).toBeTruthy();
-    // SOUL.md's editor, and Save, Cancel and Reload under it, are free-form content in the same card.
+    // The page header names the page, and holds the picker, the server and file chips and Reload.
+    const head = document.querySelector<HTMLElement>("header.page-head")!;
+    expect(within(head).getByRole("heading", { name: "Persona", level: 2 })).toBeTruthy();
+    expect(within(slot()).getByRole("combobox", { name: "Profile" })).toBeTruthy();
+    expect([...head.querySelectorAll(".meta-chip > span:first-child")].map((n) => n.textContent)).toEqual(["Server", "File"]);
+    expect(within(head.querySelector<HTMLElement>(".page-actions")!).getByRole("button", { name: /Reload/ })).toBeTruthy();
+    // Persona's section has no heading of its own, and its card no Server, Profile or File rows.
+    expect(persona().classList).toContain("set-section");
+    expect(persona().querySelector("h2")).toBeNull();
+    const card = persona().querySelector(":scope > .set-card")!;
+    expect(card.querySelectorAll(":scope > .set-row")).toHaveLength(0);
+    // SOUL.md's editor, and Save and Cancel under it, are free-form content in the card.
     const block = card.querySelector<HTMLElement>(":scope > .set-block")!;
     expect(within(block).getByRole("textbox", { name: "SOUL.md for the default profile" })).toBeTruthy();
-    for (const name of [/^Save$/, /Cancel/, /Reload/]) expect(within(block).getByRole("button", { name })).toBeTruthy();
+    for (const name of [/^Save$/, /Cancel/]) expect(within(block).getByRole("button", { name })).toBeTruthy();
+    expect(within(block).queryByRole("button", { name: /Reload/ })).toBeNull();
 
     // Copying is a row: its picker, still named "To profile", and Copy… beside it.
     const copy = screen.getByRole("region", { name: "Copy to another profile" });
@@ -786,22 +817,32 @@ describe("the row layout (#174, ADR 0059)", () => {
     expect(within(rows[0] as HTMLElement).getByRole("button", { name: "View" })).toBeTruthy();
   });
 
-  it("folds when a saved persona takes effect behind the section's (i), where search still finds it", async () => {
+  it("folds when a saved persona takes effect behind the header's (i) and summary box, where search still finds it", async () => {
     const { user } = await launch();
     await openPersona(user);
     await editor();
+    // The bare section's (i) ends the page header's description, and opens its help under it.
     const about = screen.getByRole("button", { name: "About Persona" });
+    expect(about.closest("header.page-head .page-help")).toBeTruthy();
     const help = document.getElementById(about.getAttribute("aria-controls")!)!;
+    expect(help.closest("header.page-head .page-help-text")).toBeTruthy();
     expect(about.getAttribute("aria-expanded")).toBe("false");
     expect(help.hidden).toBe(true);
     expect(help.textContent).toMatch(/Hermes reads SOUL.md when a chat starts/);
-    // The heading's name is its title alone.
-    expect(screen.getByRole("heading", { name: "Persona", level: 2 })).toBeTruthy();
-    // The folded words are still the section's text, which Settings' search matches.
-    expect(textMatches(searchText(section("Persona")), queryWords("rebuilds its instructions"))).toBe(true);
     await user.click(about);
     expect(about.getAttribute("aria-expanded")).toBe("true");
     expect(help.hidden).toBe(false);
+    // The header's summary box says it in one line, with the rest folded.
+    const box = applies();
+    const fold = box.querySelector("details")!;
+    const line = fold.querySelector<HTMLElement>("summary")!;
+    expect(line.textContent).toMatch(/Chats started after you save use the new persona\. A chat already going keeps the one it started with\./);
+    expect(fold.open).toBe(false);
+    expect(box.textContent).toMatch(/Hermes reads SOUL.md when a chat starts/);
+    // The folded words are still the box's text, which Settings' search matches.
+    expect(textMatches(searchText(box), queryWords("rebuilds its instructions"))).toBe(true);
+    await user.click(line);
+    expect(fold.open).toBe(true);
   });
 
   const unfolded = (el: Element) => expect(el.closest(".set-more, [hidden]")).toBeNull();
@@ -818,7 +859,7 @@ describe("the row layout (#174, ADR 0059)", () => {
     expect(document.querySelector(".persona .set-more :is([role=alert], [role=status], [role=alertdialog])")).toBeNull();
   });
 
-  it("shows under the picker, unfolded, that the profiles couldn't be listed", async () => {
+  it("shows first in the card, unfolded, that the profiles couldn't be listed", async () => {
     const { server, user } = await launch();
     server.rest["GET /api/profiles"] = () => {
       throw new RestError(500, "boom");
@@ -826,6 +867,7 @@ describe("the row layout (#174, ADR 0059)", () => {
     await openPersona(user);
     const problem = await screen.findByText(/Couldn't list the server's profiles/);
     unfolded(problem);
-    expect(problem.closest(".set-row")).toBe(fact("Profile"));
+    // The picker is in the page header; what went wrong listing its profiles is the card's first note.
+    expect(problem.closest(".set-note")).toBe(persona().querySelector(":scope > .set-card")!.firstElementChild);
   });
 });

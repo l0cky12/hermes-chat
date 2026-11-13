@@ -143,7 +143,7 @@ describe("Settings → Toolsets", () => {
     await user.click(toggle("Web Search & Scraping"));
     expect((await screen.findByRole("alert")).textContent).toMatch(/Hermes didn't confirm the change .*Read back just now, Web Search & Scraping is on/);
     expect(toggle("Web Search & Scraping").getAttribute("aria-checked")).toBe("true");
-    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await user.click(screen.getByRole("button", { name: "Reload" }));
     // The note stays, now saying what Hermes has, so the owner still sees that the change didn't go through.
     expect(await screen.findByText(/Hermes didn't confirm the last change \(Can't reach the Hermes dashboard: connection reset\). Read back at .*, Web Search & Scraping is on./)).toBeTruthy();
     expect(screen.queryByText(/so it may or may not have it/)).toBeNull();
@@ -248,7 +248,7 @@ describe("Settings → Toolsets", () => {
     server.toolsetConfigGate.stt = new Promise((r) => (releaseOld = r)); // The first check sees stt ready, slowly.
     const { user } = await shown(server);
     server.toolsetProviders.stt = [{ name: "Local Whisper", status: "needs_setup", is_active: true }];
-    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await user.click(screen.getByRole("button", { name: "Reload" }));
     const stt = () => toggle("Speech-to-Text").closest(".toolset-row") as HTMLElement;
     expect(await within(stt()).findByText("Needs setup")).toBeTruthy();
     act(() => releaseOld());
@@ -302,7 +302,7 @@ describe("Settings → Toolsets", () => {
     await user.click(toggle("Computer Use"));
     await screen.findByRole("alertdialog");
     server.enabledToolsets("default").add("computer_use");
-    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await user.click(screen.getByRole("button", { name: "Reload" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(screen.getByText(/Not changed: Computer Use .* was turned on elsewhere/)).toBeTruthy();
     expect(server.toolsetWrites).toEqual([]);
@@ -497,13 +497,13 @@ describe("Settings → Toolsets", () => {
       expect(await within(rowOf("Terminal & Processes")).findByText("Forced off on every platform")).toBeTruthy();
     });
 
-    it("an older Refresh landing late doesn't replace what a newer focus read found in the config", async () => {
+    it("an older Reload landing late doesn't replace what a newer focus read found in the config", async () => {
       const { server, user } = await shown();
       expect(await screen.findByText(/Inherited: the profile hasn't saved a list of its own/)).toBeTruthy();
       let release!: () => void;
       server.toolsetListGateOnce = new Promise((res) => (release = res));
-      // Refresh: its config read answers at once (still inherited), its list waits.
-      await user.click(screen.getByRole("button", { name: /Refresh/ }));
+      // Reload: its config read answers at once (still inherited), its list waits.
+      await user.click(screen.getByRole("button", { name: /Reload/ }));
       await waitFor(() => expect(server.toolsetListGateOnce).toBeUndefined());
       // Meanwhile another client saves the profile's own list; focus reads the config again.
       server.toolsetSavedLists.default = new Set(["cli"]);
@@ -709,8 +709,8 @@ describe("Settings → Toolsets layout: cards of rows, help behind an (i)", () =
     expect(web.classList.contains("set-row")).toBe(true);
     expect(toggle("Web Search & Scraping").closest(".set-control")?.parentElement).toBe(web);
     expect(within(web).getByText("web_search, web_extract").closest(".set-hint")).toBeTruthy();
-    // Refresh acts on the whole section, at its heading.
-    expect(screen.getByRole("button", { name: "Refresh" }).closest(".set-head")).toBeTruthy();
+    // Reload acts on the whole section, at its heading.
+    expect(screen.getByRole("button", { name: "Reload" }).closest(".set-head")).toBeTruthy();
     const others = screen.getByRole("heading", { name: "Other platforms" }).closest("section") as HTMLElement;
     expect(others).not.toBe(main);
     expect(within(others).getByRole("group", { name: "Toolsets for other platforms" }).parentElement?.classList.contains("set-card")).toBe(true);

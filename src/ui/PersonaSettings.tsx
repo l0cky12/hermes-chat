@@ -9,10 +9,11 @@
 // The shown profile's saved SOUL.md can be copied over another profile's, through the same check-first, read-back save
 // (ADR 0118).
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Copy, FileText, RotateCcw, Save, TriangleAlert, Undo2, X } from "lucide-react";
+import { Copy, FileText, RefreshCw, RotateCcw, Save, TriangleAlert, Undo2, X } from "lucide-react";
 import { asReadBack, certainlyUnwritten, PersonaError, sameSoul, soulNotes, type PersonaApi, type ProfileHome, type Soul } from "../hermes/persona";
 import { LeavePersona } from "./LeavePersona";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { AppliesBox, EditingProfile, HeadPart, MetaChip, useInPage } from "./SettingsPage";
 import { EARLIER_KEPT, type EarlierSoul, type PersonaDraft, type PersonaStore } from "../hermes/personaStore";
 import { clockTime, errorText } from "../hermes/values";
 
@@ -110,7 +111,7 @@ export function PersonaPage({
   const names = [...new Set([inUse, ...(listed ?? []), picked])];
   if (listed) names.sort((a, b) => (a === inUse ? -1 : b === inUse ? 1 : listed.indexOf(a) - listed.indexOf(b)));
   const picker = (
-    <select className="select persona-profile" aria-label="Profile" value={picked} onChange={(e) => pick(e.target.value)}>
+    <select className="profile-pick mono persona-profile" aria-label="Profile" value={picked} onChange={(e) => pick(e.target.value)}>
       {names.map((p) => (
         <option key={p} value={p}>
           {(p === "default" && defaultName ? `${defaultName} (default)` : p) + (p === inUse ? " (in use)" : "")}
@@ -557,9 +558,44 @@ export function PersonaSettings({
   const notes = editing ? soulNotes(text) : [];
   const canWrite = connected && !busy && !!loaded;
 
+  // Under Settings' page header (ADR 0159): the profile, server and file, Reload, and when a saved persona takes effect.
+  const inPage = useInPage();
+  const reloadBtn = (
+    <button className="btn" disabled={!connected || saving || reloading} onClick={() => (dirty ? setAsk("reload") : reload())}>
+      <RefreshCw size={14} /> Reload
+    </button>
+  );
+  const effect = (
+    <p>
+      Hermes reads SOUL.md when a chat starts. Chats started after you save use the new persona, in Hermes Chat, in other Hermes clients and on messaging
+      platforms that use the {profile} profile. A chat already under way keeps the persona it started with, unless Hermes rebuilds its instructions, as it
+      does when the chat's model changes. Hermes doesn't need to restart, and Hermes Chat never restarts it.
+    </p>
+  );
   return (
     <div className="persona">
+      {inPage && (
+        <>
+          <HeadPart at="profile">
+            <EditingProfile picker={picker ?? <span className="mono">{profile}</span>} inUse={profile === inUse} />
+          </HeadPart>
+          <HeadPart at="meta">
+            <MetaChip label="Server" value={where.route ?? where.server} />
+            <MetaChip label="File" value={file ?? `SOUL.md in the ${profile} profile's folder`} path={!!file} />
+          </HeadPart>
+          {loaded && <HeadPart at="actions">{reloadBtn}</HeadPart>}
+          <HeadPart at="applies">
+            <AppliesBox line="Chats started after you save use the new persona. A chat already going keeps the one it started with." more="How changes apply">
+              <div className="applies-text">
+                <p>Hermes Chat edits it as plain text and keeps its Markdown as you write it.</p>
+                {effect}
+              </div>
+            </AppliesBox>
+          </HeadPart>
+        </>
+      )}
       <SettingsSection
+        bare={inPage}
         title="Persona"
         intro={
           <>
@@ -570,39 +606,52 @@ export function PersonaSettings({
         more={
           <>
             <p>Hermes Chat edits it as plain text and keeps its Markdown as you write it.</p>
-            <p>
-              When a saved persona takes effect: Hermes reads SOUL.md when a chat starts. Chats started after you save use the new persona, in Hermes
-              Chat, in other Hermes clients and on messaging platforms that use the {profile} profile. A chat already under way keeps the persona it
-              started with, unless Hermes rebuilds its instructions, as it does when the chat's model changes. Hermes doesn't need to restart, and
-              Hermes Chat never restarts it.
-            </p>
+            {effect}
           </>
         }
       >
-        <SettingRow name="Server" control={<span className="set-value mono persona-fact">{where.route ?? where.server}</span>} />
-        <SettingRow
-          name="Profile"
-          hint={picker ? "Pick any profile on this server to edit its persona; that doesn't change the profile Hermes Chat is using." : undefined}
-          control={picker ?? <span className="set-value mono persona-fact">{profile}</span>}
-        >
-          {pickerProblem}
-          {profile !== inUse && (
-            <div className="muted">
-              Hermes Chat is using the <span className="mono">{inUse}</span> profile, so chats started here keep its persona. This one is for chats on
-              the <span className="mono">{profile}</span> profile, in any Hermes client.
-            </div>
-          )}
-        </SettingRow>
-        <SettingRow
-          name="File"
-          control={
-            file ? (
-              <span className="set-value mono persona-fact">{file}</span>
-            ) : (
-              <span className="muted">SOUL.md in the {profile} profile's folder on the server</span>
-            )
-          }
-        />
+        {!inPage && <SettingRow name="Server" control={<span className="set-value mono persona-fact">{where.route ?? where.server}</span>} />}
+        {inPage ? (
+          (pickerProblem || profile !== inUse) && (
+            <SettingNote>
+              <div>
+                {pickerProblem}
+                {profile !== inUse && (
+                  <div className="muted">
+                    Hermes Chat is using the <span className="mono">{inUse}</span> profile, so chats started here keep its persona. This one is for chats on
+                    the <span className="mono">{profile}</span> profile, in any Hermes client.
+                  </div>
+                )}
+              </div>
+            </SettingNote>
+          )
+        ) : (
+          <SettingRow
+            name="Profile"
+            hint={picker ? "Pick any profile on this server to edit its persona; that doesn't change the profile Hermes Chat is using." : undefined}
+            control={picker ?? <span className="set-value mono persona-fact">{profile}</span>}
+          >
+            {pickerProblem}
+            {profile !== inUse && (
+              <div className="muted">
+                Hermes Chat is using the <span className="mono">{inUse}</span> profile, so chats started here keep its persona. This one is for chats on
+                the <span className="mono">{profile}</span> profile, in any Hermes client.
+              </div>
+            )}
+          </SettingRow>
+        )}
+        {!inPage && (
+          <SettingRow
+            name="File"
+            control={
+              file ? (
+                <span className="set-value mono persona-fact">{file}</span>
+              ) : (
+                <span className="muted">SOUL.md in the {profile} profile's folder on the server</span>
+              )
+            }
+          />
+        )}
         {home?.distribution && (
           <SettingNote tone="warn">
             <TriangleAlert size={13} aria-hidden />
@@ -663,9 +712,11 @@ export function PersonaSettings({
                   <button className="btn primary" disabled={!connected || !!recover || busy} onClick={() => setCreating(true)}>
                     <FileText size={14} /> Create SOUL.md
                   </button>
-                  <button className="btn" disabled={!connected} onClick={reload}>
-                    <RotateCcw size={14} /> Reload
-                  </button>
+                  {!inPage && (
+                    <button className="btn" disabled={!connected} onClick={reload}>
+                      <RefreshCw size={14} /> Reload
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -782,9 +833,7 @@ export function PersonaSettings({
                   <button className="btn" disabled={saving || reloading || (!dirty && !creating)} onClick={cancel}>
                     <X size={14} /> Cancel
                   </button>
-                  <button className="btn" disabled={!connected || saving || reloading} onClick={() => (dirty ? setAsk("reload") : reload())}>
-                    <RotateCcw size={14} /> Reload
-                  </button>
+                  {!inPage && reloadBtn}
                 </div>
 
                 {!connected && (

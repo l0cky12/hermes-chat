@@ -1,5 +1,7 @@
 # Settings tabs keep their strip and gain a sub-nav, so no tab scrolls at 1080p
 
+> **Partly superseded by [ADR 0159](0159-settings-is-a-sidebar-tree-of-pages-beside-one-page-with-a-header.md)** (#568). The tab strip and the sub-nav column beside a tab are gone: the pages are a vertical tree in the chat list's column, and General's, Diagnostics' and Gateways' groups and Memory's entries are picked under their page in it. External memory picks its profile in the page header, not from one list entry per profile. The rest of this ADR stands.
+
 Issue #187: the Settings screen's eight tabs were right, but what sat under them scrolled. At 1920 × 1080 General was four screens tall, Memory three, Skills three, Model three. Memory → External memory listed every profile's provider in a row, so reaching one meant scrolling past the others. In Skills, a long description (code-review) pushed Edit and the switch under the text. The owner compared ten mockups, reviewed by a council of three models over two rounds, and chose the one that keeps today's tab strip and chat list.
 
 ## Decisions

@@ -4,6 +4,7 @@ import { type KeyboardEvent, useEffect, useState, useSyncExternalStore } from "r
 import { getUIPrefs, setUIPrefs, subscribe } from "../hermes/uiPrefs";
 import type { ScreenshotSupport } from "../hermes/tauriScreenshot";
 import { SettingRow, SettingsSection } from "./SettingRows";
+import { useInPage } from "./SettingsPage";
 import { DEFAULT_SCREENSHOT_SHORTCUT, checkShortcut, onlyModifiers, shortcutLabel, shortcutOf } from "./shortcut";
 import { errorText } from "../hermes/values";
 
@@ -47,8 +48,11 @@ export function ScreenshotSettings({ checkSupport }: { checkSupport?: () => Prom
     setRecording(false);
   };
 
+  // Under General › Screenshots' page header (ADR 0159) the section's own heading and intro would repeat it.
+  const inPage = useInPage();
   return (
     <SettingsSection
+      bare={inPage}
       title="Screenshots"
       className="screenshot-settings"
       intro="Take a screenshot of a region or a window and attach it to the message you're writing."

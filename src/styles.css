@@ -1183,6 +1183,12 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .voice-field { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; max-width: 520px; }
 .voice-field > span:first-child { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 500; }
 .voice-field .mono { font-size: calc(11rem / 14); font-weight: 400; }
+/* Speech providers' typed settings and keys look like the app's other fields, at its selects' height. */
+.voice-providers input:is([type="text"], [type="password"], :not([type])) {
+  box-sizing: border-box; height: 32px; padding: 0 9px; border-radius: 8px; background: var(--raised-2); border: 1px solid var(--line);
+  color: var(--text); font: inherit; font-size: calc(13rem / 14); outline: none;
+}
+.voice-providers input:is([type="text"], [type="password"], :not([type])):focus-visible { border-color: var(--line-3); outline: 2px solid var(--line-2); outline-offset: 1px; }
 .voice-provider-list { list-style: none; margin: 6px 0 8px; padding: 0; display: grid; gap: 2px; }
 .voice-provider-list li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 3px 6px; border-radius: 6px; }
 .voice-provider-list li.picked { background: var(--raised-2); }
@@ -1215,12 +1221,13 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .crash-details summary { cursor: pointer; color: var(--muted); }
 .crash-details pre { max-height: 240px; overflow: auto; margin: 8px 0 0; padding: 10px; border-radius: 8px; background: var(--raised-2); white-space: pre-wrap; word-break: break-word; }
 .crash-actions { display: flex; gap: 8px; }
-.select {
+/* Every select on a Settings page takes this style, classed or not (ADR 0159); :where keeps a page's own rules ahead. */
+.select, :where(.settings-main) select {
   height: 32px; padding: 0 8px; border-radius: 8px; background: var(--raised-2); border: 1px solid var(--line); color: var(--text);
   font: inherit; font-size: calc(13rem / 14); outline: none;
 }
-.select:hover { background: var(--raised-3); }
-.select:focus-visible { border-color: var(--line-2); outline: 2px solid var(--line-2); outline-offset: 1px; }
+.select:hover, :where(.settings-main) select:hover { background: var(--raised-3); }
+.select:focus-visible, :where(.settings-main) select:focus-visible { border-color: var(--line-2); outline: 2px solid var(--line-2); outline-offset: 1px; }
 .font-select { width: 190px; }
 .size-select { width: 80px; }
 .appearance-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 18px; }
@@ -1242,12 +1249,8 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .switch[aria-checked="true"] { background: var(--accent); border-color: transparent; }
 .switch[aria-checked="true"] .switch-knob { transform: translateX(16px); background: var(--on-accent); }
 .switch:focus-visible { outline: 2px solid var(--line-2); outline-offset: 2px; }
-/* settings tabs */
-.settings h1 { margin-bottom: 16px; }
-.settings-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
-/* settings search: the box beside the heading, and the sections of every tab that hold what's typed */
-.settings-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.settings-search { position: relative; display: flex; align-items: center; width: 280px; max-width: 50%; }
+/* settings search: the box at the top of the sidebar (or in the narrow bar), and the sections of every tab that hold what's typed */
+.settings-search { position: relative; display: flex; align-items: center; width: 100%; min-width: 0; }
 .settings-search > svg { position: absolute; left: 10px; color: var(--muted); pointer-events: none; }
 .settings-search input {
   flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line-2); border-radius: 8px; padding: 7px 34px 7px 31px; outline: none;
@@ -1265,40 +1268,157 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .settings-search-elsewhere { padding: 4px 0 14px; border-top: 1px solid var(--line); }
 .settings-search-elsewhere .btn { flex: none; }
 ::highlight(settings-search) { background-color: rgba(245, 184, 74, 0.32); }
-.settings-tab {
-  display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border-radius: 8px; color: var(--muted);
-  font-size: calc(13rem / 14); font-weight: 500;
-}
-.settings-tab:hover { background: var(--hover); color: var(--text); }
-.settings-tab.on { background: var(--raised-2); color: var(--text); }
-.settings-tab:focus-visible { outline: 2px solid var(--line-2); outline-offset: 1px; }
 .settings h3 { font-size: calc(14rem / 14); font-weight: 600; margin: 0; }
 
-/* ---------- a tab's groups beside its content (ADR 0113) ---------- */
-.settings-split { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 0 28px; align-items: start; }
-.settings-split-body { min-width: 0; }
-.subnav { display: flex; flex-direction: column; gap: 2px; padding: 22px 10px 0 0; border-right: 1px solid var(--line); position: sticky; top: 0; }
-.subnav-cell { display: flex; flex-direction: column; gap: 2px; }
-.subnav-label { font-size: calc(11rem / 14); color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; padding: 14px 10px 4px; }
-.subnav-cell:first-child .subnav-label { padding-top: 0; }
-.subnav-item { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 10px; border-radius: 8px; color: var(--muted); font-size: calc(13rem / 14); text-align: left; }
-.subnav-item svg { flex: none; }
-.subnav-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.subnav-item:hover { background: var(--hover); color: var(--text); }
-.subnav-item.on { background: var(--raised-2); color: var(--text); }
-.subnav-item:focus-visible { outline: 2px solid var(--line-2); outline-offset: 1px; }
-.subnav-item.mono { font-family: var(--mono); font-size: calc(12.5rem / 14); }
-@container settings (max-width: 820px) {
-  .settings-split { grid-template-columns: minmax(0, 1fr); gap: 10px; }
-  .subnav { flex-direction: row; flex-wrap: wrap; gap: 4px; padding: 0 0 8px; border-right: 0; border-bottom: 1px solid var(--line); position: static; }
-  .subnav-cell { flex-direction: row; align-items: center; }
-  .subnav-label { padding: 0 8px 0 4px; }
-  .subnav-item { width: auto; height: 28px; }
+
+/* ---------- Settings: a sidebar tree of pages beside one page (ADR 0159) ---------- */
+/* The sidebar takes the chat list's column: Back, the title and search stay put; the three groups of pages scroll, and
+   the open page's sections (or its headings to jump to) sit under it. The page is one column, 64 px off the sidebar. */
+.list-slot:not([hidden]) { display: contents; }
+.settings.settings-frame { display: flex; overflow: hidden; position: relative; }
+.settings-side { width: 264px; flex: none; display: flex; flex-direction: column; background: var(--sidebar); border-right: 1px solid var(--line); min-height: 0; }
+.settings-side-top { flex: none; display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding: 14px 12px 12px; border-bottom: 1px solid var(--line); }
+.settings-side-top .back { align-self: flex-start; padding: 2px 4px; }
+.settings .settings-side-title { margin: 0; font-size: calc(17rem / 14); font-weight: 600; color: var(--text-strong); padding: 2px 4px 0; letter-spacing: -0.01em; }
+.settings-search-key { position: absolute; right: 7px; font: inherit; font-size: calc(11rem / 14); color: var(--faint); border: 1px solid var(--line-2); border-radius: 5px; padding: 0 5px; pointer-events: none; }
+.settings-side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
+.settings-tabs { display: flex; flex-direction: column; gap: 14px; }
+.settings-group { display: flex; flex-direction: column; gap: 1px; }
+.settings-group-label { font-size: calc(11rem / 14); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; color: var(--faint); padding: 4px 10px 6px; }
+.settings-tab {
+  display: flex; align-items: center; gap: 9px; width: 100%; height: 32px; padding: 0 10px; border-radius: 8px; color: var(--text-2);
+  font-size: calc(13.5rem / 14); text-align: left;
 }
+.settings-tab svg { flex: none; }
+.settings-tab-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-tab:hover { background: var(--hover); color: var(--text); }
+.settings-tab.on { background: var(--raised-2); color: var(--text-strong); }
+/* The open page's sections are under it: the page is bold with no fill, so only the current section is filled. */
+.settings-tab.parent { color: var(--text-strong); font-weight: 600; }
+.settings-tab.dim { opacity: 0.45; }
+.settings-tab:focus-visible, .settings-sub:focus-visible, .settings-chips button:focus-visible, .settings-crumb:focus-visible { outline: 2px solid var(--line-2); outline-offset: 1px; }
+.settings-tab-count { flex: none; font-size: calc(11rem / 14); font-variant-numeric: tabular-nums; color: var(--text-strong); background: var(--accent-soft); padding: 0 7px; border-radius: 9px; line-height: 18px; }
+.settings-subs { display: flex; flex-direction: column; gap: 1px; margin: 2px 0 6px 18px; padding-left: 10px; border-left: 1px solid var(--line-2); }
+.settings-sub { height: 28px; padding: 0 10px; border-radius: 7px; text-align: left; color: var(--text-2); font-size: calc(13rem / 14); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-sub:hover { background: var(--hover); color: var(--text); }
+.settings-sub.on { color: var(--text-strong); background: var(--hover-2); box-shadow: inset 2px 0 0 var(--accent); }
+.settings-main { flex: 1; min-width: 0; overflow-y: auto; }
+.settings-frame .settings-inner { max-width: 1024px; margin: 0 0 0 64px; padding: 30px 32px 120px 0; }
+
+/* The page header: eyebrow, title with the profile slot on its line, the description, chips with the page's actions at
+   their end, and the summary box. With no chips, the actions end the description's line, or the title's with no slot. */
+.page-head {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0 16px; margin: 0 0 22px;
+  grid-template-areas: "eyebrow eyebrow" "title slot" "desc actions" "meta meta" "applies applies";
+}
+.page-head:not(.narrow):has(.page-meta:not(:empty)) { grid-template-areas: "eyebrow eyebrow" "title slot" "desc desc" "meta actions" "applies applies"; }
+.page-head:not(.narrow):not(:has(.page-meta:not(:empty))):not(:has(.page-slot:not(:empty))) { grid-template-areas: "eyebrow eyebrow" "title actions" "desc desc" "meta meta" "applies applies"; }
+.page-eyebrow { grid-area: eyebrow; font-size: calc(12rem / 14); color: var(--muted); font-weight: 500; margin-bottom: 2px; }
+.settings .page-title { grid-area: title; font-size: calc(20rem / 14); font-weight: 600; margin: 0; color: var(--text-strong); letter-spacing: -0.01em; }
+/* The title's line is one height on every page, slot or none, so the title doesn't move from page to page. */
+.settings .page-head:not(.narrow) > .page-title, .page-head:not(.narrow) > .page-slot:not(:empty) { min-height: 36px; display: flex; align-items: center; }
+.page-profile { min-height: 34px; }
+.settings .page-title:focus { outline: none; }
+.page-slot { grid-area: slot; justify-self: end; display: flex; gap: 8px; }
+.page-slot:empty { display: none; }
+.page-desc-block { grid-area: desc; min-width: 0; }
+.page-help { display: inline-flex; vertical-align: -3px; margin-left: 4px; }
+.page-help:empty { display: none; }
+.page-help-text:empty { display: none; }
+.page-help-text > .set-more { margin: 8px 0 0; max-width: 80ch; }
+.settings p.page-desc { margin: 4px 0 0; font-size: calc(13rem / 14); line-height: 1.5; color: var(--muted); max-width: 80ch; text-wrap: pretty; }
+.page-meta { grid-area: meta; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; min-width: 0; }
+.page-meta:empty { display: none; }
+.page-actions { grid-area: actions; justify-self: end; align-self: end; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.page-actions:empty { display: none; }
+.page-actions .btn, .page-actions .mcp-head-actions .btn { height: 30px; padding: 0 12px; font-size: calc(13rem / 14); }
+.page-actions .mcp-head-actions { gap: 8px; }
+/* A jump link's section lands on the scroll-spy's line, not against the top edge. */
+.settings-frame [role="tabpanel"] section.set-section { scroll-margin-top: 24px; }
+.page-head:not(.narrow):has(.page-meta:not(:empty)) .page-actions { margin-top: 10px; align-self: center; }
+/* Actions on the title's line sit on its centre. */
+.page-head:not(.narrow):not(:has(.page-meta:not(:empty))):not(:has(.page-slot:not(:empty))) .page-actions { align-self: center; }
+/* Actions on the description's line keep clear of the slot above them. */
+.page-head:not(.narrow):has(.page-slot:not(:empty)):not(:has(.page-meta:not(:empty))) .page-actions { margin-top: 8px; }
+.page-applies { grid-area: applies; display: flex; flex-direction: column; gap: 8px; }
+.page-applies:not(:empty) { margin-top: 12px; }
+.page-profile { display: inline-flex; align-items: center; gap: 6px; font-size: calc(12.5rem / 14); color: var(--muted); padding: 3px 4px 3px 10px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--raised); white-space: nowrap; }
+.page-profile.static { padding-right: 10px; }
+.page-profile code { font-family: var(--mono); font-size: calc(12rem / 14); color: var(--text-strong); }
+.page-profile select { width: auto; min-width: 0; max-width: 200px; height: 28px; }
+.page-profile .badge { margin-right: 4px; }
+.meta-chip { display: inline-flex; align-items: stretch; max-width: 100%; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; font-size: calc(11.5rem / 14); }
+.meta-chip > span { padding: 2px 7px; color: var(--muted); background: var(--raised-2); }
+.meta-chip code { padding: 2px 7px; font-family: var(--mono); color: var(--text-2); background: var(--raised); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meta-note { font-size: calc(12rem / 14); color: var(--muted); }
+.settings .applies-box { padding: 0; margin: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--raised); }
+.applies-box > details > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: calc(12.5rem / 14); color: var(--text-2); }
+.applies-box > details > summary::-webkit-details-marker { display: none; }
+.applies-box > details > summary > svg { flex: none; color: var(--muted); }
+.applies-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.applies-box details[open] .applies-line { white-space: normal; }
+.applies-more { flex: none; display: inline-flex; align-items: center; gap: 3px; color: var(--text-2); }
+.applies-box details[open] .applies-more svg { transform: rotate(180deg); }
+.applies-box .set-card { border-width: 1px 0 0; border-radius: 0; background: none; }
+.applies-sub { padding: 10px 14px 6px; font-size: calc(11rem / 14); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; border-top: 1px solid var(--line); }
+.applies-sub + .set-card { border-top: 0; }
+.applies-text { padding: 10px 14px; border-top: 1px solid var(--line); font-size: calc(12.5rem / 14); color: var(--text-2); }
+.settings .applies-text p { font-size: inherit; margin: 0 0 8px; }
+.settings .applies-text p:last-child { margin: 0; }
+.more-inline { font-size: inherit; color: var(--text-2); text-decoration: underline; text-underline-offset: 2px; }
+/* The rows a card folds away (the keys that can't be changed, the list's keys): the card's last line. */
+.set-fold > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 10px 16px; font-size: calc(12.5rem / 14); color: var(--text-2); }
+.set-fold > summary::-webkit-details-marker { display: none; }
+.set-fold > summary:hover { color: var(--text); }
+.set-fold[open] > summary svg:first-child { transform: rotate(90deg); }
+.set-fold > .set-row { border-top: 1px solid var(--line); }
+.set-fold > p { margin: 0 16px 12px 38px; }
+/* A commit row (Gateways' Save) reads like Model's: the state on the left, Discard and Save on the right. */
+.set-commit { flex-wrap: wrap; justify-content: space-between; }
+.set-commit-actions { display: flex; gap: 8px; }
+.set-commit > .gw-line { flex-basis: 100%; }
+/* A card of six or more rows is a little tighter. */
+.set-card:has(> .set-row:nth-child(6)) > .set-row { min-height: 50px; padding-top: 9px; padding-bottom: 9px; }
+/* A connection's buttons end at the card's right edge, and Connect leads them, so Test, Edit and Remove line up from row
+   to row. Narrow, they start at the left under the name, so Connect stays last there. */
+.settings-frame:not(.narrow) .conn-row-actions .btn.primary { order: -1; }
+
+/* Search: results grouped by page, each with the profile it edits. */
+.settings-search-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 18px 0 8px; }
+.settings-search-head .settings-search-tab { margin: 0; }
+.settings-search-head .page-profile { padding: 2px 8px; font-size: calc(12rem / 14); }
+button.settings-search-tab:hover { color: var(--text); }
+
+/* Narrow (900 px and less): a bar names the page and opens the same tree as a sheet; search sits behind an icon. */
+.settings-frame.narrow { flex-direction: column; }
+.settings-frame.narrow .settings-side { display: none; }
+.settings-frame.narrow .settings-side.sheet { display: flex; position: absolute; top: 0; bottom: 0; left: 0; width: 300px; max-width: 86%; z-index: 5; border-right: 1px solid var(--line-2); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4); }
+.settings-sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 0 0 0 6px; }
+.settings-scrim { position: absolute; inset: 0; background: var(--overlay); z-index: 4; }
+.settings-bar { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 16px; background: var(--sidebar); border-bottom: 1px solid var(--line); }
+.settings-bar-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.settings-bar-row .settings-search { flex: 1; }
+.settings-bar-search { margin-left: auto; }
+.settings-crumb { display: inline-flex; align-items: center; gap: 7px; min-width: 0; padding: 5px 10px; border-radius: 8px; font-weight: 600; color: var(--text-strong); border: 1px solid var(--line-2); background: var(--raised); }
+.settings-crumb > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-chips { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 16px; }
+.settings-chips button { flex: none; height: 28px; padding: 0 11px; border-radius: 14px; color: var(--text-2); border: 1px solid var(--line); font-size: calc(12.5rem / 14); }
+.settings-chips button.on { color: var(--text-strong); background: var(--raised-2); border-color: var(--line-2); }
+.settings-frame.narrow .settings-inner { margin: 0; max-width: none; padding: 16px 16px 80px; }
+.page-head.narrow { grid-template-areas: "slot actions" "desc desc" "meta meta" "applies applies"; }
+.page-head.narrow .page-slot { justify-self: start; }
+.page-head.narrow .page-actions { align-self: center; }
+.page-head.narrow:not(:has(.page-slot:not(:empty))) { grid-template-areas: "desc actions" "meta meta" "applies applies"; }
+.page-head.narrow p.page-desc { margin-top: 0; }
+.page-head.narrow .applies-line { white-space: normal; }
+.page-head.narrow:has(.page-slot:not(:empty)) .page-desc-block { margin-top: 8px; }
+.settings-frame.narrow .conn-row { flex-direction: column; align-items: stretch; }
+.settings-frame.narrow .conn-row > * { flex: none; }
+.settings-frame.narrow .conn-row-actions { justify-content: flex-start; flex-wrap: nowrap; margin-left: 38px; }
+
 /* ---------- the row layout every Settings page is moving to (#174, ADR 0059) ---------- */
 /* A section: its heading, at most one line under it, and a card of rows. Sections are spaced, not ruled apart. */
 .settings .set-section { padding: 0; border-top: 0; margin: 0 0 28px; }
-.settings-split-body { padding-top: 16px; }
 /* The title and its (i) on the left, the section's buttons on the right. When both don't fit, the buttons wrap under the
    title, at its start: space-between puts the only item on a line at the start. */
 .set-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; min-height: 30px; margin-bottom: 6px; }
@@ -1347,18 +1467,8 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .set-block.update-status { margin-top: 0; }
 /* Connections: one row each, in the card. */
 .set-card > .conn-rows { margin: 0; gap: 0; }
-.conn-rows > .set-row.conn-row { border: 0; border-radius: 0; background: none; }
+.conn-rows > .set-row.conn-row { border: 0; border-radius: 0; background: none; padding: 12px 16px; }
 .conn-rows > .set-row.conn-row + .conn-row { border-top: 1px solid var(--line); }
-/* A narrow window (#154): the tab strip and a compact sub-nav keep to one line each, showing only the shown tab's or
-   group's label beside the others' icons. */
-@container settings (max-width: 820px) {
-  .settings-tabs { flex-wrap: nowrap; gap: 2px; }
-  .settings-tab { padding: 0 9px; }
-  .settings-tab:not(.on) .settings-tab-label { display: none; }
-  .subnav.compact { flex-wrap: nowrap; }
-  .subnav.compact .subnav-item:not(.on) span { display: none; }
-  .settings-split-body { padding-top: 6px; }
-}
 @media (max-width: 900px) {
   .settings-inner { padding: 18px 16px 80px; }
   .settings h1 { margin: 8px 0 12px; }
@@ -1493,7 +1603,8 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 /* Settings → Model (ModelSettings.tsx) */
 /* A row's pickers (provider, model, effort) at fixed widths, so a row's control doesn't shift as a pick changes. */
 .model-pick { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: 100%; }
-.model-pick > .select { width: 180px; max-width: 100%; }
+/* A closed select shows its whole choice ("inherit · main model effort"): it grows to its longest option, from 180 px. */
+.model-pick > .select { width: auto; min-width: 180px; max-width: 100%; }
 .model-pick > .select.wide { width: 240px; }
 .model-pick > .select:disabled { opacity: 0.55; }
 /* A model field (#538): a .select to type into, with its list under it. */
@@ -3258,7 +3369,9 @@ label.memory-pick { cursor: pointer; }
 
 /* ---------- Logs (Logs.tsx, Settings → Diagnostics, ADR 0033, 0087) ---------- */
 /* The list scrolls inside a window-tall box, so the controls above it stay in view. */
-.settings-split-body > .logs-panel { padding-top: 4px; }
+[role="tabpanel"] .logs-panel { padding-top: 4px; }
+/* The filters' boxes are one height, so their labels share a line. */
+.logs-filters select, .logs-filters input { box-sizing: border-box; height: 32px; }
 .logs-search input { min-width: 220px; }
 .logs-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; }
 .logs-actions .btn { display: inline-flex; align-items: center; gap: 6px; }

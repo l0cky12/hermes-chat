@@ -1,5 +1,7 @@
 # Settings pages are cards of rows, with longer help behind an (i) button
 
+> **Partly superseded by [ADR 0159](0159-settings-is-a-sidebar-tree-of-pages-beside-one-page-with-a-header.md)** (#568). The tab strip, and its one-line narrow form, gave way to a sidebar tree and, in a narrow window, a bar that opens it as a sheet. A page's Server, Profile and File rows and its page-wide actions moved into the page header. The rest of this ADR stands.
+
 Issue #174: every Settings page was a long run of paragraphs and controls. The settings were hard to find among the explanations, and sections, buttons and spacing differed from one page to the next. ADR 0113 (#195) kept the tab strip, added a sub-nav, and made no tab scroll at 1080p. It didn't change how a page reads. At the 760 px minimum width the tab strip also wrapped onto three lines, and General's sub-nav onto two more (#154). This record sets one layout for every page. General is the first page to use it; the other tabs follow in later pull requests.
 
 ## Decisions

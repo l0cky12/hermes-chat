@@ -10,8 +10,10 @@ import { FakeHermes, row } from "../hermes/fakeHermes";
 import { memoryCache } from "../hermes/memoryCache";
 import type { ConnectionStatus } from "../hermes/model";
 import { connect, type Hermes } from "../hermes/transport";
+import { connectionRefs, formatChatLink, parseChatLink } from "../hermes/chatLinks";
 import { Main } from "../App";
 import { appearanceStore } from "./appearance";
+import { MemorySettings } from "./MemorySettings";
 import { SettingsScreen } from "./Settings";
 import { searchText } from "./settingsSearch";
 
@@ -91,23 +93,30 @@ const named = (text: string | RegExp) => (typeof text === "string" ? new RegExp(
 const entry = (text: string | RegExp) => within(screen.getByRole("list", { name: /entries$/ })).getByRole("button", { name: named(text) });
 const editor = () => screen.getByRole<HTMLTextAreaElement>("textbox", { name: /Entry in/ });
 const button = (name: string | RegExp) => screen.getByRole("button", { name });
-/** A memory file's entry in the Memory tab's list beside the detail (ADR 0113). */
-const file = (name: RegExp) => within(screen.getByRole("navigation", { name: "Memory" })).getByRole("button", { name });
-const current = (name: RegExp) => file(name).getAttribute("aria-current") === "true";
+/** A memory file's section, under the Memory tab in Settings' sidebar tree (ADR 0159). */
+const file = (name: RegExp) => within(screen.getByRole("group", { name: "Memory: sections" })).getByRole("button", { name });
+const current = (name: RegExp) => file(name).getAttribute("aria-current") === "page";
+/** The page header Settings draws above the Memory tab (ADR 0159), and one of its labelled chips: Server or File. */
+const pageHead = () => document.querySelector<HTMLElement>("header.page-head")!;
+const chip = (label: string) => [...pageHead().querySelectorAll<HTMLElement>(".meta-chip")].find((c) => c.firstElementChild?.textContent === label)?.querySelector("code");
 const learning = (s: FakeHermes, method?: string) => s.requests.filter((r) => (method ? r.method === method : r.method.startsWith("learning.")));
 
 describe("Settings → Memory", () => {
   it("is a tab in Settings that names the server, profile and file it edits", async () => {
     const { user } = await shown();
-    expect(screen.getByText("ssh://liam@hermes")).toBeTruthy();
-    expect(screen.getByText("/home/liam/.hermes/memories/MEMORY.md")).toBeTruthy();
-    const files = screen.getByRole("navigation", { name: "Memory" });
+    // The page header names the profile, the server and the file; the file from ~, in full on hover.
+    expect(pageHead().querySelector(".page-slot")!.textContent!.trim()).toBe("Editing profile default");
+    expect(chip("Server")!.textContent).toBe("ssh://liam@hermes");
+    expect(chip("File")!.textContent).toBe("~/.hermes/memories/MEMORY.md");
+    expect(chip("File")!.title).toBe("/home/liam/.hermes/memories/MEMORY.md");
+    expect(within(pageHead()).getByText(/2 entries, \d+ characters/)).toBeTruthy();
+    const files = screen.getByRole("group", { name: "Memory: sections" });
     expect(within(files).getAllByRole("button").map((t) => t.textContent)).toEqual(["Agent notes", "User profile"]);
     expect(current(/Agent notes/)).toBe(true);
-    expect(screen.getByText(/2 entries, \d+ characters/)).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "When edits take effect" })).toBeTruthy();
-    await user.click(within(files).getByRole("button", { name: /User profile/ }));
-    expect(screen.getByText("/home/liam/.hermes/memories/USER.md")).toBeTruthy();
+    // How a saved edit reaches chats is the header's summary box.
+    expect(within(pageHead()).getByText("Saved edits reach new chats. Chats already going keep the memory they started with.").closest("section.applies-box")).toBeTruthy();
+    await user.click(file(/User profile/));
+    expect(chip("File")!.title).toBe("/home/liam/.hermes/memories/USER.md");
     expect(entry(SAM)).toBeTruthy();
   });
 
@@ -596,25 +605,80 @@ describe("Settings → Memory states", () => {
 describe("Settings → Memory as cards of rows (ADR 0059)", () => {
   const section = (title: string) => screen.getByRole("heading", { name: title }).closest("section")!;
   const folded = (el: Element) => !!el.closest(".set-more");
+  const names = (el: Element, rows: string) => [...el.querySelectorAll(`${rows} .set-name`)].map((n) => n.textContent);
+  /** Memory under Settings' page header: its section has no heading of its own, the header says what it is. */
+  const bare = () => screen.getByRole("region", { name: "Memory" });
+  /** The Memory component on its own, outside Settings: it draws its own heading, rows and help. */
+  async function alone() {
+    const hermes = await connect(server().openPipe, "default");
+    running.push(hermes);
+    render(<MemorySettings api={hermes.memory} profile="default" status="connected" server="ssh://liam@hermes" onDirtyChange={() => {}} />);
+    await screen.findByRole("list", { name: "Agent notes entries" });
+  }
 
   it("draws each part as a card of rows, with each entry a row and its editor under it", async () => {
     const { user } = await shown();
-    const memory = section("Memory");
+    const memory = bare();
+    expect(within(memory).queryByRole("heading")).toBeNull();
     const card = memory.querySelector(":scope > .set-card")!;
-    expect([...card.querySelectorAll(":scope > .set-row .set-name")].map((n) => n.textContent)).toEqual(["Profile", "Server", "File"]);
+    // The profile, server and file are the header's (above), not rows of the card.
+    expect(names(card, ":scope > .set-row")).toEqual([]);
     const list = screen.getByRole("list", { name: "Agent notes entries" });
     expect(list.parentElement).toBe(card);
-    expect(within(memory).getByRole("button", { name: /^Reload/ }).closest(".set-head")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Reload/ }).closest(".page-actions")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Select/ }).closest(".page-actions")).toBeTruthy();
     await user.click(entry(SHORT));
     const editing = screen.getByRole("group", { name: /Edit entry in MEMORY.md/ });
     expect(editing.classList.contains("set-block")).toBe(true);
     expect(editing.closest("li")).toBe(entry(SHORT).closest("li"));
-    const effect = section("When edits take effect");
-    expect([...effect.querySelectorAll(".set-row .set-name")].map((n) => n.textContent)).toEqual(["New chats", "Chats already going", "Entries Hermes leaves out"]);
+    // When edits take effect is the header's summary box: a card of its rows, and the safety check under its own sub-heading.
+    const effect = pageHead().querySelector("section.applies-box")!;
+    expect(screen.queryByRole("heading", { name: "When edits take effect" })).toBeNull();
+    expect([...effect.querySelectorAll(".set-card")].map((c) => names(c, ".set-row"))).toEqual([["New chats", "Chats already going"], ["Entries Hermes leaves out"]]);
+    expect(effect.querySelector(".applies-sub")!.textContent).toBe("Safety checks");
   });
 
-  it("folds the longer help behind an (i), where Settings search still reads it", async () => {
+  it("draws the profile, server and file as rows when shown on its own", async () => {
+    await alone();
+    const memory = section("Memory");
+    const card = memory.querySelector(":scope > .set-card")!;
+    expect(names(card, ":scope > .set-row")).toEqual(["Profile", "Server", "File"]);
+    expect(within(memory).getByRole("button", { name: /^Reload/ }).closest(".set-head")).toBeTruthy();
+    expect(names(section("When edits take effect"), ".set-row")).toEqual(["New chats", "Chats already going", "Entries Hermes leaves out"]);
+  });
+
+  it("folds the longer help behind an (i) at the end of the header's description, and says in view what Restore can't do", async () => {
     const { user } = await shown();
+    const memory = bare();
+    // The section's (i) and its help are the header's, under the description.
+    expect(within(memory).queryByRole("button", { name: "About Memory" })).toBeNull();
+    const about = within(pageHead()).getByRole("button", { name: "About Memory" });
+    expect(about.closest(".page-help")).toBeTruthy();
+    expect(about.getAttribute("aria-expanded")).toBe("false");
+    const help = document.getElementById(about.getAttribute("aria-controls")!)!;
+    expect(help.closest(".page-help-text")).toBeTruthy();
+    expect(help.hidden).toBe(true);
+    expect(help.textContent).toMatch(/To add a memory, ask Hermes in a chat to remember it/);
+    expect(help.textContent).not.toMatch(/Restore previous version/);
+    await user.click(about);
+    expect(about.getAttribute("aria-expanded")).toBe("true");
+    expect(help.hidden).toBe(false);
+    const limits = memory.querySelector<HTMLElement>(".memory-restore-limits")!;
+    expect(limits.textContent).toMatch(/until you sign out or close Hermes Chat/);
+    expect(limits.textContent).toMatch(/a removed entry can't be put back from here/);
+    expect(folded(limits)).toBe(false);
+    const effect = pageHead().querySelector<HTMLElement>("section.applies-box")!;
+    const details = effect.querySelector("details")!;
+    expect(details.open).toBe(false);
+    await user.click(within(effect).getByText("How changes apply"));
+    expect(details.open).toBe(true);
+    expect(within(effect).getByRole("button", { name: "About New chats" }).getAttribute("aria-expanded")).toBe("false");
+    expect(searchText(effect)).toMatch(/it never restarts Hermes/);
+  });
+
+  it("folds the longer help behind an (i) when shown on its own, where Settings search still reads it", async () => {
+    const user = userEvent.setup();
+    await alone();
     const memory = section("Memory");
     const about = within(memory).getByRole("button", { name: "About Memory" });
     expect(about.getAttribute("aria-expanded")).toBe("false");
@@ -695,7 +759,10 @@ async function launchApp({ openChat = false } = {}) {
   const s = server();
   const hermes = await connect(s.openPipe, undefined, memoryCache());
   running.push(hermes);
-  render(<Main hermes={hermes} connection={{ mode: "ssh", sshTarget: `liam@hermes-mem-${++launches}`, url: "", username: "liam" }} onSignOut={async () => {}} />);
+  const connection = { mode: "ssh" as const, sshTarget: `liam@hermes-mem-${++launches}`, url: "", username: "liam" };
+  const refs = connectionRefs(localStorage);
+  const main = (link?: Parameters<typeof Main>[0]["link"]) => <Main hermes={hermes} connection={connection} refs={refs} link={link} onSignOut={async () => {}} />;
+  const view = render(main());
   await waitFor(() => expect(hermes.hasListed()).toBe(true));
   await act(async () => void (await hermes.idle()));
   const user = userEvent.setup();
@@ -708,7 +775,17 @@ async function launchApp({ openChat = false } = {}) {
   await screen.findByRole("list", { name: "Agent notes entries" });
   await user.click(entry(SHORT));
   await user.type(editor(), " Unsaved words.");
-  return { s, hermes, user };
+  /**
+   * A chat link arriving from outside the app (ADR 0037), as App hands it to Main. The chat list, with its rows and
+   * profile switcher, is hidden while Settings is open (ADR 0159), so a link is how a chat or profile opens from here.
+   */
+  const openLink = async (profile: string, chatId: string) => {
+    const parsed = parseChatLink(formatChatLink({ connection: refs.refFor(connection), profile, chatId }));
+    if (!parsed.ok) throw new Error("bad link");
+    view.rerender(main({ link: parsed.link, at: Date.now() }));
+    await act(async () => void (await hermes.idle()));
+  };
+  return { s, hermes, user, openLink };
 }
 
 const leaveDialog = () => screen.getByRole("alertdialog", { name: "Discard your memory edit?" });
@@ -776,10 +853,12 @@ describe("An unsaved memory edit in the app", () => {
     expect(editor().value).toBe(`${SHORT} Unsaved words.`);
   });
 
-  it("asks before opening a chat from the list", async () => {
-    const { user } = await launchApp();
-    await user.click(screen.getByText("Nightly backup"));
-    await user.click(within(leaveDialog()).getByRole("button", { name: "Keep editing" }));
+  it("asks before opening a chat", async () => {
+    const { user, openLink } = await launchApp();
+    expect(document.querySelector<HTMLElement>(".list-slot")!.hidden).toBe(true);
+    await openLink("default", "backup");
+    await user.click(within(await screen.findByRole("alertdialog", { name: "Discard your memory edit?" })).getByRole("button", { name: "Keep editing" }));
+    expect(screen.getByRole("heading", { name: "Settings" })).toBeTruthy();
     expect(editor().value).toBe(`${SHORT} Unsaved words.`);
   });
 
@@ -797,19 +876,23 @@ describe("An unsaved memory edit in the app", () => {
   });
 
   it("asks before switching profile, and switches nothing on Keep editing", async () => {
-    const { hermes, user } = await launchApp();
-    await user.click(document.querySelector<HTMLElement>(".profile-btn")!);
-    await user.click(within(await screen.findByRole("listbox", { name: "Profiles" })).getByRole("option", { name: /research/ }));
-    await user.click(within(leaveDialog()).getByRole("button", { name: "Keep editing" }));
+    const { hermes, user, openLink } = await launchApp();
+    // A link to another profile's chat switches profile, through the switcher's question.
+    await openLink("research", "notes");
+    await user.click(within(await screen.findByRole("alertdialog", { name: "Discard your memory edit?" })).getByRole("button", { name: "Keep editing" }));
     expect(hermes.getSnapshot().profile).toBe("default");
     expect(editor().value).toBe(`${SHORT} Unsaved words.`);
   });
 
   it("stays in Settings when the chat behind it leaves the list meanwhile", async () => {
-    const { hermes, user } = await launchApp({ openChat: true });
-    // Archiving the chat on screen moves its pane to a New chat, which would close Settings.
-    await user.click(screen.getAllByRole("button", { name: /^Archive:/ })[0]);
+    const { s, hermes } = await launchApp({ openChat: true });
+    // Deleted in another client: the list read on reconnecting no longer has it, so its pane gives way to a New chat,
+    // which would close Settings.
+    s.sessions = s.sessions.filter((c) => c.id !== "backup");
+    s.drop();
+    await waitFor(() => expect(hermes.getSnapshot().status).toBe("connected"), { timeout: 5_000 });
     await act(async () => void (await hermes.idle()));
+    await waitFor(() => expect(document.querySelector("[data-pane] .chat-title span")?.textContent).toBe("New chat"));
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(screen.getByRole("heading", { name: "Settings" })).toBeTruthy();
     expect(editor().value).toBe(`${SHORT} Unsaved words.`);
@@ -839,9 +922,9 @@ describe("An unsaved memory edit in the app", () => {
   });
 
   it("closes Settings as before when there's no unsaved edit", async () => {
-    const { user } = await launchApp();
+    const { user, openLink } = await launchApp();
     await user.click(button("Cancel"));
-    await user.click(screen.getByText("Nightly backup"));
+    await openLink("default", "backup");
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(screen.queryByRole("heading", { name: "Settings" })).toBeNull();
   });
