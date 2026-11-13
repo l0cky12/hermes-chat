@@ -38,7 +38,7 @@ export function OfficeCard({ room, desk, profile, color, onOpen, onClose }: { ro
 
   const facts: [string, string | undefined][] = [
     ["Chat", room.title],
-    ["Profile", room.profile === profile ? `${room.profile} (shown)` : room.profile],
+    ["Profile", room.profile === profile ? `${room.profile} (open)` : room.profile],
     ["State", `${STATE_LABEL[desk.state]}${desk.stale ? ", as last seen" : ""}`],
     ["Goal", desk.detail?.goal],
     ["Doing now", desk.doing ? `${desk.doing.text}${desk.doing.at ? ` (${ago(l, desk.doing.at)})` : ""}` : undefined],

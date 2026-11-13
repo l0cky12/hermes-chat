@@ -14,7 +14,7 @@ import { nonEmptyText } from "./values";
 
 export const UI_PREFS_KEY = "hermes-ui-prefs";
 /** The shape the document has now. Bump it, and add a step to UI_PREFS_MIGRATIONS, when a field changes meaning. */
-export const UI_PREFS_VERSION = 3;
+export const UI_PREFS_VERSION = 4;
 
 export type Theme = "light" | "dark" | "system";
 export const THEMES: readonly Theme[] = ["light", "dark", "system"];
@@ -60,7 +60,7 @@ export type UIPrefs = {
   chatSectionsShown: SectionKey[];
   /** The chat list's sections the owner collapsed, kept across restarts (ADR 0063). */
   chatSectionsCollapsed: SectionKey[];
-  /** How the agent office shows the agents at work: as a 3D building (ADR 0122), as a list, or not at all, with no rail button (ADR 0077). */
+  /** The agent office's design (ADR 0161): a floor plan, a board, a list, the 3D building (ADR 0122), or off, with no rail button (ADR 0077). */
   agentOffice: OfficeView;
   /** How much the office's building may cost to draw (ADR 0122). */
   officeQuality: OfficeQuality;
@@ -74,8 +74,8 @@ export type UIPrefs = {
   keybindings: Record<string, string[]>;
 };
 
-export type OfficeView = "building" | "list" | "off";
-export const OFFICE_VIEWS: readonly OfficeView[] = ["building", "list", "off"];
+export type OfficeView = "plan" | "board" | "list" | "building" | "off";
+export const OFFICE_VIEWS: readonly OfficeView[] = ["plan", "board", "list", "building", "off"];
 
 export type OfficeQuality = "normal" | "low";
 export const OFFICE_QUALITIES: readonly OfficeQuality[] = ["normal", "low"];
@@ -116,7 +116,7 @@ export const DEFAULT_UI_PREFS: Readonly<UIPrefs> = Object.freeze({
   idleCompact: Object.freeze({ enabled: false, percent: 70, idleMinutes: 15 }),
   chatSectionsShown: SECTION_KEYS.filter((k) => k !== "archived"),
   chatSectionsCollapsed: ["snoozed", "archived", "settled"] as SectionKey[],
-  agentOffice: "building",
+  agentOffice: "plan",
   officeQuality: "normal",
   inboxAutoDismissDays: null,
   keybindings: Object.freeze({}) as Record<string, string[]>,
@@ -134,6 +134,8 @@ export const UI_PREFS_MIGRATIONS: UIPrefsMigrations = {
   1: (doc) => (toShown(doc.chatSectionsShown) ? { ...doc, chatSectionsShown: ["pinned", ...(doc.chatSectionsShown as unknown[])] } : doc),
   // The building replaces the Desks and Scene views in version 3 (ADR 0122): whoever picked either sees the building.
   2: (doc) => (doc.agentOffice === "desks" || doc.agentOffice === "scene" ? { ...doc, agentOffice: "building" } : doc),
+  // The floor plan replaces the building as the default in version 4 (ADR 0161): whoever had the building sees the plan.
+  3: (doc) => (doc.agentOffice === "building" ? { ...doc, agentOffice: "plan" } : doc),
 };
 
 const isDoc = (v: unknown): v is UIPrefsDoc => typeof v === "object" && v !== null && !Array.isArray(v);

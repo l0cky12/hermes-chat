@@ -42,7 +42,7 @@ afterEach(() => {
 
 describe("reading", () => {
   it("is the defaults when nothing is stored", () => {
-    expect(getUIPrefs()).toEqual({ theme: "system", reopenLastChat: true, checkUpdatesOnLaunch: true, lastOpenChat: {}, modelPicker: null, modelPicks: {}, modelFavorites: [], statusBar: ["context", "model", "status"], previewWidth: null, screenshotShortcut: "Ctrl+Shift+S", templates: [], terminalKind: "server", followUp: "queue", idleCompact: { enabled: false, percent: 70, idleMinutes: 15 }, chatSectionsShown: ["pinned", "inbox", "snoozed", "working", "settled"], chatSectionsCollapsed: ["snoozed", "archived", "settled"], agentOffice: "building", officeQuality: "normal", inboxAutoDismissDays: null, keybindings: {} });
+    expect(getUIPrefs()).toEqual({ theme: "system", reopenLastChat: true, checkUpdatesOnLaunch: true, lastOpenChat: {}, modelPicker: null, modelPicks: {}, modelFavorites: [], statusBar: ["context", "model", "status"], previewWidth: null, screenshotShortcut: "Ctrl+Shift+S", templates: [], terminalKind: "server", followUp: "queue", idleCompact: { enabled: false, percent: 70, idleMinutes: 15 }, chatSectionsShown: ["pinned", "inbox", "snoozed", "working", "settled"], chatSectionsCollapsed: ["snoozed", "archived", "settled"], agentOffice: "plan", officeQuality: "normal", inboxAutoDismissDays: null, keybindings: {} });
     expect(getUIPrefs()).toEqual(DEFAULT_UI_PREFS);
   });
 
@@ -91,7 +91,7 @@ describe("reading", () => {
       // A version 1 list gains Pinned, new in version 2.
       chatSectionsShown: ["pinned", "inbox", "settled"],
       chatSectionsCollapsed: ["snoozed", "archived", "settled"],
-      agentOffice: "building",
+      agentOffice: "plan",
       officeQuality: "normal",
       inboxAutoDismissDays: null,
       keybindings: { search: ["Ctrl+J"] },
@@ -308,9 +308,18 @@ describe("migration", () => {
     expect(migrateUIPrefs({ v: 1.5, theme: "dark" })).toEqual({ v: UI_PREFS_VERSION });
   });
 
-  it("shows the building, new in version 3, to whoever picked the Desks or the Scene", () => {
-    for (const [saved, read] of [["desks", "building"], ["scene", "building"], ["list", "list"], ["off", "off"]]) {
-      localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ v: 2, agentOffice: saved }));
+  it("shows the floor plan, new in version 4, to whoever had the building, the Desks or the Scene, and keeps the building picked since", () => {
+    for (const [v, saved, read] of [
+      [2, "desks", "plan"],
+      [2, "scene", "plan"],
+      [2, "list", "list"],
+      [2, "off", "off"],
+      [3, "building", "plan"],
+      [3, "list", "list"],
+      [4, "building", "building"],
+      [4, "board", "board"],
+    ] as const) {
+      localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ v, agentOffice: saved }));
       expect(getUIPrefs().agentOffice).toBe(read);
     }
   });
