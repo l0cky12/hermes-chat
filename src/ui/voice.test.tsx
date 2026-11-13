@@ -685,7 +685,7 @@ describe("Settings, Voice", () => {
     const { user } = await signedIn();
     await user.click(screen.getByRole("button", { name: "Settings" }));
     await user.click(await screen.findByRole("tab", { name: /Voice/ }));
-    const section = (await screen.findByRole("heading", { name: "Voice" })).closest("section")!;
+    const section = (await screen.findByRole("heading", { name: "Dictation and Read aloud" })).closest("section")!;
     await within(section).findByText("Local Whisper");
     expect(within(section).getByText("Microsoft Edge TTS")).toBeTruthy();
     expect(section.textContent).toMatch(/faster-whisper/);
@@ -698,7 +698,7 @@ describe("Settings, Voice", () => {
     const { user } = await signedIn(server);
     await user.click(screen.getByRole("button", { name: "Settings" }));
     await user.click(await screen.findByRole("tab", { name: /Voice/ }));
-    const section = (await screen.findByRole("heading", { name: "Voice" })).closest("section")!;
+    const section = (await screen.findByRole("heading", { name: "Dictation and Read aloud" })).closest("section")!;
     // Dictation, Read aloud, and the Voice conversation that needs them both.
     await waitFor(() => expect(within(section).getAllByText("Unavailable")).toHaveLength(3));
     expect(section.textContent).toMatch(/can't transcribe recordings/);

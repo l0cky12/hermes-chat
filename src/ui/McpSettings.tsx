@@ -7,6 +7,7 @@
 import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
 import { AlertTriangle, BookOpen, CheckCircle2, CircleAlert, Info, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { AppliesBox, AppliesPart, EditingProfile, HeadPart, MetaChip, useInPage } from "./SettingsPage";
 import { Spinner } from "./bits";
 import { useModal } from "./modal";
 import {
@@ -60,8 +61,11 @@ export function McpSettings({
   picker,
   openUrl,
   pollMs = SIGN_IN_POLL_MS,
+  shown: inUse,
 }: {
   api: McpApi;
+  /** The profile the app uses; the header marks a picked profile that isn't it. */
+  shown?: string;
   /** The profile shown; every read and write names it, and answers for another are dropped. */
   profile: string;
   connected: boolean;
@@ -395,9 +399,49 @@ export function McpSettings({
     );
   };
 
+  // Under Settings' page header (ADR 0160) the profile, the read time, the page's buttons and when a change applies are
+  // the header's; every re-read in Settings is a Reload there.
+  const inPage = useInPage();
+  const reload = (
+    <button className="btn" disabled={!connected || loading} onClick={() => void load()} title="Read the MCP servers from Hermes again. Another client may have changed them.">
+      <RefreshCw size={14} aria-hidden /> {loading ? "Reloading…" : "Reload"}
+    </button>
+  );
+  const buttons = (
+    <span className="mcp-head-actions">
+      <button className="btn" disabled={!connected || !list} onClick={() => setDialog({ kind: "catalog" })}>
+        <BookOpen size={14} aria-hidden /> From catalog
+      </button>
+      <button className="btn primary" disabled={!connected || !list} onClick={() => setDialog({ kind: "add" })}>
+        <Plus size={14} aria-hidden /> Add server
+      </button>
+    </span>
+  );
   return (
     <>
+      {inPage && (
+        <>
+          <HeadPart at="profile">
+            <EditingProfile picker={picker ?? <span className="mono">{profile}</span>} inUse={!inUse || inUse === profile} />
+          </HeadPart>
+          {list && (
+            <HeadPart at="meta">
+              <MetaChip label="Read" value={clockTime(list.readAt)} />
+            </HeadPart>
+          )}
+          <HeadPart at="actions">
+            {list && reload}
+            {buttons}
+          </HeadPart>
+          <HeadPart at="applies">
+            <AppliesBox line="Changes reach chats started from now on. A chat already going keeps its tools." more="How changes apply">
+              <AppliesPart>{effectRows}</AppliesPart>
+            </AppliesBox>
+          </HeadPart>
+        </>
+      )}
       <SettingsSection
+        bare={inPage}
         title="MCP servers"
         titleId="mcp-heading"
         intro="Tools from other programs and services that Hermes offers the model, set up for each profile on the server."
@@ -407,18 +451,9 @@ export function McpSettings({
             every Hermes client using the profile.
           </p>
         }
-        action={
-          <span className="mcp-head-actions">
-            <button className="btn" disabled={!connected || !list} onClick={() => setDialog({ kind: "catalog" })}>
-              <BookOpen size={13} aria-hidden /> From catalog
-            </button>
-            <button className="btn primary" disabled={!connected || !list} onClick={() => setDialog({ kind: "add" })}>
-              <Plus size={13} aria-hidden /> Add server
-            </button>
-          </span>
-        }
+        action={!inPage && buttons}
       >
-        <SettingRow name="Profile" control={picker ?? <span className="set-value mono">{profile}</span>} />
+        {!inPage && <SettingRow name="Profile" control={picker ?? <span className="set-value mono">{profile}</span>} />}
         {cliOff && (
           <SettingNote tone="warn" role="status">
             <AlertTriangle size={14} />
@@ -464,41 +499,16 @@ export function McpSettings({
               </SettingNote>
             )}
             {list.servers.length ? list.servers.map(row) : <SettingNote role="status">This profile has no MCP servers yet.</SettingNote>}
-            <SettingRow
-              name="Read again"
-              hint={`As read at ${clockTime(list.readAt)}. Another client may have changed it since.`}
-              control={
-                <button className="btn" disabled={!connected || loading} onClick={() => void load()}>
-                  <RefreshCw size={13} aria-hidden /> {loading ? "Reading…" : "Read again"}
-                </button>
-              }
-            />
+            {!inPage && <SettingRow name="Reload" hint={`As read at ${clockTime(list.readAt)}. Another client may have changed it since.`} control={reload} />}
           </>
         )}
       </SettingsSection>
 
-      <SettingsSection title="When changes take effect" intro="Hermes connects a chat to the profile's MCP servers when it starts the chat.">
-        <SettingRow
-          name="Adding, editing, removing or switching"
-          hint="Chats started from now on get the change. A chat already going keeps the tools it started with."
-          more={<p>Hermes builds a chat's tools once. A server turned off stays in the config, so turning it on again needs nothing retyped.</p>}
-        />
-        <SettingRow
-          name="Turned off for a platform"
-          hint="Settings → Toolsets' no_mcp turns every MCP server off for one platform's chats in the profile."
-          more={
-            <p>
-              <span className="mono">no_mcp</span> sits in the profile's toolset list for a platform, such as <span className="mono">cli</span> for this app's chats. Hermes takes it out whenever Settings → Toolsets saves a change for that platform.
-            </p>
-          }
-        />
-        <SettingRow name="Secrets" hint="Env values and bearer tokens are write-only. Hermes keeps them on the server; this screen never shows them, and a blank one keeps what's saved." />
-        <SettingRow
-          name="Signing in"
-          hint="OAuth sign-in opens the service's page in your browser, which then returns to the Hermes dashboard."
-          more={<p>The page returns to the dashboard at the address Hermes Chat uses for it, so finish signing in on this computer while Hermes Chat is connected. Test says whether Hermes has a sign-in for the server.</p>}
-        />
-      </SettingsSection>
+      {!inPage && (
+        <SettingsSection title="When changes take effect" intro="Hermes connects a chat to the profile's MCP servers when it starts the chat.">
+          {effectRows}
+        </SettingsSection>
+      )}
 
       {dialog?.kind === "add" || dialog?.kind === "edit" ? (
         <ServerDialog
@@ -959,3 +969,29 @@ function CatalogDialog({
     </div>
   );
 }
+
+/** When an MCP change reaches chats, and what the screen keeps to itself. */
+const effectRows = (
+  <>
+    <SettingRow
+      name="Adding, editing, removing or switching"
+      hint="Chats started from now on get the change. A chat already going keeps the tools it started with."
+      more={<p>Hermes builds a chat's tools once. A server turned off stays in the config, so turning it on again needs nothing retyped.</p>}
+    />
+    <SettingRow
+      name="Turned off for a platform"
+      hint="Settings → Toolsets' no_mcp turns every MCP server off for one platform's chats in the profile."
+      more={
+        <p>
+          <span className="mono">no_mcp</span> sits in the profile's toolset list for a platform, such as <span className="mono">cli</span> for this app's chats. Hermes takes it out whenever Settings → Toolsets saves a change for that platform.
+        </p>
+      }
+    />
+    <SettingRow name="Secrets" hint="Env values and bearer tokens are write-only. Hermes keeps them on the server; this screen never shows them, and a blank one keeps what's saved." />
+    <SettingRow
+      name="Signing in"
+      hint="OAuth sign-in opens the service's page in your browser, which then returns to the Hermes dashboard."
+      more={<p>The page returns to the dashboard at the address Hermes Chat uses for it, so finish signing in on this computer while Hermes Chat is connected. Test says whether Hermes has a sign-in for the server.</p>}
+    />
+  </>
+);

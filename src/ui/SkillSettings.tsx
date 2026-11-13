@@ -24,6 +24,7 @@ import {
   type TransferOutcome,
 } from "../hermes/skills";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { AppliesBox, AppliesPart, EditingProfile, HeadPart, MetaChip, useInPage } from "./SettingsPage";
 import { clockTime, errorText } from "../hermes/values";
 
 /** The skill open in the editor: its row, SKILL.md as last read from Hermes, and the owner's text. */
@@ -76,9 +77,12 @@ export function SkillSettings({
   discardSignal = 0,
   picker,
   profiles,
+  shown,
 }: {
   api: SkillsApi;
   profile: string;
+  /** The profile the app uses; the header marks a picked profile that isn't it. */
+  shown?: string;
   status: ConnectionStatus;
   /** Picks the profile shown, in place of its name (Settings' `ProfilePicker`). */
   picker?: ReactNode;
@@ -418,16 +422,40 @@ export function SkillSettings({
     </div>
   );
 
+  // Under Settings' page header (ADR 0160) the profile, the server, Reload and when a change applies are the header's.
+  const inPage = useInPage();
+  const reloadBtn = (
+    <button className="btn" disabled={!connected || loading || !!toggling || busyBulk} onClick={() => void load()} title="Read the skills from Hermes again.">
+      <RefreshCw size={14} /> {loading ? "Reloading…" : "Reload"}
+    </button>
+  );
   return (
     <>
+      {inPage && (
+        <>
+          <HeadPart at="profile">
+            <EditingProfile picker={picker ?? <span className="mono">{profile}</span>} inUse={!shown || shown === profile} />
+          </HeadPart>
+          <HeadPart at="meta">
+            <MetaChip label="Server" value={server} />
+          </HeadPart>
+          {view && !problem && <HeadPart at="actions">{reloadBtn}</HeadPart>}
+          <HeadPart at="applies">
+            <AppliesBox line="Changes reach new chats at once. Turning a skill off also stops chats already going from loading it." more="How changes apply">
+              <AppliesPart>{effectRows}</AppliesPart>
+            </AppliesBox>
+          </HeadPart>
+        </>
+      )}
       <SettingsSection
+        bare={inPage}
         title="Skills"
         titleId="skills-heading"
         intro="Instructions Hermes can load for a task. Turning a skill off or editing it here changes it on the server, for every Hermes client using this profile."
         more={<p>Each skill is a SKILL.md file in a folder on the server. The agent sees each skill's name and description, and loads the rest when it needs it.</p>}
       >
-        <SettingRow name="Server" control={<span className="set-value mono skills-where">{server}</span>} />
-        <SettingRow name="Profile" control={picker ?? <span className="set-value mono skills-where">{profile}</span>} />
+        {!inPage && <SettingRow name="Server" control={<span className="set-value mono skills-where">{server}</span>} />}
+        {!inPage && <SettingRow name="Profile" control={picker ?? <span className="set-value mono skills-where">{profile}</span>} />}
 
         {problem ? (
           <SettingNote className="skills-state" tone={problem.kind === "unsupported" ? "muted" : "bad"} role="alert">
@@ -603,9 +631,7 @@ export function SkillSettings({
                     {query.trim() ? `${filtered.length} of ${view.skills.length}` : `${view.skills.length}`} {view.skills.length === 1 ? "skill" : "skills"}
                     {off > 0 && `, ${off} off`}
                   </span>
-                  <button className="btn" disabled={!connected || loading || !!toggling || busyBulk} onClick={() => void load()} title="Read the skills from Hermes again.">
-                    <RefreshCw size={14} /> {loading ? "Reloading…" : "Reload"}
-                  </button>
+                  {!inPage && reloadBtn}
                   {selecting ? (
                     <button className="btn" disabled={busyBulk} onClick={endSelect}>
                       Done
@@ -750,26 +776,34 @@ export function SkillSettings({
         )}
       </SettingsSection>
 
-      <SettingsSection title="When changes take effect" intro="Nothing needs restarting or reloading.">
-        <SettingRow name="Saving an edit" hint="The skill's next load, in any chat, gets the saved text." more={<p>{EDIT_EFFECT}</p>} />
-        <SettingRow
-          name="Turning a skill off"
-          hint="Chats started from now on leave it out, and Hermes then refuses to load it in any chat, even one already going."
-          more={
-            <p>
-              The switch is the profile's <span className="mono">skills.disabled</span> list, which every platform follows.
-            </p>
-          }
-        />
-        <SettingRow name="Turning a skill on" hint="New chats list it; one already going can still load it by name." />
-        <SettingRow
-          name="Undoing a saved edit"
-          hint="Restore previous version, until you sign out or close Hermes Chat; earlier versions aren't kept on the server or on this computer."
-        />
-      </SettingsSection>
+      {!inPage && (
+        <SettingsSection title="When changes take effect" intro="Nothing needs restarting or reloading.">
+          {effectRows}
+        </SettingsSection>
+      )}
     </>
   );
 }
+
+const effectRows = (
+  <>
+    <SettingRow name="Saving an edit" hint="The skill's next load, in any chat, gets the saved text. Nothing needs restarting or reloading." more={<p>{EDIT_EFFECT}</p>} />
+    <SettingRow
+      name="Turning a skill off"
+      hint="Chats started from now on leave it out, and Hermes then refuses to load it in any chat, even one already going."
+      more={
+        <p>
+          The switch is the profile's <span className="mono">skills.disabled</span> list, which every platform follows.
+        </p>
+      }
+    />
+    <SettingRow name="Turning a skill on" hint="New chats list it; one already going can still load it by name." />
+    <SettingRow
+      name="Undoing a saved edit"
+      hint="Restore previous version, until you sign out or close Hermes Chat; earlier versions aren't kept on the server or on this computer."
+    />
+  </>
+);
 
 /**
  * Select mode's bar: how many skills are picked, picking all shown or none, and Copy to, Move to and Delete, each asked

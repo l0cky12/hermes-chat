@@ -29,6 +29,7 @@ import {
   type RemoveOutcome,
 } from "../hermes/memory";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { AppliesBox, AppliesPart, EditingProfile, HeadPart, MetaChip, useInPage } from "./SettingsPage";
 import { clockTime, errorText } from "../hermes/values";
 
 /**
@@ -66,9 +67,12 @@ export function MemorySettings({
   source: sourceProp,
   files = true,
   picker,
+  shown,
 }: {
   api: MemoryApi;
   profile: string;
+  /** The profile the app uses; the header marks a picked profile that isn't it. */
+  shown?: string;
   status: ConnectionStatus;
   /** Picks the profile shown, in place of its name (Settings' `ProfilePicker`). */
   picker?: ReactNode;
@@ -649,9 +653,50 @@ export function MemorySettings({
     </>
   );
 
+  // Under Settings' page header (ADR 0160) the profile, the server and file, and Reload / Select are the header's; the
+  // part Settings hides (External memory shown instead) leaves the header to it.
+  const inPage = useInPage();
+  const head = sourceProp !== undefined;
+  const actions = view && !problem && (
+    <>
+      <button className="btn" disabled={!connected || !!busy} onClick={() => void load("reload")} title="Read memory from Hermes again. An edit you're making is kept.">
+        <RefreshCw size={14} /> {busy === "reload" ? "Reloading…" : "Reload"}
+      </button>
+      {selecting ? (
+        <button className="btn" disabled={busy === "bulk"} onClick={endSelect}>
+          Done
+        </button>
+      ) : (
+        <button className="btn" disabled={!!busy || !resource?.entries.length} onClick={startSelect} title="Pick entries to delete several at once.">
+          <CheckSquare size={14} /> Select
+        </button>
+      )}
+    </>
+  );
+  const fileHint = resource && `${entriesText(resource.entries.length)}, ${resourceChars(resource.entries).toLocaleString()} characters.`;
   return (
     <>
+      {inPage && head && (
+        <>
+          <HeadPart at="profile">
+            <EditingProfile picker={picker ?? <span className="mono">{profile}</span>} inUse={!shown || shown === profile} />
+          </HeadPart>
+          <HeadPart at="meta">
+            <MetaChip label="Server" value={server} />
+            {view && <MetaChip label="File" value={filePath} path />}
+            {fileHint && <span className="meta-note">{fileHint}</span>}
+          </HeadPart>
+          {actions && <HeadPart at="actions">{actions}</HeadPart>}
+          <HeadPart at="applies">
+            <AppliesBox line="Saved edits reach new chats. Chats already going keep the memory they started with." more="How changes apply">
+              <AppliesPart>{whenRows}</AppliesPart>
+              <AppliesPart title="Safety checks">{safetyRow}</AppliesPart>
+            </AppliesBox>
+          </HeadPart>
+        </>
+      )}
       <SettingsSection
+        bare={inPage && head}
         title="Memory"
         titleId="memory-heading"
         className="memory-files"
@@ -665,29 +710,11 @@ export function MemorySettings({
             <p>To add a memory, ask Hermes in a chat to remember it. Hermes has no call for adding one from another app.</p>
           </>
         }
-        action={
-          view &&
-          !problem && (
-            <>
-              <button className="btn" disabled={!connected || !!busy} onClick={() => void load("reload")} title="Read memory from Hermes again. An edit you're making is kept.">
-                <RefreshCw size={14} /> {busy === "reload" ? "Reloading…" : "Reload"}
-              </button>
-              {selecting ? (
-                <button className="btn" disabled={busy === "bulk"} onClick={endSelect}>
-                  Done
-                </button>
-              ) : (
-                <button className="btn" disabled={!!busy || !resource?.entries.length} onClick={startSelect} title="Pick entries to delete several at once.">
-                  <CheckSquare size={14} /> Select
-                </button>
-              )}
-            </>
-          )
-        }
+        action={inPage ? undefined : actions}
       >
-        <SettingRow name="Profile" hint="Whose memory is shown." control={picker ?? <span className="set-value mono">{profile}</span>} />
-        <SettingRow name="Server" hint="Where the memory files are kept." control={<span className="set-value mono">{server}</span>} />
-        {view && (
+        {!inPage && <SettingRow name="Profile" hint="Whose memory is shown." control={picker ?? <span className="set-value mono">{profile}</span>} />}
+        {!inPage && <SettingRow name="Server" hint="Where the memory files are kept." control={<span className="set-value mono">{server}</span>} />}
+        {view && !inPage && (
           <SettingRow
             name="File"
             hint={
@@ -794,18 +821,26 @@ export function MemorySettings({
         })}
       </SettingsSection>
 
-      <SettingsSection title="When edits take effect">
-        <SettingRow
-          name="New chats"
-          hint="Hermes reads memory into a chat when the chat starts, so a saved edit reaches chats started after it, from any Hermes client."
-          more={<p>Saving changes only the file; it never restarts Hermes.</p>}
-        />
-        <SettingRow name="Chats already going" hint="Keep the memory they started with until Hermes compresses their history, when it reads memory again." />
-        <SettingRow
-          name="Entries Hermes leaves out"
-          hint="Hermes leaves out of a chat any entry that looks like an attempt to take over the agent, and shows a note in its place."
-        />
-      </SettingsSection>
+      {!inPage && (
+        <SettingsSection title="When edits take effect">
+          {whenRows}
+          {safetyRow}
+        </SettingsSection>
+      )}
     </>
   );
 }
+
+const whenRows = (
+  <>
+    <SettingRow
+      name="New chats"
+      hint="Hermes reads memory into a chat when the chat starts, so a saved edit reaches chats started after it, from any Hermes client."
+      more={<p>Saving changes only the file; it never restarts Hermes.</p>}
+    />
+    <SettingRow name="Chats already going" hint="Keep the memory they started with until Hermes compresses their history, when it reads memory again." />
+  </>
+);
+const safetyRow = (
+  <SettingRow name="Entries Hermes leaves out" hint="Hermes leaves out of a chat any entry that looks like an attempt to take over the agent, and shows a note in its place." />
+);

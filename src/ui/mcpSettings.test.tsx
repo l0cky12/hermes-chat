@@ -51,7 +51,7 @@ async function shown({ s = server(), profile = "default", openUrl = vi.fn() } = 
       <McpSettings api={hermes.mcp} profile={profile} connected openUrl={openUrl} pollMs={20} />
     </StrictMode>,
   );
-  await screen.findByRole("button", { name: /Read again/ });
+  await screen.findByRole("button", { name: "Reload" });
   return { s, hermes, user, view, openUrl };
 }
 

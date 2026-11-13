@@ -2,12 +2,13 @@
 // card of rows. A row is a setting's name with a one-line hint on the left and its control on the right. Longer help
 // folds behind an (i) button beside the name or heading, and opens by itself while Settings is searched, so a match
 // inside it can be seen. Each section stays a <section>, the unit Settings' search shows or hides (settingsSearch.ts).
-import { createContext, type ReactNode, useContext, useId, useState } from "react";
+import { type ReactNode, useContext, useId, useState } from "react";
 import { Info } from "lucide-react";
 import { useLocale } from "../i18n/locale";
+import { HeadPart, SettingsSearching } from "./SettingsPage";
 
-/** True while Settings shows search results: every folded help text is open then. */
-export const SettingsSearching = createContext(false);
+export { SettingsSearching };
+
 
 /** The (i) button and the help it opens. `about` names what it's about, for assistive technology. */
 function useMore(about: string | undefined, more: ReactNode) {
@@ -50,8 +51,11 @@ export function SettingsSection({
   more,
   action,
   className = "",
+  bare = false,
   children,
 }: {
+  /** No heading or intro: the page header above says what the section is (ADR 0160). The section stays the unit search finds. */
+  bare?: boolean;
   title: string;
   /** The heading's id, which also names the section (a landmark), when something else points at it. */
   titleId?: string;
@@ -65,17 +69,20 @@ export function SettingsSection({
   const { button, panel } = useMore(title, more);
   return (
     // Named by its heading only when something points at it: a page of named sections would be a page of landmarks.
-    <section className={`set-section ${className}`} aria-labelledby={titleId}>
-      <div className="set-head">
+    <section className={`set-section ${className}`} aria-labelledby={bare ? undefined : titleId} aria-label={bare ? title : undefined}>
+      {!bare && <div className="set-head">
         {/* The (i) stays outside the heading, so the heading's name is only its title. */}
         <div className="set-head-title">
           <h2 id={titleId}>{title}</h2>
           {button}
         </div>
         {action && <div className="set-head-action">{action}</div>}
-      </div>
-      {intro && <div className="set-intro">{intro}</div>}
-      {panel}
+      </div>}
+      {!bare && intro && <div className="set-intro">{intro}</div>}
+      {!bare && panel}
+      {/* Bare under a page header: the header names the section, and its (i) and help go there. */}
+      {bare && button && <HeadPart at="help">{button}</HeadPart>}
+      {bare && panel && <HeadPart at="helpText">{panel}</HeadPart>}
       <div className="set-card">{children}</div>
     </section>
   );

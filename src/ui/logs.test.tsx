@@ -228,9 +228,11 @@ describe("Logs in Settings → Diagnostics", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Settings" }));
     await user.click(screen.getByRole("tab", { name: /Diagnostics/ }));
-    const groups = screen.getByRole("navigation", { name: "Diagnostics" });
+    // Server and Logs are Diagnostics' sections, under it in the sidebar's tree (ADR 0160).
+    const groups = screen.getByRole("group", { name: "Diagnostics: sections" });
     // Server comes first, as Diagnostics opened before Logs moved here; Hermes's logs aren't read until Logs is picked.
-    expect(within(groups).getByRole("button", { name: "Server" }).getAttribute("aria-current")).toBe("true");
+    expect(within(groups).getAllByRole("button").map((b) => b.textContent)).toEqual(["Server", "Logs"]);
+    expect(within(groups).getByRole("button", { name: "Server" }).getAttribute("aria-current")).toBe("page");
     expect(s.restRequests.some((r) => r.path === "/api/logs")).toBe(false);
 
     await user.click(within(groups).getByRole("button", { name: "Logs" }));
@@ -241,7 +243,7 @@ describe("Logs in Settings → Diagnostics", () => {
 
     await user.click(within(groups).getByRole("button", { name: "Server" }));
     expect(screen.queryByRole("region", { name: "Logs" })).toBeNull();
-    await user.click(within(screen.getByRole("navigation", { name: "Diagnostics" })).getByRole("button", { name: "Logs" }));
+    await user.click(within(screen.getByRole("group", { name: "Diagnostics: sections" })).getByRole("button", { name: "Logs" }));
     expect(screen.getByRole("region", { name: "Logs" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /Back to chat/ }));
     expect(screen.queryByRole("region", { name: "Logs" })).toBeNull();
@@ -311,8 +313,13 @@ describe("Settings → Diagnostics, Server and Logs", () => {
   }
   const wiring = (read: LogsWiring["read"]): LogsWiring => ({ connection: "SSH tunnel", read, save: async () => null, pollMs: 30 });
   const answering = (profile: string) => vi.fn(async (file: RemoteLog) => ({ file, lines: [`2026-11-04 10:00:00,000 INFO agent: from ${profile}\n`] }));
-  const groups = () => screen.getByRole("navigation", { name: "Diagnostics" });
-  const current = () => within(groups()).getAllByRole("button").find((b) => b.getAttribute("aria-current") === "true")?.getAttribute("aria-label");
+  const groups = () => screen.getByRole("group", { name: "Diagnostics: sections" });
+  /** The section shown, as the tree marks it; the page header's title names it too. */
+  const current = () => {
+    const name = within(groups()).getAllByRole("button").find((b) => b.getAttribute("aria-current") === "page")?.textContent;
+    expect(document.querySelector("header.page-head .page-title")!.textContent).toBe(name);
+    return name;
+  };
   /** No read starts in a few poll intervals. */
   const stillAt = async (read: ReturnType<typeof vi.fn>) => {
     const n = read.mock.calls.length;
@@ -391,17 +398,17 @@ describe("Settings → Diagnostics, Server and Logs", () => {
     expect(rows()).toEqual(["2026-11-04 10:00:00,000 INFO agent: from work"]);
   });
 
-  it("has no sub-nav with only one group, and no Diagnostics tab with neither", async () => {
+  it("has no sections in the tree with only one group, and no Diagnostics tab with neither", async () => {
     const hermes = await hermesFor();
     const { rerender } = render(<SettingsWith hermes={hermes} />);
     const user = userEvent.setup();
     await user.click(screen.getByRole("tab", { name: /Diagnostics/ }));
-    expect(screen.queryByRole("navigation", { name: "Diagnostics" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Diagnostics: sections" })).toBeNull();
     expect(screen.getByRole("region", { name: "Server" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Logs" })).toBeNull();
 
     rerender(<SettingsWith hermes={hermes} capabilities={null} logs={wiring(answering("default"))} />);
-    expect(screen.queryByRole("navigation", { name: "Diagnostics" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Diagnostics: sections" })).toBeNull();
     expect(screen.getByRole("region", { name: "Logs" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Server" })).toBeNull();
 

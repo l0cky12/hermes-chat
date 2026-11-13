@@ -1,12 +1,12 @@
-// Settings → Gateways (ADR 0073): a profile's Telegram and Discord gateways on the server, one platform at a time beside
-// a sub-nav. Each shows its state as Hermes reports it, its on/off switch, and its settings. A token is write-only: the
+// Settings → Gateways (ADR 0073): a profile's Telegram and Discord gateways on the server, one platform at a time,
+// picked in Settings' tree (ADR 0160). Each shows its state as Hermes reports it, its on/off switch, and its settings. A token is write-only: the
 // row shows Hermes's redacted preview, and Replace or Remove changes it only on Save; a row left alone keeps what Hermes
 // has. Save reads the platform first and sends nothing if it changed on the server, then reads it again to confirm.
 // Check status asks Hermes how the connection is; it sends no message (gateways.ts).
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, ExternalLink, Info, KeyRound, MessageCircle, RefreshCw, Send, Trash2, Undo2 } from "lucide-react";
+import { AlertTriangle, ExternalLink, Info, KeyRound, RefreshCw, Trash2, Undo2 } from "lucide-react";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
-import { SubNav, type SubNavItem } from "./SubNav";
+import { AppliesBox, EditingProfile, HeadPart, useInPage } from "./SettingsPage";
 import { Spinner } from "./bits";
 import {
   type Draft,
@@ -94,11 +94,33 @@ function saveNote(r: SaveResult, g: Gateway): Note {
   return { tone: "warn", text: `Hermes didn't confirm it: ${r.reason} The screen shows what Hermes has now.` };
 }
 
-export function GatewaySettings({ api, profile, connected, picker, openUrl }: { api: GatewaysApi; profile: string; connected: boolean; picker?: ReactNode; openUrl: (url: string) => Promise<void> | void }) {
+export function GatewaySettings({
+  api,
+  profile,
+  shown: inUse,
+  connected,
+  picker,
+  openUrl,
+  platform = "telegram",
+  onPlatforms,
+}: {
+  api: GatewaysApi;
+  profile: string;
+  /** The profile the app uses; the header marks a picked profile that isn't it. */
+  shown?: string;
+  connected: boolean;
+  picker?: ReactNode;
+  openUrl: (url: string) => Promise<void> | void;
+  /** The platform shown, picked in Settings' tree. */
+  platform?: PlatformId;
+  /** Told which platforms this Hermes offers, once read, so Settings' tree offers only those. */
+  onPlatforms?: (ids: PlatformId[]) => void;
+}) {
   const [list, setList] = useState<GatewayList>();
   const [problem, setProblem] = useState<{ unsupported: boolean; permission: boolean; text: string }>();
   const [loading, setLoading] = useState(false);
-  const [selected, setSelected] = useState<PlatformId>("telegram");
+  const selected = platform;
+  const inPage = useInPage();
   const [drafts, setDrafts] = useState<Partial<Record<PlatformId, Draft>>>({});
   const [notes, setNotes] = useState<Partial<Record<PlatformId, Note>>>({});
   const [checks, setChecks] = useState<Partial<Record<PlatformId, StatusCheck>>>({});
@@ -136,13 +158,36 @@ export function GatewaySettings({ api, profile, connected, picker, openUrl }: { 
 
   const gateways = list?.gateways ?? [];
   const g = gateways.find((x) => x.id === selected) ?? gateways[0];
+  const offered = gateways.map((x) => x.id).join(" ");
+  useEffect(() => {
+    if (list) onPlatforms?.(offered ? (offered.split(" ") as PlatformId[]) : []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- tell Settings when the offered platforms change, not on every new callback
+  }, [offered, !!list]);
 
-  const items: SubNavItem[] = gateways.map((x) => ({ id: x.id, label: x.name, icon: x.id === "telegram" ? <Send size={14} /> : <MessageCircle size={14} /> }));
+  // Under Settings' page header (ADR 0160) the profile, Reload and when a change applies are the header's.
+  const profileRow = inPage ? (
+    <HeadPart at="profile">
+      <EditingProfile picker={picker ?? <span className="mono">{profile}</span>} inUse={!inUse || inUse === profile} />
+    </HeadPart>
+  ) : (
+    <SettingRow name="Profile" control={picker ?? <span className="set-value mono">{profile}</span>} />
+  );
+  const reload = (
+    <button className="btn" disabled={!connected || loading} onClick={() => void load()}>
+      <RefreshCw size={14} aria-hidden /> Reload
+    </button>
+  );
+  const about = (
+    <p>
+      Hermes keeps each token in the profile's .env on the server and shows only a redacted preview of it, so this app never has it back. A change applies the next time the profile's gateway starts. Nothing here sends a message, and Check
+      status only asks Hermes how the connection is.
+    </p>
+  );
 
   if (problem)
     return (
-      <SettingsSection title="Gateways" titleId="gw-heading">
-        <SettingRow name="Profile" control={picker ?? <span className="set-value mono">{profile}</span>} />
+      <SettingsSection title="Gateways" titleId="gw-heading" bare={inPage}>
+        {profileRow}
         <SettingNote tone={problem.unsupported ? "muted" : "bad"} role="alert">
           {problem.unsupported ? <Info size={14} /> : <AlertTriangle size={14} />}
           <span>{problem.unsupported ? problem.text : problem.permission ? `Permission refused: Hermes won't let this sign-in read the gateways: ${problem.text}` : `Couldn't read the gateways: ${problem.text}`}</span>
@@ -155,24 +200,42 @@ export function GatewaySettings({ api, profile, connected, picker, openUrl }: { 
       </SettingsSection>
     );
 
-  const head = (
+  const status = !list ? (
+    <SettingNote role="status">{connected ? "Reading the gateways from Hermes…" : "Not connected to Hermes. The gateways show once it's connected."}</SettingNote>
+  ) : !gateways.length ? (
+    <SettingNote role="status">This Hermes offers neither Telegram nor Discord.</SettingNote>
+  ) : (
+    !connected && (
+      <SettingNote tone="warn" role="status">
+        <AlertTriangle size={14} />
+        <span>Not connected to Hermes. This is what it had at {clockTime(list.readAt)}; reconnect to change it.</span>
+      </SettingNote>
+    )
+  );
+  const head = inPage ? (
+    <>
+      {profileRow}
+      <HeadPart at="actions">{reload}</HeadPart>
+      <HeadPart at="applies">
+        <AppliesBox line="A change applies the next time the profile's gateway starts. The gateway runs on the server, which keeps the tokens." more="Details">
+          <div className="applies-text">{about}</div>
+        </AppliesBox>
+      </HeadPart>
+      {status && (
+        <SettingsSection title="Gateways" bare>
+          {status}
+        </SettingsSection>
+      )}
+    </>
+  ) : (
     <SettingsSection
       title="Gateways"
       titleId="gw-heading"
       intro="Reach this profile's Hermes from Telegram or Discord. The gateway runs on the server, and Hermes keeps the tokens there."
-      more={
-        <p>
-          Hermes keeps each token in the profile's .env on the server and shows only a redacted preview of it, so this app never has it back. A change applies the next time the profile's gateway starts. Nothing here sends a message, and
-          Check status only asks Hermes how the connection is.
-        </p>
-      }
-      action={
-        <button className="btn" disabled={!connected || loading} onClick={() => void load()}>
-          <RefreshCw size={13} aria-hidden /> Read again
-        </button>
-      }
+      more={about}
+      action={reload}
     >
-      <SettingRow name="Profile" control={picker ?? <span className="set-value mono">{profile}</span>} />
+      {profileRow}
       {!list ? (
         <SettingNote role="status">{connected ? "Reading the gateways from Hermes…" : "Not connected to Hermes. The gateways show once it's connected."}</SettingNote>
       ) : !gateways.length ? (
@@ -293,11 +356,10 @@ export function GatewaySettings({ api, profile, connected, picker, openUrl }: { 
   };
 
   return (
-    <div className="settings-split">
-      <SubNav label="Gateways" items={items} selected={g.id} onPick={(id) => setSelected(id as PlatformId)} />
-      <div className="settings-split-body">
-        {head}
-        <SettingsSection
+    <>
+      {head}
+      <SettingsSection
+            bare={inPage}
             title={g.name}
             titleId={`gw-${g.id}-heading`}
             intro={g.description}
@@ -318,6 +380,13 @@ export function GatewaySettings({ api, profile, connected, picker, openUrl }: { 
             <SettingRow
               name="Status"
               hint={st.text}
+              more={
+                inPage && (
+                  <p>
+                    The bot token comes from {ABOUT[g.id].tokenFrom}. Allowed user IDs are the {g.name} accounts that may talk to Hermes; left empty, Hermes asks new users to pair first.
+                  </p>
+                )
+              }
               control={
                 <span className={`badge ${st.tone === "off" ? "off" : st.tone}`} role="status">
                   {st.badge}
@@ -361,28 +430,24 @@ export function GatewaySettings({ api, profile, connected, picker, openUrl }: { 
                 </div>
               )}
             </SettingRow>
-            <SettingRow
-              name="Save"
-              hint={local ?? (dirty ? "Hermes is read first, and nothing is sent if it changed meanwhile." : "No changes.")}
-              control={
-                <>
-                  <button className="btn" disabled={!!b || (!dirty && !drafts[g.id])} onClick={() => setDrafts((all) => ({ ...all, [g.id]: undefined }))}>
-                    Discard
-                  </button>
-                  <button className="btn primary" disabled={locked || !dirty || !!local} onClick={() => void save()}>
-                    {b === "save" && <Spinner />} {b === "save" ? "Saving…" : "Save"}
-                  </button>
-                </>
-              }
-            >
+            {/* Save reads like Model's footer: the state, then Discard and Save. */}
+            <div className="set-note set-commit">
+              <span>{local ?? (dirty ? "Hermes is read first, and nothing is sent if it changed meanwhile." : "No changes.")}</span>
+              <span className="set-commit-actions">
+                <button className="btn" disabled={!!b || (!dirty && !drafts[g.id])} onClick={() => setDrafts((all) => ({ ...all, [g.id]: undefined }))}>
+                  Discard
+                </button>
+                <button className="btn primary" disabled={locked || !dirty || !!local} onClick={() => void save()}>
+                  {b === "save" && <Spinner />} {b === "save" ? "Saving…" : "Save"}
+                </button>
+              </span>
               {note && (
                 <div className={`gw-line ${note.tone}`} role={note.tone === "bad" ? "alert" : "status"}>
                   {note.text} {note.problem && <ProblemText problem={note.problem} g={g} />}
                 </div>
               )}
-            </SettingRow>
-        </SettingsSection>
-      </div>
-    </div>
+            </div>
+      </SettingsSection>
+    </>
   );
 }

@@ -3109,7 +3109,10 @@ export function Main({
           )
         }
       />
+      {/* Settings brings its own list of pages in this column (ADR 0160); the chat list stays mounted, hidden, so its
+          scroll and open sections are as they were on the way back. */}
       {listOpen && (
+        <div className="list-slot" hidden={settingsOpen}>
         <ChatList
           defaultName={defaultProfileName}
           profile={profile}
@@ -3239,6 +3242,7 @@ export function Main({
           onSearch={() => openSearch()}
           onHide={() => setListOpen(false)}
         />
+        </div>
       )}
       {botsOpen && (
         <Bots

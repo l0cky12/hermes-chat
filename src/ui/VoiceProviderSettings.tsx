@@ -2,7 +2,7 @@
 // picked one's model, voice and language, and give it an API key. See src/hermes/voiceSettings.ts and ADR 0115.
 // Keys are write-only: Hermes says only whether one is set, a typed one is sent once, and the field is emptied after.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { KeyRound, RotateCcw, Save } from "lucide-react";
+import { KeyRound, RefreshCw, RotateCcw, Save } from "lucide-react";
 import {
   KINDS,
   KIND_LABEL,
@@ -27,6 +27,7 @@ import {
 } from "../hermes/voiceSettings";
 import { Spinner } from "./bits";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { HeadPart, useInPage } from "./SettingsPage";
 import { errorText } from "../hermes/values";
 
 const USED_FOR: Record<VoiceKind, string> = {
@@ -203,6 +204,19 @@ export function VoiceProviderSettings({
   const setKey = (kind: VoiceKind, env: string, value: string) =>
     setDraft((d) => ({ ...d, keys: { ...d.keys, [kind]: { ...d.keys[kind], [env]: value } } }));
 
+  // Under Settings' page header (ADR 0160) Reload is the page's; every re-read in Settings is a Reload there.
+  const inPage = useInPage();
+  const action = !connected || unsupported ? undefined : loadError ? (
+    <button className="btn" onClick={load}>
+      <RotateCcw size={14} /> Try again
+    </button>
+  ) : (
+    read && (
+      <button className="btn" disabled={busy} onClick={load}>
+        <RefreshCw size={14} /> Reload
+      </button>
+    )
+  );
   return (
     <SettingsSection
       title="Speech providers"
@@ -226,20 +240,9 @@ export function VoiceProviderSettings({
           </p>
         </>
       }
-      action={
-        !connected || unsupported ? undefined : loadError ? (
-          <button className="btn" onClick={load}>
-            <RotateCcw size={13} /> Try again
-          </button>
-        ) : (
-          read && (
-            <button className="btn" disabled={busy} onClick={load}>
-              <RotateCcw size={13} /> Read again
-            </button>
-          )
-        )
-      }
+      action={inPage ? undefined : action}
     >
+      {inPage && action && <HeadPart at="actions">{action}</HeadPart>}
       {!connected ? (
         <SettingNote>Connect to Hermes to see and change this profile's speech providers.</SettingNote>
       ) : unsupported ? (

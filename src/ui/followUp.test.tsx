@@ -196,7 +196,7 @@ describe("Settings → General → Chats", () => {
   it("picks the Follow-up behavior, Queue until changed", async () => {
     const s = await replying();
     await s.user.click(screen.getByRole("button", { name: "Settings" }));
-    await s.user.click(within(screen.getByRole("navigation", { name: "General" })).getByRole("button", { name: "Chats" }));
+    await s.user.click(within(screen.getByRole("group", { name: "General: sections" })).getByRole("button", { name: "Chats" }));
     const group = screen.getByRole("group", { name: "Follow-up behavior" });
     expect(within(group).getByRole("button", { name: "Queue" }).getAttribute("aria-pressed")).toBe("true");
     await s.user.click(within(group).getByRole("button", { name: "Steer" }));

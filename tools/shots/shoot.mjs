@@ -131,6 +131,33 @@ const scenes = {
   },
   "automation-history-light": { query: "?mode=light", height: 1400, steps: [click("button[aria-label='Automations']"), click("button", "triage-issues"), scrollTo(".delivery-list")] },
 };
+// Every Settings tab at 1920 × 1080 (#568): `settings-tab-<id>`, for a redesign's before and after.
+for (const [id, label] of Object.entries({ general: "General", appearance: "Appearance", keyboard: "Keyboard Shortcuts", snapshots: "Snapshots", model: "Model", providers: "Providers", voice: "Voice", toolsets: "Toolsets", mcp: "MCP servers", gateways: "Gateways", profiles: "Profiles", persona: "Persona", memory: "Memory", skills: "Skills", extensions: "Extensions", diagnostics: "Diagnostics" }))
+  scenes[`settings-tab-${id}`] = { query: "?profiles=1", ...hd, steps: [openSettings, click("[role=tab]", label)] };
+// The sections a page shows one at a time, picked under it in the sidebar's tree (ADR 0160), and its narrow forms.
+const tab = (label) => click("[role=tab]", label);
+const sub = (label) => click(".settings-sub", label);
+const narrow = { width: 760, height: 600 };
+Object.assign(scenes, {
+  "settings-general-chats": { query: "?profiles=1", ...hd, steps: [openSettings, sub("Chats")] },
+  "settings-general-launch": { query: "?profiles=1", ...hd, steps: [openSettings, sub("Launch")] },
+  "settings-general-screenshots": { query: "?profiles=1", ...hd, steps: [openSettings, sub("Screenshots")] },
+  "settings-general-storage": { query: "?profiles=1", ...hd, steps: [openSettings, sub("Storage")] },
+  "settings-memory-user": { query: "?profiles=1", ...hd, steps: [openSettings, tab("Memory"), sub("User profile")] },
+  "settings-memory-external": { query: "?profiles=1", ...hd, steps: [openSettings, tab("Memory"), sub("External memory")] },
+  "settings-gateways-discord": { query: "?profiles=1", ...hd, steps: [openSettings, tab("Gateways"), sub("Discord")] },
+  "settings-diagnostics-logs": { query: "?profiles=1", ...hd, steps: [openSettings, tab("Diagnostics"), sub("Logs")] },
+  "settings-model-subagents": { query: "?profiles=1", ...hd, steps: [openSettings, tab("Model"), sub("Subagents")] },
+  "settings-search-cache": { query: "?profiles=1", ...hd, steps: [openSettings, typeSearch("cache")] },
+  "settings-search-reasoning": { query: "?profiles=1", ...hd, steps: [openSettings, typeSearch("reasoning effort")] },
+  "settings-narrow-general": { query: "?profiles=1", ...narrow, steps: [openSettings] },
+  "settings-narrow-model": { query: "?profiles=1", ...narrow, steps: [openSettings, click(".settings-crumb"), tab("Model")] },
+  "settings-narrow-memory": { query: "?profiles=1", ...narrow, steps: [openSettings, click(".settings-crumb"), tab("Memory")] },
+  "settings-narrow-keyboard": { query: "?profiles=1", ...narrow, steps: [openSettings, click(".settings-crumb"), tab("Keyboard")] },
+  "settings-narrow-skills": { query: "?profiles=1", ...narrow, steps: [openSettings, click(".settings-crumb"), tab("Skills")] },
+  "settings-narrow-sheet": { query: "?profiles=1", ...narrow, steps: [openSettings, click(".settings-crumb"), tab("Model"), click(".settings-crumb")] },
+  "settings-narrow-search": { query: "?profiles=1", ...narrow, steps: [openSettings, click(".settings-bar-search"), typeSearch("reasoning effort")] },
+});
 const wanted = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(scenes);
 
 function chrome() {

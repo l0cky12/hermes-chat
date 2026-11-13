@@ -334,7 +334,10 @@ describe("Settings → Skills editor", () => {
     await user.type(editor(), "Kept.");
     view.rerender(<Shell hermes={hermes} profile="default" status="offline" />);
     expect((button("Save") as HTMLButtonElement).disabled).toBe(true);
-    expect((button(/Reload/) as HTMLButtonElement).disabled).toBe(true);
+    // The editor's Reload (SKILL.md) and the page header's (the list) are both off.
+    const edit = screen.getByRole("group", { name: "Edit release-notes" });
+    expect((within(edit).getByRole("button", { name: /Reload/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(document.querySelector(".page-actions") as HTMLElement).getByRole("button", { name: /Reload/ }) as HTMLButtonElement).disabled).toBe(true);
     expect(editor().value).toBe(`${NOTES}Kept.`);
   });
 
@@ -382,10 +385,19 @@ describe("Settings → Skills as cards of rows (#174, ADR 0059)", () => {
   /** Whether `el` is on screen: no folded help hides it. */
   const inView = (el: Element) => el.closest("[hidden]") === null;
 
-  it("draws each section as a heading and a card of rows, with a skill's Edit and switch as its row's control", async () => {
+  it("draws the list as a card of rows under the page header, with a skill's Edit and switch as its row's control", async () => {
     await shown();
-    const card = screen.getByRole("region", { name: "Skills" }).querySelector(":scope > .set-card")!;
-    expect([...card.querySelectorAll(":scope > .set-row .set-name")].map((e) => e.textContent)).toEqual(["Server", "Profile"]);
+    // In Settings the section is bare: the page header names it and holds the profile, the server and Reload (ADR 0160).
+    const section = screen.getByRole("region", { name: "Skills" });
+    expect(section.querySelector(":scope > .set-head")).toBeNull();
+    const card = section.querySelector(":scope > .set-card")!;
+    expect(card.querySelectorAll(":scope > .set-row")).toHaveLength(0);
+    const head = document.querySelector("header.page-head") as HTMLElement;
+    expect(within(head).getByRole("heading", { level: 2 }).textContent).toBe("Skills");
+    expect(head.querySelector(".page-slot")!.textContent).toMatch(/Editing profile\s*default/);
+    expect(head.querySelector(".page-slot .badge")).toBeNull();
+    expect([...head.querySelectorAll(".page-meta .meta-chip")].map((c) => [c.firstElementChild!.textContent, c.querySelector("code")!.textContent])).toEqual([["Server", "ssh://liam@hermes"]]);
+    expect(within(head.querySelector(".page-actions") as HTMLElement).getByRole("button", { name: /Reload/ })).toBeTruthy();
     expect(list().parentElement).toBe(card);
     expect(list().classList.contains("set-block")).toBe(true);
     const control = rowOf("github").querySelector(".set-row > .set-control") as HTMLElement;
@@ -393,9 +405,11 @@ describe("Settings → Skills as cards of rows (#174, ADR 0059)", () => {
     expect(within(control).getByRole("switch", { name: "github" })).toBeTruthy();
     // The description is the row's one-line hint.
     expect(rowOf("github").querySelector(".set-hint")!.textContent).toContain("Work with GitHub.");
-    const effect = screen.getByRole("heading", { name: "When changes take effect", level: 2 }).closest("section")!;
-    expect(effect.classList.contains("set-section")).toBe(true);
-    expect(effect.querySelectorAll(":scope > .set-card > .set-row")).toHaveLength(4);
+    // When changes take effect is the header's summary box: one line, and its four rows behind it.
+    expect(screen.queryByRole("heading", { name: "When changes take effect" })).toBeNull();
+    const effect = head.querySelector("section.applies-box")!;
+    expect(effect.querySelector("summary")!.textContent).toMatch(/Changes reach new chats at once\. Turning a skill off also stops chats already going from loading it\./);
+    expect(effect.querySelectorAll(":scope > details > .set-card > .set-row")).toHaveLength(4);
   });
 
   it("opens the editor in a block of the card, under the skill's own row", async () => {
@@ -419,22 +433,33 @@ describe("Settings → Skills as cards of rows (#174, ADR 0059)", () => {
     await user.click(screen.getByRole("tab", { name: /Skills/ }));
     await screen.findByRole("list", { name: "Skills" });
 
-    const about = screen.getByRole("button", { name: "About Skills" });
+    // In Settings the page header says what the page is (ADR 0160): the section's (i) ends the page's description, and
+    // its help opens under it.
+    const head = document.querySelector("header.page-head") as HTMLElement;
+    expect(head.querySelector(".page-desc")!.textContent).toBe("Instructions Hermes loads for a kind of task. Changes apply to every client on this profile.");
+    const about = within(head).getByRole("button", { name: "About Skills" });
     expect(about.getAttribute("aria-expanded")).toBe("false");
     expect(helpOf(about).hidden).toBe(true);
     expect(helpOf(about).textContent).toMatch(/loads the rest when it needs it/);
     await user.click(about);
-    expect(about.getAttribute("aria-expanded")).toBe("true");
     expect(helpOf(about).hidden).toBe(false);
-    const off = screen.getByRole("button", { name: "About Turning a skill off" });
+    // How changes apply is one line in view; its rows open from the summary box, each row's own help behind its (i).
+    const box = head.querySelector("section.applies-box details") as HTMLDetailsElement;
+    expect(box.open).toBe(false);
+    expect(inView(within(box).getByText(/Turning a skill off also stops chats already going from loading it/))).toBe(true);
+    await user.click(box.querySelector("summary")!);
+    expect(box.open).toBe(true);
+    const off = within(box).getByRole("button", { name: "About Turning a skill off" });
+    expect(off.getAttribute("aria-expanded")).toBe("false");
     expect(helpOf(off).hidden).toBe(true);
     expect(helpOf(off).textContent).toMatch(/skills\.disabled list, which every platform follows/);
-    // The (i) never joins the heading's name.
-    expect(screen.getByRole("heading", { name: "Skills", level: 2 })).toBeTruthy();
+    await user.click(off);
+    expect(helpOf(off).hidden).toBe(false);
+    // The (i) never joins the row's name.
+    expect(within(box).getByText("Turning a skill off", { selector: ".set-name" })).toBeTruthy();
 
-    // Never folded: what a change reaches, what an undo can't bring back, and what keeps a skill off.
-    expect(inView(screen.getByText(/for every Hermes client using this profile/))).toBe(true);
-    expect(inView(screen.getByText(/earlier versions aren't kept on the server or on this computer/))).toBe(true);
+    // Never behind an (i): what an undo can't bring back, and what keeps a skill off.
+    expect(inView(within(box).getByText(/earlier versions aren't kept on the server or on this computer/))).toBe(true);
     expect(inView(within(rowOf("release-notes")).getByText(/skills\.platform_disabled\.tui/))).toBe(true);
     view.rerender(<Shell hermes={hermes} profile="default" status="offline" />);
     const stale = screen.getByText(/Not connected to Hermes. These are the skills as read at/);

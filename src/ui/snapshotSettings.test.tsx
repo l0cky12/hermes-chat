@@ -51,6 +51,11 @@ describe("Settings → Snapshots, the host card", () => {
     await screen.findByRole("form", { name: "Set up a snapshot host" });
     expect(field("Prefix").value).toBe("hermes-chat-snapshots/");
     expect(field("Secret access key").type).toBe("password");
+    // The intro shows its first sentence; the private bucket and the key's permissions are behind More (ADR 0160).
+    expect(screen.getByText(/to an S3-compatible bucket you name/)).toBeTruthy();
+    expect(screen.queryByText(/ListBucketVersions/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "More" }));
+    expect(screen.queryByRole("button", { name: "More" })).toBeNull();
     expect(screen.getByText(/ListBucketVersions/)).toBeTruthy();
     expect(screen.getByText(/lasts at most 7 days/)).toBeTruthy();
     expect(screen.getByText("Set up a snapshot host above to publish and list snapshots.")).toBeTruthy();
@@ -181,13 +186,13 @@ describe("Settings → Snapshots, the list", () => {
     expect(api.list).toHaveBeenCalledTimes(2);
   });
 
-  it("drops a list read with other host settings than the card shows, and lets Refresh read it again", async () => {
+  it("drops a list read with other host settings than the card shows, and lets Reload read it again", async () => {
     const { api } = fake({ list: vi.fn(async () => ({ host: { ...HOST, bucket: "someone-elses" }, snapshots: [LIVE] })) });
     await screen.findByText("s3.us-east-1.amazonaws.com");
     await act(async () => {});
     expect(api.list).toHaveBeenCalledWith(HOST);
     expect(screen.queryByText("Moving house")).toBeNull();
     expect(screen.getByText(/The snapshot host changed while the list was read/)).toBeTruthy();
-    expect((screen.getByRole("button", { name: /Refresh/ }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: /Reload/ }) as HTMLButtonElement).disabled).toBe(false);
   });
 });

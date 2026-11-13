@@ -2,7 +2,7 @@
 // deleted from one place. Switching stays in the chat list's header (ADR 0001): Open here goes through the same
 // question and guard. Every word comes from the catalogue (ADR 0100).
 import { useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import { Brain, Copy, FolderOpen, MoreHorizontal, Pencil, Plus, Puzzle, RefreshCw, Sparkles, Trash2, TriangleAlert, Wand2 } from "lucide-react";
+import { Brain, Copy, FolderOpen, Keyboard, MoreHorizontal, Pencil, Plus, Puzzle, RefreshCw, Sparkles, Trash2, TriangleAlert, Wand2 } from "lucide-react";
 import type { CapabilityStore } from "../hermes/capabilities";
 import type { CatalogProvider } from "../hermes/modelSettings";
 import type { ProfileCloneApi } from "../hermes/profileClone";
@@ -24,6 +24,7 @@ import { Menu } from "./ChatMenu";
 import { CloneProfileDialog } from "./CloneProfile";
 import { useModal } from "./modal";
 import { SettingNote, SettingsSection } from "./SettingRows";
+import { HeadPart, useInPage } from "./SettingsPage";
 
 /** What keeps a profile from being renamed now: a reply running in it (`title`, when known), or a queue about to send. */
 export type ProfileBusy = { kind: "reply"; title?: string } | { kind: "queue" };
@@ -244,23 +245,22 @@ export function ProfileSettings({ wiring }: { wiring: ProfilesWiring }) {
   const inUseGone = rows !== undefined && !rows.some((p) => p.name === inUse);
   const newBlocked = blocked(l, connected, lacking, "create");
 
+  // Under Settings' page header (ADR 0160) New profile and Reload are the page's actions; every re-read is a labelled Reload.
+  const inPage = useInPage();
+  const actions = (
+    <>
+      <button className="btn" disabled={!!newBlocked} title={newBlocked} onClick={() => setDialog({ kind: "new" })}>
+        <Plus size={14} aria-hidden /> {w.newProfile}
+      </button>
+      <button className="btn" title={w.refresh} disabled={!connected || reading} onClick={() => void read()}>
+        {reading ? <Spinner /> : <RefreshCw size={14} aria-hidden />} {w.reload}
+      </button>
+    </>
+  );
   return (
     <>
-      <SettingsSection
-        title={w.title}
-        intro={w.intro}
-        more={<p>{w.more}</p>}
-        action={
-          <>
-            <button className="btn" disabled={!!newBlocked} title={newBlocked} onClick={() => setDialog({ kind: "new" })}>
-              <Plus size={14} aria-hidden /> {w.newProfile}
-            </button>
-            <button className="icon-btn" aria-label={w.refresh} title={w.refresh} disabled={!connected || reading} onClick={() => void read()}>
-              {reading ? <Spinner /> : <RefreshCw size={14} aria-hidden />}
-            </button>
-          </>
-        }
-      >
+      {inPage && <HeadPart at="actions">{actions}</HeadPart>}
+      <SettingsSection bare={inPage} title={w.title} intro={w.intro} more={<p>{w.more}</p>} action={!inPage && actions}>
         {!connected && rows && <SettingNote tone="warn">{w.stale}</SettingNote>}
         {listError && (
           <SettingNote tone="bad" role="alert">
@@ -349,9 +349,14 @@ export function ProfileSettings({ wiring }: { wiring: ProfilesWiring }) {
             ))}
           </div>
         )}
-        <p id="profiles-keys" className="muted small profile-keys">
-          {w.keys}
-        </p>
+        <details className="set-fold">
+          <summary>
+            <Keyboard size={14} aria-hidden /> {w.keysTitle}
+          </summary>
+          <p id="profiles-keys" className="muted small profile-keys">
+            {w.keys}
+          </p>
+        </details>
       </SettingsSection>
 
       {menu && (

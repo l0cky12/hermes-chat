@@ -371,7 +371,7 @@ export function VoiceSettings({
 
   return (
     <SettingsSection
-      title="Voice"
+      title="Dictation and Read aloud"
       intro={
         <>
           Dictation, Read aloud and voice conversations use the <span className="mono">{profile}</span> profile's speech providers on Hermes, or this

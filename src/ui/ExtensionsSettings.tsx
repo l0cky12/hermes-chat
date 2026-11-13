@@ -7,6 +7,7 @@ import type { SkillCommands } from "../hermes/skillCommands";
 import type { Permission } from "../hermes/extensionPermissions";
 import { SettingRow, SettingsSection } from "./SettingRows";
 import { useExtensions } from "./extensionsContext";
+import { HeadPart, MoreText, useInPage } from "./SettingsPage";
 
 const MEANS: Record<Permission, string> = {
   "chat.read":
@@ -57,15 +58,28 @@ export function ExtensionsSettings({ skills }: { skills?: () => Promise<SkillCom
   }, []);
   const { refused } = offeredCommands(states, takenName(offered?.offered));
 
+  // Under Settings' page header (ADR 0160) the paragraph about extensions joins the page's description, its first
+  // sentence shown and the rest behind More.
+  const inPage = useInPage();
+  const about = (
+    <MoreText
+      first={
+        <>
+          An extension adds commands to the <span className="mono">/</span> menu and a view to the Preview.
+        </>
+      }
+      rest="Each one runs in a sandbox with no network, no files and no passwords. It reads a chat only with your permission, and only while a command you ran is running. For now only the extensions that come with Hermes Chat can be installed. Installing one from a file comes later."
+    />
+  );
   return (
     <>
-      <div className="set-intro">
-        <p>
-          An extension adds commands to the <span className="mono">/</span> menu and a view to the Preview. Each one runs in a sandbox with no network,
-          no files and no passwords. It reads a chat only with your permission, and only while a command you ran is running. For now only the extensions
-          that come with Hermes Chat can be installed. Installing one from a file comes later.
-        </p>
-      </div>
+      {inPage ? (
+        <HeadPart at="desc"> {about}</HeadPart>
+      ) : (
+        <div className="set-intro">
+          <p>{about}</p>
+        </div>
+      )}
       {states.map((s) => {
         const m = s.manifest;
         const installed = s.installed;

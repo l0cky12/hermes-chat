@@ -4,10 +4,11 @@
 // that stay as they are (undo, the screenshot shortcut, Escape in a dialog) are listed so they can be found. Changes
 // are kept in the display preferences (uiPrefs.ts), on this computer only, and apply at once.
 import { type KeyboardEvent, memo, useState, useSyncExternalStore } from "react";
-import { CircleAlert, RotateCcw } from "lucide-react";
+import { ChevronRight, CircleAlert, RotateCcw } from "lucide-react";
 import { getUIPrefs, subscribe } from "../hermes/uiPrefs";
 import { composing } from "./bits";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { HeadPart, useInPage } from "./SettingsPage";
 import { onlyModifiers, shortcutLabel } from "./shortcut";
 import {
   COMMANDS,
@@ -153,32 +154,42 @@ export const KeyboardSettings = memo(function KeyboardSettings() {
     />
   );
 
+  // Under Settings' page header (ADR 0160) Reset all is the page's action, and the page's description says how to
+  // change a shortcut. The keys that can't be changed fold at the foot of each group's card; a search opens the folds.
+  const inPage = useInPage();
+  const resetAllBtn = (
+    <button className="btn" disabled={!anyCustom} onClick={resetAll}>
+      Reset all
+    </button>
+  );
   const section = (group: Group) => {
     const { title } = GROUPS.find((g) => g.id === group)!;
     const ids = COMMAND_IDS.filter((id) => COMMANDS[id].group === group);
-    const fixed = FIXED.filter((f) => f.group === group);
+    const fixed = [
+      ...FIXED.filter((f) => f.group === group).map((f) => fixedRow(f.title, f.when, f.keys.map(chordParts))),
+      ...(group === "chat"
+        ? [fixedRow("Take a screenshot for the composer", "Always", [screenshotShortcut ? shortcutLabel(screenshotShortcut).split("+") : ["Off"]], "Changed under Settings → General → Screenshots.")]
+        : []),
+    ];
     return (
       <SettingsSection
         key={group}
         title={title}
-        intro={group === "chat" ? "Click a shortcut to change it, then press the new keys and Save. Ctrl stands for Ctrl or Cmd." : undefined}
-        action={
-          group === "chat" && (
-            <button className="btn" disabled={!anyCustom} onClick={resetAll}>
-              Reset all
-            </button>
-          )
-        }
+        intro={!inPage && group === "chat" ? "Click a shortcut to change it, then press the new keys and Save. Ctrl stands for Ctrl or Cmd." : undefined}
+        action={!inPage && group === "chat" && resetAllBtn}
       >
         {ids.map(row)}
-        {fixed.map((f) => fixedRow(f.title, f.when, f.keys.map(chordParts)))}
-        {group === "chat" &&
-          fixedRow(
-            "Take a screenshot for the composer",
-            "Always",
-            [screenshotShortcut ? shortcutLabel(screenshotShortcut).split("+") : ["Off"]],
-            "Changed under Settings → General → Screenshots.",
-          )}
+        {fixed.length > 0 &&
+          (ids.length ? (
+            <details className="set-fold">
+              <summary>
+                <ChevronRight size={14} aria-hidden /> {fixed.length} more {fixed.length === 1 ? "key" : "keys"} that can't be changed
+              </summary>
+              {fixed}
+            </details>
+          ) : (
+            fixed
+          ))}
         {group === "approvals" && (
           <SettingNote>
             No key answers an Approval or stops a reply, on purpose: Tab to the card's buttons, then Enter or Space. So nothing typed with the
@@ -189,5 +200,10 @@ export const KeyboardSettings = memo(function KeyboardSettings() {
     );
   };
 
-  return <>{GROUPS.map((g) => section(g.id))}</>;
+  return (
+    <>
+      {inPage && <HeadPart at="actions">{resetAllBtn}</HeadPart>}
+      {GROUPS.map((g) => section(g.id))}
+    </>
+  );
 });

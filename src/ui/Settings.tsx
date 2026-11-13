@@ -1,4 +1,6 @@
-// The Settings screen, in thirteen tabs. General, ported from the prototype: the connection and Sign out, what shows on
+// The Settings screen (ADR 0160): sixteen pages in a sidebar tree that takes the chat list's column, in three groups (App,
+// Agent, Server), each page under one header (SettingsPage.tsx); a narrow window has a bar that opens the tree as a sheet.
+// General, ported from the prototype: the connection and Sign out, what shows on
 // launch, screenshots, updates, the local cache, older history, importing transcripts, and backups. Appearance: how the app looks on this
 // computer (AppearanceSettings.tsx). Keyboard Shortcuts: every command and its keys, changed here (KeyboardSettings.tsx).
 // Snapshots: the bucket Share snapshot publishes to, and the snapshots in it (SnapshotSettings.tsx, ADR 0123).
@@ -13,14 +15,18 @@
 // supports (Diagnostics.tsx), and Logs, this app's and the profile's Hermes logs (Logs.tsx, ADR 0087); a tab whose
 // feature Hermes lacks says so in its place. Profiles: every profile on the server, made, renamed, described, given a
 // model and deleted (ProfileSettings.tsx, ADR 0156).
-// Profiles are switched in the list's header, not here (ADR 0001); Profiles' Open goes through the same question. The search box (Ctrl+F) shows the sections of every
-// tab whose text holds what was typed (settingsSearch.ts).
-import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowLeft, AudioLines, Blocks, Brain, Camera, Cpu, Database, Download, HardDrive, Keyboard, KeyRound, Lock, LogOut, MessagesSquare, NotebookPen, Palette, PlugZap, Power, Puzzle, RadioTower, ScrollText, Search, Server, Settings2, Share2, ShieldCheck, Sparkles, Stethoscope, Trash2, User, Users, Wrench, X } from "lucide-react";
+// Profiles are switched in the list's header, not here (ADR 0001), and the list is hidden while Settings is open;
+// Profiles' Open goes through the same question. The search box (Ctrl+F) shows the sections of every tab whose text holds
+// what was typed (settingsSearch.ts).
+import { Fragment, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ArrowLeft, AudioLines, Blocks, Brain, ChevronDown, Cpu, Download, KeyRound, Keyboard, Lock, LogOut, Palette, PlugZap, Puzzle, RadioTower, Search, Server, Settings2, Share2, ShieldCheck, Sparkles, Stethoscope, Trash2, Users, Wrench, X } from "lucide-react";
 import type { MemorySource } from "../hermes/memory";
-import { SubNav, type SubNavItem } from "./SubNav";
+import { EditingProfile, ProfileInUse, SearchHeads, SettingsPage } from "./SettingsPage";
+import type { PlatformId } from "../hermes/gateways";
 import { SettingRow, SettingsSearching, SettingsSection } from "./SettingRows";
 import { pickApp } from "./keybindings";
+import { isTextEdit } from "./editKeys";
+import { trapTab } from "./modal";
 import type { Chat, ConnectionStatus } from "../hermes/model";
 import type { Route } from "../hermes/pipe";
 import { viaLabel } from "../hermes/routes";
@@ -89,37 +95,77 @@ type Tab = "general" | "appearance" | "keyboard" | "snapshots" | "model" | "prov
  * Voice moved to its own tab with the speech providers (ADR 0115), so the third group holds screenshots.
  */
 type GenGroup = "connection" | "chats" | "launch" | "screenshots" | "storage";
-const GEN_GROUPS: SubNavItem[] = [
-  { id: "connection", label: "Connection", icon: <PlugZap size={14} /> },
-  { id: "chats", label: "Chats", icon: <MessagesSquare size={14} /> },
-  { id: "launch", label: "Launch, tray & updates", icon: <Power size={14} /> },
-  { id: "screenshots", label: "Screenshots", icon: <Camera size={14} /> },
-  { id: "storage", label: "Storage & data", icon: <HardDrive size={14} /> },
+/** A section of a page that shows its sections one at a time, picked under the page in the sidebar's tree. */
+type SectionItem = { id: string; label: string };
+const GEN_GROUPS: SectionItem[] = [
+  { id: "connection", label: "Connection" },
+  { id: "chats", label: "Chats" },
+  { id: "launch", label: "Launch, tray & updates" },
+  { id: "screenshots", label: "Screenshots" },
+  { id: "storage", label: "Storage & data" },
 ];
 /** Diagnostics' two groups (ADR 0087): what the connected Hermes supports, and the logs. */
 type DiagGroup = "server" | "logs";
-/** What the Memory tab shows beside its list: one of the profile's two memory files, or one profile's external memory. */
+const DIAG_GROUPS: SectionItem[] = [
+  { id: "server", label: "Server" },
+  { id: "logs", label: "Logs" },
+];
+/** Memory's: the profile's two memory files, and its external memory provider, for the profile picked in the header. */
+const MEM_GROUPS: SectionItem[] = [
+  { id: "file:memory", label: "Agent notes" },
+  { id: "file:profile", label: "User profile" },
+  { id: "external", label: "External memory" },
+];
+/** Gateways': one platform at a time. */
+const GW_GROUPS: SectionItem[] = [
+  { id: "telegram", label: "Telegram" },
+  { id: "discord", label: "Discord" },
+];
+/** What each section is for, under its title. */
+const SECTION_INTRO: Record<string, string> = {
+  connection: "Sign in to a Hermes server, switch to another, or sign out.",
+  chats: "What the chat list shows, what Enter does while Hermes replies, and the Office.",
+  launch: "What happens when the app starts and closes, and how it updates.",
+  screenshots: "Attach a screenshot of a region or a window to the message you're writing.",
+  storage: "This computer's cache, older history, imported transcripts and backups.",
+  "file:memory": "What Hermes noted for itself, such as facts about your setup and projects.",
+  "file:profile": "What Hermes noted about you, such as your preferences and how you work.",
+  external: "An external provider, such as Honcho, that keeps what the agent learns in its own store.",
+  telegram: "Run Hermes from Telegram DMs, groups and topics.",
+  discord: "Connect Hermes to Discord DMs, channels and threads.",
+  server: "What the connected Hermes says about itself, and which features it supports.",
+  logs: "This app's diagnostics and the profile's Hermes logs.",
+};
+/** What the Memory tab shows: one of the profile's two memory files, or one profile's external memory. */
 type MemSel = { kind: "file"; source: MemorySource } | { kind: "profile"; name: string };
 const memKey = (m: MemSel) => (m.kind === "file" ? `file:${m.source}` : `profile:${m.name}`);
 const memSelOf = (id: string): MemSel => (id.startsWith("file:") ? { kind: "file", source: id.slice(5) as MemorySource } : { kind: "profile", name: id.slice(8) });
+/** The sidebar's three groups (ADR 0160): this app, the agent (the profile's setup on Hermes), and the server. */
+const SIDEBAR_GROUPS: { id: "app" | "agent" | "server"; tabs: Tab[] }[] = [
+  { id: "app", tabs: ["general", "appearance", "keyboard", "voice", "snapshots", "extensions"] },
+  { id: "agent", tabs: ["model", "providers", "toolsets", "mcp", "gateways", "persona", "memory", "skills"] },
+  { id: "server", tabs: ["profiles", "diagnostics"] },
+];
+/** Pages that edit the profile in use name it in their header; Persona, Memory, Skills, MCP and Gateways pick theirs. */
+const IN_USE_PAGES: readonly Tab[] = ["voice", "model", "providers", "toolsets"];
 /** Each tab's label is the catalogue's `settings.tabs[id]`. */
 const TABS = [
   { id: "general", Icon: Settings2 },
   { id: "appearance", Icon: Palette },
   { id: "keyboard", Icon: Keyboard },
+  { id: "voice", Icon: AudioLines },
   { id: "snapshots", Icon: Share2 },
+  { id: "extensions", Icon: Blocks },
   { id: "model", Icon: Cpu },
   { id: "providers", Icon: KeyRound },
-  { id: "voice", Icon: AudioLines },
   { id: "toolsets", Icon: Wrench },
   { id: "mcp", Icon: Server },
   { id: "gateways", Icon: RadioTower },
-  { id: "profiles", Icon: Users },
   { id: "persona", Icon: Sparkles },
   { id: "memory", Icon: Brain },
   { id: "skills", Icon: Puzzle },
+  { id: "profiles", Icon: Users },
   { id: "diagnostics", Icon: Stethoscope },
-  { id: "extensions", Icon: Blocks },
 ] as const;
 
 /** The tabs whose sections a search shows in place. */
@@ -384,10 +430,22 @@ export function SettingsScreen({
   const [diagFocus, setDiagFocus] = useState<{ id: CapabilityId } | undefined>(showDiagnostics?.id ? { id: showDiagnostics.id } : undefined);
   const [genGroup, setGenGroup] = useState<GenGroup>("connection");
   const [memSel, setMemSel] = useState<MemSel>({ kind: "file", source: "memory" });
+  /** The profile whose external memory shows, picked in the header; the profile in use until another is. */
+  const [memExternal, setMemExternal] = useState(profile);
+  /** The Gateways platform shown, picked in the sidebar's tree, among those the server offers once read. */
+  const [gwPlatform, setGwPlatform] = useState<PlatformId>("telegram");
+  const [gwOffered, setGwOffered] = useState<PlatformId[]>();
+  const gwShown: PlatformId = !gwOffered || gwOffered.includes(gwPlatform) ? gwPlatform : (gwOffered[0] ?? gwPlatform);
   /** Every profile's name, once the Memory tab's provider overview has read them; until then only the shown profile. */
   const [memProfiles, setMemProfiles] = useState<string[]>();
   /** Picking a memory file or profile leaves any unsaved memory edit, so it asks first, as switching tabs does. */
-  const pickMem = (id: string) => memKey(memSel) !== id && guard(() => setMemSel(memSelOf(id)));
+  const pickMem = (id: string) =>
+    memKey(memSel) !== id &&
+    guard(() => {
+      const next = memSelOf(id);
+      setMemSel(next);
+      if (next.kind === "profile") setMemExternal(next.name);
+    });
   // Which profile Skills and Memory each show (ADR 0118): the app's own until the owner picks another, and the app's own
   // again when the app switches profile. Picking one leaves an unsaved edit, so it asks first. Persona picks its own
   // (PersonaPage, ADR 0117).
@@ -494,18 +552,27 @@ export function SettingsScreen({
   };
 
   const searchBox = useRef<HTMLInputElement>(null);
-  const results = useRef<HTMLDivElement>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
   const words = queryWords(query);
   const searching = words.length > 0;
   const wordsKey = words.join(" ");
   const [found, setFound] = useState(0);
+  /** A narrow window's search box shows only once opened (or while a search is on). */
+  const [searchOpen, setSearchOpen] = useState(false);
+  /** How many sections of each tab a search shows, for the counts beside the tabs in the tree. */
+  const [matchCount, setMatchCount] = useState<Partial<Record<Tab, number>>>({});
   // The shown sections follow the text as it changes: a tab reading from Hermes fills in after the search starts.
   useLayoutEffect(() => {
-    const root = results.current;
+    const root = resultsRef.current;
     if (!root || !wordsKey) return;
     const w = wordsKey.split(" ");
     const run = () => {
       setFound(applySearch(root, w));
+      const counts: Partial<Record<Tab, number>> = {};
+      for (const g of root.querySelectorAll<HTMLElement>("[data-search-group]"))
+        counts[g.dataset.searchGroup as Tab] = [...g.querySelectorAll("section:not([data-search-miss])")].filter((x) => !x.parentElement?.closest("section")).length;
+      for (const e of root.querySelectorAll<HTMLElement>("[data-search-elsewhere]")) counts[e.dataset.searchElsewhere as Tab] = 1;
+      setMatchCount((cur) => (JSON.stringify(cur) === JSON.stringify(counts) ? cur : counts));
       // A match inside a <details> fold would be counted but unseen: open them. Settings' own (i) folds open through SettingsSearching.
       for (const d of root.querySelectorAll<HTMLDetailsElement>("details")) d.open = true;
     };
@@ -528,6 +595,8 @@ export function SettingsScreen({
       if (e.defaultPrevented || document.querySelector('[aria-modal="true"]')) return;
       if (pickApp(e) === "find") {
         e.preventDefault();
+        // A narrow window keeps the box behind an icon: open it, and it takes the focus when it shows.
+        setSearchOpen(true);
         searchBox.current?.focus();
         searchBox.current?.select();
       } else if (e.key === "Escape" && searchingRef.current && !composing(e)) {
@@ -783,7 +852,8 @@ export function SettingsScreen({
       </>
     ),
   };
-  // A search shows every group's sections together, so what's typed can be found in any of them.
+  // A search shows every group's sections together, so what's typed can be found in any of them. Otherwise the group
+  // picked in the sidebar's tree shows alone (ADR 0160).
   const general = searching ? (
     <>
       {generalGroups.connection}
@@ -793,10 +863,7 @@ export function SettingsScreen({
       {generalGroups.storage}
     </>
   ) : (
-    <div className="settings-split">
-      <SubNav label="General" items={GEN_GROUPS} selected={genGroup} onPick={(id) => setGenGroup(id as GenGroup)} compact />
-      <div className="settings-split-body">{generalGroups[genGroup]}</div>
-    </div>
+    generalGroups[genGroup]
   );
 
   /** The content of a tab: the same whether it's shown alone or with others in a search. */
@@ -824,51 +891,45 @@ export function SettingsScreen({
         );
       case "memory": {
         if (!memory) return null;
-        const items: SubNavItem[] = [
-          { id: "file:memory", label: "Agent notes", icon: <NotebookPen size={14} />, under: "Built-in" },
-          { id: "file:profile", label: "User profile", icon: <User size={14} /> },
-          ...(memoryProviders ? (memProfiles ?? [profile]).map((p, i) => ({ id: `profile:${p}`, label: p, mono: true, icon: <Database size={14} />, under: i === 0 ? "External memory" : undefined })) : []),
-        ];
-        // Both parts stay mounted whichever is shown, so an unsaved edit in either is kept, and guarded, as before.
+        // Both parts stay mounted whichever is shown, so an unsaved edit in either is kept, and guarded, as before. Only
+        // the part shown fills the page header.
         return (
-          <div className="settings-split">
-            <SubNav label="Memory" items={items} selected={memKey(memSel)} onPick={pickMem} />
-            <div className="settings-split-body">
-              <div hidden={memSel.kind !== "file"}>
-                {gated(
-                  "memory",
-                  <MemorySettings
-                    key={tabProfile.memory}
-                    api={memory}
-                    profile={tabProfile.memory}
-                    status={status}
-                    server={routeLabel(route) ?? "not known until connected"}
-                    onDirtyChange={onEntriesDirty}
-                    discardSignal={memoryDiscards}
-                    source={memSel.kind === "file" ? memSel.source : undefined}
-                    files={false}
-                    picker={picker("memory", "Profile whose memory is shown")}
-                  />,
-                )}
-              </div>
-              {memoryProviders && (
-                <div hidden={memSel.kind !== "profile"}>
-                  <MemoryProviderSettings
-                    key={`providers-${profile}`}
-                    api={memoryProviders}
-                    profile={profile}
-                    connected={status === "connected"}
-                    onDirtyChange={onProvidersDirty}
-                    discardSignal={memoryDiscards}
-                    target={memSel.kind === "profile" ? memSel.name : undefined}
-                    onProfiles={setMemProfiles}
-                    onPick={(p) => pickMem(`profile:${p}`)}
-                    overview="folded"
-                  />
-                </div>
+          <>
+            <div hidden={memSel.kind !== "file"}>
+              {gated(
+                "memory",
+                <MemorySettings
+                  key={tabProfile.memory}
+                  api={memory}
+                  profile={tabProfile.memory}
+                  shown={profile}
+                  status={status}
+                  server={routeLabel(route) ?? "not known until connected"}
+                  onDirtyChange={onEntriesDirty}
+                  discardSignal={memoryDiscards}
+                  source={memSel.kind === "file" ? memSel.source : undefined}
+                  files={false}
+                  picker={picker("memory", "Profile whose memory is shown")}
+                />,
               )}
             </div>
-          </div>
+            {memoryProviders && (
+              <div hidden={memSel.kind !== "profile"}>
+                <MemoryProviderSettings
+                  key={`providers-${profile}`}
+                  api={memoryProviders}
+                  profile={profile}
+                  connected={status === "connected"}
+                  onDirtyChange={onProvidersDirty}
+                  discardSignal={memoryDiscards}
+                  target={memSel.kind === "profile" ? memSel.name : undefined}
+                  onProfiles={setMemProfiles}
+                  onPick={(p) => pickMem(`profile:${p}`)}
+                  overview="folded"
+                />
+              </div>
+            )}
+          </>
         );
       }
       case "skills":
@@ -886,6 +947,7 @@ export function SettingsScreen({
               onDirtyChange={onSkillDirty}
               discardSignal={skillDiscards}
               picker={picker("skills", "Profile whose skills are shown")}
+              shown={profile}
               profiles={profiles}
             />,
           )
@@ -949,59 +1011,50 @@ export function SettingsScreen({
               profile={tabProfile.mcp}
               connected={status === "connected"}
               picker={picker("mcp", "Profile whose MCP servers are shown")}
+              shown={profile}
               openUrl={openUrl}
             />
           )
         );
       case "gateways":
-        // Read for one profile; picking another reads it afresh, and anything typed goes with it.
+        // Read for one profile; picking another reads it afresh, and anything typed goes with it. The platform shown is
+        // picked in the sidebar's tree.
         return (
           gateways && (
             <GatewaySettings
               key={tabProfile.gateways}
               api={gateways}
               profile={tabProfile.gateways}
+              shown={profile}
               connected={status === "connected"}
               picker={picker("gateways", "Profile whose gateways are shown")}
               openUrl={openUrl}
+              platform={gwShown}
+              onPlatforms={setGwOffered}
             />
           )
         );
-      case "diagnostics": {
-        // Server and Logs, one at a time beside a sub-nav, as General's groups are (ADR 0113, 0087). Logs reads Hermes
-        // only while it's shown; what it read goes when another group, tab or profile is shown.
-        const group: DiagGroup = !capabilities || (diagGroup === "logs" && logs) ? "logs" : "server";
-        const body =
-          group === "server" ? (
-            capabilities && (
-              <DiagnosticsSettings
-                store={capabilities}
-                connected={status === "connected"}
-                server={routeLabel(route)}
-                signIn={signInText(route)}
-                headers={headers.length}
-                unsecure={unsecure}
-                profile={profile}
-                openGuide={openGuide}
-                focus={diagFocus}
-                screen={screen}
-              />
-            )
-          ) : (
-            logs && <LogsPanel key={profile} {...logs} profile={profile} connected={status === "connected"} />
-          );
-        if (!capabilities || !logs) return body;
-        const items: SubNavItem[] = [
-          { id: "server", label: "Server", icon: <Stethoscope size={14} /> },
-          { id: "logs", label: "Logs", icon: <ScrollText size={14} /> },
-        ];
-        return (
-          <div className="settings-split">
-            <SubNav label="Diagnostics" items={items} selected={group} onPick={(id) => setDiagGroup(id as DiagGroup)} compact />
-            <div className="settings-split-body">{body}</div>
-          </div>
+      case "diagnostics":
+        // Server and Logs, one at a time, picked in the sidebar's tree as General's groups are (ADR 0160, 0087). Logs
+        // reads Hermes only while it's shown; what it read goes when another group, tab or profile is shown.
+        return diagShown === "server" ? (
+          capabilities && (
+            <DiagnosticsSettings
+              store={capabilities}
+              connected={status === "connected"}
+              server={routeLabel(route)}
+              signIn={signInText(route)}
+              headers={headers.length}
+              unsecure={unsecure}
+              profile={profile}
+              openGuide={openGuide}
+              focus={diagFocus}
+              screen={screen}
+            />
+          )
+        ) : (
+          logs && <LogsPanel key={profile} {...logs} profile={profile} connected={status === "connected"} />
         );
-      }
       case "profiles":
         return profilesTab && gated("profiles", <ProfileSettings wiring={{ ...profilesTab, showTab: showTabFor }} />);
       case "general":
@@ -1010,104 +1063,427 @@ export function SettingsScreen({
   };
   const shownTab = tabs.some((t) => t.id === tab) ? tab : "general";
   const total = found + elsewhere.length;
+  const groups = SIDEBAR_GROUPS.map((g) => ({ ...g, tabs: tabs.filter((t) => g.tabs.includes(t.id)) })).filter((g) => g.tabs.length);
+  const diagShown: DiagGroup = !capabilities || (diagGroup === "logs" && logs) ? "logs" : "server";
+  // External memory's profile is picked in the header, as Memory's files' is; today's sub-nav listed each profile.
+  const externalPicker = listProfiles && (
+    <EditingProfile
+      inUse={memExternal === profile}
+      picker={<ProfilePicker value={memExternal} shown={profile} profiles={memProfiles ?? profiles} label="Profile whose external memory is shown" defaultName={defaultName} onPick={(p) => pickMem(`profile:${p}`)} />}
+    />
+  );
+  const tabLabel = (id: Tab) => tabs.find((t) => t.id === id)?.label ?? tabLabels[id];
 
-  return (
-    <SettingsSearching.Provider value={searching}>
-    <div className="settings" ref={screenRef}>
-      <div className="settings-inner">
-        <button className="back" onClick={onClose}>
-          <ArrowLeft size={15} /> {frame.back}
+  /** The sections a page shows one at a time, picked under it in the tree. */
+  const sectionsOf = (id: Tab): { items: SectionItem[]; selected: string; onPick: (id: string) => void } | undefined => {
+    switch (id) {
+      case "general":
+        return { items: GEN_GROUPS, selected: genGroup, onPick: (g) => setGenGroup(g as GenGroup) };
+      case "memory":
+        return memory
+          ? { items: memoryProviders ? MEM_GROUPS : MEM_GROUPS.slice(0, 2), selected: memSel.kind === "file" ? memKey(memSel) : "external", onPick: (g) => pickMem(g === "external" ? `profile:${memExternal}` : g) }
+          : undefined;
+      case "diagnostics":
+        return capabilities && logs ? { items: DIAG_GROUPS, selected: diagShown, onPick: (g) => setDiagGroup(g as DiagGroup) } : undefined;
+      case "gateways": {
+        // Only the platforms this Hermes offers; a pick it doesn't offer shows the first it does, named as such.
+        const items = GW_GROUPS.filter((g) => !gwOffered || gwOffered.includes(g.id as PlatformId));
+        return gateways && items.length ? { items, selected: gwShown, onPick: (g) => setGwPlatform(g as PlatformId) } : undefined;
+      }
+    }
+  };
+  const sections = searching ? undefined : sectionsOf(shownTab);
+  const section = sections?.items.find((i) => i.id === sections.selected);
+
+  // A page without sections of its own lists its headings under it in the tree, to jump to; the one at the top of the
+  // view is current (scroll-spy). A jump link clicked stays current until any scroll after the jump's own has settled
+  // (a wheel, a key, a scrollbar drag), and at the end of the scroll the last section is current.
+  const mainRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [jumps, setJumps] = useState<string[]>([]);
+  const [here, setHere] = useState<string>();
+  const pinned = useRef<{ name: string; settling: number }>(undefined);
+  const sectioned = !!sections;
+  useLayoutEffect(() => {
+    const root = panelRef.current;
+    if (!root || sectioned) return setJumps([]);
+    const read = () => {
+      const names = jumpSections(root).map(headingOf);
+      setJumps((cur) => (cur.join("\n") === names.join("\n") ? cur : names));
+    };
+    read();
+    const seen = new MutationObserver(read);
+    // Text changes too: a heading renamed in place (another interface language) renames its jump link.
+    seen.observe(root, { childList: true, subtree: true, characterData: true });
+    return () => seen.disconnect();
+  }, [shownTab, searching, sectioned]);
+  useEffect(() => {
+    const main = mainRef.current;
+    const root = panelRef.current;
+    pinned.current = undefined;
+    if (!main || !root || jumps.length < 2) return setHere(undefined);
+    const spy = () => {
+      const pin = pinned.current;
+      if (pin && Date.now() < pin.settling) {
+        // The jump's own scroll: it settles once 150 ms pass without one.
+        pin.settling = Date.now() + 150;
+        return setHere(pin.name);
+      }
+      pinned.current = undefined;
+      const secs = jumpSections(root);
+      if (!secs.length) return;
+      const top = main.getBoundingClientRect().top + 24;
+      let cur = secs[0];
+      for (const s of secs) if (s.getBoundingClientRect().top <= top + 4) cur = s;
+      if (main.scrollTop > 0 && main.scrollTop + main.clientHeight >= main.scrollHeight - 2) cur = secs[secs.length - 1];
+      setHere(headingOf(cur));
+    };
+    spy();
+    main.addEventListener("scroll", spy, { passive: true });
+    return () => main.removeEventListener("scroll", spy);
+  }, [jumps]);
+  const jump = (name: string) => {
+    const s = panelRef.current && jumpSections(panelRef.current).find((x) => headingOf(x) === name);
+    if (!s) return;
+    pinned.current = { name, settling: Date.now() + 150 };
+    setHere(name);
+    s.scrollIntoView?.({ block: "start" });
+  };
+  /** Under the open page in the tree: its sections, or its headings to jump to. */
+  const children: { id: string; label: string; current: boolean; go: () => void; jump?: boolean }[] = sections
+    ? sections.items.map((i) => ({ id: i.id, label: i.label, current: i.id === sections.selected, go: () => sections.onPick(i.id) }))
+    : jumps.length >= 2
+      ? jumps.map((j) => ({ id: j, label: j, current: j === (here ?? jumps[0]), go: () => jump(j), jump: true }))
+      : [];
+
+  // The narrow window (760 px wide at the least) has no room for the sidebar: a bar names the page and opens the same
+  // tree as a sheet, and search sits behind an icon in it.
+  const narrow = useNarrow();
+  const [sheet, setSheet] = useState(false);
+  // The sheet is a modal dialog: focus moves to the page shown in it, Tab stays inside, Escape closes it, and focus goes
+  // back to the bar's page button.
+  const sideRef = useRef<HTMLElement>(null);
+  const crumbRef = useRef<HTMLButtonElement>(null);
+  const sheetWas = useRef(false);
+  /** The sheet's tab the arrows moved the focus to: its one Tab stop (a roving tabindex), so Tab wraps inside the sheet. */
+  const [rove, setRove] = useState<Tab>();
+  useEffect(() => {
+    if (sheet) {
+      setRove(undefined);
+      (sideRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? sideRef.current?.querySelector<HTMLElement>('[role="tab"]'))?.focus();
+    }
+    else if (sheetWas.current) {
+      // Only while the focus is still the sheet's (or nobody's): a pick that asks first (an unsaved edit) has moved it into
+      // the question, which keeps it.
+      const at = document.activeElement;
+      if (!at || at === document.body || sideRef.current?.contains(at)) crumbRef.current?.focus();
+    }
+    sheetWas.current = sheet;
+  }, [sheet]);
+  const onSheetKey = (e: ReactKeyboardEvent<HTMLElement>) => {
+    if (!sheet) return;
+    if (e.key === "Escape" && !composing(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return setSheet(false);
+    }
+    if (!isTextEdit(e)) e.stopPropagation();
+    trapTab(e, sideRef.current);
+  };
+  useEffect(() => {
+    if (!narrow) setSheet(false);
+  }, [narrow]);
+  const pickTab = (t: Tab) => {
+    setSheet(false);
+    pick(t);
+  };
+  const searchField = (
+    <div className="settings-search" role="search">
+      <Search size={14} aria-hidden />
+      <input
+        ref={searchBox}
+        type="search"
+        aria-label={frame.search}
+        placeholder={frame.search}
+        value={query}
+        onChange={(e) => typed(e.target.value)}
+        onBlur={() => !query && setSearchOpen(false)}
+      />
+      {query ? (
+        <button className="icon-btn" aria-label={frame.clearSearch} title={frame.clearSearch} onClick={() => (setQuery(""), searchBox.current?.focus())}>
+          <X size={14} />
         </button>
-        <div className="settings-head">
-          <h1>{frame.title}</h1>
-          <div className="settings-search" role="search">
-            <Search size={14} aria-hidden />
-            <input
-              ref={searchBox}
-              type="search"
-              aria-label={frame.search}
-              placeholder={frame.search}
-              value={query}
-              onChange={(e) => typed(e.target.value)}
-            />
-            {query && (
-              <button className="icon-btn" aria-label={frame.clearSearch} title={frame.clearSearch} onClick={() => (setQuery(""), searchBox.current?.focus())}>
-                <X size={14} />
-              </button>
-            )}
+      ) : (
+        !narrow && <kbd className="settings-search-key">Ctrl F</kbd>
+      )}
+    </div>
+  );
+  // Ctrl+F in a narrow window opens the bar's search first, then focuses it.
+  useEffect(() => {
+    if (narrow && searchOpen) searchBox.current?.focus();
+  }, [narrow, searchOpen]);
+
+  const tree = (
+    <div
+      className="settings-tabs"
+      role="tablist"
+      aria-orientation="vertical"
+      aria-label={frame.title}
+      // While searching no tab is selected, so the arrows move on from the tab that has the focus. A section's button
+      // under a tab moves on its own (below).
+      onKeyDown={(e) => {
+        if ((e.target as HTMLElement).getAttribute("role") !== "tab") return;
+        const ids = groups.flatMap((g) => g.tabs.map((t) => t.id));
+        const focused = ids.find((id) => (e.target as HTMLElement).id === `settings-tab-${id}`);
+        // In the narrow sheet the arrows only move the focus, and Enter or a click picks (and closes the sheet): a pick can
+        // ask first about an unsaved edit, and that question belongs to a deliberate pick, not to a step through the list.
+        if (sheet) {
+          const at = ids.indexOf(focused ?? tab);
+          const step = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : e.key === "ArrowUp" || e.key === "ArrowLeft" ? -1 : 0;
+          const next = e.key === "Home" ? 0 : e.key === "End" ? ids.length - 1 : step ? (at + step + ids.length) % ids.length : -1;
+          if (next < 0) return;
+          e.preventDefault();
+          setRove(ids[next]);
+          document.getElementById(`settings-tab-${ids[next]}`)?.focus();
+          return;
+        }
+        arrowSelect(e, ids, searching && focused ? focused : tab, pickTab);
+      }}
+    >
+      {groups.map((g) => (
+        <div key={g.id} className="settings-group" role="presentation">
+          <div className="settings-group-label" aria-hidden>
+            {frame.groups[g.id]}
           </div>
-        </div>
-        <div
-          className="settings-tabs"
-          role="tablist"
-          aria-label={frame.title}
-          // While searching no tab is selected, so the arrows move on from the tab that has the focus.
-          onKeyDown={(e) => {
-            const ids = tabs.map((t) => t.id);
-            const focused = ids.find((id) => (e.target as HTMLElement).id === `settings-tab-${id}`);
-            arrowSelect(e, ids, searching && focused ? focused : tab, pick);
-          }}
-        >
-          {tabs.map(({ id, label, Icon }) => {
+          {g.tabs.map(({ id, label, Icon }) => {
             const on = !searching && shownTab === id;
+            const kids = on && children.length > 0;
+            const count = searching ? matchCount[id] : undefined;
             return (
-              <button
-                key={id}
-                id={`settings-tab-${id}`}
-                className={`settings-tab ${on ? "on" : ""}`}
-                role="tab"
-                aria-selected={on}
-                tabIndex={on || (searching && id === tabs[0].id) ? 0 : -1}
-                aria-controls={searching ? undefined : `settings-panel-${id}`}
-                // In a narrow window only the shown tab keeps its label (#154); the others are named here and by a tip.
-                aria-label={label}
-                title={label}
-                onClick={() => pick(id)}
-              >
-                <Icon size={14} aria-hidden /> <span className="settings-tab-label">{label}</span>
-              </button>
+              <Fragment key={id}>
+                <button
+                  id={`settings-tab-${id}`}
+                  className={`settings-tab ${on ? (kids ? "parent" : "on") : ""} ${searching && !count ? "dim" : ""}`}
+                  role="tab"
+                  aria-selected={on}
+                  tabIndex={(sheet && rove ? rove === id : on || (searching && id === groups[0].tabs[0].id)) ? 0 : -1}
+                  aria-controls={searching ? undefined : `settings-panel-${id}`}
+                  onClick={() => pickTab(id)}
+                >
+                  <Icon size={15} aria-hidden /> <span className="settings-tab-label">{label}</span>
+                  {!!count && <span className="settings-tab-count">{count}</span>}
+                </button>
+                {kids && (
+                  <div className="settings-subs" role="group" aria-label={`${label}: ${sections ? "sections" : "on this page"}`} onKeyDown={(e) => moveAmong(e, ".settings-sub")}>
+                    {children.map((c) => (
+                      <button
+                        key={c.id}
+                        className={`settings-sub ${c.current ? "on" : ""}`}
+                        aria-current={c.current ? (c.jump ? "location" : "page") : undefined}
+                        onClick={() => (c.go(), setSheet(false))}
+                      >
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </Fragment>
             );
           })}
         </div>
+      ))}
+    </div>
+  );
 
-        {searching ? (
-          <div className="settings-results">
-            <p className="muted small settings-search-count" role="status">
-              {total ? `${total} ${total === 1 ? "match" : "matches"} for “${query.trim()}”` : `No settings match “${query.trim()}”.`}
-            </p>
-            <div ref={results}>
-            {elsewhere.map(({ id, label, Icon }) => (
-              <div key={id} className="settings-row settings-search-elsewhere" data-search-mark>
-                <div>
-                  <div className="settings-search-tab">
+  // Search's results, grouped by page: each names its page and, on a page that edits the profile in use, says so, as
+  // the page's header would (ADR 0160).
+  const results = (
+    <div className="settings-results">
+      <header className="page-head">
+        <h2 className="page-title">{frame.searchTitle}</h2>
+        <p className="page-desc settings-search-count" role="status">
+          {total ? `${total} ${total === 1 ? "match" : "matches"} for “${query.trim()}”` : `No settings match “${query.trim()}”.`}
+        </p>
+      </header>
+      <div ref={resultsRef}>
+        {elsewhere.map(({ id, label, Icon }) => (
+          <div key={id} className="settings-row settings-search-elsewhere" data-search-mark data-search-elsewhere={id}>
+            <div>
+              <div className="settings-search-tab">
+                <Icon size={13} /> {label}
+              </div>
+              <div className="muted small">{aboutOf(id)}</div>
+            </div>
+            <button className="btn" onClick={() => pickTab(id)}>
+              {id === "profiles" ? frame.about.open(label) : `Open ${label}`}
+            </button>
+          </div>
+        ))}
+        <SearchHeads>
+          {tabs
+            .filter((t) => SEARCHED.includes(t.id))
+            .map(({ id, label, Icon }) => (
+              <div key={id} data-search-group={id} role="group" aria-label={label}>
+                <div className="settings-search-head">
+                  <button className="settings-search-tab" onClick={() => pickTab(id)}>
                     <Icon size={13} /> {label}
-                  </div>
-                  <div className="muted small">{aboutOf(id)}</div>
+                  </button>
+                  {IN_USE_PAGES.includes(id) && <ProfileInUse name={profile} />}
                 </div>
-                <button className="btn" onClick={() => pick(id)}>
-                  {id === "profiles" ? frame.about.open(label) : `Open ${label}`}
-                </button>
+                {panel(id)}
               </div>
             ))}
-              {tabs
-                .filter((t) => SEARCHED.includes(t.id))
-                .map(({ id, label, Icon }) => (
-                  <div key={id} data-search-group={id} role="group" aria-label={label}>
-                    <div className="settings-search-tab">
-                      <Icon size={13} /> {label}
-                    </div>
-                    {panel(id)}
-                  </div>
-                ))}
-            </div>
-          </div>
-        ) : (
-          <div id={`settings-panel-${shownTab}`} role="tabpanel" aria-labelledby={`settings-tab-${shownTab}`}>
-            {panel(shownTab)}
-          </div>
-        )}
+        </SearchHeads>
       </div>
     </div>
+  );
+
+  const crumb = (
+    <>
+      {(() => {
+        const Icon = tabs.find((t) => t.id === shownTab)?.Icon ?? Settings2;
+        return <Icon size={15} aria-hidden />;
+      })()}
+      <span>
+        {searching ? frame.searchTitle : tabLabel(shownTab)}
+        {!searching && section && (
+          <>
+            {" "}
+            <span className="faint">›</span> {section.label}
+          </>
+        )}
+      </span>
+      <ChevronDown size={14} aria-hidden />
+    </>
+  );
+
+  return (
+    <SettingsSearching.Provider value={searching}>
+      <div className={`settings settings-frame ${narrow ? "narrow" : ""}`} ref={screenRef}>
+        {narrow && (
+          <div className="settings-bar">
+            <div className="settings-bar-row">
+              <button className="icon-btn" aria-label={frame.back} title={frame.back} onClick={onClose}>
+                <ArrowLeft size={16} />
+              </button>
+              {searchOpen || searching ? (
+                <>
+                  {searchField}
+                  <button className="btn" onClick={() => (setQuery(""), setSearchOpen(false))}>
+                    {frame.done}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button ref={crumbRef} className="settings-crumb" aria-haspopup="dialog" aria-expanded={sheet} onClick={() => setSheet(true)}>
+                    {crumb}
+                  </button>
+                  <button className="icon-btn settings-bar-search" aria-label={`${frame.search} (Ctrl+F)`} title={`${frame.search} (Ctrl+F)`} onClick={() => setSearchOpen(true)}>
+                    <Search size={16} />
+                  </button>
+                </>
+              )}
+            </div>
+            {!searching && children.length > 0 && (
+              <div className="settings-chips" role="group" aria-label={`${tabLabel(shownTab)}: ${sections ? "sections" : "on this page"}`} onKeyDown={(e) => moveAmong(e, "button", true)}>
+                {children.map((c) => (
+                  <button key={c.id} className={c.current ? "on" : ""} aria-current={c.current ? (c.jump ? "location" : "page") : undefined} onClick={c.go}>
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        <aside
+          ref={sideRef}
+          className={`settings-side ${sheet ? "sheet" : ""}`}
+          role={sheet ? "dialog" : undefined}
+          aria-modal={sheet || undefined}
+          aria-label={sheet ? frame.title : undefined}
+          onKeyDown={onSheetKey}
+        >
+          <div className="settings-side-top">
+            {narrow ? (
+              <div className="settings-sheet-head">
+                <b>{frame.title}</b>
+                <button className="icon-btn" aria-label={frame.closeNav} title={frame.closeNav} onClick={() => setSheet(false)}>
+                  <X size={16} />
+                </button>
+              </div>
+            ) : (
+              <>
+                <button className="back" onClick={onClose}>
+                  <ArrowLeft size={15} /> {frame.back}
+                </button>
+                <h1 className="settings-side-title">{frame.title}</h1>
+                {searchField}
+              </>
+            )}
+          </div>
+          <div className="settings-side-scroll">{tree}</div>
+        </aside>
+        {sheet && <div className="settings-scrim" onClick={() => setSheet(false)} />}
+        <div className="settings-main" ref={mainRef}>
+          <div className="settings-inner">
+            {searching ? (
+              results
+            ) : (
+              <div id={`settings-panel-${shownTab}`} role="tabpanel" aria-labelledby={`settings-tab-${shownTab}`} ref={panelRef}>
+                <SettingsPage
+                  // Keyed by page only: picking a section keeps the page's components mounted, with any edit in them (ADR 0113).
+                  key={shownTab}
+                  narrow={narrow}
+                  eyebrow={section ? tabLabel(shownTab) : undefined}
+                  title={section?.label ?? tabLabel(shownTab)}
+                  description={(section && SECTION_INTRO[section.id]) || frame.pages[shownTab]}
+                  profile={IN_USE_PAGES.includes(shownTab) ? profile : undefined}
+                  slot={shownTab === "memory" && memSel.kind === "profile" && memoryProviders ? externalPicker : undefined}
+                >
+                  {panel(shownTab)}
+                </SettingsPage>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </SettingsSearching.Provider>
   );
+}
+
+/** Whether the window is narrow: 900 px or less, where the sidebar gives way to the bar (ADR 0160). */
+function useNarrow(): boolean {
+  const query = typeof window !== "undefined" ? window.matchMedia?.("(max-width: 900px)") : undefined;
+  const [narrow, setNarrow] = useState(!!query?.matches);
+  useEffect(() => {
+    if (!query) return;
+    const on = () => setNarrow(query.matches);
+    on();
+    query.addEventListener?.("change", on);
+    return () => query.removeEventListener?.("change", on);
+  }, [query]);
+  return narrow;
+}
+
+/** A page's outer sections that have a heading, in order: what its jump links go to. The "How changes apply" box isn't one. */
+function jumpSections(root: Element): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>("section.set-section")].filter((s) => {
+    const outer = s.parentElement?.closest("section");
+    return (!outer || !root.contains(outer)) && !s.closest(".page-head") && !!s.querySelector(":scope > .set-head h2");
+  });
+}
+const headingOf = (s: Element) => s.querySelector(":scope > .set-head h2")?.textContent?.trim() ?? "";
+
+/** Up and Down (or Left and Right, across) move between a group's buttons, as the tree's tabs do. */
+function moveAmong(e: ReactKeyboardEvent<HTMLElement>, selector: string, across = false) {
+  const back = across ? "ArrowLeft" : "ArrowUp";
+  const on = across ? "ArrowRight" : "ArrowDown";
+  if (![back, on, "Home", "End"].includes(e.key)) return;
+  const all = [...e.currentTarget.querySelectorAll<HTMLElement>(selector)];
+  const at = all.indexOf(e.target as HTMLElement);
+  if (at < 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const next = e.key === "Home" ? 0 : e.key === "End" ? all.length - 1 : Math.max(0, Math.min(all.length - 1, at + (e.key === on ? 1 : -1)));
+  all[next]?.focus();
 }

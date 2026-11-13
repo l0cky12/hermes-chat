@@ -67,8 +67,12 @@ describe("Settings → Model", () => {
   it("shows the main model, subagents, auxiliary models and guardrails as Hermes has them", async () => {
     await shown();
     expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(
-      expect.arrayContaining(["Main model", "Subagents", "Auxiliary models", "Guardrails", "Idle compaction"]),
+      expect.arrayContaining(["Main model", "Subagents", "Auxiliary models", "Idle compaction"]),
     );
+    // The guardrails are the page header's summary box (ADR 0160): one line, with the checks under "Safety checks".
+    const guard = document.querySelector<HTMLElement>("header.page-head section.applies-box")!;
+    expect(guard.querySelector(".applies-line")!.textContent).toBe("Hermes checks pinned helpers and the price before it switches the main model.");
+    expect(guard.querySelector(".applies-more")!.textContent!.trim()).toBe("Safety checks");
     expect(select("Main provider").value).toBe("openrouter");
     expect(select("Main model").value).toBe("z-ai/glm-5.3-flash");
     expect(select("Main reasoning effort").value).toBe("high");
@@ -79,7 +83,7 @@ describe("Settings → Model", () => {
     expect(select("Compression effort").value).toBe("inherit");
     expect(select("Approval checks provider").value).toBe("auto");
     expect(select("Approval checks effort").value).toBe("none");
-    expect(screen.getByText(/Text generation, Compression and Vision are pinned to OpenRouter/)).toBeTruthy();
+    expect(within(guard).getByText(/Text generation, Compression and Vision are pinned to OpenRouter/)).toBeTruthy();
   });
 
   it("keeps the pickers' text in view: the form-field select style leaves .select's padding alone", async () => {
@@ -135,7 +139,7 @@ describe("A model field searches the provider's models (#538)", () => {
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(field.getAttribute("aria-expanded")).toBe("false");
     expect(field.value).toBe("deepseek/deepseek-v4-pro");
-    expect(screen.getByText("Not applied yet.")).toBeTruthy();
+    expect(screen.getByText("Not applied yet. Leaving Settings drops it.")).toBeTruthy();
     expect(screen.getByRole<HTMLButtonElement>("button", { name: "Apply main model" }).disabled).toBe(false);
     expect(writes(server)).toEqual([]);
   });
@@ -255,8 +259,11 @@ describe("Settings → Model as cards of rows (#174, ADR 0059)", () => {
 
   it("puts each setting in a row of its section's card, with Apply on the card's last line", async () => {
     await shown();
-    for (const heading of ["Main model", "Text generation", "Subagents", "Auxiliary models", "Guardrails", "Idle compaction"])
+    for (const heading of ["Main model", "Text generation", "Subagents", "Auxiliary models", "Idle compaction"])
       expect(section(heading).querySelector(":scope > .set-card")).toBeTruthy();
+    // The guardrails are rows of a card in the header's summary box (ADR 0160).
+    const guards = document.querySelectorAll("header.page-head .applies-box details > .set-card > .set-row.model-guard");
+    expect(guards.length).toBeGreaterThan(0);
     for (const name of ["Main provider", "Main model", "Main reasoning effort"]) expect(inRow(select(name), "Main model")).toBe(true);
     expect(inRow(screen.getByRole("checkbox", { name: "Fast mode" }), "Main model")).toBe(true);
     for (const name of ["Subagent route", "Subagent reasoning effort"]) expect(inRow(select(name), "Subagents")).toBe(true);
@@ -277,15 +284,21 @@ describe("Settings → Model as cards of rows (#174, ADR 0059)", () => {
 
   it("folds only explanation: states, problems and what leaving drops stay in view", async () => {
     const { user } = await shown();
-    const visible = (text: RegExp) => !screen.getByText(text).closest("[hidden]");
-    expect(visible(/leaving Settings drops them/)).toBe(true);
-    expect(visible(/Text generation, Compression and Vision are pinned to OpenRouter/)).toBe(true);
-    for (const state of screen.getAllByText("Same as Hermes.")) expect(state.closest("[hidden]")).toBeNull();
+    const visible = (text: RegExp) => !screen.getByText(text).closest("[hidden], details:not([open])");
+    // Each part's state says that a change waits here, beside its Apply.
+    const states = screen.getAllByText("Same as Hermes. Changes wait here until you apply them.");
+    expect(states).toHaveLength(3);
+    for (const state of states) expect(state.closest("[hidden], details:not([open])")).toBeNull();
     expect(visible(/Subagents run on the main agent's provider and model/)).toBe(true);
     await user.selectOptions(select("Main provider"), "nous");
     expect(visible(/^Choose a model for nous\.$/)).toBe(true);
-    // Nothing on the tab is folded but the help behind an (i).
+    await pickModel(user, "Main model", "hermes-5-70b");
+    expect(visible(/^Not applied yet\. Leaving Settings drops it\.$/)).toBe(true);
+    // Nothing on the tab is folded but the help behind an (i), and the safety checks behind the header's summary line.
     for (const fold of screen.getByRole("tabpanel").querySelectorAll("[hidden]")) expect(fold.classList.contains("set-more")).toBe(true);
+    const folds = screen.getByRole("tabpanel").querySelectorAll("details");
+    expect([...folds].map((d) => d.closest("section")?.className)).toEqual(["applies-box"]);
+    expect(screen.getByText(/Text generation, Compression and Vision are pinned to OpenRouter/).closest("details")).toBe(folds[0]);
   });
 
   it("keeps the longer help behind an (i), opened by a search that finds words in it", async () => {

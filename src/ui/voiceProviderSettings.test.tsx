@@ -212,7 +212,7 @@ describe("Settings → Voice → Speech providers", () => {
     await screen.findByRole("group", { name: "Text-to-speech" });
     let open!: () => void;
     server.voiceSetupGate = new Promise((r) => (open = r));
-    await user.click(screen.getByRole("button", { name: /Read again/ }));
+    await user.click(screen.getByRole("button", { name: /Reload/ }));
     await user.selectOptions(picker("Text-to-speech"), "ElevenLabs");
     await user.click(saveButton());
     await screen.findByText(/Saved on Hermes, and read back/);
@@ -264,14 +264,14 @@ describe("Settings → Voice → Speech providers", () => {
     expect(fake.writes).toEqual([]);
   });
 
-  it("drops what was typed where Read again finds Hermes changed it, and says so, instead of saving over it", async () => {
+  it("drops what was typed where Reload finds Hermes changed it, and says so, instead of saving over it", async () => {
     const { user, fake } = await shown();
     await screen.findByRole("group", { name: "Text-to-speech" });
     await user.clear(within(side("Text-to-speech")).getByLabelText(/^Voice/));
     await user.type(within(side("Text-to-speech")).getByLabelText(/^Voice/), "en-US-JennyNeural");
     await user.selectOptions(within(side("Speech-to-text")).getByLabelText(/Model size/), "small");
     fake.set("default", "tts.edge.voice", "en-GB-SoniaNeural");
-    await user.click(screen.getByRole("button", { name: /Read again/ }));
+    await user.click(screen.getByRole("button", { name: /Reload/ }));
     await waitFor(() => expect(within(side("Text-to-speech")).getByLabelText<HTMLInputElement>(/^Voice/).value).toBe("en-GB-SoniaNeural"));
     expect(screen.getByRole("alert").textContent).toMatch(/Changed on Hermes since you opened this: Microsoft Edge TTS's voice/);
     expect(within(side("Speech-to-text")).getByLabelText<HTMLSelectElement>(/Model size/).value).toBe("small");
@@ -280,7 +280,7 @@ describe("Settings → Voice → Speech providers", () => {
     expect(fake.writes.map((w) => w.body)).toEqual([{ stt: { local: { model: "small" } } }]);
   });
 
-  it("drops a key and settings typed for the provider in use when Read again finds another client switched it", async () => {
+  it("drops a key and settings typed for the provider in use when Reload finds another client switched it", async () => {
     const { user, fake } = await shown({ setUp: (s) => s.voiceProviders.set("default", "tts.provider", "openai") });
     await screen.findByRole("group", { name: "Text-to-speech" });
     expect(picker("Text-to-speech").value).toBe("OpenAI TTS");
@@ -288,7 +288,7 @@ describe("Settings → Voice → Speech providers", () => {
     await user.type(within(side("Text-to-speech")).getByLabelText(/^Voice/), "nova");
     await user.type(within(side("Text-to-speech")).getByLabelText("OpenAI TTS OpenAI API key"), "sk-typed");
     fake.set("default", "tts.provider", "elevenlabs");
-    await user.click(screen.getByRole("button", { name: /Read again/ }));
+    await user.click(screen.getByRole("button", { name: /Reload/ }));
     await waitFor(() => expect(picker("Text-to-speech").value).toBe("ElevenLabs"));
     expect(screen.getByRole("alert").textContent).toMatch(/Changed on Hermes since you opened this: the text-to-speech provider \(now ElevenLabs\)/);
     expect((saveButton() as HTMLButtonElement).disabled).toBe(true);
@@ -386,10 +386,10 @@ describe("Settings → Voice → Speech providers", () => {
     }
     await user.selectOptions(picker("Text-to-speech"), "OpenAI TTS");
     expect(within(side("Text-to-speech")).getByRole("group", { name: "OpenAI TTS settings" }).closest(".set-block")).toBeTruthy();
-    // What a save comes to, with Discard and Save, is the card's last line; Read again acts on the whole section.
+    // What a save comes to, with Discard and Save, is the card's last line; Reload acts on the whole section.
     expect(saveButton().closest(".set-card > .set-note:last-child")?.parentElement).toBe(card);
     expect(screen.getByRole("status").textContent).toBe("Not saved yet.");
-    expect(screen.getByRole("button", { name: /Read again/ }).closest(".set-head-action")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Reload/ }).closest(".set-head-action")).toBeTruthy();
   });
 
   it("folds how keys and the config are kept behind the section's (i), never a provider's state", async () => {

@@ -22,6 +22,7 @@ import { BROWSER_FIX, browserOf, isUnavailable, type ScreenApi, type ServerBrows
 import { CopyCommand, Spinner, ago, storedTime } from "./bits";
 import { useLocale } from "../i18n/locale";
 import { SettingNote, SettingRow, SettingsSection } from "./SettingRows";
+import { useInPage } from "./SettingsPage";
 import { errorText } from "../hermes/values";
 
 /** Opens a compatibility guide page in the owner's browser. */
@@ -134,9 +135,12 @@ export function DiagnosticsSettings({
   // Every check failed to get an answer, and the version couldn't be read: the server, not a feature, is the problem.
   const failed = !snap.checking && snap.checkedAt !== undefined && !!f.versionWhy && probed.every((c) => snap.caps[c.id].state === "unreachable");
 
+  // Under Diagnostics › Server's page header (ADR 0160) the first section's heading and intro would repeat it.
+  const inPage = useInPage();
   return (
     <div className="diagnostics">
       <SettingsSection
+        bare={inPage}
         title="Server"
         titleId="diag-server"
         intro="What the Hermes server says about itself."
