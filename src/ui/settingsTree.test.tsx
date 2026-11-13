@@ -213,6 +213,12 @@ describe("Settings → General sections", () => {
     expect(document.activeElement).toBe(keys);
     expect(keys.getAttribute("aria-selected")).toBe("false");
     expect(asked).toBe(0);
+    // The focused tab is the sheet's Tab stop: from the last tab, Tab wraps inside the sheet, never to the page behind.
+    await user.keyboard("{End}");
+    expect(document.activeElement).toBe(within(sheet).getByRole("tab", { name: "Memory" }));
+    await user.keyboard("{Tab}");
+    expect(sheet.contains(document.activeElement)).toBe(true);
+    keys.focus();
     await user.keyboard("{Enter}");
     expect(asked).toBe(1);
     expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();

@@ -1165,8 +1165,13 @@ export function SettingsScreen({
   const sideRef = useRef<HTMLElement>(null);
   const crumbRef = useRef<HTMLButtonElement>(null);
   const sheetWas = useRef(false);
+  /** The sheet's tab the arrows moved the focus to: its one Tab stop (a roving tabindex), so Tab wraps inside the sheet. */
+  const [rove, setRove] = useState<Tab>();
   useEffect(() => {
-    if (sheet) (sideRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? sideRef.current?.querySelector<HTMLElement>('[role="tab"]'))?.focus();
+    if (sheet) {
+      setRove(undefined);
+      (sideRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? sideRef.current?.querySelector<HTMLElement>('[role="tab"]'))?.focus();
+    }
     else if (sheetWas.current) {
       // Only while the focus is still the sheet's (or nobody's): a pick that asks first (an unsaved edit) has moved it into
       // the question, which keeps it.
@@ -1238,6 +1243,7 @@ export function SettingsScreen({
           const next = e.key === "Home" ? 0 : e.key === "End" ? ids.length - 1 : step ? (at + step + ids.length) % ids.length : -1;
           if (next < 0) return;
           e.preventDefault();
+          setRove(ids[next]);
           document.getElementById(`settings-tab-${ids[next]}`)?.focus();
           return;
         }
@@ -1260,7 +1266,7 @@ export function SettingsScreen({
                   className={`settings-tab ${on ? (kids ? "parent" : "on") : ""} ${searching && !count ? "dim" : ""}`}
                   role="tab"
                   aria-selected={on}
-                  tabIndex={on || (searching && id === groups[0].tabs[0].id) ? 0 : -1}
+                  tabIndex={(sheet && rove ? rove === id : on || (searching && id === groups[0].tabs[0].id)) ? 0 : -1}
                   aria-controls={searching ? undefined : `settings-panel-${id}`}
                   onClick={() => pickTab(id)}
                 >
