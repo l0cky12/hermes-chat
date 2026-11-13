@@ -90,8 +90,23 @@ describe("The side panel", () => {
       ]);
       expect(list.contains(document.activeElement)).toBe(true);
       expect(document.activeElement).toBe(rows()[0]);
-      expect(screen.queryAllByRole("tab", { selected: true })).toEqual([]);
+      expect(screen.queryByRole("tablist")).toBeNull();
       expect(mounts).toEqual([]);
+    });
+
+    it("shows the tabs once one has been opened, and keeps them when + brings the launcher back", () => {
+      render(<Harness start={null} />);
+      expect(screen.queryByRole("tab")).toBeNull();
+      fireEvent.click(rows()[2]);
+      expect(screen.getAllByRole("tab").map((t) => [t.textContent, t.getAttribute("aria-selected")])).toEqual([
+        ["Preview", "false"],
+        ["Terminal", "false"],
+        ["Files", "true"],
+        ["Screen", "false"],
+      ]);
+      fireEvent.click(screen.getByRole("button", { name: "Open a surface" }));
+      expect(screen.getByRole("heading", { name: "Open a surface" })).toBeTruthy();
+      expect(screen.getAllByRole("tab")).toHaveLength(4);
     });
 
     it("opens a tab by click, by its letter in either case, and moves between rows with the arrows, wrapping", () => {

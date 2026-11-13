@@ -115,24 +115,27 @@ export function SidePanel({
             <ArrowLeft size={16} />
           </button>
         )}
-        <div role="tablist" aria-label="Side panel" className="panel-tablist">
-          {TABS.map((t) => (
-            <button
-              key={t.tab}
-              role="tab"
-              id={`panel-tab-${t.tab}`}
-              aria-selected={tab === t.tab}
-              aria-controls={`panel-${t.tab}`}
-              className="panel-tab"
-              title={t.title}
-              onClick={() => onTab(t.tab)}
-            >
-              <t.Icon size={14} />
-              <span className="panel-tab-label">{t.label}</span>
-              {running[t.tab] && <span className="dot run-dot" role="img" aria-label={typeof running[t.tab] === "string" ? (running[t.tab] as string) : "(running)"} />}
-            </button>
-          ))}
-        </div>
+        {/* No tabs until one has been opened: the launcher alone offers them then. */}
+        {(made.length > 0 || tab !== null) && (
+          <div role="tablist" aria-label="Side panel" className="panel-tablist">
+            {TABS.map((t) => (
+              <button
+                key={t.tab}
+                role="tab"
+                id={`panel-tab-${t.tab}`}
+                aria-selected={tab === t.tab}
+                aria-controls={`panel-${t.tab}`}
+                className="panel-tab"
+                title={t.title}
+                onClick={() => onTab(t.tab)}
+              >
+                <t.Icon size={14} />
+                <span className="panel-tab-label">{t.label}</span>
+                {running[t.tab] && <span className="dot run-dot" role="img" aria-label={typeof running[t.tab] === "string" ? (running[t.tab] as string) : "(running)"} />}
+              </button>
+            ))}
+          </div>
+        )}
         <button className={`icon-btn panel-new ${tab === null ? "on" : ""}`} title="Open a surface" onClick={() => onTab(null)}>
           <Plus size={16} />
         </button>

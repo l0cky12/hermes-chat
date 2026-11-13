@@ -426,7 +426,7 @@ This app having Hermes compact a chat the owner has left: one open in this app, 
 _Avoid_: auto-compact (Hermes's own compaction is automatic too), auto-compress, cleanup
 
 **Side panel**:
-The resizable panel beside the chat, with four tabs: Preview, Terminal, Files and Screen. It opens from the chat's header on what it showed last, which until a tab is picked is its launcher, **Open a surface**, listing the tabs with their keys (P, T, F, S); its + button shows the launcher again. It opens at a tab from the rail, a link or a tool call. In a window too narrow for both, it covers the chat until the owner goes back to it. Closing it, or going to another tab or the launcher, leaves what runs in it running (ADR 0039, ADR 0159).
+The resizable panel beside the chat, with four tabs: Preview, Terminal, Files and Screen. It opens from the chat's header on what it showed last, which until a tab is picked is its launcher, **Open a surface**, listing the tabs with their keys (P, T, F, S); the tabs show above it only once one has been opened, and its + button shows the launcher again. It opens at a tab from the rail, a link or a tool call. In a window too narrow for both, it covers the chat until the owner goes back to it. Closing it, or going to another tab or the launcher, leaves what runs in it running (ADR 0039, ADR 0159).
 _Avoid_: drawer, sidebar (that is the chat list), inspector
 
 **Preview**:

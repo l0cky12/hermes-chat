@@ -3110,6 +3110,7 @@ label.memory-pick { cursor: pointer; }
 @container (max-width: 31rem) { .panel-tab-label { display: none; } }
 @container (max-width: 33.5rem) { .side-panel.overlay .panel-tab-label { display: none; } }
 .panel-new, .panel-close { flex: none; }
+.panel-new { margin-left: auto; }
 /* Pressed while the launcher shows: the selected tab's face, since .icon-btn.on is the panel's own colour in light themes. */
 .panel-new.on { background: var(--raised-3); color: var(--text); }
 /* The launcher (ADR 0159): each tab as a row with its key, centred in the panel. */
