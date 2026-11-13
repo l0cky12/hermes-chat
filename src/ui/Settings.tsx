@@ -1230,7 +1230,8 @@ export function SettingsScreen({
         if ((e.target as HTMLElement).getAttribute("role") !== "tab") return;
         const ids = groups.flatMap((g) => g.tabs.map((t) => t.id));
         const focused = ids.find((id) => (e.target as HTMLElement).id === `settings-tab-${id}`);
-        arrowSelect(e, ids, searching && focused ? focused : tab, pickTab);
+        // Arrows pick without closing the narrow sheet, so they can go on to the next tab; a click or Enter closes it.
+        arrowSelect(e, ids, searching && focused ? focused : tab, pick);
       }}
     >
       {groups.map((g) => (

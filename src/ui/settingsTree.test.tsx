@@ -197,6 +197,20 @@ describe("Settings → General sections", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "General › Connection" }));
   });
 
+  it("moves through the narrow sheet's tabs with the arrows, keeping it open until one is clicked", async () => {
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q === "(max-width: 900px)", media: q, addEventListener() {}, removeEventListener() {} }));
+    const { user } = await shown();
+    await user.click(screen.getByRole("button", { name: "General › Connection" }));
+    await user.keyboard("{ArrowDown}{ArrowDown}");
+    const sheet = screen.getByRole("dialog", { name: "Settings" });
+    const keys = within(sheet).getByRole("tab", { name: "Keyboard Shortcuts" });
+    expect(keys.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(keys);
+    await user.click(keys);
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Keyboard Shortcuts" })).toBeTruthy();
+  });
+
   it("leaves the focus in a question that a pick from the narrow sheet asks first (an unsaved edit)", async () => {
     vi.stubGlobal("matchMedia", (q: string) => ({ matches: q === "(max-width: 900px)", media: q, addEventListener() {}, removeEventListener() {} }));
     const s = new FakeHermes();
