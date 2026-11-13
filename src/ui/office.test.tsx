@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-// The agent office (ADR 0077, ADR 0122), from what a fake Hermes reports through the real transport: the building and
-// the list show the same agents in the same states, named the same way, with the same Open chat, through a reply's
-// run, Approval, failures, completion and a reconnect. Also the agent's card, "+N more", the list a computer without
+// The agent office (ADR 0077, ADR 0122, ADR 0161), from what a fake Hermes reports through the real transport: the
+// floor plan, the board, the building and the list show the same agents in the same states, named the same way, with
+// the same Open chat, through a reply's run, Approval, failures, completion and a reconnect. Also the agent's card, "+N more", the list a computer without
 // WebGL gets, the keyboard, reduced motion, the full view, and that it draws nothing while hidden. jsdom has no WebGL:
 // the building's tests stand in a WebGL context and a scene that records what it was told to draw.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -18,6 +18,7 @@ import { Main } from "../App";
 import { Office } from "./Office";
 import { OfficeSettings } from "./OfficeSettings";
 import { EMPTY_OFFICE_MEMORY } from "./OfficeBuilding";
+import type { OfficeDesign } from "./OfficeMenus";
 import { setWindowHidden } from "./windowState";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
@@ -90,12 +91,13 @@ function roomsOf(hermes: Hermes): { rooms: Room[]; connected: boolean } {
   return { rooms: officeRooms({ entries, shown: () => true, chats: s.chats, profile: s.profile, connected }), connected };
 }
 
-type View = "building" | "list";
+type View = OfficeDesign;
+const DESIGNS = ["plan", "board", "building", "list"] as const;
 const agents = () => Array.from(document.querySelectorAll<HTMLButtonElement>("[data-desk]"));
 
 /**
- * Every agent's accessible name, and where Open chat goes for each, in one view. In the building an agent opens its
- * card, and the card's Open chat opens the chat; in the list the row opens it.
+ * Every agent's accessible name, and where Open chat goes for each, in one view. In the plan, the board and the
+ * building an agent opens its card, and the card's Open chat opens the chat; in the list the row opens it.
  */
 function seen({ rooms, connected }: { rooms: Room[]; connected: boolean }, view: View) {
   if (view === "building") withWebGL();
@@ -104,7 +106,7 @@ function seen({ rooms, connected }: { rooms: Room[]; connected: boolean }, view:
   const labels = agents().map((d) => d.getAttribute("aria-label")!);
   for (const d of agents()) {
     fireEvent.click(d);
-    if (view === "building") fireEvent.click(screen.getByRole("button", { name: "Open chat" }));
+    if (view !== "list") fireEvent.click(screen.getByRole("button", { name: "Open chat" }));
   }
   const opened = onOpen.mock.calls.map(([r, d]) => `${r.chatId} ${d.agent.kind === "subagent" ? d.agent.id : "reply"}`);
   unmount();
@@ -113,15 +115,18 @@ function seen({ rooms, connected }: { rooms: Room[]; connected: boolean }, view:
   return { labels, opened };
 }
 
-/** Both views agree, and each agent's state as its name says it. */
+const byName = ({ labels, opened }: { labels: string[]; opened: string[] }) => labels.map((l, i) => `${l} → ${opened[i]}`).sort();
+
+/** Every design agrees, and each agent's state as its name says it. */
 function states(hermes: Hermes): string[] {
   const now = roomsOf(hermes);
   const building = seen(now, "building");
   expect(seen(now, "list")).toEqual(building);
+  for (const flat of ["plan", "board"] as const) expect(byName(seen(now, flat))).toEqual(byName(building));
   return building.labels.map((l) => l.split(", in “")[0].replace(/, started by “[^”]*”$/, ""));
 }
 
-describe("The building and the list", () => {
+describe("Every design", () => {
   it("show the same agents, states and actions through a run, an Approval, failures, a completion and a reconnect", async () => {
     vi.useFakeTimers();
     const server = new FakeHermes();
@@ -202,7 +207,7 @@ describe("The building and the list", () => {
     const more = screen.getByRole("button", { name: `${list.labels.length - 40} more agents aren't drawn. Show them all in List.` });
     await user.click(more);
     expect(agents()).toHaveLength(list.labels.length);
-    expect(screen.getByRole("button", { name: "List" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Office design: List" })).toBeTruthy();
   }, 20_000);
 
   it("keeps an agent only Hermes's own completion marks finished", async () => {
@@ -260,7 +265,7 @@ function office(view: View, over: Partial<Parameters<typeof Office>[0]> = {}) {
 }
 
 describe("The office from the keyboard", () => {
-  it.each(["building", "list"] as const)("moves between every agent with the arrows, Home and End, and opens one with Enter (%s)", async (view) => {
+  it.each(DESIGNS)("moves between every agent with the arrows, Home and End, and opens one with Enter (%s)", async (view) => {
     const { onOpen, onClose, desks, user } = office(view);
     expect(document.activeElement).toBe(desks()[0]);
     await user.keyboard("{ArrowDown}");
@@ -272,12 +277,12 @@ describe("The office from the keyboard", () => {
     await user.keyboard("{ArrowUp}{Home}");
     expect(document.activeElement).toBe(desks()[0]);
     await user.keyboard("{ArrowDown}{ArrowDown}{Enter}");
-    // In the building Enter opens the agent's card, with Open chat ready to press.
-    if (view === "building") await user.keyboard("{Enter}");
+    // Outside the list Enter opens the agent's card, with Open chat ready to press.
+    if (view !== "list") await user.keyboard("{Enter}");
     expect(onOpen).toHaveBeenCalledTimes(1);
     expect(onOpen.mock.calls[0][1]).toMatchObject({ agent: { kind: "subagent", id: "a" } });
     // Escape closes the card first, then the office.
-    await user.keyboard(view === "building" ? "{Escape}{Escape}" : "{Escape}");
+    await user.keyboard(view === "list" ? "{Escape}" : "{Escape}{Escape}");
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -296,16 +301,23 @@ describe("The office from the keyboard", () => {
     expect(ask.isConnected).toBe(false);
   });
 
-  it("switches between the building and the list with the same agents named the same way", async () => {
+  it("switches designs from the Design menu, with the same agents named the same way in each", async () => {
     const { onView, user, desks } = office("building");
-    const labels = desks().map((d) => d.getAttribute("aria-label"));
+    const labels = desks().map((d) => d.getAttribute("aria-label")!);
     expect(labels[3]).toBe("Check expiry, Finished, started by “Read the auth code”, in “Audit”.");
     expect(labels[0]).toBe("The chat's reply, Waiting for your approval, in “Deploy plan”. A command is waiting for your approval.");
-    await user.click(screen.getByRole("button", { name: "List" }));
-    expect(onView).toHaveBeenCalledWith("list");
-    cleanup();
-    office("list");
-    expect(desks().map((d) => d.getAttribute("aria-label"))).toEqual(labels);
+    await user.click(screen.getByRole("button", { name: "Office design: 3D building" }));
+    const items = screen.getAllByRole("menuitemradio");
+    expect(items.map((i) => i.querySelector(".office-design-name")!.textContent)).toEqual(["Floor plan", "Board", "List", "3D building"]);
+    expect(items.map((i) => i.getAttribute("aria-checked"))).toEqual(["false", "false", "false", "true"]);
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(onView).toHaveBeenCalledWith("plan");
+    expect(screen.queryByRole("menu")).toBeNull();
+    for (const view of ["plan", "board", "list"] as const) {
+      cleanup();
+      office(view);
+      expect(desks().map((d) => d.getAttribute("aria-label")!).sort()).toEqual([...labels].sort());
+    }
   });
 });
 
@@ -404,7 +416,7 @@ describe("The building", () => {
     await user.click(screen.getByRole("button", { name: /^Read the auth code, Running/ }));
     const card = screen.getByRole("dialog", { name: "Read the auth code" });
     const facts = () => Array.from(card.querySelectorAll("dt")).map((dt) => `${dt.textContent}: ${dt.nextElementSibling!.textContent}`);
-    expect(facts()).toEqual(["Chat: Audit", "Profile: default (shown)", "State: Running", "Goal: Read the auth code", "Doing now: read_file: src/auth.ts (just now)", "Model: sub-model", "Time: Running for 2 h 5 min"]);
+    expect(facts()).toEqual(["Chat: Audit", "Profile: default (open)", "State: Running", "Goal: Read the auth code", "Doing now: read_file: src/auth.ts (just now)", "Model: sub-model", "Time: Running for 2 h 5 min"]);
     expect(within(card).getAllByRole("button").map((b) => b.textContent || b.getAttribute("aria-label"))).toEqual(["Close the card", "Open chat"]);
     await waitFor(() => expect(drawn.scene?.selected).toBe("default audit a"));
 
@@ -449,10 +461,11 @@ describe("The building", () => {
     render(<Office floorMemory={fresh()} rooms={sample()} view="building" onView={() => {}} server="hermes" profile="default" connected onOpen={() => {}} onClose={() => {}} />);
     expect(document.querySelector(".office-fallback")!.textContent).toBe("Showing the list: This computer's web view has no WebGL, which the building needs.");
     expect(document.querySelector(".office-list")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Building" })).toHaveProperty("disabled", true);
     expect(agents()).toHaveLength(4);
     await new Promise((r) => setTimeout(r, 0));
     expect(drawn.mounts).toBe(0);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Office design: List" }));
+    expect(screen.getByRole("menuitemradio", { name: /^3D building/ })).toHaveProperty("disabled", true);
   });
 
   it("lets things move only when the system doesn't ask for reduced motion, and draws only while the window has focus", async () => {
@@ -602,7 +615,7 @@ describe("The building", () => {
     await user.click(within(group).getByRole("button", { name: "Low" }));
     expect(getUIPrefs().officeQuality).toBe("low");
     expect(within(group).getByRole("button", { name: "Low" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByRole("group", { name: "Office" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Office design" })).toBeTruthy();
   });
 
   it("resets the view from its button", async () => {
@@ -615,7 +628,7 @@ describe("The building", () => {
 });
 
 describe("An agent that goes while it has focus", () => {
-  it.each(["building", "list"] as const)("leaves focus on the agent now in its place, where the keys still work (%s)", async (view) => {
+  it.each(DESIGNS)("leaves focus on the agent now in its place, where the keys still work (%s)", async (view) => {
     const { onClose, user, rerender } = office(view);
     expect(document.activeElement?.getAttribute("data-desk")).toBe("default deploy reply");
     rerender({ rooms: sample().slice(1) });
@@ -628,7 +641,7 @@ describe("An agent that goes while it has focus", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it.each(["building", "list"] as const)("follows the agent as the agents before it go, so the one after it takes its place (%s)", (view) => {
+  it.each(DESIGNS)("follows the agent as the agents before it go, so the one after it takes its place (%s)", (view) => {
     const desk = (id: string) => ({ key: `default audit ${id}`, agent: { kind: "subagent" as const, id: id as never, depth: 0 }, name: `Task ${id}`, state: "running" as const });
     const audit = (ids: string[]): Room => ({ key: "default audit", profile: "default", chatId: "audit", title: "Audit", desks: ids.map(desk) });
     const first = sample()[0];
@@ -668,6 +681,11 @@ async function auditing() {
 }
 
 const officeButton = () => document.querySelector<HTMLButtonElement>(".office-btn");
+async function openAgent(user: ReturnType<typeof userEvent.setup>, name: RegExp) {
+  await user.click(officeButton()!);
+  await user.click(within(screen.getByRole("group", { name: "Floor plan" })).getByRole("button", { name }));
+  await user.click(screen.getByRole("button", { name: "Open chat" }));
+}
 /** What the app asked Hermes to do, as opposed to read: answers, sends, stops and steers. */
 const writes = (server: FakeHermes) => [
   ...server.responses,
@@ -681,15 +699,12 @@ describe("The office in the app", () => {
     await user.click(screen.getByRole("button", { name: /^Other/ }));
     const before = writes(server).length;
 
-    await user.click(officeButton()!);
-    const room = screen.getByRole("list", { name: "Audit" });
-    await user.click(within(room).getByRole("button", { name: /^Check token expiry, Running, started by “Read the auth code”/ }));
+    await openAgent(user, /^Check token expiry, Running, started by “Read the auth code”, in “Audit”/);
     expect(screen.queryByRole("region", { name: "Office" })).toBeNull();
     const panel = screen.getByRole("region", { name: "Subagents" });
     await waitFor(() => expect(document.activeElement).toBe(within(panel).getByRole("heading", { name: "Check token expiry" })));
 
-    await user.click(officeButton()!);
-    await user.click(within(screen.getByRole("list", { name: "Audit" })).getByRole("button", { name: /^The chat's reply, Waiting for your approval/ }));
+    await openAgent(user, /^The chat's reply, Waiting for your approval, in “Audit”/);
     await waitFor(() => expect(document.activeElement?.closest(".approval")).toBeTruthy());
     expect(writes(server)).toHaveLength(before);
   });
@@ -700,13 +715,11 @@ describe("The office in the app", () => {
     await act(async () => void (await hermes.idle()));
     act(() => server.event(server.runtimeIdOf("other")!, "subagent.start", who("sa-docs", "Tidy the docs")));
 
-    const desk = () => within(screen.getByRole("list", { name: "Audit" })).getByRole("button", { name: /^Read the auth code, Running/ });
+    const desk = /^Read the auth code, Running, in “Audit”/;
     const heading = () => within(screen.getByRole("region", { name: "Subagents" })).getByRole("heading", { name: "Read the auth code" });
-    await user.click(officeButton()!);
-    await user.click(desk());
+    await openAgent(user, desk);
     await waitFor(() => expect(document.activeElement).toBe(heading()));
-    await user.click(officeButton()!);
-    await user.click(desk());
+    await openAgent(user, desk);
     await waitFor(() => expect(document.activeElement).toBe(heading()));
 
     await user.click(screen.getByRole("button", { name: "Search all chats (Ctrl+K)" }));
@@ -799,8 +812,11 @@ describe("The office in the app", () => {
     await auditing();
     expect(officeButton()).toBeTruthy();
     expect(document.querySelector(".office")).toBeNull();
-    act(() => void setUIPrefs({ agentOffice: "list" }));
     await userEvent.setup().click(officeButton()!);
+    expect(document.querySelector(".plan [data-desk]")).toBeTruthy();
+    act(() => void setUIPrefs({ agentOffice: "board" }));
+    expect(document.querySelector(".board [data-desk]")).toBeTruthy();
+    act(() => void setUIPrefs({ agentOffice: "list" }));
     expect(document.querySelector(".office-list")).toBeTruthy();
     expect(document.querySelector(".office-building")).toBeNull();
     withWebGL();

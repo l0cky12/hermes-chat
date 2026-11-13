@@ -3291,7 +3291,7 @@ export function Main({
               <Office
                 rooms={officeRooms({ entries: inbox.entries, shown: (e) => !acks.isDismissed(e, dismissed), chats, profile, connected: status === "connected" })}
                 floorMemory={officeFloorMemory}
-                view={agentOffice === "list" ? "list" : "building"}
+                view={agentOffice}
                 onView={(view) => setUIPrefs({ agentOffice: view })}
                 server={where ?? "the server"}
                 profile={profile}

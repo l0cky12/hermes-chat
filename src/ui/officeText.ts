@@ -1,5 +1,20 @@
-// What the office says about an agent, the same in the building and in List (ADR 0077, ADR 0122): its state in words
-// and its accessible name.
+// What the office says about an agent, the same in every design (ADR 0077, ADR 0122, ADR 0161): its state in words and
+// as an icon, and its accessible name.
+import {
+  CircleAlert,
+  CircleCheck,
+  CircleDashed,
+  CircleDot,
+  CircleHelp,
+  CircleStop,
+  Clock,
+  Coffee,
+  Hourglass,
+  Loader,
+  MessageCircleQuestion,
+  ShieldAlert,
+  type LucideIcon,
+} from "lucide-react";
 import type { Desk, DeskState, Room } from "../hermes/office";
 
 export const STATE_LABEL: Record<DeskState, string> = {
@@ -15,6 +30,36 @@ export const STATE_LABEL: Record<DeskState, string> = {
   ended: "Ended, Hermes didn't say how",
   unknown: "Not known yet",
   idle: "Not running",
+};
+
+export const STATE_SHORT: Record<DeskState, string> = {
+  queued: "Queued",
+  running: "Running",
+  handedOff: "Handed off",
+  approval: "Approval",
+  failed: "Failed",
+  uncertain: "May not have sent",
+  completed: "Finished",
+  unread: "Unread",
+  stopped: "Stopped",
+  ended: "Ended",
+  unknown: "Not known",
+  idle: "Not running",
+};
+
+export const STATE_ICON: Record<DeskState, LucideIcon> = {
+  queued: Clock,
+  running: Loader,
+  handedOff: Hourglass,
+  approval: ShieldAlert,
+  failed: CircleAlert,
+  uncertain: MessageCircleQuestion,
+  completed: CircleCheck,
+  unread: CircleDot,
+  stopped: CircleStop,
+  ended: CircleDashed,
+  unknown: CircleHelp,
+  idle: Coffee,
 };
 
 /** The subagent that started a subagent, when it is in the office too. */

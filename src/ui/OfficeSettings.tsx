@@ -1,14 +1,11 @@
-// How the agent office shows (ADR 0077, ADR 0122): as a 3D building, as a list, or not at all. Kept in the display preferences
-// (uiPrefs.ts), on this computer only. Drawn as a card of rows (ADR 0059).
+// How the agent office shows (ADR 0077, ADR 0122, ADR 0161): in one of the designs the office's Design menu offers, or
+// not at all. Kept in the display preferences (uiPrefs.ts), on this computer only. Drawn as a card of rows (ADR 0059).
 import { useSyncExternalStore } from "react";
 import { getUIPrefs, setUIPrefs, subscribe, type OfficeQuality, type OfficeView } from "../hermes/uiPrefs";
 import { SettingRow, SettingsSection } from "./SettingRows";
+import { DESIGNS } from "./OfficeMenus";
 
-const CHOICES: { value: OfficeView; label: string }[] = [
-  { value: "building", label: "Building" },
-  { value: "list", label: "List" },
-  { value: "off", label: "Off" },
-];
+const CHOICES: { value: OfficeView; label: string }[] = [...DESIGNS.map((d) => ({ value: d.value, label: d.label })), { value: "off", label: "Off" }];
 
 const QUALITIES: { value: OfficeQuality; label: string }[] = [
   { value: "normal", label: "Normal" },
@@ -34,33 +31,30 @@ export function OfficeSettings() {
   return (
     <SettingsSection title="Agent office">
       <SettingRow
-        name="Office"
+        name="Office design"
         nameId="agent-office-label"
-        hint="Every reply and subagent at work, opened from the rail in place of the chats. Off hides the rail button."
+        hint="Every reply and subagent at work, opened from the rail in place of the chats. The office's Design menu picks the same. Off hides the rail button."
         more={
           <p>
-            <b>Building</b> draws a low-poly office with a room for each kind of state: the Workroom for agents at work,
-            the Waiting room for those waiting for you, the Trouble room for failures and the Lounge for the rest. Each
-            chat's agents wear its team color. Click an agent for its card; drag to turn, scroll to zoom. <b>List</b> shows
-            the same agents as rows, and is what the office shows on a computer without WebGL. The office only shows what
-            the Inbox and each chat's Subagents panel already know, and it never approves or starts anything. It draws
-            nothing while nothing moves, while it is closed, or while the window is hidden or not focused.
+            <b>Floor plan</b> draws four rooms, one for each kind of state: Needs you, Working, Trouble and At rest, with each chat's agents at one desk. <b>Board</b> gives each
+            chat a row and each kind of state a column. <b>List</b> shows the same agents as rows. <b>3D building</b> is the low-poly office, and the list stands in on a computer
+            without WebGL. Click an agent for its card. The office only shows what the Inbox and each chat's Subagents panel already know, and it never approves or starts anything.
           </p>
         }
         control={
-          <div className="segmented" role="group" aria-labelledby="agent-office-label">
+          <select className="select" aria-labelledby="agent-office-label" value={agentOffice} onChange={(e) => setUIPrefs({ agentOffice: e.target.value as OfficeView })}>
             {CHOICES.map((c) => (
-              <button key={c.value} type="button" aria-pressed={agentOffice === c.value} onClick={() => setUIPrefs({ agentOffice: c.value })}>
+              <option key={c.value} value={c.value}>
                 {c.label}
-              </button>
+              </option>
             ))}
-          </div>
+          </select>
         }
       />
       <SettingRow
         name="Office quality"
         nameId="office-quality-label"
-        hint="Low draws at most 15 frames a second at a lower resolution, agents type at half the pace, and they appear in their new room instead of walking. It applies to Building, and the office has the same switch."
+        hint="For the 3D building only. Low draws at most 15 frames a second at a lower resolution, agents type at half the pace, and they appear in their new room instead of walking. The building has the same switch."
         control={<OfficeQualitySwitch aria-labelledby="office-quality-label" />}
       />
     </SettingsSection>
