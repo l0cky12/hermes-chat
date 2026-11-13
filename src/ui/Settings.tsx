@@ -1167,7 +1167,12 @@ export function SettingsScreen({
   const sheetWas = useRef(false);
   useEffect(() => {
     if (sheet) (sideRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? sideRef.current?.querySelector<HTMLElement>('[role="tab"]'))?.focus();
-    else if (sheetWas.current) crumbRef.current?.focus();
+    else if (sheetWas.current) {
+      // Only while the focus is still the sheet's (or nobody's): a pick that asks first (an unsaved edit) has moved it into
+      // the question, which keeps it.
+      const at = document.activeElement;
+      if (!at || at === document.body || sideRef.current?.contains(at)) crumbRef.current?.focus();
+    }
     sheetWas.current = sheet;
   }, [sheet]);
   const onSheetKey = (e: ReactKeyboardEvent<HTMLElement>) => {

@@ -197,6 +197,35 @@ describe("Settings → General sections", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "General › Connection" }));
   });
 
+  it("leaves the focus in a question that a pick from the narrow sheet asks first (an unsaved edit)", async () => {
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q === "(max-width: 900px)", media: q, addEventListener() {}, removeEventListener() {} }));
+    const s = new FakeHermes();
+    const hermes = await connect(s.openPipe, "default");
+    running.push(hermes);
+    // App's question before leaving an unsaved edit: a modal dialog whose button takes the focus as it opens.
+    function Guarded() {
+      const [ask, setAsk] = useState<{ go: () => void }>();
+      return (
+        <>
+          <Shell hermes={hermes} guard={(go) => setAsk({ go })} />
+          {ask && (
+            <div role="alertdialog" aria-modal="true" aria-label="Leave the unsaved edit?">
+              <button autoFocus onClick={() => setAsk(undefined)}>
+                Keep editing
+              </button>
+            </div>
+          )}
+        </>
+      );
+    }
+    render(<Guarded />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "General › Connection" }));
+    await user.click(within(screen.getByRole("dialog", { name: "Settings" })).getByRole("tab", { name: "Memory" }));
+    const question = screen.getByRole("alertdialog", { name: "Leave the unsaved edit?" });
+    expect(document.activeElement).toBe(within(question).getByRole("button", { name: "Keep editing" }));
+  });
+
   it("shows every section of every page while searching, and the section picked again after", async () => {
     const { user } = await shown();
     await user.click(item("General", "Chats"));
