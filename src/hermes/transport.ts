@@ -30,7 +30,7 @@ import { GatewaysApi } from "./gateways";
 import { PersonaApi } from "./persona";
 import { ProfileCloneApi } from "./profileClone";
 import { ProfilesApi, toProfileRows } from "./profiles";
-import { APPROVAL_CHOICES, isBroadGrant, isOutgoing, isQuestion, isWaiting, offeredChoices, sameFields, turnStart, type ApprovalChoice, type ApprovalItem, type AttachCheck, type ClarifyQuestion, type QuestionAnswer, type QuestionItem, type QuestionKind, type Attachment, type Chat, type ChatQueue, type ConnectionStatus, type ContextUse, type Found, type Item, type ListedChat, type LiveSession, type LiveSessions, type OtherProfiles, type Outgoing, type OutgoingItem, type Queued, type SavedSend, type SeenFailure, type SessionLive, type SideQuestion, type Source, QUEUE_LIMIT } from "./model";
+import { APPROVAL_CHOICES, isBroadGrant, isOutgoing, isQuestion, isWaiting, offeredChoices, sameFields, turnStart, type ApprovalChoice, type ApprovalItem, type AttachCheck, type ClarifyQuestion, type QuestionAnswer, type QuestionItem, type QuestionKind, type Attachment, type Chat, type ChatQueue, type ConnectionStatus, type ContextUse, type Found, type Item, type ListedChat, type LiveSession, type LiveSessions, type OtherProfiles, type Outgoing, type OutgoingItem, type Queued, type SavedSend, type SeenFailure, type SentReference, type SessionLive, type SideQuestion, type Source, QUEUE_LIMIT } from "./model";
 import { catalogFromServer, fallbackCatalog, isEffort, modelKey, pickFromInfo, type ModelCatalog, type ModelPick } from "./models";
 import { approvalsOf, isApprovalMode, writesFor, type ApprovalPick } from "./approvals";
 import { CheckTimesStore, noOthers, OtherProfilesCheck } from "./otherProfiles";
@@ -56,6 +56,7 @@ import { RestError, conflictOf, sessionNotFound, statusOf, type OpenPipe, type P
 import { projectContextFiles, type ChatContext, type ProjectContextFiles } from "./projectContextFiles";
 import { withContext } from "./projectContext";
 import { typedText } from "./branch";
+import { SUMMARY_INSTRUCTIONS, SUMMARY_MAX_TOKENS, cleanSummary, referenceBlock, referencedTitles, summaryInput } from "./chatReferences";
 import { RemoteFilesError, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, previewSupport, remoteFiles, type EditIo, type RemoteFiles } from "./remoteFiles";
 import { isUnsecure } from "./unsecure";
 import { signInRefused } from "./account";
@@ -2951,11 +2952,12 @@ export class Hermes {
   /**
    * Sends a message as `send` does, and also says which item in the chat it is, so a Voice conversation can follow the
    * reply to that message and no other (ADR 0111). `itemId` is missing only when the chat isn't in the list.
+   * `references`: Referenced chats, whose summaries go after the typed words as attached context (ADR 0163).
    */
-  sendTracked(chatId: string, text: string, attachments: Attachment[] = [], skill?: SkillCall): Promise<{ delivery: Delivery; itemId?: string }> {
+  sendTracked(chatId: string, text: string, attachments: Attachment[] = [], skill?: SkillCall, references: SentReference[] = []): Promise<{ delivery: Delivery; itemId?: string }> {
     // Refused as it starts, in the background (ADR 0125). A send the owner started on the target goes on after a switch.
     if (this.role === "background") return Promise.resolve({ delivery: { delivery: "unsent", reason: new BackgroundRefused().message } });
-    return this.deliver(chatId, text, attachments, undefined, skill);
+    return this.deliver(chatId, text, attachments, undefined, skill, references);
   }
 
   /**
@@ -2970,7 +2972,7 @@ export class Hermes {
     if (!chat || !first || first.outgoing.state === "sending" || chat.running || this.submitting.has(this.profile, chatId)) return undefined;
     const profile = this.profile;
     this.setOutgoing(profile, chatId, itemId, () => null);
-    const { delivery, itemId: again } = await this.deliver(chatId, first.text, first.outgoing.attachments ?? [], undefined, first.outgoing.skill);
+    const { delivery, itemId: again } = await this.deliver(chatId, first.text, first.outgoing.attachments ?? [], undefined, first.outgoing.skill, first.outgoing.references);
     if (delivery.delivery === "unsent" && first.outgoing.state === "unknown" && again) this.setOutgoing(profile, chatId, again, () => first);
     return delivery;
   }
@@ -3131,6 +3133,7 @@ export class Hermes {
     attachments: Attachment[],
     queued?: { kept: (ok: boolean) => void; held: () => void },
     skill?: SkillCall,
+    references: SentReference[] = [],
   ): Promise<{ delivery: Delivery; itemId?: string }> {
     const chat = this.snapshot.chats.find((c) => c.id === chatId);
     if (!chat) return { delivery: { delivery: "unsent", reason: "This chat isn't in the list." } };
@@ -3147,7 +3150,8 @@ export class Hermes {
       id: nextId(chat.items, "u"),
       text,
       ...(attachments.length && { attachments: attachments.map((a) => a.name) }),
-      outgoing: { state: "sending", ...(attachments.length && { attachments }), ...(skill && { skill }) },
+      ...(references.length && { references: references.map((r) => r.title) }),
+      outgoing: { state: "sending", ...(attachments.length && { attachments }), ...(skill && { skill }), ...(references.length && { references }) },
     };
     this.patchChat(chatId, (c) => ({
       ...c,
@@ -3189,12 +3193,13 @@ export class Hermes {
         const go = async () => {
           const asking = this.sendContext?.(profile, chatId);
           if (asking) told = await asking.catch(() => undefined);
-          if (!skill) return this.submit(runtimeId, text, attachments, goingOut, !!queued, told?.blocks);
+          const context = [...(told?.blocks ?? []), ...references.map(referenceBlock)];
+          if (!skill) return this.submit(runtimeId, text, attachments, goingOut, !!queued, context);
           // Hermes builds the skill's text for this session; nothing reaches the chat until it is sent below.
           const ran = await runSkill((method, params) => this.request(method, params), runtimeId, skill);
           shown = ran.display;
           this.setOutgoing(profile, chatId, user.id, (r) => ({ ...r, text: ran.display }));
-          return this.submit(runtimeId, ran.message, attachments, goingOut, !!queued, told?.blocks);
+          return this.submit(runtimeId, ran.message, attachments, goingOut, !!queued, context);
         };
         const compacting = this.compacting.get(chatId);
         return compacting ? compacting.then(go) : go();
@@ -3408,6 +3413,24 @@ export class Hermes {
     if (!title) throw new Error("Hermes didn't answer with a title.");
     if (this.profile !== profile) throw new Error("The profile changed before the title was ready.");
     return this.rename(chatId, title, from);
+  }
+
+  /**
+   * A short summary of another chat of this profile, for a message that references it (ADR 0163). The chat's stored
+   * messages are read with dashboard REST; the summary comes from legacy `llm.oneshot` on the profile's Text generation
+   * model, which adds nothing to either chat. Rejects if the chat has no messages or Hermes gives no summary; with a
+   * `TitleModelUnavailable` if Hermes has no credentials for that model's provider.
+   */
+  async summarizeChat(chatId: string): Promise<string> {
+    const profile = this.profile;
+    const input = summaryInput(await this.storedRows(chatId, profile));
+    if (!input) throw new Error("This chat has no messages to summarize.");
+    const { text } = (await this.request("llm.oneshot", { profile, instructions: SUMMARY_INSTRUCTIONS, input, max_tokens: SUMMARY_MAX_TOKENS }).catch((e) => {
+      throw (e instanceof RpcError && titleModelUnavailable(e.message, profile)) || e;
+    })) as { text?: unknown };
+    const summary = typeof text === "string" ? cleanSummary(text) : "";
+    if (!summary) throw new Error("Hermes didn't answer with a summary.");
+    return summary;
   }
 
   /**
@@ -5587,8 +5610,10 @@ function historyItems(messages: TranscriptMessage[]): Item[] {
     if (!m.text?.trim()) return thought;
     const at = storedAt(m.timestamp);
     const rowId = Number.isSafeInteger(m.row_id) ? (m.row_id as number) : undefined;
-    if (m.role === "user")
-      return [{ kind: "user", id, text: typedText(m.text), ...(at && { at }), ...(rowId !== undefined && { rowId }), ...(m.display_kind === "steer" && { steer: true }) }];
+    if (m.role === "user") {
+      const references = referencedTitles(m.text);
+      return [{ kind: "user", id, text: typedText(m.text), ...(references.length && { references }), ...(at && { at }), ...(rowId !== undefined && { rowId }), ...(m.display_kind === "steer" && { steer: true }) }];
+    }
     if (m.role === "assistant") return [...thought, { kind: "assistant", id, text: m.text, ...(at && { at }), ...(rowId !== undefined && { rowId }) }];
     return [];
   });
