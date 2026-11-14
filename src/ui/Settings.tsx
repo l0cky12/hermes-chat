@@ -50,6 +50,7 @@ import { PersonaPage, type PersonaDirty, type PersonaWhere } from "./PersonaSett
 import type { PersonaApi } from "../hermes/persona";
 import type { PersonaStore } from "../hermes/personaStore";
 import { StartupSettings } from "./StartupSettings";
+import { SummonSettings } from "./SummonSettings";
 import { ChatSectionSettings } from "./ChatSectionSettings";
 import { InboxSettings } from "./InboxSettings";
 import { OfficeSettings } from "./OfficeSettings";
@@ -767,6 +768,7 @@ export function SettingsScreen({
     launch: (
       <>
         <StartupSettings />
+        <SummonSettings />
         <TraySettings tray={tray} />
         <UpdateSettings />
       </>

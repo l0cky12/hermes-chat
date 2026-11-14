@@ -32,7 +32,8 @@ import { desktopNotify } from "./hermes/tauriNotify";
 import { ScreenshotDesk, type ScreenshotApi } from "./hermes/screenshots";
 import { ReferenceDesk } from "./hermes/chatReferences";
 import { deadline } from "./hermes/remoteFiles";
-import { desktopSummon, type SummonApi } from "./hermes/summon";
+import { desktopSummon, type SummonApi, type Summoned } from "./hermes/summon";
+import { SelectionWatch, quoted, untilFocused } from "./hermes/selection";
 import { onDesktopScreenshot, screenshotSupport, showWindow, syncScreenshotOutbox, tauriScreenshots, type ScreenshotSupport } from "./hermes/tauriScreenshot";
 import { AtConnectionLimit, ConnectionManager, DisconnectConnection, RailConnections, RemoveConnection, SwitchConnection, atLimitText, liveCounts } from "./ui/Connections";
 import { checkShortcut, shortcutLabel, shortcutOf } from "./ui/shortcut";
@@ -1460,7 +1461,7 @@ export function Main({
   // The model pick is sticky: new chats start on it, in this profile, until the owner picks another. It is kept on this
   // computer only and never becomes the profile's default. Picked in another profile, it gives way to this profile's
   // own model. A chat on screen shows the model it runs on, and a pick there switches that chat alone.
-  const { modelPicker, modelPicks, modelFavorites, previewWidth, screenshotShortcut, agentOffice, inboxAutoDismissDays } = useSyncExternalStore(subscribeUIPrefs, getUIPrefs);
+  const { modelPicker, modelPicks, modelFavorites, previewWidth, screenshotShortcut, agentOffice, inboxAutoDismissDays, summonSelection } = useSyncExternalStore(subscribeUIPrefs, getUIPrefs);
   const keys = useBindings();
   const officeShown = officeOpen && agentOffice !== "off";
   // Who sits where in the building. It outlives the building's view, so hidden to the tray, minimized, behind Settings
@@ -2907,12 +2908,36 @@ export function Main({
 
   // `hermes-chat --show`, `--toggle` or a second launch brought the window forward: the cursor goes back in the selected pane's
   // composer, its draft as it was. Settings or another screen over the chat stays as it was left, unsaved edits and all.
-  const onSummonedRef = useRef(() => {});
-  onSummonedRef.current = () => {
-    if (covered || covering || previewCovers || searchOpen) return;
+  // From another app, text selected or copied there since the window last lost focus is quoted after that draft, never
+  // sent (ADR 0172). The selections are read only with the setting on.
+  const [selectionWatch] = useState(() => new SelectionWatch());
+  const readSelection = summonSelection ? summon?.readSelection : undefined;
+  useEffect(() => {
+    if (!readSelection) return;
+    const read = () => void readSelection().then((s) => selectionWatch.remember(s), () => {});
+    read();
+    window.addEventListener("blur", read);
+    return () => window.removeEventListener("blur", read);
+  }, [readSelection, selectionWatch]);
+  const chatCovered = () => covered || covering || previewCovers || searchOpen;
+  const prefillRef = useRef((_: string | undefined) => {});
+  prefillRef.current = (text) => {
+    if (!text || chatCovered()) return;
+    flushSync(() => keepDraft(draftKey(connection, profile, active.chatId), quoted(text)));
     focusPane(active.key);
+    const composer = document.querySelector<HTMLTextAreaElement>(`[data-pane="${CSS.escape(active.key)}"] .composer textarea`);
+    composer?.setSelectionRange(composer.value.length, composer.value.length);
   };
-  useEffect(() => summon?.onSummoned(() => onSummonedRef.current()), [summon]);
+  const onSummonedRef = useRef((_: Summoned) => {});
+  onSummonedRef.current = ({ fromElsewhere }) => {
+    if (chatCovered()) return;
+    focusPane(active.key);
+    if (fromElsewhere && readSelection)
+      void untilFocused()
+        .then(readSelection)
+        .then((s) => prefillRef.current(selectionWatch.take(s)), () => {});
+  };
+  useEffect(() => summon?.onSummoned((s) => onSummonedRef.current(s)), [summon]);
 
 
   // Each pane's tab strip above its chat, and the pane as a place to drop a chat dragged from the list or a tab.
