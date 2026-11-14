@@ -95,8 +95,10 @@ export function themeVars(p: Palette, mode: Mode, contrast = DEFAULT_CONTRAST): 
   const bg = p.background;
   const text = k > 0 ? mix(p.text, extreme, 0.5 * k) : mix(p.text, bg, 0.12 * -k);
   const shade = (w: number) => mix(bg, text, clamp(w, 0, 1));
-  // Past 1, a tone keeps going from the text color to the extreme, for a palette whose own text is too faint for AA.
-  const tone = (w: number) => (w <= 1 ? shade(w) : mix(text, extreme, clamp(w - 1, 0, 1)));
+  // Past 1, a tone keeps going from the text color toward black or white, whichever stands out more from the
+  // background, for a custom palette whose own text is too faint for AA.
+  const far = contrastRatio("#ffffff", bg) >= contrastRatio("#000000", bg) ? "#ffffff" : "#000000";
+  const tone = (w: number) => (w <= 1 ? shade(w) : mix(text, far, clamp(w - 1, 0, 1)));
   const lift = dark ? 0 : 0.02; // Light backgrounds need a little more for the same step.
   // Softer goes less far than sharper, so muted text stays readable at the lowest setting.
   const spread = (up: number, down: number) => (k > 0 ? up * k : down * k);
@@ -138,7 +140,7 @@ export function themeVars(p: Palette, mode: Mode, contrast = DEFAULT_CONTRAST): 
 /** WCAG AA for body text: the least contrast any text the app shows may have against what it sits on. */
 const MIN_TEXT_CONTRAST = 4.5;
 
-/** The least tone weight whose color reads at AA on every surface, or 2 (the extreme) if none does. */
+/** The least tone weight whose color reads at AA on every surface, or 2 (black or white) if none does. */
 function readableWeight(tone: (w: number) => string, surfaces: string[]) {
   for (let w = 0; w < 2; w += 0.01) if (surfaces.every((s) => contrastRatio(tone(w), s) >= MIN_TEXT_CONTRAST)) return w;
   return 2;

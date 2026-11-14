@@ -86,6 +86,16 @@ describe("Theme colors", () => {
       }
   });
 
+  it("go toward black for a dark-mode palette on a mid grey, where black stands out more than white", () => {
+    // Dark mode darkens code blocks to #6d6d6d, where black reaches 4.06:1 and nothing reaches AA on both it and #888.
+    const grey = { background: "#888888", surface: "#888888", text: "#999999", accent: "#d08b6e" };
+    for (const c of [0, 50, 100]) {
+      const v = themeVars(grey, "dark", c);
+      for (const key of ["--bg", "--sidebar", "--raised", "--raised-2", "--raised-3"])
+        expect(contrastRatio(v["--faint"], v[key]), `${key} at contrast ${c}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   it("never draw muted text fainter than faint text", () => {
     for (const theme of BUILTIN_THEMES)
       for (const mode of ["light", "dark"] as const)
