@@ -143,7 +143,7 @@ export const UI_PREFS_MIGRATIONS: UIPrefsMigrations = {
 
 const isDoc = (v: unknown): v is UIPrefsDoc => typeof v === "object" && v !== null && !Array.isArray(v);
 /** A document's version: no `v` is version 0; anything that isn't a whole number isn't trusted at all. */
-const versionOf = (doc: UIPrefsDoc) => (doc.v === undefined ? 0 : Number.isInteger(doc.v) ? (doc.v as number) : -1);
+export const versionOf = (doc: UIPrefsDoc) => (doc.v === undefined ? 0 : Number.isInteger(doc.v) ? (doc.v as number) : -1);
 
 /**
  * `raw` brought up to version `to`, one step at a time. A document from a newer app is read as it is: its fields are

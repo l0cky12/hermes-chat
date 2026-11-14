@@ -230,6 +230,18 @@ describe("a backup", () => {
     }
   });
 
+  it("leaves a preferences document it can't read as it was, besides the Settings it restores", async () => {
+    const entries = await makeBackup(await populated(), CATEGORY_IDS);
+    const into = env();
+    const template = { id: "tpl-here", name: "Here", description: "", body: "Kept" };
+    into.storage.setItem("hermes-ui-prefs", JSON.stringify({ v: "invalid", templates: [template] }));
+    const backup = await readBackup(entries);
+    const mapping = defaultMapping(backup, connOf(conn), ["default", "work"]);
+    const plan = planRestore(backup, await loadCurrent(into), connOf(conn), mapping, { ...all("skip"), settings: "replace" });
+    await applyRestore(into, plan, ok);
+    expect(JSON.parse(into.storage.getItem("hermes-ui-prefs")!)).toMatchObject({ v: "invalid", theme: "dark", templates: [template] });
+  });
+
   it("goes to another connection only once the owner maps each place", async () => {
     const entries = await makeBackup(await populated(), CATEGORY_IDS);
     const fresh = env();

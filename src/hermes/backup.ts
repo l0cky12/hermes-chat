@@ -20,7 +20,7 @@ import { PROJECTS_KEY, PROJECTS_VERSION, readLinks, type ScopeLinks } from "./pr
 import { savedDefaultsFile, storageDefaultsFile, toDefaults, type DefaultsFile, type ProjectDefaults } from "./projectDefaults";
 import { readTags, savedTagsFile } from "./tags";
 import { toTemplates, type Template } from "./templates";
-import { migrateUIPrefs, readUIPrefs, UI_PREFS_KEY } from "./uiPrefs";
+import { migrateUIPrefs, readUIPrefs, UI_PREFS_KEY, versionOf } from "./uiPrefs";
 import { TERMINAL_TARGET_KEY } from "./terminal";
 import { QUEUE_LIMIT, type ChatQueue } from "./model";
 import { APPEARANCE_KEY, loadAppearance } from "../ui/appearance";
@@ -326,9 +326,13 @@ const prefsDoc = (s: BackupStorage): Record<string, unknown> => {
 };
 /**
  * The stored prefs brought up to this version, for a restore to write into: written as they were, the restored values
- * would run through the older version's migrations on the next read, which can undo them (ADR 0162).
+ * would run through the older version's migrations on the next read, which can undo them (ADR 0162). One whose version
+ * isn't a version stays as it is, since migrating it would drop every field, another category's among them.
  */
-const currentPrefsDoc = (s: BackupStorage) => migrateUIPrefs(prefsDoc(s));
+const currentPrefsDoc = (s: BackupStorage) => {
+  const doc = prefsDoc(s);
+  return versionOf(doc) < 0 ? doc : migrateUIPrefs(doc);
+};
 const settingsRaw = (s: BackupStorage) => {
   const doc = prefsDoc(s);
   return stable([Object.fromEntries(SETTINGS_FIELDS.filter((f) => f in doc).map((f) => [f, doc[f]])), s.getItem(APPEARANCE_KEY), s.getItem(TERMINAL_TARGET_KEY)]);
