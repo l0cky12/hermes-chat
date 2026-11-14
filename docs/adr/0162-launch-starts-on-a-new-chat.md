@@ -17,5 +17,5 @@ Since `0accfac1`, the app opened each profile's last chat at launch, and Setting
 
 ## Consequences
 
-- A restore brings the preferences stored here up to this version before it writes the backup's Settings into them (`backup.ts`). Written into an older document, as before, a restored `reopenLastChat: true` was turned off again by this migration on the next read.
+- A backup and a restore read the preferences stored here as the app does, brought up to this version (`backup.ts`), and a restore writes the backup's Settings into that. Read as stored, an older document's `reopenLastChat: true` matched a backup's and the restore skipped it, though the app reads it as off; and written into an older document, a restored `true` was turned off again by this migration on the next read. A document whose version isn't a version is left as stored, since migrating it would drop every field.
 - A backup made before version 5 holds `reopenLastChat: true`, and restoring its Settings turns reopening back on. That restores what the backup holds, as it does for every other setting.

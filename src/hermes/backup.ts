@@ -325,9 +325,11 @@ const prefsDoc = (s: BackupStorage): Record<string, unknown> => {
   }
 };
 /**
- * The stored prefs brought up to this version, for a restore to write into: written as they were, the restored values
- * would run through the older version's migrations on the next read, which can undo them (ADR 0162). One whose version
- * isn't a version stays as it is, since migrating it would drop every field, another category's among them.
+ * The stored prefs brought up to this version, as the app reads them, for a backup to hold and a restore to compare
+ * with and write into. Read as stored, an older document's values can differ from what the app shows (ADR 0162 turns a
+ * stored `reopenLastChat: true` off), so a restore could find them unchanged, or write values its migrations then undo.
+ * One whose version isn't a version stays as it is, since migrating it would drop every field, another category's among
+ * them.
  */
 const currentPrefsDoc = (s: BackupStorage) => {
   const doc = prefsDoc(s);
@@ -345,7 +347,7 @@ export const CATEGORIES = {
     holds: "Theme, appearance and custom themes, startup and display choices, the model pick and favorites, status bar, screenshot shortcut, terminal target and which computer it opens on",
     scoped: false,
     async load({ storage }) {
-      const doc = prefsDoc(storage);
+      const doc = currentPrefsDoc(storage);
       const recs: Rec[] = SETTINGS_FIELDS.filter((f) => f in doc).map((f) => ({ scope: "", key: f, value: doc[f] }));
       for (const [key, k] of [["appearance", APPEARANCE_KEY], ["terminalTarget", TERMINAL_TARGET_KEY]] as const) {
         const v = storage.getItem(k);
@@ -389,7 +391,7 @@ export const CATEGORIES = {
     holds: "Your message templates: names, descriptions and text, and the project each is offered in",
     scoped: false,
     async load({ storage }) {
-      const list = toTemplates(prefsDoc(storage).templates) ?? [];
+      const list = toTemplates(currentPrefsDoc(storage).templates) ?? [];
       return { recs: list.map((t) => ({ scope: "", key: t.id, value: t })), raw: templatesRaw(storage) };
     },
     async save({ storage }, before, recs) {

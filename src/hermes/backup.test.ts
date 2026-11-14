@@ -230,6 +230,21 @@ describe("a backup", () => {
     }
   });
 
+  it("restores Reopen last chat on launch over a document from before version 5 that stored the same Settings", async () => {
+    const from = await populated();
+    const prefs = JSON.parse(from.storage.getItem("hermes-ui-prefs")!);
+    from.storage.setItem("hermes-ui-prefs", JSON.stringify({ ...prefs, v: UI_PREFS_VERSION, reopenLastChat: true }));
+    const entries = await makeBackup(from, CATEGORY_IDS);
+    // Stored as the backup holds them, but read with reopening off: version 5 turned it off (ADR 0162).
+    const into = env();
+    into.storage.setItem("hermes-ui-prefs", JSON.stringify({ v: 4, theme: "dark", checkUpdatesOnLaunch: false, terminalKind: "local", reopenLastChat: true }));
+    into.storage.setItem("hermes-chat.appearance", from.storage.getItem("hermes-chat.appearance")!);
+    into.storage.setItem("hermes-chat.terminal-target", from.storage.getItem("hermes-chat.terminal-target")!);
+    const { report } = await restore(entries, into, conn, ["default", "work"], "replace");
+    expect(report.outcomes.find((o) => o.id === "settings")?.state).toBe("restored");
+    expect(readUIPrefs(migrateUIPrefs(JSON.parse(into.storage.getItem("hermes-ui-prefs")!))).reopenLastChat).toBe(true);
+  });
+
   it("leaves a preferences document it can't read as it was, besides the Settings it restores", async () => {
     const entries = await makeBackup(await populated(), CATEGORY_IDS);
     const into = env();
