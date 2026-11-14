@@ -65,7 +65,7 @@ function CommandText({ command }: { command: string }) {
 }
 
 /** How long buttons ignore clicks after they appear, so a click aimed at what was there before doesn't answer. */
-const ARM_MS = 400;
+export const ARM_MS = 400;
 
 /**
  * Wraps a button's action so it runs only on a deliberate click: not the second click of a double click (`detail`
