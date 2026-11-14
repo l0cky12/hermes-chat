@@ -147,8 +147,9 @@ describe("ReferenceDesk", () => {
   it("puts back a summary read from a stored message, which names no chat, and sends it again as it was", () => {
     const { desk } = deferred();
     const readBack = { title: "Deploy", summary: "Shipped." };
-    desk.putBack("k", [readBack, readBack]);
-    expect(desk.in("k")).toEqual([{ id: "sent:Deploy", title: "Deploy", state: "ready", summary: "Shipped." }]);
-    expect(desk.take("k")).toEqual([readBack]);
+    const sameTitle = { title: "Deploy", summary: "Rolled back." };
+    desk.putBack("k", [readBack, readBack, sameTitle]);
+    expect(desk.in("k").map((r) => r.state === "ready" && r.summary)).toEqual(["Shipped.", "Rolled back."]);
+    expect(desk.take("k")).toEqual([readBack, sameTitle]);
   });
 });

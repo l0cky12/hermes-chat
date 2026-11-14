@@ -11,7 +11,7 @@ export type ReferableChat = { id: string; title: string; updatedAt: number };
 
 /**
  * A chat referenced in an unsent message, known in it by `id`: the chat's id, or for a summary read back from a stored
- * message, which names no chat, one made from its title. `summarizing` until Hermes answers, then `ready` with the
+ * message, which names no chat, one made from its title and summary. `summarizing` until Hermes answers, then `ready` with the
  * summary, or `failed` with why; `fix: "text-model"` when the fix is the profile's Text generation model, as for
  * Regenerate title.
  */
@@ -147,7 +147,7 @@ export class ReferenceDesk {
   /** References of a message that didn't go, back on its Draft after any added meanwhile. */
   putBack(key: string, refs: readonly SentReference[]) {
     const fresh = refs
-      .map(({ chatId, title, summary }): Reference => ({ id: chatId ?? `sent:${title}`, ...(chatId !== undefined && { chatId }), title, state: "ready", summary }))
+      .map(({ chatId, title, summary }): Reference => ({ id: chatId ?? `sent:${title}\n${summary}`, ...(chatId !== undefined && { chatId }), title, state: "ready", summary }))
       .filter((r, i, all) => !this.in(key).some((k) => k.id === r.id) && all.findIndex((o) => o.id === r.id) === i);
     if (fresh.length) this.set(key, [...this.in(key), ...fresh]);
   }
