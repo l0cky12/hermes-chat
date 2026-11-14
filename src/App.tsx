@@ -2448,7 +2448,7 @@ export function Main({
       shown?.set(pref, null);
     } else return;
     setReopening(undefined);
-  }, [hermes, reopening, chats, pref]);
+  }, [hermes, reopening, chats, pref, shown]);
 
   useEffect(() => {
     if (!toast) return;
