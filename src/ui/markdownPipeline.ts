@@ -55,20 +55,25 @@ function rehypeFind(query: string) {
  */
 const rehypePaths = () => (tree: HastNode) => {
   const data = (m: PathMention) => ({ dataPath: m.written, ...(m.folder && { dataFolder: true }) });
-  const walk = (node: HastNode) => {
+  // A word that runs on into what is beside it is only part of a path: `src/__init__.py` is `src/`, then `init` in
+  // bold, then `.py`, and `src/` alone would open the wrong place. Text runs on when the character facing the word
+  // could continue a path; an element other than a line break always does.
+  const runsOn = (n: HastNode | undefined, side: "before" | "after") => {
+    if (n?.type === "element") return n.tagName !== "br";
+    const v = n?.type === "text" ? (n.value ?? "") : "";
+    return side === "before" ? /[\p{L}\p{N}_~/-]$/u.test(v) : /^(?:[\p{L}\p{N}_~/-]|\.[\p{L}\p{N}])/u.test(v);
+  };
+  /** `before`, `after`: the element's own text runs on into what is beside the element. */
+  const walk = (node: HastNode, before = false, after = false) => {
     if (!node.children) return;
     const where = node.tagName === "code" ? "code" : "prose";
     const siblings = node.children;
-    // A word that runs on into an element beside it is only part of a path: `src/__init__.py` is `src/`, then
-    // `init` in bold, then `.py`, and `src/` alone would open the wrong place.
-    const glued = (i: number) => {
-      const next = siblings[i];
-      return next?.type === "element" && next.tagName !== "br";
-    };
+    const glued = (i: number, side: "before" | "after") =>
+      side === "before" ? (i === 0 ? before : runsOn(siblings[i - 1], side)) : i === siblings.length - 1 ? after : runsOn(siblings[i + 1], side);
     node.children = siblings.flatMap((child, i): HastNode[] => {
       if (child.type === "text" && child.value) {
         const text = child.value;
-        const spans = findPaths(text, where).filter((s) => !(s.start === 0 && glued(i - 1)) && !(s.end === text.length && glued(i + 1)));
+        const spans = findPaths(text, where).filter((s) => !(s.start === 0 && glued(i, "before")) && !(s.end === text.length && glued(i, "after")));
         if (!spans.length) return [child];
         const out: HastNode[] = [];
         let at = 0;
@@ -84,7 +89,7 @@ const rehypePaths = () => (tree: HastNode) => {
         const { href, ...rest } = child.properties ?? {};
         const mention = typeof href === "string" ? hrefPath(href) : undefined;
         if (mention) child.properties = { ...rest, ...data(mention) };
-      } else if (child.tagName !== "pre" && !classes(child).some((c) => c.startsWith("katex") || c === "language-math")) walk(child);
+      } else if (child.tagName !== "pre" && !classes(child).some((c) => c.startsWith("katex") || c === "language-math")) walk(child, glued(i, "before"), glued(i, "after"));
       return [child];
     });
   };

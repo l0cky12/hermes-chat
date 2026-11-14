@@ -95,6 +95,7 @@ describe("A path in a code span", () => {
     [" src/ui ", ["src/ui"]],
     ["/home/liam/My Documents/report.md", ["/home/liam/My Documents/report.md"]],
     ["~/My Projects/site/", ["~/My Projects/site/"]],
+    ["/home/liam/My Documents/report.md:12", ["/home/liam/My Documents/report.md:12 -> /home/liam/My Documents/report.md"]],
   ])("links the whole of %j", (code, paths) => expect(linked(code, "code")).toEqual(paths));
 
   it.each([
@@ -104,6 +105,8 @@ describe("A path in a code span", () => {
     ["a/b.txt", ["a/b.txt"]],
     ["/usr/bin/ls -la /srv/app", ["/usr/bin/ls", "/srv/app"]],
     ["/usr/bin/env python", ["/usr/bin/env"]],
+    ["/usr/bin/cat /tmp/a.txt", ["/usr/bin/cat", "/tmp/a.txt"]],
+    ["/usr/bin/cat ~/notes/a.txt", ["/usr/bin/cat", "~/notes/a.txt"]],
   ])("links the paths inside %j as running text does", (code, paths) => expect(linked(code, "code")).toEqual(paths));
 
   it.each(["console.log", "os.path", "Makefile", "y/n", "1/2", "s/foo/bar/", "cd /tmp", "git checkout origin/main", "@types/node", "github.com/a/b", "--out/dir", "src/*.ts", "a//b", "~", "/"])(

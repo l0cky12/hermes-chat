@@ -76,12 +76,18 @@ function mentionIn(body: string, isPath: (w: string) => boolean): PathMention | 
 }
 
 /**
- * A code span that is one full path with spaces in its names (`/home/liam/My Documents/report.md`): it names a file
- * by its extension or a folder by its last `/`. A word after a space that starts with `-` is an option, so
- * `/usr/bin/ls -la` is a command, and its first word is the path.
+ * A code span that is one full path with spaces in its names (`/home/liam/My Documents/report.md:12`): it names a
+ * file by its extension or a folder by its last `/`. A word after a space that starts with `-`, `/` or `~/` is an
+ * argument, so `/usr/bin/ls -la` and `/usr/bin/cat /tmp/a.txt` are commands, and their paths link one by one.
  */
-const spacedPath = (w: string) =>
-  /^(\/|~\/)/.test(w) && !/\s-|\s\s|[^\S ]/.test(w) && (w.endsWith("/") || EXTENSION.test(w.slice(w.lastIndexOf("/") + 1)));
+function spacedPath(w: string): boolean {
+  const path = w.replace(LINE_SUFFIX, "");
+  return (
+    /^(\/|~\/)/.test(path) &&
+    !/\s(?:-|\/|~\/)|\s\s|[^\S ]/.test(path) &&
+    (path.endsWith("/") || EXTENSION.test(path.slice(path.lastIndexOf("/") + 1)))
+  );
+}
 
 /** The path in one word of running text, without the quotes, brackets and punctuation around it. */
 function inWord(word: string): { from: number; to: number; mention: PathMention } | undefined {
