@@ -8,7 +8,7 @@
 // Clearing the cache deletes every connection's chat lists and Saved copies, and nothing else: never the sign-in,
 // drafts, outboxes, appearance or display preferences (uiPrefs.ts).
 import { type ScopeSource, connectionScope, inScope } from "./connections";
-import type { Attachment, Chat, ChatQueue, Item, Outgoing, OutgoingItem, Queued, Source } from "./model";
+import type { Attachment, Chat, ChatQueue, Item, Outgoing, OutgoingItem, Queued, SentReference, Source } from "./model";
 import type { ChatCache, SavedTranscript } from "./transport";
 import { UI_PREFS_KEY } from "./uiPrefs";
 import { replyUsageOf } from "./usage";
@@ -163,6 +163,7 @@ function toItem(v: unknown): Item | undefined {
   switch (i.kind) {
     case "user": {
       const attachments = Array.isArray(i.attachments) ? i.attachments.filter((a): a is string => typeof a === "string") : undefined;
+      const references = Array.isArray(i.references) ? i.references.filter((a): a is string => typeof a === "string") : undefined;
       const rowId = Number.isSafeInteger(i.rowId) ? (i.rowId as number) : undefined;
       return text === undefined
         ? undefined
@@ -171,6 +172,7 @@ function toItem(v: unknown): Item | undefined {
             id,
             text,
             ...(attachments?.length && { attachments }),
+            ...(references?.length && { references }),
             ...(at !== undefined && { at }),
             ...(rowId !== undefined && { rowId }),
             ...(i.steer === true && { steer: true }),
@@ -220,6 +222,13 @@ const isAttachment = (a: unknown): a is Attachment => {
   return typeof f?.path === "string" && typeof f.name === "string" && typeof f.size === "number" && (f.kind === "image" || f.kind === "file");
 };
 
+const isSentReference = (r: unknown): r is SentReference => {
+  const s = r as SentReference | null;
+  return (s?.chatId === undefined || typeof s.chatId === "string") && typeof s?.title === "string" && typeof s.summary === "string";
+};
+
+const keptReference = ({ chatId, title, summary }: SentReference): SentReference => ({ ...(chatId !== undefined && { chatId }), title, summary });
+
 /** A kept outbox row, rebuilt from its fields, or undefined if it isn't one. */
 function toOutgoing(v: unknown): OutgoingItem | undefined {
   const item = toItem(v);
@@ -228,12 +237,14 @@ function toOutgoing(v: unknown): OutgoingItem | undefined {
   const sent = o.sent as Record<string, unknown> | undefined;
   const skill = o.skill as Record<string, unknown> | undefined;
   const attachments = Array.isArray(o.attachments) ? o.attachments.filter(isAttachment) : [];
+  const references = Array.isArray(o.references) ? o.references.filter(isSentReference) : [];
   const outgoing: Outgoing = {
     state: o.state,
     ...(optionalText(o.reason) !== undefined && { reason: optionalText(o.reason) }),
     ...(attachments.length && { attachments }),
     ...(typeof sent?.prompt === "string" && { sent: { prompt: sent.prompt, ...(num(sent.after) !== undefined && { after: num(sent.after) }) } }),
     ...(skill && typeof skill.name === "string" && skill.name && typeof skill.arg === "string" && { skill: { name: skill.name, arg: skill.arg } }),
+    ...(references.length && { references: references.map(keptReference) }),
   };
   return { ...item, outgoing };
 }
@@ -267,7 +278,12 @@ export function toBranches(v: unknown): BranchStore {
     const pending = q.pending as Record<string, unknown> | null | undefined;
     const kept =
       pending && typeof pending.text === "string" && optionalText(pending.prefix) && optionalText(pending.through)
-        ? { text: pending.text, prefix: optionalText(pending.prefix)!, through: optionalText(pending.through)! }
+        ? {
+            text: pending.text,
+            prefix: optionalText(pending.prefix)!,
+            through: optionalText(pending.through)!,
+            ...(Array.isArray(pending.references) && pending.references.some(isSentReference) && { references: pending.references.filter(isSentReference).map(keptReference) }),
+          }
         : undefined;
     return { kind: q.kind, rootId: optionalText(q.rootId)!, turn: q.turn as number, ...(model && { model }), ...(kept && { pending: kept }) };
   };

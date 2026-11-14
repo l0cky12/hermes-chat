@@ -1,14 +1,17 @@
 // Transcript, thinking, tool-call groups, Approval cards, find bar, composer and the Settle button, ported from the prototype.
 // Dictation and Read aloud come from Voice.tsx.
 import { createContext, memo, type ReactNode, type RefObject, useCallback, startTransition, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
-import { Archive, ArchiveRestore, ArrowUp, Brain, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, Columns2, CornerDownRight, EyeOff, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Share2, Square, Trash2, Wrench, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowUp, AtSign, Brain, Camera, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CloudOff, Columns2, CornerDownRight, EyeOff, FileDown, FileInput, Globe, HardDrive, Link2, ListPlus, Ellipsis, Paperclip, RotateCcw, Search, Server, Share2, Square, Trash2, Wrench, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { decodeString } from "micromark-util-decode-string";
-import type { ApprovalChoice, AttachCheck, Attachment, Chat, ChatQueue, ConnectionStatus, Item, OutgoingItem, QuestionAnswer, SideQuestion, Source } from "../hermes/model";
+import type { ApprovalChoice, AttachCheck, Attachment, Chat, ChatQueue, ConnectionStatus, Item, OutgoingItem, QuestionAnswer, SentReference, SideQuestion, Source } from "../hermes/model";
 import { SOURCE_LABEL, isOutgoing, isWaiting } from "../hermes/model";
 import type { SkillCall } from "../hermes/skillCommands";
+import { STEER, typedCommand } from "../hermes/commands";
 import type { ScreenshotDesk } from "../hermes/screenshots";
+import type { Reference, ReferenceDesk } from "../hermes/chatReferences";
+import { ReferenceChips } from "./ReferenceChips";
 import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard } from "./QuestionCard";
 import { Menu, PinItem, type ChatPin } from "./ChatMenu";
@@ -65,6 +68,11 @@ export type FollowUpHost = {
 
 /** Why a message with files can't steer: `/steer` carries only words. */
 const FILES_CANT_STEER = "A steer carries only words, so a message with files goes after the reply.";
+const REFERENCES_CANT_STEER = "A message that references a chat can't steer the reply. Send it once the reply ends.";
+const NO_REFERENCES: readonly Reference[] = [];
+
+/** Where a composer keeps the chats its message references, and the way to the fix for a failed summary. */
+export type ComposerReferences = { desk: ReferenceDesk; onTextModelSettings?: () => void };
 
 /** The reasons for queueing instead of steering already told, so each is said once while the app runs. */
 const toldWhy = new Set<string>();
@@ -430,6 +438,7 @@ export function ChatPane({
   subagents,
   showSubagent,
   commands,
+  references,
   onDismissSideQuestion,
   followUp,
   compare,
@@ -463,7 +472,7 @@ export function ChatPane({
   onDismiss: (itemId: string) => void;
   onAttach: (paths: string[]) => Promise<AttachCheck>;
   /** `skill`: the message runs skills (skillCommands.ts); Hermes builds what goes from it. */
-  onSend: (text: string, attachments: Attachment[], skill?: SkillCall) => void;
+  onSend: (text: string, attachments: Attachment[], skill?: SkillCall, references?: SentReference[]) => void;
   onStop: () => void;
   onAnswer: (approvalId: string, choice: ApprovalChoice, confirmed?: boolean) => void;
   onQuestion: (itemId: string, answer: QuestionAnswer) => void;
@@ -506,6 +515,7 @@ export function ChatPane({
   /** A subagent to open in the Subagents panel, from the agent office. */
   showSubagent?: { id: SubagentId; at: number };
   commands?: CommandHost;
+  references?: ComposerReferences;
   /** Takes away the card of one of the chat's side questions (ADR 0070). */
   onDismissSideQuestion?: (id: string) => void;
   /** What sending does while the reply runs: queue or steer (ADR 0057). Without it, it queues. */
@@ -1097,6 +1107,7 @@ export function ChatPane({
         screenshots={screenshots}
         screenshotKeys={screenshotKeys}
         commands={commands}
+        references={references}
         followUp={compare ? undefined : followUp}
         compare={compare}
       />
@@ -1177,6 +1188,16 @@ const BlockView = memo(
                 <span key={i} className="chip">
                   <Paperclip size={12} />
                   <span className="chip-name">{name}</span>
+                </span>
+              ))}
+            </div>
+          )}
+          {block.references && (
+            <div className="msg-files">
+              {block.references.map((title, i) => (
+                <span key={i} className="chip ref-chip" title="A summary of this chat went with the message">
+                  <Link2 size={12} aria-hidden />
+                  <span className="chip-name">Referenced: {title}</span>
                 </span>
               ))}
             </div>
@@ -1566,6 +1587,7 @@ function Composer({
   screenshots,
   screenshotKeys,
   commands,
+  references,
   followUp,
   compare,
 }: {
@@ -1587,7 +1609,7 @@ function Composer({
   onText: (text: string, how?: EditKind) => void;
   onStep: (step: EditStep) => string | undefined;
   onAttach: (paths: string[]) => Promise<AttachCheck>;
-  onSend: (text: string, attachments: Attachment[], skill?: SkillCall) => void;
+  onSend: (text: string, attachments: Attachment[], skill?: SkillCall, references?: SentReference[]) => void;
   onStop: () => void;
   modelControls?: ReactNode;
   autoFocus?: boolean;
@@ -1605,6 +1627,8 @@ function Composer({
   screenshots: ScreenshotDesk;
   screenshotKeys?: string;
   commands?: CommandHost;
+  /** The chats the message references, kept under `draftKey`. */
+  references?: ComposerReferences;
   /** While a reply runs, Enter queues or steers by its `mode`, and Ctrl+Enter does the other. */
   followUp?: FollowUpHost;
   compare?: Comparing;
@@ -1613,6 +1637,7 @@ function Composer({
   // The chat's staged attachments, kept by the desk under its Draft key so they outlive this composer (ADR 0145).
   const attachments = useSyncExternalStore(screenshots.subscribe, () => screenshots.stagedIn(draftKey));
   const annotations = useSyncExternalStore(screenshots.subscribe, screenshots.annotationLabels);
+  const refs = useSyncExternalStore(references?.desk.subscribe ?? noDesk, () => references?.desk.in(draftKey) ?? NO_REFERENCES);
   const focused = useRef(autoFocus);
   focused.current = autoFocus;
   // The transcript joins the text as it is when it arrives, typed meanwhile included.
@@ -1634,6 +1659,12 @@ function Composer({
     }
   });
   const [refused, setRefused] = useState<string[]>([]);
+  // Set when a send waited on a summary; what it says follows the references, and it goes once they are all ready.
+  const [refsHeld, setRefsHeld] = useState(false);
+  const unready = refs.find((r) => r.state !== "ready");
+  useEffect(() => {
+    if (!unready) setRefsHeld(false);
+  }, [unready]);
   const [dragging, setDragging] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const talk = useSyncExternalStore(conversation?.subscribe ?? noDesk, conversation?.getSnapshot ?? (() => NOT_TALKING));
@@ -1901,9 +1932,21 @@ function Composer({
   };
   /** `other`: Ctrl+Enter, which does the other of queue and steer while a reply runs. */
   const send = (other = false) => {
+    if (refs.length && typedCommand(text.trim())?.def === STEER) return setRefused([REFERENCES_CANT_STEER]);
     if (slash.run()) return;
     if (!sendable || steering) return;
     if (compare?.refuse) return setRefused([compare.refuse]);
+    // A summary goes with the message it was written with, so the message waits for every summary to be ready.
+    if (unready) {
+      setRefused([]);
+      return setRefsHeld(true);
+    }
+    // A message without references goes as it always did, with no arguments for them.
+    const go = (files: Attachment[], skill?: SkillCall) => {
+      if (references && refs.length) onSend(text.trim(), files, skill, references.desk.take(draftKey));
+      else if (skill) onSend(text.trim(), files, skill);
+      else onSend(text.trim(), files);
+    };
     const skill = slash.skill;
     if (skill) {
       // Hermes builds a skill's message for the chat's session when it goes, so it can't wait in the queue or steer a
@@ -1912,13 +1955,14 @@ function Composer({
       if (attachments.length) return setRefused(["Files can't go with a message that runs a skill. Send them in a message of their own."]);
       if (queueing && onQueue) return setRefused(["A message that runs a skill can't be queued. Send it while connected, with no reply running and nothing queued."]);
       if (offline || running) return;
-      onSend(text.trim(), [], skill.call);
+      go([], skill.call);
       setRefused([]);
       return;
     }
     // A message that would steer and can't is queued, saying why: the chat's reason once, files every time.
     let fellBack: string | undefined;
     if (canFollow && (followUp.mode === "steer") !== other) {
+      if (refs.length) return setRefused([REFERENCES_CANT_STEER]);
       if (!steerWhy) return void steer(text.trim());
       if (steerWhy === FILES_CANT_STEER) fellBack = `Your message is queued, not steered. ${steerWhy}`;
       else if (!toldWhy.has(steerWhy)) {
@@ -1927,11 +1971,12 @@ function Composer({
       }
     }
     if (queueing && onQueue) {
+      if (refs.length) return setRefused(["A message that references a chat can't be queued. Send it while connected, with no reply running and nothing queued."]);
       const why = onQueue(text.trim(), [...attachments]);
       if (why) return setRefused([why]);
     } else {
       if (offline || running) return;
-      onSend(text.trim(), [...attachments]);
+      go([...attachments]);
     }
     screenshots.change({ kind: "sent", key: draftKey, paths: attachments.map((a) => a.path) });
     setRefused(fellBack ? [fellBack] : []);
@@ -1999,9 +2044,25 @@ function Composer({
           {r}
         </div>
       ))}
+      {refsHeld && unready && (
+        <div className="attach-note" role="alert">
+          {unready.state === "summarizing" ? `Wait for the summary of ${unready.title}, or remove it.` : `Retry or remove the reference to ${unready.title}.`}
+        </div>
+      )}
       {slash.view}
       <div className={`composer ${dragging ? "dragging" : ""}`}>
         {dragging && <div className="drop-overlay">Drop files to attach</div>}
+        {refs.length > 0 && (
+          <ReferenceChips
+            refs={refs}
+            onRetry={(id) => {
+              references?.desk.retry(draftKey, id);
+              taRef.current?.focus();
+            }}
+            onRemove={(id) => references?.desk.remove(draftKey, id)}
+            onTextModelSettings={references?.onTextModelSettings}
+          />
+        )}
         {attachments.length > 0 && (
           <div className="chips">
             {attachments.map((f) => (
@@ -2057,6 +2118,11 @@ function Composer({
           <button className="icon-btn" title="Attach files" onClick={() => void pick()}>
             <Paperclip size={16} />
           </button>
+          {commands?.references && (
+            <button className="icon-btn" title="Reference a chat" aria-label="Reference a chat" onClick={slash.startReference}>
+              <AtSign size={16} />
+            </button>
+          )}
           {voice && !dictation.active && !talking && <MicButton dictation={dictation} blocked={micBlocked(status, voiceSetup, sttPrefs)} />}
           {conversation && !dictation.active && !talking && (
             <StartConversationButton

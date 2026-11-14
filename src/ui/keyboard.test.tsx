@@ -228,6 +228,8 @@ describe("Interrupting by keyboard", () => {
     const s = await replying();
     await s.user.tab(); // Attach files
     await s.user.tab();
+    expect(focused()).toBe(button("Reference a chat"));
+    await s.user.tab();
     expect(focused()).toBe(button("Dictate"));
     await s.user.tab();
     expect(focused()).toBe(button("Start voice conversation"));
