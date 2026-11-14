@@ -1,6 +1,6 @@
 # Toolsets are the profile's setting on Hermes, changed one at a time and confirmed by read-back
 
-> **Amended by [ADR 0165](0165-diagnostics-checks-toolset-switches-and-approval-answers-with-writes-that-change-nothing.md)** (#571). Diagnostics sends the same write check when it opens, so Toolset switches no longer waits for this screen to show Supported or Not supported. The rest of this ADR stands.
+> **Amended by [ADR 0169](0169-diagnostics-checks-toolset-switches-and-approval-answers-with-writes-that-change-nothing.md)** (#571). Diagnostics sends the same write check when it opens, so Toolset switches no longer waits for this screen to show Supported or Not supported. The rest of this ADR stands.
 
 Settings → Toolsets shows and changes which toolsets Hermes offers the model in the profile shown, through the dashboard's own routes at `bf0203a` (`hermes_cli/web_routers/tools.py`): `GET /api/tools/toolsets?profile=` to read, `PUT /api/tools/toolsets/{name}?profile=` with `{"enabled": true|false}` to change one. The setting is the profile's `platform_toolsets.<platform>` in its config.yaml (`stt.enabled` for speech-to-text). For every toolset but the platform-restricted ones the platform is `cli`, which is what Hermes builds this app's chats with (`tui_gateway/agent_factory._load_enabled_toolsets`), and also the CLI's, the TUI's and the official desktop app's. Each change is checked against a fresh read first and reported as saved only when a read afterwards shows it.
 

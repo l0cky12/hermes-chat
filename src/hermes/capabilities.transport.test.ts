@@ -243,7 +243,7 @@ describe("capabilities over the transport", () => {
   });
 });
 
-describe("Diagnostics' write checks (ADR 0165)", () => {
+describe("Diagnostics' write checks (ADR 0169)", () => {
   /** Signed in, with a reply running in a chat whose Approval waits: the check must leave it waiting. */
   async function waiting(server: FakeHermes) {
     const hermes = await signedIn(server);

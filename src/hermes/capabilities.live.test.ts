@@ -1,7 +1,7 @@
 // Connection diagnostics against a REAL Hermes dashboard: skipped unless HERMES_LIVE_DASHBOARD is set. It signs in with
 // the dashboard's basic provider, opens /api/ws, and runs the same CapabilityStore the app does, with failures worded as
 // the Rust relay words them. Every check reads, but for the two write checks Check again sends for what can't exist (a
-// toolset no toolset is, an Approval no session has, ADR 0165), so any dashboard will do; it prints the redacted
+// toolset no toolset is, an Approval no session has, ADR 0169), so any dashboard will do; it prints the redacted
 // report. Run it against a throwaway dashboard, for example:
 //
 //   HERMES_LIVE_DASHBOARD=http://127.0.0.1:9361/ HERMES_LIVE_USER=fixture HERMES_LIVE_PASSWORD=… \

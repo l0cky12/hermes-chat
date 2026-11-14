@@ -11,7 +11,7 @@
 //    route that answered, or one that is missing, settles that capability without asking again.
 // 3. A check, only for what neither of those settled: one request per capability that only reads, with a time limit.
 //    Two capabilities have no read to check them by, so Diagnostics sends each one named request shaped like a write,
-//    which changes nothing, while it is open (`WriteCheck`, ADR 0165). Nothing else is written to find out, and nothing
+//    which changes nothing, while it is open (`WriteCheck`, ADR 0169). Nothing else is written to find out, and nothing
 //    at all on connect.
 //
 // Every answer is one of four states. `supported`: Hermes answered the route or method. `unsupported`: Hermes has no
@@ -79,7 +79,7 @@ type Probe =
 
 /**
  * A check for a capability no read can settle: one request shaped like a write, for something that can't exist, so
- * Hermes refuses it before changing anything (ADR 0165). Only Diagnostics sends it, while it is open. `read`: what
+ * Hermes refuses it before changing anything (ADR 0169). Only Diagnostics sends it, while it is open. `read`: what
  * Hermes's answer, or its failure, says of the capability.
  */
 type WriteCheck = {
@@ -101,7 +101,7 @@ export type CapabilitySpec = {
   anchor: string;
   /** How it is checked when nothing else has settled it. None for one learnt only from what Hermes says or a screen checks. */
   probe?: Probe;
-  /** How Diagnostics checks it while open, when no read can (ADR 0165). */
+  /** How Diagnostics checks it while open, when no read can (ADR 0169). */
   writeCheck?: WriteCheck;
   /** Dashboard routes, as the relay names them (`api/…`, no query). A GET's answer settles the capability. */
   routes?: RegExp[];
@@ -344,7 +344,7 @@ export const CAPABILITIES: readonly CapabilitySpec[] = [
   {
     id: "outputs",
     label: "Outputs",
-    // The Outputs screen is gone (ADR 0164). The id stays: extensions name capabilities in `needs` (ADR 0126).
+    // The Outputs screen is gone (ADR 0168). The id stays: extensions name capabilities in `needs` (ADR 0126).
     usedBy: "Extensions that list outputs in their needs",
     needs: "GET /api/fs/list, and GET /api/sessions/{id}/messages with tool rows.",
     without: "An extension that needs it shows what is missing instead of running.",
@@ -788,7 +788,7 @@ export class CapabilityStore {
   }
 
   /**
-   * Diagnostics opened: sends the write checks (ADR 0165) of the capabilities this connection hasn't settled. Nothing
+   * Diagnostics opened: sends the write checks (ADR 0169) of the capabilities this connection hasn't settled. Nothing
    * else sends them.
    */
   checkWrites(): Promise<void> {
@@ -921,7 +921,7 @@ export class CapabilityStore {
       this.lackingActions.clear();
       this.set({ caps: { ...fresh(), ...Object.fromEntries(kept.map((c) => [c.id, c])) } });
     }
-    // Check again finds out afresh what no read checks: by its write check (ADR 0165), or by its own screen.
+    // Check again finds out afresh what no read checks: by its write check (ADR 0169), or by its own screen.
     if (force) {
       // A change found missing is let through again, so its own screen can find it there after an update.
       this.forgetLacking();

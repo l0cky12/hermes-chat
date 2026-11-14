@@ -123,7 +123,7 @@ export function DiagnosticsSettings({
   }, [focus]);
   // "Copied" stays only until the next change, so it never describes an older report.
   useEffect(() => setCopied(undefined), [snap]);
-  // What no read can check is checked while this is open, by a request that changes nothing (ADR 0165).
+  // What no read can check is checked while this is open, by a request that changes nothing (ADR 0169).
   useEffect(() => {
     if (connected) void store.checkWrites();
   }, [store, connected, profile]);

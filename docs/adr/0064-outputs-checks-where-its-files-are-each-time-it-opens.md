@@ -1,6 +1,6 @@
 # Outputs checks where its files are each time it opens
 
-> **Superseded by [ADR 0164](0164-the-outputs-screen-is-removed-and-artifacts-open-from-the-preview.md)** (#570). The Outputs screen is gone, so nothing checks where its files are.
+> **Superseded by [ADR 0168](0168-the-outputs-screen-is-removed-and-artifacts-open-from-the-preview.md)** (#570). The Outputs screen is gone, so nothing checks where its files are.
 
 Issue #223: on the Outputs page, Edit on `hermes-verify-install.sh` failed with "can't be edited here: That file isn't on the server, or is gone now". The issue named four possible causes. Checked against the real Hermes (v0.22.6, default profile) and its stored rows:
 - **Wrong machine:** no. The profile's terminal is `local`, so the tools and the dashboard share one disk. Preview and Edit read a tool's file through `/api/fs/*` with the profile, and a `host` file through the managed files routes, as the availability check does (ADR 0016, ADR 0029).

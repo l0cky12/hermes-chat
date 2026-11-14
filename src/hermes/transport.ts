@@ -1221,7 +1221,7 @@ export class Hermes {
   /**
    * What this Hermes server can do, for Connection diagnostics and the screens that depend on it (capabilities.ts,
    * ADR 0044). Its checks read, through the connection in use, but for Diagnostics' two write checks, which change
-   * nothing (ADR 0165), and it is kept in memory for this sign-in only. A write whose capability Hermes lacks is
+   * nothing (ADR 0169), and it is kept in memory for this sign-in only. A write whose capability Hermes lacks is
    * refused here, before it is sent.
    */
   readonly capabilities = new CapabilityStore(
