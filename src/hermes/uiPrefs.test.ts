@@ -42,7 +42,7 @@ afterEach(() => {
 
 describe("reading", () => {
   it("is the defaults when nothing is stored", () => {
-    expect(getUIPrefs()).toEqual({ theme: "system", reopenLastChat: true, checkUpdatesOnLaunch: true, lastOpenChat: {}, modelPicker: null, modelPicks: {}, modelFavorites: [], statusBar: ["context", "model", "status"], previewWidth: null, screenshotShortcut: "Ctrl+Shift+S", templates: [], terminalKind: "server", followUp: "queue", idleCompact: { enabled: false, percent: 70, idleMinutes: 15 }, chatSectionsShown: ["pinned", "inbox", "snoozed", "working", "settled"], chatSectionsCollapsed: ["snoozed", "archived", "settled"], agentOffice: "plan", officeQuality: "normal", inboxAutoDismissDays: null, keybindings: {} });
+    expect(getUIPrefs()).toEqual({ theme: "system", reopenLastChat: false, checkUpdatesOnLaunch: true, lastOpenChat: {}, modelPicker: null, modelPicks: {}, modelFavorites: [], statusBar: ["context", "model", "status"], previewWidth: null, screenshotShortcut: "Ctrl+Shift+S", templates: [], terminalKind: "server", followUp: "queue", idleCompact: { enabled: false, percent: 70, idleMinutes: 15 }, chatSectionsShown: ["pinned", "inbox", "snoozed", "working", "settled"], chatSectionsCollapsed: ["snoozed", "archived", "settled"], agentOffice: "plan", officeQuality: "normal", inboxAutoDismissDays: null, keybindings: {} });
     expect(getUIPrefs()).toEqual(DEFAULT_UI_PREFS);
   });
 
@@ -324,6 +324,21 @@ describe("migration", () => {
     }
   });
 
+  it("starts on a new chat from version 5, whatever an older document held, and keeps reopening turned on since", () => {
+    for (const [v, saved, read] of [
+      [0, true, false],
+      [3, true, false],
+      [4, true, false],
+      [4, false, false],
+      [4, undefined, false],
+      [5, true, true],
+      [5, false, false],
+    ] as const) {
+      localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ v, reopenLastChat: saved }));
+      expect(getUIPrefs().reopenLastChat).toBe(read);
+    }
+  });
+
   it("keeps the office's quality, and reads one it doesn't know as Normal", () => {
     for (const [saved, read] of [["low", "low"], ["normal", "normal"], ["ultra", "normal"], [3, "normal"]]) {
       localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ v: UI_PREFS_VERSION, officeQuality: saved }));
@@ -425,7 +440,14 @@ describe("Clear local cache", () => {
 });
 
 describe("the last open chat", () => {
+  it("isn't reopened by default, and is still kept", () => {
+    rememberOpenChat("default", "c1");
+    expect(chatToReopen("default")).toBeUndefined();
+    expect(stored().lastOpenChat).toEqual({ default: "c1" });
+  });
+
   it("is kept for each profile apart", () => {
+    setUIPrefs({ reopenLastChat: true });
     rememberOpenChat("default", "c1");
     rememberOpenChat("work", "w1");
     rememberOpenChat("default", "c2");
@@ -443,6 +465,7 @@ describe("the last open chat", () => {
   });
 
   it("is forgotten only while it is still the chat named", () => {
+    setUIPrefs({ reopenLastChat: true });
     rememberOpenChat("default", "c1");
     forgetOpenChat("default", "c0");
     expect(chatToReopen("default")).toBe("c1");

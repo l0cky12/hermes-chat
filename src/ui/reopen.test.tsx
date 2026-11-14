@@ -3,7 +3,7 @@
 // storage between launches, and the test checks which chat is on screen after the restart.
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import { memoryCache, type MemoryCache } from "../hermes/memoryCache";
 import { connect, type Hermes } from "../hermes/transport";
@@ -74,7 +74,25 @@ async function switchTo(user: ReturnType<typeof userEvent.setup>, hermes: Hermes
   await act(async () => void (await hermes.idle()));
 }
 
+describe("by default", () => {
+  it("starts every launch on the New chat pane, though the chat on screen is kept", async () => {
+    const s = server();
+    const first = await launch(s);
+    expect(onScreen()).toBe("New chat");
+    await openFromList(first.user, "NAS disks");
+    expect(storedLastOpen()).toEqual({ default: "nas" });
+    await quit();
+
+    await launch(s);
+    expect(onScreen()).toBe("New chat");
+    expect(screen.getByRole("button", { name: /NAS disks/ }).getAttribute("aria-current")).not.toBe("true");
+  });
+});
+
 describe("across a restart", () => {
+  // The owner turned "Reopen last chat on launch" on; it is off by default (ADR 0162).
+  beforeEach(() => void setUIPrefs({ reopenLastChat: true }));
+
   it("reopens the chat that was on screen when the app closed", async () => {
     const s = server();
     const first = await launch(s);
@@ -180,6 +198,9 @@ describe("across a restart", () => {
 });
 
 describe("per profile", () => {
+  // The owner turned "Reopen last chat on launch" on; it is off by default (ADR 0162).
+  beforeEach(() => void setUIPrefs({ reopenLastChat: true }));
+
   it("keeps each profile's last chat apart and reopens the one for the profile shown", async () => {
     const s = server();
     const cache = memoryCache();
@@ -209,6 +230,9 @@ describe("per profile", () => {
 });
 
 describe("a chat that is gone", () => {
+  // The owner turned "Reopen last chat on launch" on; it is off by default (ADR 0162).
+  beforeEach(() => void setUIPrefs({ reopenLastChat: true }));
+
   it("falls back to the New chat pane and forgets the chat when Hermes no longer lists it", async () => {
     const s = server();
     const first = await launch(s);
@@ -247,16 +271,16 @@ describe("a chat that is gone", () => {
 });
 
 describe("the Settings toggle", () => {
-  it("turns reopening off and on", async () => {
+  it("is off by default, and turns reopening on and off", async () => {
     const { user } = await launch(server());
     await user.click(screen.getByRole("button", { name: /^Settings/ }));
     await user.click(await screen.findByRole("button", { name: "Launch, tray & updates" }));
     const toggle = await screen.findByRole("switch", { name: "Reopen last chat on launch" });
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
-    await user.click(toggle);
     expect(toggle.getAttribute("aria-checked")).toBe("false");
-    expect(getUIPrefs().reopenLastChat).toBe(false);
     await user.click(toggle);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
     expect(getUIPrefs().reopenLastChat).toBe(true);
+    await user.click(toggle);
+    expect(getUIPrefs().reopenLastChat).toBe(false);
   });
 });
