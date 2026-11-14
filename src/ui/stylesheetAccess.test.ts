@@ -1,9 +1,10 @@
-// What the stylesheet does for people who turn motion off, scale the interface, or sign in by keyboard. jsdom applies
-// no stylesheet, so these read styles.css.
+// @vitest-environment jsdom
+// What the stylesheet does for people who turn motion off, scale the interface, or sign in by keyboard. jsdom loads
+// no stylesheet of its own, so these read styles.css.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const css: string = readFileSync(new URL("../styles.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+const css: string = readFileSync("src/styles.css", "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
 /** The body of each block opened by `prelude`, braces balanced. */
 function blocks(prelude: string) {
@@ -62,9 +63,17 @@ describe("Icons", () => {
 });
 
 describe("Sign-in and setup", () => {
-  it("ring whichever control has the keyboard's focus, inputs included", () => {
-    const ring = declarations(css, ":is(.first-run, .setup) :is(input, select, textarea, button, a):focus-visible");
-    expect(ring).toMatch(/outline: 2px solid var\(--accent\)/);
+  it("ring whichever control has the keyboard's focus, through the form resets that turn outlines off", () => {
+    const style = document.createElement("style");
+    style.textContent = css;
+    document.head.append(style);
+    document.body.innerHTML =
+      `<div class="setup"><label class="field"><select><option>a</option></select></label><label class="field"><input></label><button>Go</button></div>`;
+    for (const control of document.querySelectorAll<HTMLElement>(".setup select, .setup input, .setup button")) {
+      control.focus();
+      expect(getComputedStyle(control).outline, control.tagName).toBe("2px solid var(--accent)");
+    }
+    style.remove();
   });
 
   it("draw placeholders in faint text, which themes keep at AA", () => {

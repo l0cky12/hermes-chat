@@ -95,6 +95,8 @@ export function themeVars(p: Palette, mode: Mode, contrast = DEFAULT_CONTRAST): 
   const bg = p.background;
   const text = k > 0 ? mix(p.text, extreme, 0.5 * k) : mix(p.text, bg, 0.12 * -k);
   const shade = (w: number) => mix(bg, text, clamp(w, 0, 1));
+  // Past 1, a tone keeps going from the text color to the extreme, for a palette whose own text is too faint for AA.
+  const tone = (w: number) => (w <= 1 ? shade(w) : mix(text, extreme, clamp(w - 1, 0, 1)));
   const lift = dark ? 0 : 0.02; // Light backgrounds need a little more for the same step.
   // Softer goes less far than sharper, so muted text stays readable at the lowest setting.
   const spread = (up: number, down: number) => (k > 0 ? up * k : down * k);
@@ -110,7 +112,7 @@ export function themeVars(p: Palette, mode: Mode, contrast = DEFAULT_CONTRAST): 
   const hover2 = 0.07 + lift / 2;
   // Text sits on each surface, and on the selected chat's row: the strongest hover tint over the list panel.
   const under = [...Object.values(surfaces), mix(surfaces["--sidebar"], text, hover2)];
-  const faint = Math.max((dark ? 0.335 : 0.42) + spread(0.2, 0.08), readableWeight(shade, under));
+  const faint = Math.max((dark ? 0.335 : 0.42) + spread(0.2, 0.08), readableWeight(tone, under));
   return {
     ...surfaces,
     "--line": alpha(text, 0.07 + 0.04 * k + lift),
@@ -122,8 +124,8 @@ export function themeVars(p: Palette, mode: Mode, contrast = DEFAULT_CONTRAST): 
     "--text-2": shade(0.89 + 0.08 * k),
     "--text-strong": mix(text, extreme, dark ? 0.45 : 0.6),
     // Never fainter than faint, which the floor may have lifted past muted's own shade.
-    "--muted": shade(Math.max((dark ? 0.57 : 0.67) + spread(0.18, 0.1), faint)),
-    "--faint": shade(faint),
+    "--muted": tone(Math.max((dark ? 0.57 : 0.67) + spread(0.18, 0.1), faint)),
+    "--faint": tone(faint),
     "--accent": p.accent,
     "--accent-soft": alpha(p.accent, dark ? 0.16 : 0.12),
     "--on-accent": contrastRatio(onAccent, p.accent) >= contrastRatio("#ffffff", p.accent) ? onAccent : "#ffffff",
@@ -136,10 +138,10 @@ export function themeVars(p: Palette, mode: Mode, contrast = DEFAULT_CONTRAST): 
 /** WCAG AA for body text: the least contrast any text the app shows may have against what it sits on. */
 const MIN_TEXT_CONTRAST = 4.5;
 
-/** The least shade weight whose color reads at AA on every surface, or 1 (the text color) if none does. */
-function readableWeight(shade: (w: number) => string, surfaces: string[]) {
-  for (let w = 0; w < 1; w += 0.01) if (surfaces.every((s) => contrastRatio(shade(w), s) >= MIN_TEXT_CONTRAST)) return w;
-  return 1;
+/** The least tone weight whose color reads at AA on every surface, or 2 (the extreme) if none does. */
+function readableWeight(tone: (w: number) => string, surfaces: string[]) {
+  for (let w = 0; w < 2; w += 0.01) if (surfaces.every((s) => contrastRatio(tone(w), s) >= MIN_TEXT_CONTRAST)) return w;
+  return 2;
 }
 
 /** Which mode shows: the scheme picked, or the system's when it's System. */

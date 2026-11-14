@@ -74,6 +74,18 @@ describe("Theme colors", () => {
     for (let c = 0; c <= 100; c++) readableEverywhere(c);
   });
 
+  it("keep faint and muted text at AA for a custom palette whose own text is too faint", () => {
+    const dim = { background: "#000000", surface: "#000000", text: "#555555", accent: "#d08b6e" };
+    const light = { background: "#ffffff", surface: "#ffffff", text: "#aaaaaa", accent: "#d08b6e" };
+    for (const [palette, mode] of [[dim, "dark"], [light, "light"]] as const)
+      for (const c of [0, 50, 100]) {
+        const v = themeVars(palette, mode, c);
+        for (const key of ["--faint", "--muted"])
+          for (const [on, surface] of Object.entries(surfaces(v)))
+            expect(contrastRatio(v[key], surface), `${mode} ${key} on ${on} at contrast ${c}`).toBeGreaterThanOrEqual(4.5);
+      }
+  });
+
   it("never draw muted text fainter than faint text", () => {
     for (const theme of BUILTIN_THEMES)
       for (const mode of ["light", "dark"] as const)
