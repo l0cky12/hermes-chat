@@ -163,6 +163,8 @@ const INBOX_CHECK_EVERY_MS = 30_000;
 const TOAST_MS = 5_000;
 const ACTION_TOAST_MS = 15_000;
 
+/** The card or message to show in a chat once it opens: an item, or else the chat's waiting Approval. */
+type LinkReveal = { itemId?: string; approval: boolean };
 /** A short notice above the composer; `undo` puts back what it reports. `at` restarts the timer for a repeat. */
 type Toast = { text: string; undo?: () => void; action?: { label: string; run: () => void }; at: number };
 
@@ -467,7 +469,7 @@ function Screens({ links }: { links: LinkInbox }) {
   useSyncExternalStore(registry.subscribe, registry.getSnapshot);
   const overview = registry.overview();
   // A message to open a chat on another live connection once it is the target: an inbox entry or a chat link for it.
-  const [opening, setOpening] = useState<{ link: ChatLink; at: number; connection: string }>();
+  const [opening, setOpening] = useState<{ link: ChatLink; at: number; connection: string; reveal?: LinkReveal }>();
   // Connect asked at the limit: the live connections to choose one to disconnect from.
   const [atLimit, setAtLimit] = useState<SavedConnection>();
   // A background connection with work under way, asked about before Disconnect closes it.
@@ -796,7 +798,13 @@ function Screens({ links }: { links: LinkInbox }) {
   const openElsewhere = (e: InboxEntry) => {
     const m = e.server && registry.get(e.server.id);
     if (!m) return;
-    setOpening({ link: { connection: savedConnectionRefs.refFor(m.connection), profile: e.profile, chatId: e.chatId }, at: Date.now(), connection: m.connection.id });
+    const approval = e.kind === "approval" && !e.ended;
+    setOpening({
+      link: { connection: savedConnectionRefs.refFor(m.connection), profile: e.profile, chatId: e.chatId },
+      at: Date.now(),
+      connection: m.connection.id,
+      ...((e.itemId || approval) && { reveal: { itemId: e.itemId, approval } }),
+    });
     void switchTo(m.connection);
   };
   // A notification clicked from a background connection opens its chat there, as its inbox entry does. The target's
@@ -1187,8 +1195,11 @@ export function Main({
   guardClose?: CloseGuard;
   onSignOut: () => Promise<void>;
   updates?: Updater;
-  /** A chat link to open (ADR 0037); `at` tells one from the next. Main takes it with `onLinkTaken`. */
-  link?: { link: ChatLink; at: number };
+  /**
+   * A chat link to open (ADR 0037); `at` tells one from the next. Main takes it with `onLinkTaken`. `reveal`: the card or
+   * message to show once the chat is open, for an inbox entry or notification from a background connection.
+   */
+  link?: { link: ChatLink; at: number; reveal?: LinkReveal };
   onLinkTaken?: (at: number) => void;
   /** When a newer link that can't open arrived: it replaces whatever an older link was doing, notice and all. */
   linkSuperseded?: number;
@@ -2640,7 +2651,7 @@ export function Main({
   // first as the switcher does, and open the chat. A link that can't open changes nothing on screen, so the composer
   // and its draft stay as they were. Nothing is ever sent. `attempt` tells a retry from the try it replaces, so an
   // answer that comes back late, or after Cancel, is dropped.
-  type LinkJob = { link: ChatLink; at: number; attempt: number; stage: "check" | "wait" | "locate" | "confirm" | "switch"; found?: Found; from?: string; gen?: number };
+  type LinkJob = { link: ChatLink; at: number; reveal?: LinkReveal; attempt: number; stage: "check" | "wait" | "locate" | "confirm" | "switch"; found?: Found; from?: string; gen?: number };
   const [linkJob, setLinkJob] = useState<LinkJob>();
   const [linkError, setLinkError] = useState<LinkNoticeView>();
   const linkJobRef = useRef(linkJob);
@@ -2657,7 +2668,7 @@ export function Main({
   };
   const retryLink = (job: LinkJob) => {
     setLinkError(undefined);
-    const next: LinkJob = { link: job.link, at: job.at, attempt: job.attempt + 1, stage: "check" };
+    const next: LinkJob = { link: job.link, at: job.at, reveal: job.reveal, attempt: job.attempt + 1, stage: "check" };
     linkJobRef.current = next;
     setLinkJob(next);
   };
@@ -2667,7 +2678,7 @@ export function Main({
     onLinkTaken?.(link.at);
     if (linkJobRef.current?.at === link.at) return;
     setLinkError(undefined);
-    const job: LinkJob = { link: link.link, at: link.at, attempt: 0, stage: "check" };
+    const job: LinkJob = { link: link.link, at: link.at, reveal: link.reveal, attempt: 0, stage: "check" };
     linkJobRef.current = job;
     setLinkJob(job);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- take each arrived link once, keyed on its `at`; `onLinkTaken` is a new function each render and would run it on every render
@@ -2695,7 +2706,8 @@ export function Main({
         // Already asked, just above.
         openChat(found.chatId, { pane, keepSettings: true });
         setSettingsOpen(false);
-        requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(`[data-pane="${CSS.escape(pane)}"] .composer textarea`)?.focus());
+        if (job.reveal) setFocusItem({ pane, chatId: found.chatId, ...job.reveal });
+        else requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(`[data-pane="${CSS.escape(pane)}"] .composer textarea`)?.focus());
       },
       "leave",
       stayed(job),

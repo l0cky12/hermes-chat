@@ -187,13 +187,17 @@ describe("Live connections", () => {
 
     // An Approval on Home, now in the background, comes as a notification. Clicking it makes Home the target and shows
     // its card, answering nothing (ADR 0171).
-    act(() => void servers[BRAVO].askApproval(servers[BRAVO].runtimeIdOf("c1")!, { command: "rm -rf /srv/home-cache" }));
+    let homeCard = "";
+    act(() => void (homeCard = servers[BRAVO].askApproval(servers[BRAVO].runtimeIdOf("c1")!, { command: "rm -rf /srv/home-cache" }).id!));
     await waitFor(() => expect(notices.some((n) => n.title === "Home: Hermes is asking for approval")).toBe(true));
     const homeNotice = notices.find((n) => n.title === "Home: Hermes is asking for approval")!;
     expect(homeNotice).toMatchObject({ deny: true, tag: expect.any(String) });
     act(() => events.get("notification-action")?.({ payload: { tag: homeNotice.tag, action: "open" } }));
     expect(await screen.findByText("Home · default")).toBeTruthy();
     expect(await screen.findByText("rm -rf /srv/home-cache")).toBeTruthy();
+    // Focus is on the card itself, as the entry's own click puts it, not in the composer.
+    await waitFor(() => expect(document.activeElement?.getAttribute("data-item")).toBe(homeCard));
+    expect(document.activeElement?.classList.contains("approval")).toBe(true);
     expect(connects.length).toBe(2);
     expect(servers[BRAVO].approvalAnswers).toEqual([]);
     await userEvent.click(screen.getByRole("button", { name: "Deny" }));
