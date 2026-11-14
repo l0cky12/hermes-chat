@@ -100,6 +100,7 @@ import { CAPABILITIES, guideUrl, type CapabilityId } from "./hermes/capabilities
 import { useCapabilities } from "./ui/Diagnostics";
 import { Automations } from "./ui/Automations";
 import { tauriLocalTerminal, tauriTerminal } from "./ui/tauriTerminal";
+import { useShells } from "./ui/useShells";
 import { terminalTarget, terminalTargetGuessed, terminalTargetKey, type TerminalKind } from "./hermes/terminal";
 import { REPO_PATH_KEY, REPO_RECENT_KEY, REPO_TARGET_KEY, readRecent, remember, repoTarget } from "./hermes/repo";
 import { RepositoryScreen } from "./ui/Repository";
@@ -1290,8 +1291,9 @@ export function Main({
   /** Automations (webhook routes, ADR 0108) cover the chat too. */
   const [automationsOpen, setAutomationsOpen] = useState(false);
   // The side panel's Terminal (ADR 0022, ADR 0039): which shell is shown, kept in the prefs so it opens on the one picked
-  // last (the Hermes server's until then, ADR 0051), and which are running, for the rail's dot.
-  const termKind = useSyncExternalStore(subscribeUIPrefs, getUIPrefs).terminalKind;
+  // last (the Hermes server's until then, ADR 0051), the folder shells a reply's paths opened (ADR 0163), and which are
+  // running, for the rail's dot.
+  const terminalShells = useShells();
   // The list holds the profile's archived chats only while its Archived section is shown (ADR 0063); a profile switch
   // starts without them, so they are listed again then.
   const archivedShown = useSyncExternalStore(subscribeUIPrefs, getUIPrefs).chatSectionsShown.includes("archived");
@@ -3769,8 +3771,10 @@ export function Main({
                       }}
                       local={{ api: tauriLocalTerminal }}
                       shown={shown}
-                      kind={termKind}
-                      onKind={(k) => setUIPrefs({ terminalKind: k })}
+                      shells={terminalShells.shells}
+                      onShow={terminalShells.show}
+                      onClose={terminalShells.close}
+                      onLocal={(id) => terminalShells.move(id, "local")}
                       onRunning={setTermRunning}
                     />
                   </Suspense>

@@ -3410,8 +3410,17 @@ label.memory-pick { cursor: pointer; }
 /* Terminal in the panel */
 .terminal-tab { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .terminal-tab[hidden] { display: none; }
-.terminal-kinds { margin: 10px 12px 0; align-self: flex-start; flex: none; }
+.terminal-shells { margin: 10px 12px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: none; }
+.terminal-kinds { flex: none; }
 .terminal-kinds button { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; }
+/* A folder shell (ADR 0163): a chip beside the two computers, with its own close button. */
+.terminal-folder { display: inline-flex; align-items: center; max-width: 220px; min-width: 0; background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
+.terminal-folder button { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 6px; font-size: calc(12rem / 14); color: var(--muted); min-width: 0; }
+.terminal-folder button > svg, .terminal-folder button > .dot { flex: none; }
+.terminal-folder button > span:not(.dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-folder button[aria-pressed="true"] { background: var(--raised-3); color: var(--text); }
+.terminal-folder .terminal-folder-close { flex: none; padding: 3px 4px; }
+.terminal-folder .terminal-folder-close:hover { color: var(--text); }
 .side-panel .terminal-title { margin: 8px 12px 6px; min-height: 28px; gap: 8px; }
 .terminal-where { font-size: calc(12rem / 14); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .side-panel .terminal-connect { padding: 0 12px 10px; }

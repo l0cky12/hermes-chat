@@ -2,11 +2,12 @@
 // The Terminal screen: it connects at once to a known target and asks for one otherwise, keeps the shell's keys from
 // the app's shortcuts, ends and reconnects, and closes ssh when it goes. xterm.js itself is stood in for: jsdom can't
 // draw it.
-import { useSyncExternalStore } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TerminalApi, TerminalEvent } from "../hermes/terminal";
-import { getUIPrefs, setUIPrefs, subscribe } from "../hermes/uiPrefs";
+import { shellsAt, type TerminalApi, type TerminalEvent } from "../hermes/terminal";
+import { resolvePath, type ServerPath } from "../hermes/paths";
+import { getUIPrefs } from "../hermes/uiPrefs";
+import { useShells } from "./useShells";
 
 const xterms: FakeXTerm[] = [];
 class FakeXTerm {
@@ -56,11 +57,14 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 const { TerminalScreen, TerminalTab } = await import("./Terminal");
 
 class FakeTerminals implements TerminalApi {
-  opened: { target: string; cols: number; rows: number; emit: (e: TerminalEvent) => void }[] = [];
+  opened: { target: string; cols: number; rows: number; emit: (e: TerminalEvent) => void; folder?: string }[] = [];
   written: string[] = [];
   closed: number[] = [];
-  open(target: string, cols: number, rows: number, emit: (e: TerminalEvent) => void) {
-    this.opened.push({ target, cols, rows, emit });
+  /** Why `open` is refused, while set. */
+  refuse?: string;
+  open(target: string, cols: number, rows: number, emit: (e: TerminalEvent) => void, folder?: string) {
+    if (this.refuse) return Promise.reject(new Error(this.refuse));
+    this.opened.push({ target, cols, rows, emit, folder });
     return Promise.resolve(this.opened.length);
   }
   write(_id: number, data: string) {
@@ -187,7 +191,7 @@ describe("The Terminal tab", () => {
     const local = new FakeTerminals();
     const onRunning = vi.fn();
     const tab = (kind: "server" | "local") => (
-      <TerminalTab server={{ api: server, initialTarget: "liam@hermes", onTarget: () => {} }} local={{ api: local }} shown kind={kind} onKind={() => {}} onRunning={onRunning} />
+      <TerminalTab server={{ api: server, initialTarget: "liam@hermes", onTarget: () => {} }} local={{ api: local }} shown shells={shellsAt(kind)} onShow={() => {}} onClose={() => {}} onLocal={() => {}} onRunning={onRunning} />
     );
     const { rerender } = render(tab("server"));
     await act(async () => {});
@@ -208,10 +212,41 @@ describe("The Terminal tab", () => {
   });
 });
 
-/** The Terminal tab as the app shows it: the computer picked is kept in the prefs (App.tsx does the same). */
-function Panel({ server, local, initialTarget, guessed, onTarget = () => {} }: { server: FakeTerminals; local: FakeTerminals; initialTarget: string; guessed?: boolean; onTarget?: (t: string) => void }) {
-  const kind = useSyncExternalStore(subscribe, getUIPrefs).terminalKind;
-  return <TerminalTab server={{ api: server, initialTarget, guessed, onTarget }} local={{ api: local }} shown kind={kind} onKind={(k) => setUIPrefs({ terminalKind: k })} />;
+/** What `useShells` gives the app, for a test to open a folder shell as a click on a path does. */
+type Held = { current?: ReturnType<typeof useShells> };
+
+/** The Terminal tab as the app shows it: its shells are held above it, as App.tsx holds them (useShells.ts). */
+function Panel({
+  server,
+  local,
+  initialTarget,
+  guessed,
+  onTarget = () => {},
+  held,
+  onRunning,
+}: {
+  server: FakeTerminals;
+  local: FakeTerminals;
+  initialTarget: string;
+  guessed?: boolean;
+  onTarget?: (t: string) => void;
+  held?: Held;
+  onRunning?: (running: { server: boolean; local: boolean }) => void;
+}) {
+  const shells = useShells();
+  if (held) held.current = shells;
+  return (
+    <TerminalTab
+      server={{ api: server, initialTarget, guessed, onTarget }}
+      local={{ api: local }}
+      shown
+      shells={shells.shells}
+      onShow={shells.show}
+      onClose={shells.close}
+      onLocal={(id) => shells.move(id, "local")}
+      onRunning={onRunning}
+    />
+  );
 }
 const pressed = (name: RegExp) => screen.getByRole("button", { name }).getAttribute("aria-pressed");
 
@@ -349,5 +384,124 @@ describe("Which computer the Terminal opens on", () => {
     expect(serverScreen.dataset.kind).toBe("server");
     expect(serverScreen.hidden).toBe(true);
     expect(localScreen.hidden).toBe(false);
+  });
+});
+
+describe("A folder shell (ADR 0163)", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  async function panel(initialTarget = "liam@hermes") {
+    const server = new FakeTerminals();
+    const local = new FakeTerminals();
+    const held: Held = {};
+    const onRunning = vi.fn();
+    render(<Panel server={server} local={local} initialTarget={initialTarget} held={held} onRunning={onRunning} />);
+    await act(async () => {});
+    const openIn = async (folder: string) => {
+      let opened = false;
+      await act(async () => void (opened = held.current!.openIn("server", resolvePath(folder, undefined) as ServerPath)));
+      return opened;
+    };
+    return { server, local, openIn, onRunning };
+  }
+  const chip = (name: RegExp) => screen.getByRole("button", { name });
+
+  it("is an ssh of its own started in the folder, shown beside the owner's shell, which is left as it was", async () => {
+    const { server, openIn, onRunning } = await panel();
+    act(() => server.opened[0].emit(out("liam@hermes:~$ vim notes")));
+    await openIn("/srv/app/docs");
+    expect(server.opened.map((o) => [o.target, o.folder])).toEqual([
+      ["liam@hermes", undefined],
+      ["liam@hermes", "/srv/app/docs"],
+    ]);
+    expect(chip(/^docs/).getAttribute("aria-pressed")).toBe("true");
+    expect(chip(/^docs/).title).toBe("/srv/app/docs\nA shell started in this folder on the Hermes server");
+    expect(pressed(/Hermes server/)).toBe("false");
+    expect(xterms[1].written.join("")).toContain("── ssh liam@hermes, in /srv/app/docs ──");
+    expect(screen.getByLabelText("Terminal on the server, in /srv/app/docs")).toBeTruthy();
+    act(() => server.opened[1].emit(out("liam@hermes:/srv/app/docs$ ")));
+    expect(onRunning).toHaveBeenLastCalledWith({ server: true, local: false });
+    expect(screen.getAllByRole("img", { name: "(running)" })).toHaveLength(2);
+    // Nothing was typed into either shell, and the owner's is still running.
+    expect(server.written).toEqual([]);
+    expect(server.closed).toEqual([]);
+    // Its computer isn't a pick: the tab still opens on the server's own shell next time.
+    expect(getUIPrefs().terminalKind).toBe("server");
+  });
+
+  it("is shown again, not started again, when its folder is opened again while it runs", async () => {
+    const { server, openIn } = await panel();
+    await openIn("/srv/app/docs");
+    act(() => server.opened[1].emit(out("$ ")));
+    await act(async () => fireEvent.click(chip(/Hermes server/)));
+    expect(chip(/^docs/).getAttribute("aria-pressed")).toBe("false");
+    await openIn("/srv/app/docs");
+    expect(chip(/^docs/).getAttribute("aria-pressed")).toBe("true");
+    expect(server.opened).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /^docs/ })).toHaveLength(1);
+  });
+
+  it("starts again in its folder when the folder is opened again after it ended", async () => {
+    const { server, openIn } = await panel();
+    await openIn("/srv/app/docs");
+    act(() => server.opened[1].emit(out("$ ")));
+    act(() => server.opened[1].emit({ kind: "exit", code: 0 }));
+    await openIn("/srv/app/docs");
+    expect(server.opened.map((o) => o.folder)).toEqual([undefined, "/srv/app/docs", "/srv/app/docs"]);
+    expect(screen.getAllByRole("button", { name: /^docs/ })).toHaveLength(1);
+  });
+
+  it("ends its own ssh when it is closed, and no other", async () => {
+    const { server, openIn } = await panel();
+    await openIn("/srv/app/docs");
+    await openIn("~/notes");
+    act(() => server.opened.forEach((o) => o.emit(out("$ "))));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Close the shell in notes" })));
+    expect(server.closed).toEqual([3]);
+    expect(screen.queryByRole("button", { name: /^notes/ })).toBeNull();
+    // The one on screen was closed, so its computer's own shell shows.
+    expect(pressed(/Hermes server/)).toBe("true");
+    expect(chip(/^docs/)).toBeTruthy();
+    expect(screen.getAllByRole("img", { name: "(running)" })).toHaveLength(2);
+  });
+
+  it("says why when its folder is one a shell can't start in, and keeps its place to be closed", async () => {
+    const { server, openIn } = await panel();
+    server.refuse = "A shell can't start in this folder on the server: its path can't have a quote (') in it.";
+    await openIn("/srv/it's");
+    expect(screen.getByRole("status", { name: /in \/srv\/it's: Couldn't start/ })).toBeTruthy();
+    expect(screen.getByText(server.refuse)).toBeTruthy();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Close the shell in it's" })));
+    expect(screen.queryByText(server.refuse)).toBeNull();
+  });
+
+  it("with no SSH target, asks for one, and offers the same folder on this computer", async () => {
+    const { server, local, openIn } = await panel("");
+    await openIn("/srv/app/docs");
+    expect(server.opened).toHaveLength(0);
+    const offers = screen.getAllByRole("button", { name: /Use this computer instead/ });
+    await act(async () => fireEvent.click(offers[offers.length - 1]));
+    expect(local.opened.map((o) => o.folder)).toEqual(["/srv/app/docs"]);
+    expect(chip(/^docs/).title).toBe("/srv/app/docs\nA shell started in this folder on this computer");
+    expect(screen.getAllByRole("button", { name: /^docs/ })).toHaveLength(1);
+    expect(server.opened).toHaveLength(0);
+  });
+
+  it("holds eight, and opens no ninth until one is closed", async () => {
+    const { server, openIn } = await panel();
+    for (let i = 1; i <= 8; i++) expect(await openIn(`/srv/app/f${i}`)).toBe(true);
+    expect(await openIn("/srv/app/f9")).toBe(false);
+    expect(server.opened).toHaveLength(9);
+    expect(await openIn("/srv/app/f3")).toBe(true);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Close the shell in f1" })));
+    expect(await openIn("/srv/app/f9")).toBe(true);
+    expect(server.opened.at(-1)!.folder).toBe("/srv/app/f9");
+  });
+
+  it("shows a folder's name with nothing in it that could reverse its words", async () => {
+    const { openIn } = await panel();
+    await openIn("/srv/app/\u202Ecod");
+    expect(chip(/^\uFFFDcod/).title.startsWith("/srv/app/\uFFFDcod\n")).toBe(true);
   });
 });
