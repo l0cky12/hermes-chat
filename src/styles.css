@@ -4197,3 +4197,70 @@ div.export-preview.export-page { height: auto; padding: 10px 12px; background: v
 .ext-facts dd { margin: 0; }
 .ext-note { margin-top: 10px; font-size: calc(12.5rem / 14); color: var(--text-2); }
 .ext-note.error { color: var(--bad); }
+
+/* ---------- the Work page, the kanban board of bot work (Work.tsx, ADR 0171) ---------- */
+/* The board fills the screen and never scrolls the page: each column scrolls on its own, and the row of columns
+   scrolls sideways when they don't fit. */
+.work-screen { display: flex; flex-direction: column; overflow: hidden; }
+.work-inner { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 20px 24px 16px; }
+.work-inner .back { align-self: flex-start; }
+.work-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; }
+.work-head h1 { margin: 0; }
+.work-spacer { flex: 1; }
+.work-inner > .job-banner, .work-inner > .job-error { margin: 0; }
+.work-board { flex: 1; min-height: 0; display: flex; gap: 12px; align-items: flex-start; overflow: auto; padding-bottom: 4px; }
+/* `.settings section` would otherwise set its own padding and border-top on each column. */
+.settings section.work-column {
+  flex: 1 0 180px; max-width: 320px; max-height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 10px;
+  border-radius: var(--radius); border: 1px solid var(--line-2); background: var(--sidebar); transition: opacity 0.12s;
+}
+.settings section.work-column.over { border-color: var(--accent); }
+.work-column.nodrop { opacity: 0.4; }
+.settings h2.work-column-head { margin: 0 2px 2px; display: flex; justify-content: space-between; font-size: calc(13rem / 14); font-weight: 600; text-transform: capitalize; color: var(--text-2); }
+.work-count { color: var(--faint); font: 500 calc(12rem / 14) var(--mono); }
+.work-card { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--bg); cursor: pointer; text-align: left; }
+.work-card:hover, .work-card:focus-visible { border-color: var(--line-3); outline: none; }
+.work-card[draggable="true"] { cursor: grab; }
+.work-card.dragging { opacity: 0.5; }
+.work-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: calc(11.5rem / 14); color: var(--faint); }
+.work-meta span { display: inline-flex; align-items: center; gap: 4px; }
+.work-meta code { font-size: calc(11.5rem / 14); }
+.work-title { font-weight: 600; font-size: calc(13.5rem / 14); overflow-wrap: anywhere; }
+.settings .work-card p { margin: 0; font-size: calc(12.5rem / 14); color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.settings .work-card p.work-why { color: var(--warn); }
+.work-why svg { vertical-align: -2px; }
+.work-assignee { display: flex; align-items: center; gap: 5px; font-size: calc(12rem / 14); color: var(--text-2); }
+.settings p.work-empty { margin: 4px 2px; font-size: calc(12.5rem / 14); color: var(--faint); }
+.leave-overlay .leave-dialog.work-dialog { max-width: min(480px, calc(100% - 32px)); width: 100%; max-height: calc(100vh - 32px); }
+.leave-overlay .leave-dialog.work-dialog.wide { max-width: min(640px, calc(100% - 32px)); padding: 0; }
+.work-form { display: flex; flex-direction: column; gap: 10px; }
+.wide .work-form { padding: 18px 20px; }
+.work-form > input, .work-fields input, .work-fields select, .work-fields textarea, .work-add textarea, .work-sheet-foot select {
+  background: var(--bg); border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 9px; color: var(--text); outline: none; font: inherit; min-width: 0;
+}
+.work-form > input:focus, .work-fields input:focus, .work-fields select:focus, .work-fields textarea:focus, .work-add textarea:focus { border-color: var(--line-3); }
+.work-fields { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.work-fields label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: calc(12.5rem / 14); }
+.work-fields textarea, .work-add textarea { resize: vertical; }
+.work-fields-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.work-fields-row label { flex: 1 1 160px; }
+.work-err { color: var(--bad); overflow-wrap: anywhere; }
+.work-sheet { display: flex; flex-direction: column; min-height: 0; max-height: calc(100vh - 32px); }
+.work-sheet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line-2); }
+.work-sheet-head h2 { margin: 0; font-size: calc(16rem / 14); overflow-wrap: anywhere; }
+.work-sheet-tools { display: flex; gap: 2px; flex: none; }
+.work-sheet-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 14px 20px; }
+.work-sheet > .work-err { margin: 0; padding: 0 20px 10px; }
+.work-status { text-transform: capitalize; color: var(--text-2); }
+.work-sub { margin: 6px 0 0; font-size: calc(11.5rem / 14); font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: 0.04em; }
+.work-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
+.work-comment { display: flex; flex-direction: column; gap: 2px; }
+.work-comment small { font-size: calc(12rem / 14); color: var(--faint); }
+.work-comment b { color: var(--text-2); font-weight: 600; }
+.work-add { display: flex; gap: 8px; align-items: flex-end; }
+.work-add textarea { flex: 1; }
+.work-sheet-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line-2); }
+@media (max-width: 640px) {
+  .work-inner { padding: 14px 16px 12px; }
+  .settings section.work-column { flex-basis: 78vw; }
+}

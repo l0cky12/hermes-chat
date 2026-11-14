@@ -63,6 +63,7 @@ const NEW = {
   "GET api/cron/jobs": [],
   "GET api/webhooks": { subscriptions: [] },
   "GET api/fs/list": {},
+  "GET api/plugins/kanban/boards": { boards: [] },
 };
 
 function diagnostics(store: CapabilityStore, props: Partial<Parameters<typeof DiagnosticsSettings>[0]> = {}) {

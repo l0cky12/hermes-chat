@@ -151,6 +151,10 @@ Needs the webhook routes under `/api/webhooks`. Checked with `GET /api/webhooks`
 
 Needs `GET /api/fs/list`, and `GET /api/sessions/{id}/messages` with tool rows. Checked with `GET /api/fs/list`. Without `fs/list`, the Outputs screen shows a note instead of the list.
 
+## Work
+
+Needs the dashboard's kanban plugin (`plugins/kanban/dashboard/plugin_api.py`), under `/api/plugins/kanban`. Checked with `GET /api/plugins/kanban/boards`. The Work page reads `GET board` and `GET workflow` for the current board, and `GET tasks/{id}` for a task's sheet. It changes the board with `PATCH tasks/{id}` (an edit or a move), `POST tasks` (a new task, with an `idempotency_key`) and `POST tasks/{id}/comments`. Without the plugin, the Work button doesn't show, and a board read that answers 404 shows a note asking for the plugin to be turned on. The same plugin tells the chat list which tasks a chat dispatched.
+
 ## Sign-in methods
 
 The sign-in screen and Setup read the dashboard's public `GET /api/status` (`auth_required`, `auth_providers`, `auth_flows`) and, when `auth_flows` lists `native_pkce`, `GET /api/auth/providers`, before anything signs in (ADR 0058). Password sign-in needs a provider listed with `supports_password`, or `basic` in `auth_providers` on a Hermes without the providers list; every Hermes checked has `basic`. Token sign-in needs the `session-token` provider, in Hermes from `2edfd0d` (2026-10-28), started with `HERMES_DASHBOARD_SESSION_TOKEN` set; it was checked live at `f0d94882`. The owner's server at `bf0203a` doesn't have it, so the app doesn't offer Token there. A status that can't be read, or that lists no method the app supports, leaves the password, as before. Browser sign-in through OIDC or Nous Portal, which `auth_flows: native_pkce` advertises, isn't built yet.

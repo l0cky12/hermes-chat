@@ -90,6 +90,7 @@ import { tauriCloseGuard, type CloseGuard } from "./ui/tauriWindow";
 import { FileBrowser } from "./ui/FileBrowser";
 import { OutputsScreen, type OutputsScope } from "./ui/Outputs";
 import { UsageAnalytics } from "./ui/UsageAnalytics";
+import { Work } from "./ui/Work";
 import { note, type RemoteLog } from "./hermes/logs";
 import { OutputsIndex, outputsIn, sessionOf, splitPath, type Output } from "./hermes/outputs";
 import { STATUS_LABEL, composing, routeLabel } from "./ui/bits";
@@ -1320,6 +1321,8 @@ export function Main({
   const [outputsScope, setOutputsScope] = useState<OutputsScope>("chat");
   // Usage analytics covers the chat panes too (ADR 0026). It reads Hermes afresh each time it opens.
   const [usageOpen, setUsageOpen] = useState(false);
+  // The Work page, the kanban board of bot work (Work.tsx, ADR 0171), covers the chat panes too.
+  const [workOpen, setWorkOpen] = useState(false);
   const usageIo = useMemo(() => hermes.usageIo(), [hermes]);
   // The Preview's server side is the open connection's, which Rust finds by the name it was opened under (ADR 0125).
   const previewWeb = useMemo<WebPages>(() => ({ ...webPages, devServers: () => webPages.devServers(hermes.connectionId) }), [webPages, hermes]);
@@ -1633,7 +1636,7 @@ export function Main({
     setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
     setRepoOpen(false);
     setOutputsOpen(false);
-    setUsageOpen(false);
+    setUsageOpen(false); setWorkOpen(false);
     setShowTextGeneration(undefined);
     setShowMemory(undefined);
     setShowDiagnostics(undefined);
@@ -1815,7 +1818,7 @@ export function Main({
       setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
       setRepoOpen(false);
       setOutputsOpen(false);
-      setUsageOpen(false);
+      setUsageOpen(false); setWorkOpen(false);
       if (remember) rememberChat(id);
     };
     if (keepSettings) go();
@@ -1830,7 +1833,7 @@ export function Main({
       setProjectOpen(false);
       setSettingsOpen(false);
       setOutputsOpen(false);
-      setUsageOpen(false);
+      setUsageOpen(false); setWorkOpen(false);
       setRepoOpen(false);
       setAutomationsOpen(false);
       setOfficeOpen(false);
@@ -1869,7 +1872,7 @@ export function Main({
       setSettingsOpen(false);
       setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
       setOutputsOpen(false);
-      setUsageOpen(false);
+      setUsageOpen(false); setWorkOpen(false);
       setRepoAt((was) => ({ ...at, n: (was?.n ?? 0) + 1 }));
       setRepoOpen(true);
     });
@@ -1887,7 +1890,7 @@ export function Main({
     setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
     setRepoOpen(false);
     setOutputsOpen(false);
-    setUsageOpen(false);
+    setUsageOpen(false); setWorkOpen(false);
   });
 
   // A second pane opens to the right and becomes the active one. Both panes may show the same chat: they are two views
@@ -1908,7 +1911,7 @@ export function Main({
     setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
     setRepoOpen(false);
     setOutputsOpen(false);
-    setUsageOpen(false);
+    setUsageOpen(false); setWorkOpen(false);
     rememberChat(chatId);
   });
 
@@ -1966,7 +1969,7 @@ export function Main({
     setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
     setRepoOpen(false);
     setOutputsOpen(false);
-    setUsageOpen(false);
+    setUsageOpen(false); setWorkOpen(false);
     // One destination at a time: an earlier Memory shortcut mustn't switch Settings away from this one.
     setShowMemory(undefined);
     setShowDiagnostics(undefined);
@@ -1983,7 +1986,7 @@ export function Main({
       setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
       setRepoOpen(false);
       setOutputsOpen(false);
-      setUsageOpen(false);
+      setUsageOpen(false); setWorkOpen(false);
       setSearchOpen(false);
       if (!previewFits) setPanelHidden(true);
     });
@@ -2884,7 +2887,7 @@ export function Main({
   // Settings covers the chat, and the side panel with it; so do the project screen, Scheduled jobs, Automations, Usage
   // and the Repository screen. Outputs covers the chat panes but keeps the side panel beside it, since its files
   // open there.
-  const screenCovering = settingsOpen || projectScreenOpen || jobsOpen || automationsOpen || usageOpen || repoOpen || officeVisible;
+  const screenCovering = settingsOpen || projectScreenOpen || jobsOpen || automationsOpen || usageOpen || workOpen || repoOpen || officeVisible;
   const covering = screenCovering || outputsOpen;
   const previewShown = panelOpen && !screenCovering && (previewFits || !panelHidden);
   const previewCovers = previewShown && !previewFits;
@@ -3021,7 +3024,7 @@ export function Main({
                   setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
                   setRepoOpen(false);
                   setOutputsOpen(false);
-                  setUsageOpen(false);
+                  setUsageOpen(false); setWorkOpen(false);
                   setShowTextGeneration(undefined);
                   setShowDiagnostics(undefined);
                   setShowVoice(undefined);
@@ -3146,7 +3149,7 @@ export function Main({
             setProjectOpen(false);
             setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
             setRepoOpen(false);
-            setUsageOpen(false);
+            setUsageOpen(false); setWorkOpen(false);
             setOutputsOpen((o) => !o);
           })
         }
@@ -3186,7 +3189,7 @@ export function Main({
             setProjectOpen(false);
             setSettingsOpen(false);
             setOutputsOpen(false);
-            setUsageOpen(false);
+            setUsageOpen(false); setWorkOpen(false);
             setRepoOpen(false);
             setAutomationsOpen(false);
             setJobsAt(undefined);
@@ -3199,7 +3202,7 @@ export function Main({
             setProjectOpen(false);
             setSettingsOpen(false);
             setOutputsOpen(false);
-            setUsageOpen(false);
+            setUsageOpen(false); setWorkOpen(false);
             setRepoOpen(false);
             setJobsOpen(false);
             setOfficeOpen(false);
@@ -3213,7 +3216,7 @@ export function Main({
             setSettingsOpen(false);
             setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
             setOutputsOpen(false);
-            setUsageOpen(false);
+            setUsageOpen(false); setWorkOpen(false);
             setRepoAt(undefined);
             setRepoOpen((o) => !o);
           })
@@ -3226,10 +3229,27 @@ export function Main({
             setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
             setRepoOpen(false);
             setOutputsOpen(false);
+            setWorkOpen(false);
             setUsageOpen((o) => !o);
           })
         }
         usageOpen={usageOpen && !settingsOpen && !projectScreenOpen && !jobsOpen && !automationsOpen}
+        // Hidden for a Hermes without the kanban plugin, once the page that found out has closed.
+        onWork={
+          caps.caps.kanban.state === "unsupported" && !workOpen
+            ? undefined
+            : () =>
+                guard(() => {
+                  setProjectOpen(false);
+                  setSettingsOpen(false);
+                  setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
+                  setRepoOpen(false);
+                  setOutputsOpen(false);
+                  setUsageOpen(false);
+                  setWorkOpen((o) => !o);
+                })
+        }
+        workOpen={workOpen && !settingsOpen && !projectScreenOpen && !jobsOpen && !automationsOpen && !officeVisible}
         updateWaiting={updateWaiting}
         connectionsMenu={
           onSwitchConnection && (
@@ -3289,7 +3309,7 @@ export function Main({
                     setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
                     setRepoOpen(false);
                     setOutputsOpen(false);
-                    setUsageOpen(false);
+                    setUsageOpen(false); setWorkOpen(false);
                     setProjectOpen(true);
                   });
                 }}
@@ -3299,7 +3319,7 @@ export function Main({
                     setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
                     setRepoOpen(false);
                     setOutputsOpen(false);
-                    setUsageOpen(false);
+                    setUsageOpen(false); setWorkOpen(false);
                     setProjectOpen(true);
                     void projects.readDefaults();
                   })
@@ -3653,6 +3673,15 @@ export function Main({
             listProfiles={listProfiles}
             defaultName={defaultProfileName}
             profilesTab={profilesWiring}
+          />
+        ) : workOpen ? (
+          <Work
+            api={hermes.kanban}
+            connected={status === "connected"}
+            onClose={() => {
+              flushSync(() => setWorkOpen(false));
+              focusPane(active.key);
+            }}
           />
         ) : usageOpen ? (
           <UsageAnalytics

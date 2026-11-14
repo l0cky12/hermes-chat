@@ -1598,6 +1598,7 @@ impl Dashboard {
             ("PUT", _) if memory_provider_write("PUT", path, body.as_deref()) => Method::PUT,
             ("POST", _) if memory_provider_write("POST", path, body.as_deref()) => Method::POST,
             ("POST", _) if webhook_write("POST", path, body.as_deref()) => Method::POST,
+            ("POST", _) if kanban_write(path, body.as_deref()) => Method::POST,
             ("PUT", _) if webhook_write("PUT", path, body.as_deref()) => Method::PUT,
             ("PUT", p) if is_profile_soul(p) => Method::PUT,
             ("POST", "api/profiles") if profile_create_allowed(body.as_deref()) => Method::POST,
@@ -2559,6 +2560,24 @@ pub fn gateway_write(method: &str, path: &str, body: Option<&str>) -> bool {
     })
 }
 
+/// The Work page's two `POST`s to the dashboard's kanban plugin (ADR 0171): `api/plugins/kanban/tasks` creates a task,
+/// with only the fields New task sets, and `api/plugins/kanban/tasks/{id}/comments` adds a comment, with only its text.
+/// The task id is one segment of letters, digits, `-` and `_`, as the plugin makes them. Its edits and moves are
+/// `PATCH`es, which the relay already takes.
+fn kanban_write(path: &str, body: Option<&str>) -> bool {
+    let Some(rest) = path.strip_prefix("api/plugins/kanban/tasks") else { return false };
+    let id_ok = |id: &str| (1..=128).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    let keys: &[&str] = match rest.strip_prefix('/').map(|r| r.split('/').collect::<Vec<_>>()).as_deref() {
+        None if rest.is_empty() => &["title", "body", "assignee", "priority", "idempotency_key"],
+        Some([id, "comments"]) if id_ok(id) => &["body"],
+        _ => return false,
+    };
+    let Some(fields) = body.and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok()).and_then(|v| v.as_object().cloned()) else {
+        return false;
+    };
+    fields.keys().all(|k| keys.contains(&k.as_str())) && fields.get(if keys == ["body"] { "body" } else { "title" }).is_some_and(|v| v.is_string())
+}
+
 /// The Automations writes (ADR 0108, Hermes's `/api/webhooks` routes and the `webhooks/1` contract): `POST
 /// api/webhooks` creates a route, `PUT api/webhooks/{name}` edits one, `PUT api/webhooks/{name}/enabled` pauses or
 /// resumes one, and `POST api/webhooks/{name}/deliveries/{id}/retry` retries a failed delivery. The route name is one
@@ -3430,7 +3449,7 @@ fn agent_text_body(path: &str, text: &str, session: Option<&str>) -> Result<serd
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_text_body, memory_entry_edit_allowed, memory_provider_write, profile_create_allowed, profile_describe_auto, profile_field_write,
+        agent_text_body, kanban_write, memory_entry_edit_allowed, memory_provider_write, profile_create_allowed, profile_describe_auto, profile_field_write,
         provider_key_name, skill_create_allowed, text_unless_stalled, unless_stalled, webhook_write, TransportError,
     };
     use std::time::Duration;
@@ -3666,6 +3685,35 @@ mod tests {
             assert!(!webhook_write(method, path, Some(body)), "{method} {path} {body}");
         }
         assert!(!webhook_write("POST", "api/webhooks", None));
+    }
+
+    #[test]
+    fn only_the_work_pages_writes() {
+        for (path, body) in [
+            ("api/plugins/kanban/tasks", r#"{"title":"Ship it","priority":0,"idempotency_key":"k"}"#),
+            ("api/plugins/kanban/tasks", r#"{"title":"Ship it","body":"b","assignee":"researcher","priority":2,"idempotency_key":"k"}"#),
+            ("api/plugins/kanban/tasks/t_0000001a/comments", r#"{"body":"BLOCKED: waiting on keys"}"#),
+        ] {
+            assert!(kanban_write(path, Some(body)), "{path} {body}");
+        }
+        for (path, body) in [
+            // Only what New task sets: no tenant, workspace or parents.
+            ("api/plugins/kanban/tasks", r#"{"title":"x","workspace_path":"/"}"#),
+            ("api/plugins/kanban/tasks", r#"{"body":"no title"}"#),
+            ("api/plugins/kanban/tasks/t_1/comments", r#"{"body":"x","author":"someone"}"#),
+            ("api/plugins/kanban/tasks/t_1/comments", r#"{}"#),
+            ("api/plugins/kanban/tasks/t_1", r#"{"status":"done"}"#),
+            ("api/plugins/kanban/tasks/t_1/run", r#"{}"#),
+            ("api/plugins/kanban/tasks/../comments", r#"{"body":"x"}"#),
+            ("api/plugins/kanban/tasks/a%2Fb/comments", r#"{"body":"x"}"#),
+            ("api/plugins/kanban/tasksx", r#"{"title":"x"}"#),
+            ("api/plugins/kanban/boards", r#"{"slug":"x"}"#),
+            ("api/plugins/kanban/tasks", "not json"),
+            ("api/plugins/kanban/tasks", "[]"),
+        ] {
+            assert!(!kanban_write(path, Some(body)), "{path} {body}");
+        }
+        assert!(!kanban_write("api/plugins/kanban/tasks", None));
     }
 
     #[test]

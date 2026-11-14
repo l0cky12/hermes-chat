@@ -2,10 +2,12 @@
 // the dashboard's kanban plugin REST (`plugins/kanban/dashboard/plugin_api.py` at Hermes 0.22.6), under
 // `api/plugins/kanban/`, with the dashboard's own sign-in and nothing more. `KanbanApi` makes the reads; `KanbanWatch`
 // decides when, keeps what was read, and hands the transport each session's tasks. The task's status on the board
-// decides everything; a `status.update` only says which task to read.
+// decides everything; a `status.update` only says which task to read. The Work page (issue #595, ADR 0171) reads and
+// changes the current board through the same `KanbanApi`, as the official desktop app's Kanban view does.
+import { CapabilityUnsupportedError, RouteMissingError } from "./capabilities";
 import { TASK_MEANS, isStale, parseTask, sameTask, type DispatchedTask } from "./dispatched";
-import { statusOf, type RestMethod } from "./pipe";
-import { isObj } from "./values";
+import { RefusedError, statusOf, type RestMethod } from "./pipe";
+import { isObj, textOrEmpty } from "./values";
 
 export type RestFn = (method: RestMethod, pathAndQuery: string, body?: unknown) => Promise<unknown>;
 
@@ -17,8 +19,173 @@ export type SeenTask = { task: DispatchedTask; sessionId?: string };
 
 const BASE = "api/plugins/kanban";
 
+/** A task as the Work page shows it. `body` and `assignee` are empty for none. */
+export type BoardTask = {
+  id: string;
+  title: string;
+  body: string;
+  assignee: string;
+  status: string;
+  priority: number;
+  tenant?: string;
+  /** The latest run's summary: for a blocked task, usually why. The board cuts it to 200 characters; `loadTask` doesn't. */
+  summary?: string;
+  comments: number;
+};
+export type BoardColumn = { name: string; tasks: BoardTask[] };
+/** The current board, one column per status. `assignees`: the profiles a task can be given to. */
+export type Board = { columns: BoardColumn[]; assignees: string[] };
+/** The plugin's column catalog: which columns take a drop, and which moves a person may make from each status. */
+export type Workflow = { columns: { key: string; label: string; dropTarget: boolean }[]; manual: Record<string, string[]> };
+/** `at`: Unix ms. */
+export type TaskComment = { id: number; author: string; body: string; at: number };
+/** A task's editable fields, for New task and the task sheet's Edit. */
+export type TaskFields = { title: string; body: string; priority: number; assignee: string };
+/** A move the board may not show yet: the task and the status it left. */
+export type PendingMove = { id: string; from: string };
+
+/** The board answered 404: the dashboard has no kanban plugin. */
+export class NoKanbanPlugin extends Error {
+  constructor() {
+    super("The Hermes dashboard has no Kanban plugin. Enable it on the host to see the board here.");
+  }
+}
+
+const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+
+function parseBoardTask(v: unknown, column: string): BoardTask[] {
+  if (!isObj(v) || typeof v.id !== "string" || !v.id) return [];
+  return [
+    {
+      id: v.id,
+      title: textOrEmpty(v.title),
+      body: textOrEmpty(v.body),
+      assignee: textOrEmpty(v.assignee),
+      status: typeof v.status === "string" && v.status ? v.status : column,
+      priority: typeof v.priority === "number" && Number.isFinite(v.priority) ? v.priority : 0,
+      ...(typeof v.tenant === "string" && v.tenant && { tenant: v.tenant }),
+      ...(typeof v.latest_summary === "string" && v.latest_summary && { summary: v.latest_summary }),
+      comments: typeof v.comment_count === "number" ? v.comment_count : 0,
+    },
+  ];
+}
+
+const parseBoard = (res: unknown): Board => ({
+  columns: (isObj(res) && Array.isArray(res.columns) ? res.columns : []).flatMap((c): BoardColumn[] =>
+    isObj(c) && typeof c.name === "string" ? [{ name: c.name, tasks: (Array.isArray(c.tasks) ? c.tasks : []).flatMap((t) => parseBoardTask(t, c.name as string)) }] : [],
+  ),
+  assignees: isObj(res) ? strings(res.assignees) : [],
+});
+
+function parseWorkflow(res: unknown): Workflow {
+  const columns = (isObj(res) && Array.isArray(res.columns) ? res.columns : []).flatMap((c): Workflow["columns"] =>
+    isObj(c) && typeof c.key === "string" ? [{ key: c.key, label: typeof c.label === "string" && c.label ? c.label : c.key, dropTarget: c.drag_target === true }] : [],
+  );
+  const manual = isObj(res) && isObj(res.manual) ? Object.fromEntries(Object.entries(res.manual).map(([from, to]) => [from, strings(to)])) : {};
+  return { columns, manual };
+}
+
+const parseComment = (c: unknown): TaskComment[] =>
+  isObj(c) && typeof c.id === "number" && typeof c.body === "string"
+    ? [{ id: c.id, author: textOrEmpty(c.author), body: c.body, at: typeof c.created_at === "number" ? c.created_at * 1000 : 0 }]
+    : [];
+
+const taskPath = (id: string) => `${BASE}/tasks/${encodeURIComponent(id)}`;
+
+/** Whether `wf` lets a person move a task from `from` to `to`. Running is the dispatcher's to set, so it's never offered. */
+export const canMove = (wf: Workflow, from: string, to: string) =>
+  from !== to && !!wf.columns.find((c) => c.key === to)?.dropTarget && !!wf.manual[from]?.includes(to);
+
+/** What a move must say first: completing needs a summary unless the task comes from review, and blocking needs a reason. */
+export const moveNeeds = (from: string, to: string): "summary" | "reason" | undefined =>
+  to === "done" && from !== "review" ? "summary" : to === "blocked" ? "reason" : undefined;
+
+/**
+ * Whether the board shows `p` done: the task is no longer in the status it left. The dashboard coalesces concurrent
+ * board reads, so a read right after a move can still be the old one.
+ */
+export const moveSettled = (columns: readonly BoardColumn[], p: PendingMove) => !columns.some((c) => c.tasks.some((t) => t.id === p.id && t.status === p.from));
+
+/** Whether a write certainly didn't happen: Hermes refused it (under 500), or it was never sent. Anything else may have landed. */
+export const refused = (e: unknown) => {
+  const status = statusOf(e);
+  return status !== undefined ? status < 500 : e instanceof RefusedError || e instanceof CapabilityUnsupportedError || e instanceof RouteMissingError;
+};
+
+/** The fields an edit changes, as the PATCH takes them: an empty assignee unassigns. The title is sent trimmed. */
+export function taskEdits(t: BoardTask, f: TaskFields): Partial<TaskFields> {
+  const out: Partial<TaskFields> = {};
+  if (f.title.trim() !== t.title) out.title = f.title.trim();
+  if (f.body !== t.body) out.body = f.body;
+  if (f.priority !== t.priority) out.priority = f.priority;
+  if (f.assignee !== t.assignee) out.assignee = f.assignee;
+  return out;
+}
+
 export class KanbanApi {
   constructor(private rest: RestFn) {}
+
+  /** The current board, for the Work page. Archived tasks are left out by the plugin. */
+  async loadBoard(): Promise<Board> {
+    try {
+      return parseBoard(await this.rest("GET", `${BASE}/board`));
+    } catch (e) {
+      if (statusOf(e) === 404) throw new NoKanbanPlugin();
+      throw e;
+    }
+  }
+
+  async loadWorkflow(): Promise<Workflow> {
+    return parseWorkflow(await this.rest("GET", `${BASE}/workflow`));
+  }
+
+  /** The full task (the board cuts its summary short) and its comments, oldest first. */
+  async loadTask(id: string): Promise<{ task: BoardTask; comments: TaskComment[] }> {
+    const res = await this.rest("GET", taskPath(id));
+    const task = isObj(res) ? parseBoardTask(res.task, "")[0] : undefined;
+    if (!task) throw new Error(`Hermes answered task ${id} with something this app doesn't read.`);
+    const comments = (isObj(res) && Array.isArray(res.comments) ? res.comments : []).flatMap(parseComment).sort((a, b) => a.at - b.at || a.id - b.id);
+    return { task, comments };
+  }
+
+  /**
+   * Creates a task; the server picks its column. `key` makes a retry after a lost answer return the same task instead
+   * of a second one. `warning`: Hermes's word that nothing will run it, such as no dispatcher.
+   */
+  async createTask(f: TaskFields, key: string): Promise<{ id?: string; warning?: string }> {
+    const body = { title: f.title.trim(), ...(f.body && { body: f.body }), ...(f.assignee && { assignee: f.assignee }), priority: f.priority, idempotency_key: key };
+    const res = await this.rest("POST", `${BASE}/tasks`, body);
+    const id = isObj(res) && isObj(res.task) && typeof res.task.id === "string" ? res.task.id : undefined;
+    const warning = isObj(res) && typeof res.warning === "string" && res.warning ? res.warning : undefined;
+    return { id, warning };
+  }
+
+  /** Changes only `changes`, and answers the task as saved, when Hermes says. */
+  async editTask(id: string, changes: Partial<TaskFields>): Promise<BoardTask | undefined> {
+    const res = await this.rest("PATCH", taskPath(id), changes);
+    return isObj(res) ? parseBoardTask(res.task, "")[0] : undefined;
+  }
+
+  async addComment(id: string, body: string): Promise<void> {
+    await this.rest("POST", `${taskPath(id)}/comments`, { body });
+  }
+
+  /**
+   * Moves a task to another column. A block also leaves a `BLOCKED: <reason>` comment, as the CLI does, once the block
+   * is accepted. If that comment fails the move still stands, so it comes back as a warning.
+   */
+  async moveTask(id: string, to: string, text = ""): Promise<string | undefined> {
+    const said = text.trim();
+    const body = to === "done" && said ? { status: to, result: said, summary: said } : to === "blocked" && said ? { status: to, block_reason: said } : { status: to };
+    await this.rest("PATCH", taskPath(id), body);
+    if (to !== "blocked" || !said) return undefined;
+    try {
+      await this.addComment(id, `BLOCKED: ${said}`);
+      return undefined;
+    } catch (e) {
+      return `Blocked ${id}, but its BLOCKED: comment wasn't saved: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
 
   async boards(): Promise<{ boards: KanbanBoard[]; current?: string }> {
     const res = await this.rest("GET", `${BASE}/boards`);
