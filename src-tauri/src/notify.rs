@@ -277,7 +277,7 @@ mod desktop {
             conn.add_match(rule("ActionInvoked"), move |(id, key): (u32, String), _, m| action.send(Signal::Action(from(m), id, key)).is_ok())?;
             let closed = tx.clone();
             conn.add_match(rule("NotificationClosed"), move |(id, _): (u32, u32), _, m| closed.send(Signal::Closed(from(m), id)).is_ok())?;
-            let owner = MatchRule::new_signal("org.freedesktop.DBus", "NameOwnerChanged").with_sender("org.freedesktop.DBus");
+            let owner = MatchRule::new_signal("org.freedesktop.DBus", "NameOwnerChanged").with_strict_sender("org.freedesktop.DBus");
             conn.add_match(owner, move |(name, old, _): (String, String, String), _, _| {
                 name != SERVICE || old.is_empty() || tx.send(Signal::OwnerGone(old)).is_ok()
             })?;
@@ -395,9 +395,18 @@ mod desktop {
             };
 
             b.notify("Hermes is asking for approval", "…", Some("approval".into()), true).unwrap();
-            // Another client on the bus sends what looks like the service's Deny; it is ignored, and the service's own
-            // Review after it still opens the card.
+            // Another client on the bus sends what looks like the service's Deny, and, straight to this app, what looks
+            // like the bus saying the service went away; both are ignored, and the service's own Review after them still
+            // opens the card.
             let intruder = connect(&bus.address);
+            let owner: (String,) = b
+                .conn
+                .with_proxy("org.freedesktop.DBus", "/org/freedesktop/DBus", Duration::from_secs(5))
+                .method_call("org.freedesktop.DBus", "GetNameOwner", (SERVICE,))
+                .unwrap();
+            let mut gone = Message::new_signal("/org/freedesktop/DBus", "org.freedesktop.DBus", "NameOwnerChanged").unwrap().append3(SERVICE, owner.0, "");
+            gone.set_destination(Some(b.conn.unique_name().into_static()));
+            intruder.send(gone).unwrap();
             intruder.send(invoked(1, "deny")).unwrap();
             intruder.channel().flush();
             first.send(invoked(1, "review")).unwrap();
