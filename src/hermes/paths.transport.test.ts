@@ -1,13 +1,15 @@
 // What the transport tells path links (ADR 0163), against FakeHermes: what is at a path where tools run, and the
 // folder each chat works in, which a relative path in its replies is relative to.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "./fakeHermes";
-import { connect, type Hermes } from "./transport";
+import { connect, readSaved, type Hermes } from "./transport";
+import { localChatCache } from "./chatCache";
 import { resolvePath, type ServerPath } from "./paths";
 
 const running: Hermes[] = [];
 afterEach(async () => {
   await Promise.all(running.splice(0).map((h) => h.close()));
+  vi.unstubAllGlobals();
 });
 
 async function signedIn(server: FakeHermes) {
@@ -72,5 +74,29 @@ describe("The folder a chat works in", () => {
     expect(folderOf(hermes, started)).toBe("/srv/other");
     const plain = await hermes.newChat();
     expect(folderOf(hermes, plain)).toBe(s.hermesHome);
+  });
+
+  it("is kept in the list saved on this computer, so a relative path still links while offline", async () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      get length() {
+        return store.size;
+      },
+      key: (i: number) => [...store.keys()][i] ?? null,
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    });
+    const here = { mode: "ssh" as const, sshTarget: "liam@hermes", url: "", username: "liam" };
+    const s = new FakeHermes();
+    s.sessions = [row("in-app", 1, { pinned: true, cwd: "/srv/app" })];
+    const hermes = await connect(s.openPipe, undefined, localChatCache(here));
+    running.push(hermes);
+    await hermes.sync();
+    await hermes.close();
+    s.refuse = "Can't reach the Hermes dashboard: network is unreachable";
+    const offline = readSaved(s.openPipe, s.refuse, localChatCache(here))!;
+    running.push(offline);
+    expect(folderOf(offline, "in-app")).toBe("/srv/app");
   });
 });

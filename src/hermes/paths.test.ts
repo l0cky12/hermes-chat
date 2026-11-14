@@ -93,6 +93,8 @@ describe("A path in a code span", () => {
     ["src/App.tsx:1455", ["src/App.tsx:1455 -> src/App.tsx"]],
     ["package.json:12", ["package.json:12 -> package.json"]],
     [" src/ui ", ["src/ui"]],
+    ["/home/liam/My Documents/report.md", ["/home/liam/My Documents/report.md"]],
+    ["~/My Projects/site/", ["~/My Projects/site/"]],
   ])("links the whole of %j", (code, paths) => expect(linked(code, "code")).toEqual(paths));
 
   it.each([
@@ -100,6 +102,8 @@ describe("A path in a code span", () => {
     ["rm -rf build/ && ls dist/", ["build/", "dist/"]],
     ['import x from "./foo"', ["./foo"]],
     ["a/b.txt", ["a/b.txt"]],
+    ["/usr/bin/ls -la /srv/app", ["/usr/bin/ls", "/srv/app"]],
+    ["/usr/bin/env python", ["/usr/bin/env"]],
   ])("links the paths inside %j as running text does", (code, paths) => expect(linked(code, "code")).toEqual(paths));
 
   it.each(["console.log", "os.path", "Makefile", "y/n", "1/2", "s/foo/bar/", "cd /tmp", "git checkout origin/main", "@types/node", "github.com/a/b", "--out/dir", "src/*.ts", "a//b", "~", "/"])(
@@ -138,7 +142,7 @@ describe("A Markdown link's address as a path", () => {
 describe("A path's full path", () => {
   it("keeps a full path, folded, with no slash at its end", () => {
     expect(full("/etc/hosts")).toBe("/etc/hosts");
-    expect(full("/srv//app/./src/../docs/")).toBe("/srv/app/docs");
+    expect(full("/srv//app/./docs/")).toBe("/srv/app/docs");
     expect(full("~/notes/./a.md")).toBe("~/notes/a.md");
     expect(full("/")).toBe("/");
     expect(full("~/")).toBe("~/");
@@ -147,17 +151,15 @@ describe("A path's full path", () => {
   it("joins a relative path to the folder it is relative to, and has none without one", () => {
     expect(full("src/ui/Markdown.tsx", "/srv/app")).toBe("/srv/app/src/ui/Markdown.tsx");
     expect(full("./", "/srv/app")).toBe("/srv/app");
-    expect(full("../shared/x.md", "/srv/app/")).toBe("/srv/shared/x.md");
     expect(full("notes/a.md", "~/work")).toBe("~/work/notes/a.md");
     expect(resolvePath("src/ui", undefined)).toBeUndefined();
     expect(resolvePath("src/ui", "relative/base")).toBeUndefined();
   });
 
-  it("stops `..` at the root, and has no path above the home folder", () => {
-    expect(full("../../../etc/passwd", "/srv/app")).toBe("/etc/passwd");
-    expect(full("/../..")).toBe("/");
-    expect(resolvePath("~/../other", undefined)).toBeUndefined();
-    expect(resolvePath("../../x", "~/work")).toBeUndefined();
+  it("keeps `..`, which only the server can follow through a symbolic link", () => {
+    expect(full("/bin/../share")).toBe("/bin/../share");
+    expect(full("../shared/x.md", "/srv/app/")).toBe("/srv/app/../shared/x.md");
+    expect(full("~/../other")).toBe("~/../other");
   });
 
   it("has none for a path with a control character in it, or one too long for the server", () => {

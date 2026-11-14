@@ -58,10 +58,17 @@ const rehypePaths = () => (tree: HastNode) => {
   const walk = (node: HastNode) => {
     if (!node.children) return;
     const where = node.tagName === "code" ? "code" : "prose";
-    node.children = node.children.flatMap((child): HastNode[] => {
+    const siblings = node.children;
+    // A word that runs on into an element beside it is only part of a path: `src/__init__.py` is `src/`, then
+    // `init` in bold, then `.py`, and `src/` alone would open the wrong place.
+    const glued = (i: number) => {
+      const next = siblings[i];
+      return next?.type === "element" && next.tagName !== "br";
+    };
+    node.children = siblings.flatMap((child, i): HastNode[] => {
       if (child.type === "text" && child.value) {
         const text = child.value;
-        const spans = findPaths(text, where);
+        const spans = findPaths(text, where).filter((s) => !(s.start === 0 && glued(i - 1)) && !(s.end === text.length && glued(i + 1)));
         if (!spans.length) return [child];
         const out: HastNode[] = [];
         let at = 0;

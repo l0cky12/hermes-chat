@@ -4,7 +4,7 @@
 import { isServerPath, looksLikeHost, previewKnows, withoutBidi, type PreviewTarget } from "./preview";
 
 /**
- * A full path where Hermes's tools run: `/…` or `~/…`, with `.`, `..` and doubled slashes folded away, no slash at its
+ * A full path where Hermes's tools run: `/…` or `~/…`, with `.` and doubled slashes folded away, no slash at its
  * end (but `/` and `~/` themselves), and no control character. Only `resolvePath` makes one.
  */
 export type ServerPath = string & { readonly __serverPath: unique symbol };
@@ -75,6 +75,14 @@ function mentionIn(body: string, isPath: (w: string) => boolean): PathMention | 
   return !neverAPath(written) && isPath(written) ? { written, folder: written.endsWith("/") } : undefined;
 }
 
+/**
+ * A code span that is one full path with spaces in its names (`/home/liam/My Documents/report.md`): it names a file
+ * by its extension or a folder by its last `/`. A word after a space that starts with `-` is an option, so
+ * `/usr/bin/ls -la` is a command, and its first word is the path.
+ */
+const spacedPath = (w: string) =>
+  /^(\/|~\/)/.test(w) && !/\s-|\s\s|[^\S ]/.test(w) && (w.endsWith("/") || EXTENSION.test(w.slice(w.lastIndexOf("/") + 1)));
+
 /** The path in one word of running text, without the quotes, brackets and punctuation around it. */
 function inWord(word: string): { from: number; to: number; mention: PathMention } | undefined {
   let from = 0;
@@ -103,7 +111,7 @@ function inWord(word: string): { from: number; to: number; mention: PathMention 
 export function findPaths(text: string, where: "prose" | "code"): PathSpan[] {
   if (where === "code") {
     const whole = text.trim();
-    const mention = whole && whole.length <= MAX_WORD && !/\s/.test(whole) ? mentionIn(whole, codePath) : undefined;
+    const mention = whole && whole.length <= MAX_WORD && (!/\s/.test(whole) || spacedPath(whole)) ? mentionIn(whole, codePath) : undefined;
     if (mention) {
       const start = text.length - text.trimStart().length;
       return [{ start, end: start + whole.length, mention }];
@@ -149,19 +157,17 @@ export function hrefPath(href: string): PathMention | undefined {
 
 /**
  * `written` as a full path. A relative one joins `base`, the folder it is relative to (a chat's working folder), and
- * is undefined without one. `..` stops at `/`; above `~/` only the server could say where it leads, so that is undefined.
+ * is undefined without one. `.` and doubled slashes are folded away; `..` is kept, since through a symbolic link only
+ * the server knows where it leads (`/bin/..` can be `/usr`).
  */
 export function resolvePath(written: string, base: string | undefined): ServerPath | undefined {
   const full = /^(\/|~\/)/.test(written) ? written : base && isServerPath(base) ? `${base}/${written}` : undefined;
   if (full === undefined || CONTROL.test(full)) return undefined;
   const home = full.startsWith("~/");
-  const kept: string[] = [];
-  for (const segment of full.slice(home ? 2 : 1).split("/")) {
-    if (!segment || segment === ".") continue;
-    if (segment !== "..") kept.push(segment);
-    else if (kept.length) kept.pop();
-    else if (home) return undefined;
-  }
+  const kept = full
+    .slice(home ? 2 : 1)
+    .split("/")
+    .filter((segment) => segment && segment !== ".");
   const path = (home ? "~/" : "/") + kept.join("/");
   return isServerPath(path) ? (path as ServerPath) : undefined;
 }

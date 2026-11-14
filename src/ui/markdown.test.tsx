@@ -194,6 +194,12 @@ describe("A path in a reply (ADR 0163)", () => {
     expect(container.querySelector("pre a")).toBeNull();
   });
 
+  it("doesn't link the part of a path that Markdown's emphasis cut short, while a path beside a line break still links", () => {
+    const { container, words } = reply("Edited src/__init__.py and src/**bold**/x.py,\nthen /srv/app/main.py\nand more.");
+    expect(container.querySelector("strong")?.textContent).toBe("init");
+    expect(words()).toEqual(["/srv/app/main.py"]);
+  });
+
   it("holds a find-in-chat mark inside its link", () => {
     const { path } = reply("Edited src/ui/Markdown.tsx today.", { query: "markdown" });
     expect(path("src/ui/Markdown.tsx").querySelector("mark.hit")?.textContent).toBe("Markdown");
@@ -225,7 +231,7 @@ describe("A path in a reply (ADR 0163)", () => {
     const { path } = reply('In src/a.ts and [the notes](../notes/a.md "/etc/passwd\u202Eevil").');
     const where = "On the Hermes server: a file opens in the Preview, a folder in the Terminal.";
     expect(path("src/a.ts").title).toBe(`/srv/app/src/a.ts\n${where}`);
-    expect(path("the notes").title).toBe(`/srv/notes/a.md\n${where}\n/etc/passwd\uFFFDevil`);
+    expect(path("the notes").title).toBe(`/srv/app/../notes/a.md\n${where}\n/etc/passwd\uFFFDevil`);
   });
 
   it("opens on a click and on Enter, as a folder when it is written as one, naming the chat", async () => {

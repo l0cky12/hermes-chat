@@ -4834,7 +4834,7 @@ export class Hermes {
     this.cache.save(
       profile,
       // A Bot Chat isn't part of the list, so it isn't kept as part of it (ADR 0066).
-      chats.filter((c) => !isBotChat(c)).map(({ id, title, source, settled, settledHere, archived, updatedAt, unread }) => ({
+      chats.filter((c) => !isBotChat(c)).map(({ id, title, source, settled, settledHere, archived, updatedAt, unread, folder }) => ({
         id,
         title,
         source,
@@ -4843,6 +4843,7 @@ export class Hermes {
         archived,
         updatedAt,
         unread,
+        folder,
         items: [],
       })),
     );

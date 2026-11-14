@@ -16,6 +16,7 @@ import { persist } from "./unsaved";
 import { NO_BRANCHES, type BranchAttempt, type BranchLink, type BranchPoint, type BranchStore, type BranchVariant } from "./branch";
 import { pickOf } from "./models";
 import { optionalText } from "./values";
+import { isServerPath } from "./preview";
 
 /** Every key prefix this module keeps a connection's data under, each followed by its scope (connections.ts). */
 export const CACHE_PREFIXES = () => [LIST_PREFIX, TRANSCRIPT_PREFIX, PROFILE_PREFIX, PULLED_PREFIX, OUTBOX_PREFIX, QUEUE_PREFIX, HELD_PREFIX, BRANCH_PREFIX];
@@ -144,6 +145,7 @@ function toChat(v: unknown): Chat | undefined {
     updatedAt: num(c.updatedAt) ?? 0,
     ...(typeof c.unread === "boolean" && { unread: c.unread }),
     ...(c.archived === true && { archived: true }),
+    ...(typeof c.folder === "string" && isServerPath(c.folder) && { folder: c.folder }),
     items: [],
   };
 }
