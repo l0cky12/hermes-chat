@@ -3,7 +3,9 @@
 // changes. Run against the fake Hermes, whose `session.branch` and `session.undo` follow the live probe of 2026-11-03.
 import { describe, expect, it } from "vitest";
 import type { BranchLink } from "./branch";
+import { referenceBlock } from "./chatReferences";
 import { FakeHermes, row } from "./fakeHermes";
+import { withContext } from "./projectContext";
 import { memoryCache } from "./memoryCache";
 import type { Item } from "./model";
 import { cannotResend, replayTarget, splitRefs, turnAt, turnsOf, variantRoot, variantsIn, withRefs } from "./replay";
@@ -293,6 +295,20 @@ describe("Regenerate", () => {
     expect(edit).toMatchObject({ refs: "@file:/srv/uploads/report.pdf", words: "Compare again" });
     await hermes.replay(p);
     expect(submits().at(-1)!.params.text).toBe("@file:/srv/uploads/report.pdf\n\nCompare again");
+  });
+
+  it("sends the Referenced chats the message carried again, for Regenerate and Edit", async () => {
+    const block = referenceBlock({ title: "Garage shelf", summary: "Four shelves on a 2x4 frame, 180 cm tall." });
+    const { hermes, itemWith, submits } = await chatWithHistory((s) => {
+      s.storeMessage("c1", { role: "user", text: withContext("What did we decide?", [block]) });
+      s.storeMessage("c1", { role: "assistant", text: "Four shelves." });
+    });
+    await hermes.replay(await hermes.previewReplay("c1", itemWith("Four shelves."), "regenerate"));
+    expect(submits().at(-1)!.params.text).toBe(withContext("What did we decide?", [block]));
+    const edit = await hermes.previewReplay("c1", itemWith("What did we decide?"), "edit");
+    expect(edit.words).toBe("What did we decide?");
+    await hermes.replay(edit, "How tall is it?");
+    expect(submits().at(-1)!.params.text).toBe(withContext("How tall is it?", [block]));
   });
 
   it("refuses a message sent with an image, which can't be sent again from the history", async () => {

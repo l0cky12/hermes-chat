@@ -1,7 +1,7 @@
 import { type ReactNode, type RefObject, Suspense, lazy, useCallback, useLayoutEffect, useMemo, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { ArrowLeft, ArrowRight, Columns2, FolderCog, GitBranch, PanelBottom, PanelLeft, PanelRight, PanelTop, X } from "lucide-react";
-import { CONNECT_STOPPED, LIVE_MIN_GAP_MS, RenameConflict, connect, openSaved, readSaved, toSource, type Delivery, type Hermes, type Notify } from "./hermes/transport";
+import { CONNECT_STOPPED, LIVE_MIN_GAP_MS, RenameConflict, TitleModelUnavailable, connect, openSaved, readSaved, toSource, type Delivery, type Hermes, type Notify } from "./hermes/transport";
 import { invoke } from "@tauri-apps/api/core";
 import type { CommandHost } from "./ui/SlashCommands";
 import { STEER, type ServerCommandList } from "./hermes/commands";
@@ -30,6 +30,8 @@ import { tauriSnapshots } from "./hermes/snapshots";
 import { needsAttention, type Updater } from "./hermes/updates";
 import { desktopNotify } from "./hermes/tauriNotify";
 import { ScreenshotDesk, type ScreenshotApi } from "./hermes/screenshots";
+import { ReferenceDesk } from "./hermes/chatReferences";
+import { deadline } from "./hermes/remoteFiles";
 import { desktopSummon, type SummonApi } from "./hermes/summon";
 import { onDesktopScreenshot, screenshotSupport, showWindow, syncScreenshotOutbox, tauriScreenshots, type ScreenshotSupport } from "./hermes/tauriScreenshot";
 import { AtConnectionLimit, ConnectionManager, DisconnectConnection, RailConnections, RemoveConnection, SwitchConnection, atLimitText, liveCounts } from "./ui/Connections";
@@ -41,7 +43,7 @@ import { AttemptLog, tauriAttemptStore } from "./hermes/attempts";
 import { readMethods } from "./hermes/signInMethods";
 import { PreferredRoutes, type RouteHealth, routesOf, sshAddressOf } from "./hermes/routes";
 import { signInError, testSignIn, type SignInError, type TestOutcome } from "./hermes/setup";
-import { isOutgoing, isWaiting, type Attachment, type Chat, type ConnectionStatus, type Found } from "./hermes/model";
+import { isOutgoing, isWaiting, type Attachment, type Chat, type ConnectionStatus, type Found, type SentReference } from "./hermes/model";
 import { shortName, type ModelCatalog, type ModelPick } from "./hermes/models";
 import { ChatList, Rail, leavingNote } from "./ui/Sidebar";
 import { type ChatLink, type ConnectionRefs, checkConnection, connectionKey, connectionLabel, connectionRefs, formatChatLink, locateChat, parseChatLink } from "./hermes/chatLinks";
@@ -82,7 +84,7 @@ import { SettingsScreen, type PersonaWiring } from "./ui/Settings";
 import type { ProfilesWiring } from "./ui/ProfileSettings";
 import { LeavePersona, type LeaveWhat } from "./ui/LeavePersona";
 import { LeaveArtifacts } from "./ui/ArtifactEditor";
-import { ArtifactStore, artifactIo, artifactKey, isDirty } from "./hermes/artifacts";
+import { ASK_DEADLINE_MS, ArtifactStore, artifactIo, artifactKey, isDirty } from "./hermes/artifacts";
 import { LeaveMemoryEdit, useCloseGuard } from "./ui/LeaveMemoryEdit";
 import { tauriCloseGuard, type CloseGuard } from "./ui/tauriWindow";
 import { FileBrowser } from "./ui/FileBrowser";
@@ -990,7 +992,7 @@ type Compare = readonly [CompareSide, CompareSide];
  * Starts a pane's chat if it hasn't started, and sends to it. `mirrored`: the message was typed in the other compared
  * pane, so this pane's own draft stays as it is. Resolves whether the message reached the chat's outbox.
  */
-type Deliver = (text: string, attachments: Attachment[], skill: SkillCall | undefined, mirrored: boolean) => Promise<boolean>;
+type Deliver = (text: string, attachments: Attachment[], skill: SkillCall | undefined, mirrored: boolean, references: SentReference[]) => Promise<boolean>;
 
 let panesMade = 0;
 /** A pane's key, which is also its name to Hermes for what is on screen (transport.ts `open`). */
@@ -1930,6 +1932,28 @@ export function Main({
     setDesk(d);
     return () => d.dispose();
   }, []);
+  // The chats each unsent message references (ADR 0165), summarized by the connection on screen.
+  const hermesNow = useRef(hermes);
+  hermesNow.current = hermes;
+  const [referenceDesk] = useState(
+    () =>
+      new ReferenceDesk(
+        (chatId) => deadline(hermesNow.current.summarizeChat(chatId), ASK_DEADLINE_MS),
+        (e) => (e instanceof TitleModelUnavailable ? { why: e.message, fix: "text-model" } : { why: errorText(e) }),
+      ),
+  );
+  const openTextGeneration = () => {
+    setProjectOpen(false);
+    setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
+    setRepoOpen(false);
+    setOutputsOpen(false);
+    setUsageOpen(false);
+    // One destination at a time: an earlier Memory shortcut mustn't switch Settings away from this one.
+    setShowMemory(undefined);
+    setShowDiagnostics(undefined);
+    setShowTextGeneration({});
+    setSettingsOpen(true);
+  };
   // Reveal the composer when Search, Settings, Projects, Server files or a narrow preview covers it, so the capture can
   // be reviewed.
   const takeScreenshot = (remote = false) => guard(() => {
@@ -2916,6 +2940,8 @@ export function Main({
           active={!covered && !covering && !previewCovers && (!split || isActive)}
           split={split}
           screenshots={desk}
+          referenceDesk={referenceDesk}
+          onTextGenerationSettings={openTextGeneration}
           screenshotWiring={screenshots}
           screenshotKeys={screenshotShortcut ? shortcutLabel(screenshotShortcut) : undefined}
           voice={voice}
@@ -3311,18 +3337,7 @@ export function Main({
           onRename={(id, title, from) => hermes.rename(id, title, from)}
           onRegenTitle={(id) => hermes.regenerateTitle(id)}
           onCopyLink={copyChatLink}
-          onTextGenerationSettings={() => {
-            setProjectOpen(false);
-            setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-            setRepoOpen(false);
-            setOutputsOpen(false);
-            setUsageOpen(false);
-            // One destination at a time: an earlier Memory shortcut mustn't switch Settings away from this one.
-            setShowMemory(undefined);
-            setShowDiagnostics(undefined);
-            setShowTextGeneration({});
-            setSettingsOpen(true);
-          }}
+          onTextGenerationSettings={openTextGeneration}
           onListProfiles={() => hermes.profiles()}
           onCheckOthers={() => void hermes.checkOtherProfiles()}
           onSwitchProfile={switchProfile}
@@ -4004,6 +4019,8 @@ function ChatView({
   screenshotWiring,
   screenshotKeys,
   voice,
+  referenceDesk,
+  onTextGenerationSettings,
 }: {
   hermes: Hermes;
   connection: SavedConnection;
@@ -4087,6 +4104,9 @@ function ChatView({
   screenshotWiring: Screenshots;
   screenshotKeys?: string;
   voice: VoiceApi;
+  /** The chats each unsent message references, by Draft key. */
+  referenceDesk: ReferenceDesk;
+  onTextGenerationSettings: () => void;
 }) {
   // What the owner has typed and not sent, kept for each chat on this connection and profile. Two panes on one chat
   // share its draft.
@@ -4173,7 +4193,7 @@ function ChatView({
 
   // A failed send stays in its chat's outbox. A failure to start a chat restores the New chat draft, unless the message
   // was typed in the other compared pane: there it still is.
-  const deliver: Deliver = async (text, attachments, skill, mirrored) => {
+  const deliver: Deliver = async (text, attachments, skill, mirrored, references) => {
     // In no outbox until its chat exists: an update's restart meanwhile keeps it as the draft (unsaved.ts). A mirrored
     // message is held with no text, so it doesn't go either, and is kept once, as the other pane's draft.
     const typed = mirrored ? "" : savedDrafts.take(shownDraft);
@@ -4185,13 +4205,17 @@ function ChatView({
       // Saved as a draft for the restart, so it doesn't go. Should the restart fail, it is back in the composer.
       const now = savedDrafts.get(held.key);
       savedDrafts.set(held.key, now ? `${now}\n\n${typed}` : typed);
+      referenceDesk.putBack(held.key, references);
       return false;
     }
     if ("delivery" in to) {
-      if (!mirrored) savedDrafts.putBack(draftOf(null), typed);
+      if (!mirrored) {
+        savedDrafts.putBack(draftOf(null), typed);
+        referenceDesk.putBack(draftOf(null), references);
+      }
       return false;
     }
-    const { delivery, itemId } = await hermes.sendTracked(to.id, text, attachments, skill);
+    const { delivery, itemId } = await hermes.sendTracked(to.id, text, attachments, skill, references);
     // No item: the chat left the list before the message went in, so it is in no outbox. Its words go back to its Draft
     // while a pane still shows it, and the chat is asked for: back in the list if Hermes still has it, else the Draft
     // moves to New chat. Once its panes have given way, they go straight to New chat (#467).
@@ -4213,11 +4237,11 @@ function ChatView({
   }, [delivers, paneKey]);
   // Screenshots are held and let go once for both compared chats: letting go after the first would delete a capture
   // the second still uploads.
-  const send = async (text: string, attachments: Attachment[], skill?: SkillCall) => {
+  const send = async (text: string, attachments: Attachment[], skill?: SkillCall, references: SentReference[] = []) => {
     const paths = attachments.map((a) => a.path);
     screenshots.hold(paths);
     const partner = compare?.partner();
-    const both = Promise.all([deliver(text, attachments, skill, false), partner?.(text, attachments, skill, true)]);
+    const both = Promise.all([deliver(text, attachments, skill, false, references), partner?.(text, attachments, skill, true, references)]);
     const [own, mirrored] = await (compare ? compare.track(both) : both);
     if (!own && !mirrored) return screenshots.sent(shownDraft, attachments, false);
     // The other chat's message holds the files now, and a screenshot goes once that message no longer needs it, so
@@ -4263,6 +4287,7 @@ function ChatView({
     if (row?.kind !== "user") return;
     const typed = savedDrafts.get(shownDraft);
     savedDrafts.set(shownDraft, typed ? `${typed}\n\n${row.text}` : row.text);
+    referenceDesk.putBack(shownDraft, row.outgoing?.references ?? []);
     hermes.dismiss(chat.id, itemId);
   };
 
@@ -4294,7 +4319,13 @@ function ChatView({
   const serverCommands = useServerCommands(hermes, status === "connected", profile);
   const skillCommands = useSkillCommands(hermes, status === "connected", profile);
   const caps = useCapabilities(hermes.capabilities);
+  // Another of the profile's chats can be referenced; a Bot Chat is its bot's, and an archived one is out of sight.
+  const referable = useMemo(
+    () => listedChats.filter((c) => c.id !== chat.id && !c.archived && !isBotChat(c) && c.title.trim()).map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt })),
+    [listedChats, chat.id],
+  );
   const commands: CommandHost = {
+    references: { chats: referable, reference: (c) => referenceDesk.add(shownDraft, { chatId: c.id, title: c.title }) },
     skills: status === "connected" ? skillCommands.skills : undefined,
     refreshSkills: skillCommands.refresh,
     guide: caps.caps.commands.state === "unsupported" ? () => openGuide(guideUrl("commands")) : undefined,
@@ -4531,6 +4562,7 @@ function ChatView({
       // typed stays in the composer, and a failure is a Failed message (ADR 0111).
       voiceSend={started ? (text) => hermes.sendTracked(chat.id, text) : undefined}
       commands={commands}
+      references={{ desk: referenceDesk, onTextModelSettings: onTextGenerationSettings }}
       onDismissSideQuestion={(id) => hermes.dismissSideQuestion(chat.id, id)}
       followUp={followUp}
       compare={compare}

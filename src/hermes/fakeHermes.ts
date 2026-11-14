@@ -445,6 +445,8 @@ export class FakeHermes {
   /** Set to make `GET /api/sessions/{id}/messages` fail with this. */
   messagesFailure?: string | Error;
   oneshotFailure?: string;
+  /** While set, `llm.oneshot` answers once it settles. */
+  oneshotGate?: Promise<void>;
   /** The owner's local disk, by path, for attachments. */
   files: Record<string, FakeFile> = {};
   /**
@@ -1130,9 +1132,13 @@ export class FakeHermes {
     "llm.oneshot": (r) => {
       if (!String(r.params.instructions ?? "").trim() && !String(r.params.input ?? "").trim())
         return this.fail(r.id, 4030, "llm.oneshot requires a template or instructions/input");
-      if (this.oneshotFailure !== undefined) return this.fail(r.id, 5030, `one-shot generation failed: ${this.oneshotFailure}`);
-      const answer = this.oneshotAnswer;
-      this.respond(r.id, { text: typeof answer === "string" ? answer : answer({ instructions: String(r.params.instructions ?? ""), input: String(r.params.input ?? "") }) });
+      const answer = () => {
+        if (this.oneshotFailure !== undefined) return this.fail(r.id, 5030, `one-shot generation failed: ${this.oneshotFailure}`);
+        const a = this.oneshotAnswer;
+        this.respond(r.id, { text: typeof a === "string" ? a : a({ instructions: String(r.params.instructions ?? ""), input: String(r.params.input ?? "") }) });
+      };
+      if (this.oneshotGate) void this.oneshotGate.then(answer);
+      else answer();
     },
     "model.options": (r) => {
       if (!this.modelOptionsResult) return this.fail(r.id, -32601, "Method not found: model.options");

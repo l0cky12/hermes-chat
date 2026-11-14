@@ -91,6 +91,20 @@ describe("The Bots view", () => {
     expect(screen.getByRole("button", { name: "New chat with Scribe" })).toBeTruthy();
   });
 
+  it("shows only the bots whose name holds what is typed in the search box, in any case, and not their description", async () => {
+    const { user } = await launch();
+    await openBots(user);
+    const search = within(bots()).getByRole("textbox", { name: "Search bots" });
+    await user.type(search, "SCRI");
+    expect(botRows().map((r) => r.querySelector(".bots-name")?.textContent)).toEqual(["Scribe"]);
+    await user.clear(search);
+    await user.type(search, "release");
+    expect(botRows()).toEqual([]);
+    expect(within(bots()).getByText("No bots match “release”.")).toBeTruthy();
+    await user.clear(search);
+    expect(botRows().length).toBe(2);
+  });
+
   it("opens a bot's Bot Chat in its profile, and keeps it out of the chat list", async () => {
     const { server, hermes, user } = await launch();
     await openBots(user);
@@ -174,6 +188,19 @@ describe("New bot in the Bots view", () => {
     await waitFor(() => expect(document.activeElement).toBe(ada));
     expect(within(bots()).getByRole("status").textContent).toBe("Created ada. Open its row to start its Bot Chat.");
     expect(server.requests.filter((r) => r.method === "session.create" || r.method === "prompt.submit")).toEqual([]);
+  });
+
+  it("clears a search that would hide the new bot, so its row is shown and focused", async () => {
+    const { user } = await launch();
+    await openBots(user);
+    await user.type(screen.getByLabelText("Search bots"), "scribe");
+    await user.click(screen.getByRole("button", { name: "New bot" }));
+    await user.type(within(form()).getByLabelText("Name"), "ada");
+    await user.click(within(form()).getByRole("button", { name: /Create bot/ }));
+    await waitFor(() => expect(botRows()).toHaveLength(3));
+    expect(screen.getByLabelText("Search bots")).toHaveProperty("value", "");
+    const ada = botRows().find((r) => r.querySelector(".bots-name")?.textContent === "Ada")!;
+    await waitFor(() => expect(document.activeElement).toBe(ada));
   });
 
   it("refuses a name another bot's profile has, before asking Hermes", async () => {
