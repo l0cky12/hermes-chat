@@ -6,6 +6,9 @@ import { fileURLToPath } from "node:url";
 export default defineConfig({
   root: fileURLToPath(new URL("..", import.meta.url)),
   plugins: [react()],
+  // Vitest scans only the test files for dependencies to pre-bundle. The app frame's own imports, found later on a cold
+  // cache, made Vite reload the page in the middle of the first test.
+  optimizeDeps: { entries: ["e2e/app.html"] },
   test: {
     include: ["e2e/features/**/*.e2e.tsx"],
     testTimeout: 30_000,
