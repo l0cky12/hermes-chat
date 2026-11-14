@@ -211,6 +211,9 @@ export const isServerPath = (raw: string) => /^(\/|~\/)/.test(raw) && !raw.inclu
 const BARE_HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.?(?::\d{1,5})?(?:[/?#]|$)/i;
 const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 
+/** Whether `text` starts as a web address typed without a scheme does (`github.com/a/b`), so it isn't a path. */
+export const looksLikeHost = (text: string) => BARE_HOST.test(text);
+
 export function parseAddress(raw: string, appOrigin: string): { target: PreviewTarget } | { error: string } {
   const text = raw.trim();
   if (!text) return { error: "Enter a web address or a path on the Hermes server." };
@@ -321,12 +324,17 @@ const LANGUAGES: Record<string, string> = {
   php: "php",
   swift: "swift",
   cs: "csharp",
+  // Plain text, named here so `previewKnows` takes them for files.
+  txt: "",
+  csv: "",
 };
 /** Hermes's own `language` names (`_FS_PREVIEW_LANGUAGE_BY_EXT`) that highlight.js calls something else. */
 const SERVER_LANGUAGES: Record<string, string> = { html: "xml", jsx: "javascript", tsx: "typescript", shell: "bash", toml: "ini", text: "", csv: "" };
 
 const extOf = (name: string) => /\.([a-z0-9]+)$/i.exec(name)?.[1].toLowerCase() ?? "";
 export const languageOf = (name: string) => LANGUAGES[extOf(name)] ?? "";
+/** Whether `name` ends in an extension the Preview has a view for, so a word like `package.json` reads as a file's name. */
+export const previewKnows = (name: string) => Object.hasOwn(LANGUAGES, extOf(name)) || IMAGE_NAME.test(name) || MARKDOWN_NAME.test(name) || HTML_NAME.test(name);
 const formatOf = (name: string): "markdown" | "html" | "code" => (MARKDOWN_NAME.test(name) ? "markdown" : HTML_NAME.test(name) ? "html" : "code");
 
 /** Why a file that isn't text or an image can't be shown. */
