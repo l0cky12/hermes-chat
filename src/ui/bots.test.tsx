@@ -155,6 +155,48 @@ describe("The Bots view", () => {
   });
 });
 
+describe("New bot in the Bots view", () => {
+  const form = () => screen.getByRole("dialog", { name: "New bot" });
+
+  it("makes a profile through New profile's form and shows the new bot's row, focused, without starting its Bot Chat", async () => {
+    const { server, user } = await launch();
+    await openBots(user);
+    await user.click(screen.getByRole("button", { name: "New bot" }));
+    await user.type(within(form()).getByLabelText("Name"), "ada");
+    await user.type(within(form()).getByLabelText("Description (optional)"), "Reads papers");
+    await user.click(within(form()).getByRole("button", { name: /Create bot/ }));
+    await waitFor(() => expect(botRows()).toHaveLength(3));
+    expect(screen.queryByRole("dialog", { name: "New bot" })).toBeNull();
+    expect(server.restRequests.filter((r) => r.method !== "GET").map((r) => [`${r.method} ${r.path}`, r.body])).toEqual([["POST /api/profiles", { name: "ada", description: "Reads papers" }]]);
+    const ada = botRows().find((r) => r.querySelector(".bots-name")?.textContent === "Ada")!;
+    expect(within(ada).getByText("Reads papers")).toBeTruthy();
+    expect(within(ada).getByText("No Bot Chat yet. Open it to start one.")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(ada));
+    expect(within(bots()).getByRole("status").textContent).toBe("Created ada. Open its row to start its Bot Chat.");
+    expect(server.requests.filter((r) => r.method === "session.create" || r.method === "prompt.submit")).toEqual([]);
+  });
+
+  it("refuses a name another bot's profile has, before asking Hermes", async () => {
+    const { server, user } = await launch();
+    await openBots(user);
+    await user.click(screen.getByRole("button", { name: "New bot" }));
+    await user.type(within(form()).getByLabelText("Name"), "scribe");
+    expect(within(form()).getByText("There's already a profile named scribe. Pick another name.")).toBeTruthy();
+    expect(within(form()).getByRole("button", { name: /Create bot/ })).toHaveProperty("disabled", true);
+    expect(server.restRequests.filter((r) => r.method !== "GET")).toEqual([]);
+  });
+
+  it("closes only the form on Escape, with focus back on New bot", async () => {
+    const { user } = await launch();
+    await openBots(user);
+    await user.click(screen.getByRole("button", { name: "New bot" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "New bot" })).toBeNull();
+    expect(bots()).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "New bot" }));
+  });
+});
+
 describe("Opening the Bots view", () => {
   const PNG = "data:image/png;base64,iVBORw0KGgo=";
   const names = () => botRows().map((r) => r.querySelector(".bots-name")?.textContent);

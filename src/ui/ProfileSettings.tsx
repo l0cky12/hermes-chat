@@ -429,6 +429,7 @@ export function ProfileSettings({ wiring }: { wiring: ProfilesWiring }) {
           lacking={lacking}
           returnTo={selectedRow}
           onClone={wiring.clone && (() => setDialog({ kind: "clone", source: selected }))}
+          onPersona={(name) => wiring.showTab("persona", name)}
           onDone={(result) => {
             setDialog(undefined);
             setNotice(result.notice);
@@ -707,30 +708,42 @@ function ModelPicker({
   );
 }
 
-/** What a finished form tells the tab: what to say, which row to select, and a profile to edit next. */
-type FormResult = { notice?: Notice; select?: string; edit?: string };
+/** What a finished form tells its screen: what to say, which row to select, and a profile to edit next. */
+export type FormResult = { notice?: Notice; select?: string; edit?: string };
 
 /**
  * New profile and Edit, one modal. New makes a blank profile in one create. Edit saves each changed field through its
  * own route, in order: description, model, then the name, so the earlier calls still use the old name. A failed field
  * keeps the dialog open, marked with Hermes's words; the fields that saved stay saved.
+ *
+ * The Bots view's New bot is this form's New (ADR 0164): `heading` and `createLabel` name what it makes there, and
+ * `noEdit` leaves out Set model after a create that didn't set it, since that screen has no Edit to go on to.
+ * `onPersona`: shows Settings → Persona on a profile, linked from Edit.
  */
-function ProfileForm({
+export function ProfileForm({
   wiring,
   row,
   rows,
   lacking,
   returnTo,
+  heading,
+  createLabel,
+  noEdit,
   onClone,
+  onPersona,
   onDone,
   onClose,
 }: {
-  wiring: ProfilesWiring;
+  wiring: Omit<ProfilesWiring, "showTab">;
   row?: ProfileRow;
-  rows: readonly ProfileRow[];
+  rows: readonly Pick<ProfileRow, "name">[];
   lacking: (a: ProfileAction) => boolean;
   returnTo: RefObject<HTMLElement | null>;
+  heading?: string;
+  createLabel?: string;
+  noEdit?: boolean;
   onClone?: () => void;
+  onPersona?: (name: string) => void;
   onDone: (result: FormResult) => void;
   onClose: () => void;
 }) {
@@ -956,7 +969,7 @@ function ProfileForm({
         }}
       >
         <h2 id={titleId} className="leave-title">
-          {row ? f.editTitle(rowName(l, row)) : f.newTitle}
+          {row ? f.editTitle(rowName(l, row)) : (heading ?? f.newTitle)}
         </h2>
         {madeNoModel ? (
           <>
@@ -969,9 +982,11 @@ function ProfileForm({
               >
                 {w.dismiss}
               </button>
-              <button className="btn primary" onClick={() => onDone({ select: madeNoModel.name, edit: madeNoModel.name })}>
-                {f.setModel}
-              </button>
+              {!noEdit && (
+                <button className="btn primary" onClick={() => onDone({ select: madeNoModel.name, edit: madeNoModel.name })}>
+                  {f.setModel}
+                </button>
+              )}
             </div>
           </>
         ) : asking ? (
@@ -1053,6 +1068,7 @@ function ProfileForm({
               {stateNote(states.model)}
             </div>
             {row ? (
+              onPersona && (
               <div className="field">
                 <span className="field-label">{w.menu.persona}</span>
                 <button
@@ -1061,13 +1077,14 @@ function ProfileForm({
                   onClick={() =>
                     leave(() => {
                       onClose();
-                      wiring.showTab("persona", row.name);
+                      onPersona(row.name);
                     })
                   }
                 >
                   {f.personaLink}
                 </button>
               </div>
+              )
             ) : (
               <div className="field">
                 <label className="field-label" htmlFor={soulId}>
@@ -1094,7 +1111,7 @@ function ProfileForm({
                 title={saveWhy ?? (row && nothing ? f.nothingChanged : undefined)}
                 onClick={() => void (row ? save() : create())}
               >
-                {saving && <Spinner />} {stopping ? f.stopping : saving ? (row ? f.saving : f.creating) : row ? f.save : f.create}
+                {saving && <Spinner />} {stopping ? f.stopping : saving ? (row ? f.saving : f.creating) : row ? f.save : (createLabel ?? f.create)}
               </button>
             </div>
             {saveWhy && !saving && saveWhy !== issue && saveWhy !== busyText && saveWhy !== renameWhy && (

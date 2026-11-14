@@ -79,6 +79,7 @@ import { AttentionClock, ClearedStore, PINS_KEY, PinStore, SNOOZE_KEY, STOP_WAIT
 import { IDLE_COMPACT_CHECK_MS, IdleCompactor, idleCompactionNote } from "./hermes/idleCompact";
 import { runFilter } from "./hermes/chatFilter";
 import { SettingsScreen, type PersonaWiring } from "./ui/Settings";
+import type { ProfilesWiring } from "./ui/ProfileSettings";
 import { LeavePersona, type LeaveWhat } from "./ui/LeavePersona";
 import { LeaveArtifacts } from "./ui/ArtifactEditor";
 import { ArtifactStore, artifactIo, artifactKey, isDirty } from "./hermes/artifacts";
@@ -3026,6 +3027,61 @@ export function Main({
     };
   });
 
+  // Settings → Profiles (ADR 0156), and the Bots view's New bot, which is its New profile form (ADR 0164).
+  const profilesWiring: Omit<ProfilesWiring, "showTab"> = {
+    api: hermes.manageProfiles,
+    clone: hermes.profileClone,
+    capabilities: hermes.capabilities,
+    inUse: profile,
+    connected: status === "connected",
+    unread: (name) => others.byName[name]?.unread,
+    catalog: () => hermes.modelSettings.providers(),
+    busy: (name) => {
+      if (name === profile) {
+        const running = chats.find((c) => c.running);
+        if (running) return { kind: "reply", title: running.title };
+        const queues = hermes.getSnapshot().queues;
+        return Object.values(queues).some((q) => !q.paused && q.items.length) ? { kind: "queue" } : undefined;
+      }
+      const working = live?.sessions.find((s) => s.profile === name && s.status === "working");
+      return working ? { kind: "reply", title: working.title } : undefined;
+    },
+    lostMessages: (name) => hermes.heldMessagesIn(name),
+    jobCount: (name) => hermes.cron.list(name).then((jobs) => jobs.length, () => undefined),
+    leaving: leavingNote(profile, chats, words.profiles.leaving),
+    switchTo: switchFromProfiles,
+    local: {
+      pending: () => renamePending(connection),
+      note: (from, to) => noteRename(connection, from, to),
+      clear: () => clearRename(connection),
+      renamed: async (from, to) => {
+        // This run's chat on screen moves with the profile, as this computer's data does.
+        const fromPref = prefScope(connection, from);
+        if (shown?.has(fromPref)) {
+          shown.set(prefScope(connection, to), shown.get(fromPref) ?? null);
+          shown.delete(fromPref);
+        }
+        try {
+          await renameProfileLocally(connection, from, to, profileStores());
+        } finally {
+          // The inbox's dismissals were rewritten under the new name: it reads them again.
+          acks.reload();
+          // The profile in use keeps its chats on screen under its new name, as a switch would show them.
+          if (hermes.profile === from) void hermes.switchProfile(to);
+        }
+      },
+      deleted: async (name) => {
+        try {
+          await forgetProfileLocally(connection, name, profileStores());
+        } finally {
+          acks.reload();
+          await syncScreenshotOutbox().catch(() => {});
+        }
+      },
+    },
+    copyText: (text) => (navigator.clipboard?.writeText ? navigator.clipboard.writeText(text) : Promise.reject(new Error("No clipboard"))),
+  };
+
   return (
     <LinksProvider preview={openPreview} web={webPages} onToast={(text) => setToast({ text, at: Date.now() })}>
     <div className="app" inert={covered || restarting}>
@@ -3292,6 +3348,7 @@ export function Main({
           onNewChat={(b) => openBot(b, "new")}
           onRefresh={() => void hermes.checkOtherProfiles()}
           onClose={() => setBotsOpen(false)}
+          profiles={profilesWiring}
         />
       )}
       {inboxOpen && (
@@ -3561,59 +3618,7 @@ export function Main({
             guard={guard}
             listProfiles={listProfiles}
             defaultName={defaultProfileName}
-            profilesTab={{
-              api: hermes.manageProfiles,
-              clone: hermes.profileClone,
-              capabilities: hermes.capabilities,
-              inUse: profile,
-              connected: status === "connected",
-              unread: (name) => others.byName[name]?.unread,
-              catalog: () => hermes.modelSettings.providers(),
-              busy: (name) => {
-                if (name === profile) {
-                  const running = chats.find((c) => c.running);
-                  if (running) return { kind: "reply", title: running.title };
-                  const queues = hermes.getSnapshot().queues;
-                  return Object.values(queues).some((q) => !q.paused && q.items.length) ? { kind: "queue" } : undefined;
-                }
-                const working = live?.sessions.find((s) => s.profile === name && s.status === "working");
-                return working ? { kind: "reply", title: working.title } : undefined;
-              },
-              lostMessages: (name) => hermes.heldMessagesIn(name),
-              jobCount: (name) => hermes.cron.list(name).then((jobs) => jobs.length, () => undefined),
-              leaving: leavingNote(profile, chats, words.profiles.leaving),
-              switchTo: switchFromProfiles,
-              local: {
-                pending: () => renamePending(connection),
-                note: (from, to) => noteRename(connection, from, to),
-                clear: () => clearRename(connection),
-                renamed: async (from, to) => {
-                  // This run's chat on screen moves with the profile, as this computer's data does.
-                  const fromPref = prefScope(connection, from);
-                  if (shown?.has(fromPref)) {
-                    shown.set(prefScope(connection, to), shown.get(fromPref) ?? null);
-                    shown.delete(fromPref);
-                  }
-                  try {
-                    await renameProfileLocally(connection, from, to, profileStores());
-                  } finally {
-                    // The inbox's dismissals were rewritten under the new name: it reads them again.
-                    acks.reload();
-                    // The profile in use keeps its chats on screen under its new name, as a switch would show them.
-                    if (hermes.profile === from) void hermes.switchProfile(to);
-                  }
-                },
-                deleted: async (name) => {
-                  try {
-                    await forgetProfileLocally(connection, name, profileStores());
-                  } finally {
-                    acks.reload();
-                    await syncScreenshotOutbox().catch(() => {});
-                  }
-                },
-              },
-              copyText: (text) => (navigator.clipboard?.writeText ? navigator.clipboard.writeText(text) : Promise.reject(new Error("No clipboard"))),
-            }}
+            profilesTab={profilesWiring}
           />
         ) : usageOpen ? (
           <UsageAnalytics

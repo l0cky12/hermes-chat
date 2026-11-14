@@ -128,7 +128,7 @@ Hermes's way of treating each profile as a bot with a lasting identity, each wit
 _Avoid_: agents mode, roster (Hermes's desktop calls its list that, but here it is the Bots view)
 
 **Bot**:
-A profile as the Bots view shows it: its name, picture and description, from Hermes. Its row shows its Bot Chat's last message, and whether it is Replying or Needs you. Clicking the row opens its Bot Chat; the pen beside it starts an ordinary chat in that profile.
+A profile as the Bots view shows it: its name, picture and description, from Hermes. Its row shows its Bot Chat's last message, and whether it is Replying or Needs you. Clicking the row opens its Bot Chat; the pen beside it starts an ordinary chat in that profile. New bot (+) in the Bots view makes one: a new profile, through the New profile form (ADR 0164).
 _Avoid_: agent (Hermes's own word for what runs the chat), assistant, persona (that is the profile's SOUL.md)
 
 **Bot Chat**:

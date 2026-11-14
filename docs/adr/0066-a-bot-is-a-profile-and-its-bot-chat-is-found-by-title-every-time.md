@@ -20,7 +20,7 @@ Issue #222 asked for Hermes's Bot Mode, as the official Hermes desktop app has i
   5. A second click while a creation runs joins it.
 
   No session id is kept as the bot's chat: not in memory between opens, not on disk, and not as the chat to reopen at the next launch. Recency never picks the chat. A bot in another profile switches the profile first, as the switcher does, and asks first if leaving that profile would leave a reply or Approval behind.
-- **No intro is sent.** Hermes's desktop greets a bot with "Hey, tell me about yourself!" only when its New Agent flow creates the bot. Its comments say why a click must not: an intro on every re-created chat used a model turn each time and put a message in the owner's name into the chat. This app doesn't create bots, so the owner speaks first. The issue described the intro on every creation. This follows Hermes's code instead.
+- **No intro is sent.** Hermes's desktop greets a bot with "Hey, tell me about yourself!" only when its New Agent flow creates the bot. Its comments say why a click must not: an intro on every re-created chat used a model turn each time and put a message in the owner's name into the chat. This app didn't create bots then, so the owner speaks first. (New bot, ADR 0164, now makes one, and still sends no intro.) The issue described the intro on every creation. This follows Hermes's code instead.
 - **A Bot Chat stays out of the chat list and search.** Hermes's list already leaves hidden sessions out, except in the archived view. Its search doesn't. So the app leaves out these sessions itself:
   - any listed row titled "Bot Chat", which also covers one created visible by an older client;
   - any search hit with that title, or whose id or lineage root the roster named.
