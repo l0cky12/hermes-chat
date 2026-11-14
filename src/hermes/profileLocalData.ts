@@ -50,7 +50,7 @@ export const CONNECTION_KEYS: readonly { prefix: string; kind: "name" | "names" 
 /** A rename made on the server whose move on this computer hasn't finished, by connection (`renamePending`). */
 export const RENAMES_KEY = "hermes-chat.profile-renames";
 
-/** Where the Outputs screen kept its index, every connection and profile in one document, until ADR 0168 removed it. */
+/** Where the Outputs screen kept its index, every connection and profile in one document, until ADR 0170 removed it. */
 const RETIRED_OUTPUTS_KEY = "hermes-chat.outputs";
 
 /** Documents `{scopes: {[scope]: …}}` with a scope for each connection and profile. */
@@ -87,7 +87,7 @@ export const NOT_PER_PROFILE: Record<string, string> = {
   [RETIRED_OUTPUTS_KEY]: "The Outputs screen's index, from before the screen was removed: deleted at launch (`dropRetiredData`)",
 };
 
-/** Deletes what this computer kept for a screen that is gone, so it isn't kept forever: the Outputs index (ADR 0168). */
+/** Deletes what this computer kept for a screen that is gone, so it isn't kept forever: the Outputs index (ADR 0170). */
 export function dropRetiredData(storage: Pick<Storage, "removeItem"> = localStorage) {
   try {
     storage.removeItem(RETIRED_OUTPUTS_KEY);

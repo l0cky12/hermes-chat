@@ -1,4 +1,4 @@
-// Artifacts: Server files opened to edit beside the chat, from the Preview (GLOSSARY.md "Artifact", ADR 0029, ADR 0168).
+// Artifacts: Server files opened to edit beside the chat, from the Preview (GLOSSARY.md "Artifact", ADR 0029, ADR 0170).
 // An artifact is one file on one machine: a `host` file is on the dashboard's own machine and is read and saved through
 // the managed-files routes, exactly as Server files edits a file (ADR 0024); any other is where its profile's tools
 // run, read with `GET /api/fs/read-data-url` and saved with `POST /api/fs/write-text`, the routes that follow the

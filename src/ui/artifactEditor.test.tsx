@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// The artifact editor in the running app (ADR 0029, ADR 0168): a Server file shown in the preview pane, opened to edit
+// The artifact editor in the running app (ADR 0029, ADR 0170): a Server file shown in the preview pane, opened to edit
 // beside the chat with the Preview's Edit, against a fake Hermes whose agent fs routes, write-text and `llm.oneshot` answer as the deployed `bf0203a` does.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -90,7 +90,7 @@ describe("The artifact editor", () => {
     expect(changes.textContent).toMatch(/added.*removed/);
     await user.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText(/Saved\. Hermes has your edit, read back from the server\./);
-    // Saved as the Preview read it: a link from a tool call names no chat's sandbox (ADR 0062, ADR 0168).
+    // Saved as the Preview read it: a link from a tool call names no chat's sandbox (ADR 0062, ADR 0170).
     expect(server.fsWrites).toEqual([{ profile: "default", path: "/srv/out/plan.md", text: "# Launch plan\n\nShip it.\n" }]);
     expect(document.querySelector(".artifact-id .badge")!.textContent).toMatch(/^Saved /);
   });

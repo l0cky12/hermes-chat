@@ -344,7 +344,7 @@ export const CAPABILITIES: readonly CapabilitySpec[] = [
   {
     id: "outputs",
     label: "Outputs",
-    // The Outputs screen is gone (ADR 0168). The id stays: extensions name capabilities in `needs` (ADR 0126).
+    // The Outputs screen is gone (ADR 0170). The id stays: extensions name capabilities in `needs` (ADR 0126).
     usedBy: "Extensions that list outputs in their needs",
     needs: "GET /api/fs/list, and GET /api/sessions/{id}/messages with tool rows.",
     without: "An extension that needs it shows what is missing instead of running.",

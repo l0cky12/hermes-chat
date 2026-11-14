@@ -113,7 +113,7 @@ export function PreviewPane({
   /** Where an artifact's draft lives (artifacts.ts): editing it in the pane, and away from it, share one store. */
   artifacts?: ArtifactStore;
   /**
-   * The connection and profile a Server file is edited in, as an artifact (ADR 0029, ADR 0168), and the chat on screen,
+   * The connection and profile a Server file is edited in, as an artifact (ADR 0029, ADR 0170), and the chat on screen,
    * whose model "Ask Hermes to edit" borrows. None offers no Edit.
    */
   artifactScope?: Pick<ArtifactRef, "scope" | "profile" | "chatId">;

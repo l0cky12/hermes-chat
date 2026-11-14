@@ -1,6 +1,6 @@
 # Outputs are the files Hermes's tools say they wrote, indexed on this computer as metadata only
 
-> **Superseded by [ADR 0168](0168-the-outputs-screen-is-removed-and-artifacts-open-from-the-preview.md)** (#570). The Outputs screen and its index are gone. Its rules for what counts as an Output no longer run anywhere. The `outputs` capability and its check stay for extensions that name it.
+> **Superseded by [ADR 0170](0170-the-outputs-screen-is-removed-and-artifacts-open-from-the-preview.md)** (#570). The Outputs screen and its index are gone. Its rules for what counts as an Output no longer run anywhere. The `outputs` capability and its check stay for extensions that name it.
 
 Outputs lists the files Hermes made in a chat, a project or a whole profile, so the owner can find them without reading a long transcript or browsing the server. Hermes has no record of "files this session produced": the official desktop app's Artifacts page scrapes every path and URL out of replies and tool output. This app counts a file only when a tool says, in its own structured result, that it wrote it:
 

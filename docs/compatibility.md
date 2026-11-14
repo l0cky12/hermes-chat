@@ -149,7 +149,7 @@ Needs the webhook routes under `/api/webhooks`. Checked with `GET /api/webhooks`
 
 ## Outputs
 
-Needs `GET /api/fs/list`, and `GET /api/sessions/{id}/messages` with tool rows. Checked with `GET /api/fs/list`. The Outputs screen is gone (ADR 0168). The capability stays because extensions can name `outputs` in `needs` (ADR 0126): without `fs/list`, such an extension shows what is missing instead of running.
+Needs `GET /api/fs/list`, and `GET /api/sessions/{id}/messages` with tool rows. Checked with `GET /api/fs/list`. The Outputs screen is gone (ADR 0170). The capability stays because extensions can name `outputs` in `needs` (ADR 0126): without `fs/list`, such an extension shows what is missing instead of running.
 
 ## Sign-in methods
 

@@ -3105,7 +3105,7 @@ fn is_session_list(path: &str) -> bool {
     segs.next() == Some("api") && segs.next() == Some("sessions") && segs.next().is_none()
 }
 
-/// The most read of one relayed answer, set for the removed Outputs screen's reads of one chat (ADR 0168). The biggest
+/// The most read of one relayed answer, set for the removed Outputs screen's reads of one chat (ADR 0170). The biggest
 /// the webview asks of `get_limited` is about 13.4 MiB, a 10 MiB image preview as base64 JSON (src/hermes/remoteFiles.ts).
 const RELAY_MAX_BYTES: u64 = 64 * MIB;
 
