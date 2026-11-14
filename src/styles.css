@@ -456,7 +456,7 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 .msg.assistant :not(pre) > code {
   background: var(--raised-2); padding: 1.5px 5px; border-radius: 5px; font-size: 0.86em; color: var(--code-inline);
 }
-/* A path in a reply (previewContext.tsx `PathLink`, ADR 0163): the words' own colour, so a reply full of paths doesn't
+/* A path in a reply (previewContext.tsx `PathLink`, ADR 0167): the words' own colour, so a reply full of paths doesn't
    turn link blue, with a dotted line under it for what a click opens. */
 .path-link { color: inherit; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; cursor: pointer; border-radius: 3px; }
 .path-link:hover { text-decoration: underline solid currentColor; }
@@ -3508,7 +3508,7 @@ label.memory-pick { cursor: pointer; }
 .terminal-shells { margin: 10px 12px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: none; }
 .terminal-kinds { flex: none; }
 .terminal-kinds button { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; }
-/* A folder shell (ADR 0163): a chip beside the two computers, with its own close button. */
+/* A folder shell (ADR 0167): a chip beside the two computers, with its own close button. */
 .terminal-folder { display: inline-flex; align-items: center; max-width: 220px; min-width: 0; background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
 .terminal-folder button { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 6px; font-size: calc(12rem / 14); color: var(--muted); min-width: 0; }
 .terminal-folder button > svg, .terminal-folder button > .dot { flex: none; }

@@ -1,4 +1,4 @@
-// Paths in a reply (ADR 0163): which words are a path, the full path each one names, and what opening one does. Pure,
+// Paths in a reply (ADR 0167): which words are a path, the full path each one names, and what opening one does. Pure,
 // with no React and no transport. A path is where Hermes's tools run, never on this computer, and it is model output:
 // nothing here reads it as anything but text.
 import { isServerPath, looksLikeHost, previewKnows, withoutBidi, type PreviewTarget } from "./preview";

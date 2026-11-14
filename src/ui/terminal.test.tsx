@@ -387,7 +387,7 @@ describe("Which computer the Terminal opens on", () => {
   });
 });
 
-describe("A folder shell (ADR 0163)", () => {
+describe("A folder shell (ADR 0167)", () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => localStorage.clear());
 

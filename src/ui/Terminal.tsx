@@ -1,7 +1,7 @@
 // The side panel's Terminal (ADR 0022, ADR 0039, ADR 0051): a shell on the Hermes server through the owner's own ssh,
 // and a shell on this computer, each in a terminal of its own. It opens on the one picked last, the server's until then. Both stay alive while the owner is in another tab or the panel is
 // hidden. Ending a session, or its shell exiting, keeps what was printed, with a way to start again. A folder a reply
-// named gets a shell of its own beside them, started in that folder (a folder shell, ADR 0163).
+// named gets a shell of its own beside them, started in that folder (a folder shell, ADR 0167).
 import { useEffect, useRef, useState } from "react";
 import { Folder, Laptop, Play, Plug, Server, X } from "lucide-react";
 import { Terminal as XTerm, type ITheme } from "@xterm/xterm";
@@ -299,7 +299,7 @@ function statusWord(s: TerminalState) {
 
 /**
  * The Terminal tab: the Hermes server's shell and this computer's, then a shell for each folder opened from a reply
- * (ADR 0163), one shown at a time, switched at the top. `shells` says which there are and which is shown
+ * (ADR 0167), one shown at a time, switched at the top. `shells` says which there are and which is shown
  * (useShells.ts). The server's and this computer's are each made the first time they are shown, and a folder shell
  * when it is opened; each is kept from then on, so its session runs on while another is shown. Closing a folder shell
  * ends it.

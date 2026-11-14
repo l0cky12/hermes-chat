@@ -1,4 +1,4 @@
-// The Terminal tab's shells as the app holds them (terminal.ts `Shells`, ADR 0163), above the tab itself: a path in a
+// The Terminal tab's shells as the app holds them (terminal.ts `Shells`, ADR 0167), above the tab itself: a path in a
 // reply opens a folder shell whether or not the tab has been shown yet.
 import { useMemo, useRef, useState } from "react";
 import { closeShell, moveShell, openShellIn, showShell, shellsAt, type ShellId, type Shells, type TerminalKind } from "../hermes/terminal";

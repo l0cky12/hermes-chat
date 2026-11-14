@@ -48,7 +48,7 @@ function rehypeFind(query: string) {
 }
 
 /**
- * Rehype plugin (ADR 0163): wraps each path in running text and in a code span in `<a data-path>`, with `data-folder`
+ * Rehype plugin (ADR 0167): wraps each path in running text and in a code span in `<a data-path>`, with `data-folder`
  * when it is written as a folder, and makes a link whose address is a path into the same element. The `<a>` has no
  * `href`: a path is never an address the window could follow, and react-markdown's URL policy has nothing of it to
  * read. Code blocks, math and the words of a link are left as they are.

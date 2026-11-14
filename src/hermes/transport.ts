@@ -4982,7 +4982,7 @@ export class Hermes {
   }
 
   /**
-   * What is at `path` where the profile shown runs its tools (ADR 0163), by listing it: a listing is a folder,
+   * What is at `path` where the profile shown runs its tools (ADR 0167), by listing it: a listing is a folder,
    * `ENOTDIR` a file, `ENOENT` nothing. `unknown` when Hermes can't say: not connected, no such route, a refusal, a
    * listing too long to read. The listing names no chat, so a file in a chat's sandbox reads as missing.
    * Never rejects.

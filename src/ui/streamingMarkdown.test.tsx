@@ -187,7 +187,7 @@ describe("A streamed reply, once finished", () => {
     seen.forEach((html, i) => expect(html, `after ${(i + 1) * 5} characters`).toBe(whole(text.slice(0, (i + 1) * 5))));
   });
 
-  it("links the paths the one-piece render links, at every delta and once finished (ADR 0163)", { timeout: 30_000 }, async () => {
+  it("links the paths the one-piece render links, at every delta and once finished (ADR 0167)", { timeout: 30_000 }, async () => {
     const inAChat: Around = ({ children }) => (
       <LinksProvider preview={vi.fn()} path={async () => {}} web={{ openInBrowser: vi.fn() }} onToast={vi.fn()}>
         <PathsIn folder="/srv/app">{children}</PathsIn>

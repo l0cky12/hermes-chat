@@ -1292,7 +1292,7 @@ export function Main({
   /** Automations (webhook routes, ADR 0108) cover the chat too. */
   const [automationsOpen, setAutomationsOpen] = useState(false);
   // The side panel's Terminal (ADR 0022, ADR 0039): which shell is shown, kept in the prefs so it opens on the one picked
-  // last (the Hermes server's until then, ADR 0051), the folder shells a reply's paths opened (ADR 0163), and which are
+  // last (the Hermes server's until then, ADR 0051), the folder shells a reply's paths opened (ADR 0167), and which are
   // running, for the rail's dot.
   const terminalShells = useShells();
   // The list holds the profile's archived chats only while its Archived section is shown (ADR 0063); a profile switch
@@ -1468,7 +1468,7 @@ export function Main({
     },
     [openPanel],
   );
-  // A path in a reply (ADR 0163): a file opens in the Preview, a folder in a folder shell on the Hermes server. One
+  // A path in a reply (ADR 0167): a file opens in the Preview, a folder in a folder shell on the Hermes server. One
   // opener for every pane, so the newest click wins whichever pane it was in.
   const openShellIn = terminalShells.openIn;
   const openPath = useMemo(

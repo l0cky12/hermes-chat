@@ -24,7 +24,7 @@ impl<'a> Target<'a> {
     }
 }
 
-/// A folder on the server a terminal's shell starts in (ADR 0163): `/…` or `~/…`, at most 4096 bytes, with no `'`,
+/// A folder on the server a terminal's shell starts in (ADR 0167): `/…` or `~/…`, at most 4096 bytes, with no `'`,
 /// `\`, `!` or control character. The path is model output, so it reaches the server's login shell only inside single
 /// quotes, and these are the characters that mean something there to some shell: `'` ends the quotes, fish reads `\'`
 /// and `\\` inside them, and csh expands `!` and ends a word at a newline inside them.

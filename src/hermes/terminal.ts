@@ -11,7 +11,7 @@ export type TerminalEvent = { kind: "output"; data: Uint8Array } | { kind: "exit
 
 /**
  * Rust's terminal commands. `open` resolves to the terminal's id; its events may start before it resolves. `folder`:
- * the folder its shell starts in, in place of the home folder (ADR 0163). `write` carries only what the owner typed.
+ * the folder its shell starts in, in place of the home folder (ADR 0167). `write` carries only what the owner typed.
  */
 export type TerminalApi = {
   open(target: string, cols: number, rows: number, onEvent: (e: TerminalEvent) => void, folder?: string): Promise<number>;
@@ -22,7 +22,7 @@ export type TerminalApi = {
 
 /**
  * One of the Terminal tab's shells. `server` and `local` are the two it always has. A folder shell's id names its
- * computer and its folder, so opening the same folder again finds the shell already there (ADR 0163).
+ * computer and its folder, so opening the same folder again finds the shell already there (ADR 0167).
  */
 export type ShellId = TerminalKind | `in:${TerminalKind}:${string}`;
 

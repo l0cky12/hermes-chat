@@ -1745,7 +1745,7 @@ fn permission<R: tauri::Runtime>(webview: &tauri::Webview<R>, kind: PermissionKi
 
 /// Opens a terminal on the server: `ssh` to `target` (the sign-in's SSH target, or one the owner gave the terminal),
 /// `cols` × `rows`, its output and end sent to `on_event` (terminal.rs, ADR 0022). `folder`: a folder on the server
-/// its shell starts in, a path a reply named (ADR 0163).
+/// its shell starts in, a path a reply named (ADR 0167).
 #[tauri::command]
 async fn terminal_open(
     terminals: State<'_, terminal::Terminals>,
@@ -1779,7 +1779,7 @@ fn terminal_close(terminals: State<'_, terminal::Terminals>, id: u64) {
 }
 
 /// Opens a terminal on this computer: the owner's own login shell, in their home folder (ADR 0039), or in `folder`
-/// (ADR 0163). The webview picks neither the program nor its arguments.
+/// (ADR 0167). The webview picks neither the program nor its arguments.
 #[tauri::command]
 async fn terminal_open_local(
     terminals: State<'_, terminal::Terminals>,

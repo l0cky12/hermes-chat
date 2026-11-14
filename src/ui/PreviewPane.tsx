@@ -673,7 +673,7 @@ function FileBody({ name, load }: { name: string; load: () => Promise<FileView> 
 }
 
 /**
- * The paths in a Server file (ADR 0163): a relative one is relative to the folder the file is in, in the same chat's
+ * The paths in a Server file (ADR 0167): a relative one is relative to the folder the file is in, in the same chat's
  * sandbox. A file on the dashboard's own machine names no path where tools run, so none of its paths link.
  */
 function ServerFilePaths({ here, children }: { here: Extract<PreviewTarget, { kind: "server" }>; children: ReactNode }) {

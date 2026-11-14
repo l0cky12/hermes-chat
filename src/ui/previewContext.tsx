@@ -32,7 +32,7 @@ export const useLinkMenu = () => {
 };
 
 /**
- * Marks the text under it as speaking of where Hermes's tools run, so the paths in it link (ADR 0163): a chat's
+ * Marks the text under it as speaking of where Hermes's tools run, so the paths in it link (ADR 0167): a chat's
  * transcript, a Server file. Markdown outside one links no path: a Local file's `~/notes` is on this computer.
  * `folder`: the folder a relative path joins, a chat's working folder; without one, only full paths link. `session`:
  * the chat whose sandbox a path may be in (preview.ts `readServerFile`).
@@ -262,7 +262,7 @@ export function PreviewLink({
 }
 
 /**
- * A path in a reply (ADR 0163). A click, or Enter, opens it: a file in the Preview, a folder in a folder shell. It is
+ * A path in a reply (ADR 0167). A click, or Enter, opens it: a file in the Preview, a folder in a folder shell. It is
  * an `<a>` with no `href`, so nothing can ever send the app's window to it. Outside a `PathsIn`, with a relative path
  * and no folder to join, or where nothing opens paths, it stays the text's own words.
  */

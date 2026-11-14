@@ -446,7 +446,7 @@ The menu a right click, the Menu key or Shift+F10 opens on a link in a reply, a 
 _Avoid_: context menu (fine in conversation), integrated browser (that is the Preview), system browser (say your browser)
 
 **Path link**:
-A file's or a folder's path in a reply, a Side question or a Server file's Markdown, made clickable: a full path (`/etc/hosts`, `~/notes/`), or one relative to the folder the chat works in (`src/ui/Markdown.tsx`). It is found in running text, in a code span and as a Markdown link's address, never in a code block. A click, or Enter, asks the Hermes server what is at the path: a file opens in the Preview, and a folder opens a Folder shell. A path written with a slash at its end is taken for a folder without asking. Its menu (right click, the Menu key or Shift+F10) has Open in the Preview, Open in the Terminal and Copy path. It is never a web address, and the path is always one where Hermes's tools run (ADR 0163).
+A file's or a folder's path in a reply, a Side question or a Server file's Markdown, made clickable: a full path (`/etc/hosts`, `~/notes/`), or one relative to the folder the chat works in (`src/ui/Markdown.tsx`). It is found in running text, in a code span and as a Markdown link's address, never in a code block. A click, or Enter, asks the Hermes server what is at the path: a file opens in the Preview, and a folder opens a Folder shell. A path written with a slash at its end is taken for a folder without asking. Its menu (right click, the Menu key or Shift+F10) has Open in the Preview, Open in the Terminal and Copy path. It is never a web address, and the path is always one where Hermes's tools run (ADR 0167).
 _Avoid_: file link, hyperlink (that is a link, which opens a web page), path chip (a tool call's)
 
 **Server file**:
@@ -510,7 +510,7 @@ The Side panel's tab with the owner's own shells: one on the Hermes server, thro
 _Avoid_: console, shell (for the tab), Hermes's terminal tool (the agent's, which runs in a chat)
 
 **Folder shell**:
-A shell in the Terminal that starts in one folder on the Hermes server, opened from a Path link. It is an ssh of its own beside the owner's two shells, shown as a chip with the folder's name, and it runs on while another shell shows. The same folder opened again shows the shell it already has, started again only if it ended. Closing its chip ends it. The Terminal holds eight. A folder whose path has a quote, a backslash, an exclamation mark or a control character in it gets none, since the path reaches the server's shell only as one quoted word. With no SSH target, it can start on this computer in the same folder instead (ADR 0163).
+A shell in the Terminal that starts in one folder on the Hermes server, opened from a Path link. It is an ssh of its own beside the owner's two shells, shown as a chip with the folder's name, and it runs on while another shell shows. The same folder opened again shows the shell it already has, started again only if it ended. Closing its chip ends it. The Terminal holds eight. A folder whose path has a quote, a backslash, an exclamation mark or a control character in it gets none, since the path reaches the server's shell only as one quoted word. With no SSH target, it can start on this computer in the same folder instead (ADR 0167).
 _Avoid_: tab (the Terminal is the tab), session, working directory shell
 
 **Screen**:

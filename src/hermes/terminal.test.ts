@@ -209,7 +209,7 @@ describe("terminal target", () => {
   });
 });
 
-describe("a terminal in a folder (ADR 0163)", () => {
+describe("a terminal in a folder (ADR 0167)", () => {
   it("starts in its folder each time it starts, and a terminal with none starts where ssh puts it", async () => {
     const api = new FakeTerminals();
     const inFolder = new TerminalSession(api, () => {}, () => {}, "/srv/app/docs");
@@ -223,7 +223,7 @@ describe("a terminal in a folder (ADR 0163)", () => {
   });
 });
 
-describe("the Terminal tab's shells (ADR 0163)", () => {
+describe("the Terminal tab's shells (ADR 0167)", () => {
   const at = (folder: string) => resolvePath(folder, undefined) as ServerPath;
   const opened = (s: Shells, folder: string, kind: "server" | "local" = "server") => {
     const next = openShellIn(s, kind, at(folder));

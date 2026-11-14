@@ -39,7 +39,7 @@ export const CASES: Case[] = [
   { name: "math-dollar", what: '"$a ".repeat(n), rendered', sizes: [2500, 5000, 10000, 20000], run: (n) => render(REPLIES["math-dollar"](n)) },
   { name: "math-paren", what: '"\\\\(a ".repeat(n), rendered', sizes: [2500, 5000, 10000, 20000], run: (n) => render(REPLIES["math-paren"](n)) },
   { name: "code-untagged", what: "untagged code block of n characters, rendered", sizes: [25000, 50000, 100000, 200000], run: (n) => render(untagged(n)) },
-  { name: "paths", what: '"a/ /a ))/b/c)) ".repeat(n), rendered: words that nearly are paths (ADR 0163)', sizes: [500, 1000, 2000, 4000], run: (n) => render(REPLIES.paths(n)) },
+  { name: "paths", what: '"a/ /a ))/b/c)) ".repeat(n), rendered: words that nearly are paths (ADR 0167)', sizes: [500, 1000, 2000, 4000], run: (n) => render(REPLIES.paths(n)) },
   {
     name: "code-untagged-find",
     what: "the same block rendered twice, the second time marking a find query",

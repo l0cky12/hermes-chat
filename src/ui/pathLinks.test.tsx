@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Paths in a reply, in the signed-in app against a fake Hermes (ADR 0163): a file's path opens the file in the
+// Paths in a reply, in the signed-in app against a fake Hermes (ADR 0167): a file's path opens the file in the
 // Preview, a folder's opens a shell started in it in the Terminal, and nothing is ever typed into a shell. Rust's
 // terminal commands and xterm.js are stood in for; what they were asked for is what the tests read.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";

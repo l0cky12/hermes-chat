@@ -1,4 +1,4 @@
-// Paths in a reply (ADR 0163): which words link, what full path each names, and where opening one goes.
+// Paths in a reply (ADR 0167): which words link, what full path each names, and where opening one goes.
 import { describe, expect, it, vi } from "vitest";
 import { destinationOf, findPaths, folderOf, hrefPath, pathOpener, resolvePath, type PathKind, type PathOpen, type ServerPath } from "./paths";
 import type { PreviewTarget } from "./preview";

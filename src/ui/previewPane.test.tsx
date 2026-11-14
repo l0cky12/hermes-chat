@@ -1563,7 +1563,7 @@ describe("The link menu (issue #240)", () => {
     expect(rightClick(hosts)).toBe(false);
     expect(screen.queryByRole("menu")).toBeNull();
 
-    // A file: address on no machine is a path on the server (ADR 0163), with the path menu.
+    // A file: address on no machine is a path on the server (ADR 0167), with the path menu.
     expect(rightClick(within(pane()).getByText("this server's"))).toBe(false);
     expect(menuItems()).toEqual(["Open in the Preview", "Open in the Terminal", "Copy path"]);
     await user.keyboard("{Escape}");

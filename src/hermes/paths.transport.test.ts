@@ -1,4 +1,4 @@
-// What the transport tells path links (ADR 0163), against FakeHermes: what is at a path where tools run, and the
+// What the transport tells path links (ADR 0167), against FakeHermes: what is at a path where tools run, and the
 // folder each chat works in, which a relative path in its replies is relative to.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "./fakeHermes";

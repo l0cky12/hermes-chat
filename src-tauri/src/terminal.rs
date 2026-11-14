@@ -91,7 +91,7 @@ pub struct Terminals {
     open: Mutex<HashMap<u64, Session>>,
 }
 
-/// `ssh` to `target` in a terminal, its shell started in `folder` on the server when one is given (ADR 0163).
+/// `ssh` to `target` in a terminal, its shell started in `folder` on the server when one is given (ADR 0167).
 pub fn ssh_command(target: &str, folder: Option<&str>) -> Result<Command, TerminalError> {
     let target = Target::parse(target).ok_or(TerminalError::BadTarget)?;
     let folder = folder.map(|f| Folder::parse(f).ok_or(TerminalError::BadFolder)).transpose()?;
@@ -140,7 +140,7 @@ fn local_folder(folder: &str, home: Option<&Path>) -> Option<PathBuf> {
 }
 
 /// The owner's own shell on this computer, started in their home folder (ADR 0039), or in `folder` when one is given
-/// (ADR 0163). Nothing the webview sends picks the program or its arguments, and no shell reads `folder`: it is the
+/// (ADR 0167). Nothing the webview sends picks the program or its arguments, and no shell reads `folder`: it is the
 /// process's working folder, so any character in it is only a character.
 pub fn local_shell_command(folder: Option<&str>) -> Result<Command, TerminalError> {
     #[cfg(windows)]

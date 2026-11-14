@@ -162,7 +162,7 @@ describe("A link's tooltip (#471)", () => {
   });
 });
 
-describe("A path in a reply (ADR 0163)", () => {
+describe("A path in a reply (ADR 0167)", () => {
   /** A reply in a chat that works in `/srv/app`, with `open` standing in for what opens a path. */
   function reply(text: string, { open = vi.fn(async (_: PathOpen) => {}), folder = "/srv/app" as string | null, query = "" } = {}) {
     const onToast = vi.fn();
