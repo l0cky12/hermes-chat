@@ -82,6 +82,7 @@ import { SettingsScreen, type PersonaWiring } from "./ui/Settings";
 import { LeavePersona, type LeaveWhat } from "./ui/LeavePersona";
 import { LeaveArtifacts } from "./ui/ArtifactEditor";
 import { ArtifactStore, artifactIo, isDirty } from "./hermes/artifacts";
+import { useWindowTitle, windowTitle } from "./ui/windowTitle";
 import { LeaveMemoryEdit, useCloseGuard } from "./ui/LeaveMemoryEdit";
 import { tauriCloseGuard, type CloseGuard } from "./ui/tauriWindow";
 import { FileBrowser } from "./ui/FileBrowser";
@@ -1642,6 +1643,7 @@ export function Main({
     of: (id) => unreadChats.filter((c) => proj.chats[id]?.includes(c.id)).length,
   };
   const projectNames = (chatId: string) => listable.filter((p) => proj.chats[p.id]?.includes(chatId)).map((p) => p.name);
+  useWindowTitle(windowTitle(active.chatId ? chats.find((c) => c.id === active.chatId)?.title : undefined, unreadChats.length));
 
   const listedFromHermes = hermes.hasListed();
   // Clears from the Inbox were kept on this computer until clearing a chat settled it (ADR 0090). Once Hermes has

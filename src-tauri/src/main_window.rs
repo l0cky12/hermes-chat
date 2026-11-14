@@ -8,9 +8,14 @@ use tauri::{AppHandle, Runtime, Url, WebviewWindowBuilder};
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let config = app.config().app.windows.first().cloned().unwrap_or_default();
     let dev = tauri::is_dev().then(|| app.config().build.dev_url.clone()).flatten();
+    let app_name = config.title.clone();
     WebviewWindowBuilder::from_config(app, &config)?
         .on_navigation(move |url| may_show(url, dev.as_ref()))
         .on_new_window(|_, _| NewWindowResponse::Deny)
+        // The page names the window (src/ui/windowTitle.ts); neither webview passes its title on by itself.
+        .on_document_title_changed(move |window, title| {
+            let _ = window.set_title(if title.trim().is_empty() { &app_name } else { &title });
+        })
         .build()?;
     Ok(())
 }
