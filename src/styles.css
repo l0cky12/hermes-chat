@@ -4072,3 +4072,14 @@ div.export-preview.export-page { height: auto; padding: 10px 12px; background: v
 .ext-facts dd { margin: 0; }
 .ext-note { margin-top: 10px; font-size: calc(12.5rem / 14); color: var(--text-2); }
 .ext-note.error { color: var(--bad); }
+
+/* Reduced motion: nothing pulses, spins, bounces or slides in. A state that moved to show itself keeps a still mark:
+   connecting is a hollow amber ring (connected is a solid green dot, offline a grey one), recording a red dot with a halo. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0s !important; animation-delay: 0s !important; animation-iteration-count: 1 !important;
+    transition-duration: 0s !important; transition-delay: 0s !important; scroll-behavior: auto !important;
+  }
+  .conn-dot.connecting, .conn-dot.reconnecting { background: none; box-shadow: inset 0 0 0 2px var(--warn); }
+  .rec-dot { box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 30%, transparent); }
+}
