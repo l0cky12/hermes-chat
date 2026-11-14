@@ -21,7 +21,7 @@ type OpenPath = (open: PathOpen) => Promise<void>;
 const PreviewContext = createContext<((t: PreviewTarget) => void) | undefined>(undefined);
 const MenuContext = createContext<ShowMenu | undefined>(undefined);
 const PathContext = createContext<OpenPath | undefined>(undefined);
-const PathsInContext = createContext<{ folder?: string; session?: string }>({});
+const PathsInContext = createContext<{ folder?: string; session?: string } | undefined>(undefined);
 
 export const useOpenPreview = () => useContext(PreviewContext);
 
@@ -32,9 +32,10 @@ export const useLinkMenu = () => {
 };
 
 /**
- * What the paths under it are relative to, and whose they are (ADR 0163). `folder`: the folder a relative path joins,
- * a chat's working folder; without one, only full paths link. `session`: the chat whose sandbox a path may be in
- * (ADR 0062).
+ * Marks the text under it as speaking of where Hermes's tools run, so the paths in it link (ADR 0163): a chat's
+ * transcript, a Server file. Markdown outside one links no path: a Local file's `~/notes` is on this computer.
+ * `folder`: the folder a relative path joins, a chat's working folder; without one, only full paths link. `session`:
+ * the chat whose sandbox a path may be in (preview.ts `readServerFile`).
  */
 export function PathsIn({ folder, session, children }: { folder?: string; session?: string; children: ReactNode }) {
   const value = useMemo(() => ({ folder, session }), [folder, session]);
@@ -262,16 +263,16 @@ export function PreviewLink({
 
 /**
  * A path in a reply (ADR 0163). A click, or Enter, opens it: a file in the Preview, a folder in a folder shell. It is
- * an `<a>` with no `href`, so nothing can ever send the app's window to it. A relative path with no folder to join
- * (`PathsIn`), and any path where nothing opens paths, stays the reply's own words.
+ * an `<a>` with no `href`, so nothing can ever send the app's window to it. Outside a `PathsIn`, with a relative path
+ * and no folder to join, or where nothing opens paths, it stays the text's own words.
  */
 export function PathLink({ written, folder, title, children }: { written: string; folder: boolean; title?: string; children?: ReactNode }) {
   const open = useContext(PathContext);
   const menu = useContext(MenuContext);
   const within = useContext(PathsInContext);
   const [busy, setBusy] = useState(false);
-  const path = resolvePath(written, within.folder);
-  if (!open || !path) return <>{children}</>;
+  const path = within && resolvePath(written, within.folder);
+  if (!open || !within || !path) return <>{children}</>;
   const request: PathOpen = { path, saysFolder: folder, ...(within.session && { session: within.session }) };
   const go = () => {
     if (busy) return;

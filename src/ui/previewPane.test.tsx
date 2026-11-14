@@ -1544,7 +1544,8 @@ describe("The link menu (issue #240)", () => {
 
   it("leaves a same-page link's own menu alone, blocks it on an emptied file: link, and gives a web link in a previewed Markdown file the link menu", async () => {
     const { server, user } = await signedIn();
-    server.serverFiles["/home/liam/app/GUIDE.md"] = "# Guide\n\nSee [Usage](#usage), [the site](https://guide.example.com/) and [the hosts file](file:///etc/hosts).\n\n## Usage\n\nRun it.\n";
+    server.serverFiles["/home/liam/app/GUIDE.md"] =
+      "# Guide\n\nSee [Usage](#usage), [the site](https://guide.example.com/), [the hosts file](file://fileserver/etc/hosts) and [this server's](file:///etc/hosts).\n\n## Usage\n\nRun it.\n";
     await user.click(screen.getByRole("button", { name: "Open the side panel" }));
     await user.click(screen.getByRole("button", { name: "Preview" }));
     await user.click(within(pane()).getByRole("textbox"));
@@ -1555,11 +1556,17 @@ describe("The link menu (issue #240)", () => {
     expect(rightClick(within(pane()).getByRole("link", { name: "Usage" }))).toBe(true);
     expect(screen.queryByRole("menu")).toBeNull();
 
-    // react-markdown empties a file: address, so there is nothing to copy, and WebKit's Open Link would load this page.
+    // react-markdown empties a file: address on another machine, so there is nothing to copy, and WebKit's Open Link
+    // would load this page.
     const hosts = within(pane()).getByText("the hosts file");
     expect(hosts.getAttribute("href")).toBe("");
     expect(rightClick(hosts)).toBe(false);
     expect(screen.queryByRole("menu")).toBeNull();
+
+    // A file: address on no machine is a path on the server (ADR 0163), with the path menu.
+    expect(rightClick(within(pane()).getByText("this server's"))).toBe(false);
+    expect(menuItems()).toEqual(["Open in the Preview", "Open in the Terminal", "Copy path"]);
+    await user.keyboard("{Escape}");
 
     expect(rightClick(within(pane()).getByRole("link", { name: "the site" }))).toBe(false);
     expect(menuItems()).toEqual(["Open in the Preview", "Open in your browser", "Copy link"]);

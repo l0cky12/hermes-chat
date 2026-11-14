@@ -101,7 +101,7 @@ import { useCapabilities } from "./ui/Diagnostics";
 import { Automations } from "./ui/Automations";
 import { tauriLocalTerminal, tauriTerminal } from "./ui/tauriTerminal";
 import { useShells } from "./ui/useShells";
-import { terminalTarget, terminalTargetGuessed, terminalTargetKey, type TerminalKind } from "./hermes/terminal";
+import { MAX_FOLDER_SHELLS, terminalTarget, terminalTargetGuessed, terminalTargetKey, type TerminalKind } from "./hermes/terminal";
 import { REPO_PATH_KEY, REPO_RECENT_KEY, REPO_TARGET_KEY, readRecent, remember, repoTarget } from "./hermes/repo";
 import { RepositoryScreen } from "./ui/Repository";
 import { startInWorktree, worktreeChats, type WorktreeChat, type WorktreeStart } from "./hermes/worktrees";
@@ -123,6 +123,7 @@ import { ScreenTab } from "./ui/Screen";
 import { LinksProvider, useOpenPreview } from "./ui/previewContext";
 import { tauriLocalFiles, tauriServerPages, tauriWebPages, type LocalFiles, type ServerPages, type WebPages } from "./ui/tauriPreview";
 import type { PreviewTarget } from "./hermes/preview";
+import { pathOpener } from "./hermes/paths";
 import type { Route } from "./hermes/pipe";
 import { tauriTray, type TrayWiring } from "./hermes/tauriTray";
 import { usePageHidden, useWindowHidden } from "./ui/windowState";
@@ -1466,6 +1467,22 @@ export function Main({
       openPanel("preview");
     },
     [openPanel],
+  );
+  // A path in a reply (ADR 0163): a file opens in the Preview, a folder in a folder shell on the Hermes server. One
+  // opener for every pane, so the newest click wins whichever pane it was in.
+  const openShellIn = terminalShells.openIn;
+  const openPath = useMemo(
+    () =>
+      pathOpener({
+        kindOf: (path) => hermes.pathKind(path),
+        preview: openPreview,
+        shell: (folder) => {
+          if (openShellIn("server", folder)) openPanel("terminal");
+          else setToast({ text: `The Terminal holds ${MAX_FOLDER_SHELLS} folder shells. Close one to open another.`, at: Date.now() });
+        },
+        say: (text) => setToast({ text, at: Date.now() }),
+      }),
+    [hermes, openPreview, openPanel, openShellIn],
   );
   const mainRef = useRef<HTMLElement>(null);
   const mainWidth = useWidth(mainRef);
@@ -3029,7 +3046,7 @@ export function Main({
   });
 
   return (
-    <LinksProvider preview={openPreview} web={webPages} onToast={(text) => setToast({ text, at: Date.now() })}>
+    <LinksProvider preview={openPreview} path={openPath} web={webPages} onToast={(text) => setToast({ text, at: Date.now() })}>
     <div className="app" inert={covered || restarting}>
       <Rail
         status={status}

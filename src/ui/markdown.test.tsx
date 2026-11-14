@@ -209,8 +209,16 @@ describe("A path in a reply (ADR 0163)", () => {
     expect(reply("Edited src/a.ts and /etc/hosts.conf, and `./run.sh`.", { folder: null }).words()).toEqual(["/etc/hosts.conf"]);
   });
 
-  it("stays text where nothing opens paths", () => {
-    expect(render("See /etc/hosts.conf and `src/ui`.")).toBe("<p>See /etc/hosts.conf and <code>src/ui</code>.</p>");
+  it("stays text where nothing opens paths, and in Markdown that isn't about the Hermes server", () => {
+    const text = "See /etc/hosts.conf and `src/ui`.";
+    expect(render(text)).toBe("<p>See /etc/hosts.conf and <code>src/ui</code>.</p>");
+    // A Local file, say: its `/etc/hosts.conf` is this computer's.
+    const { container } = renderDom(
+      <LinksProvider preview={vi.fn()} path={async () => {}} web={{ openInBrowser: vi.fn() }} onToast={vi.fn()}>
+        <Markdown text={text} />
+      </LinksProvider>,
+    );
+    expect(container.querySelector("a")).toBeNull();
   });
 
   it("says its full path first in its tooltip, whatever title the Markdown gives", () => {

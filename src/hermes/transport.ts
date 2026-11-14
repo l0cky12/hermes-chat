@@ -63,6 +63,7 @@ import { AccountsApi } from "./accounts";
 import { providerKeys, readyProviders, SignInFailure, type ProviderSetup, type SavedKey } from "./setup";
 import { restartHold } from "./unsaved";
 import { hostFileView, readServerFile, type FileView } from "./preview";
+import type { PathKind, ServerPath } from "./paths";
 import type { DisplayLease, DisplayObserve, DisplayStatus, ScreenApi } from "./screen";
 import { agentFsEditIo } from "./artifacts";
 import { splitPath, type OutputsIo, type StoredRow as StoredOutputRow } from "./outputs";
@@ -2251,6 +2252,7 @@ export class Hermes {
       updatedAt: Date.now(),
       items: [],
       live: withLive(undefined, res.info),
+      ...folderIn(res.info),
     };
     // A new session's agent starts its counters from zero.
     this.usageFrom.set(res.session_id, countersOf((res.info as { usage?: unknown } | undefined)?.usage) ?? ZERO_COUNTERS);
@@ -2360,6 +2362,7 @@ export class Hermes {
     const sid = await this.resume(chatId);
     const res = (await this.request("session.cwd.set", { session_id: sid, profile: this.profile, cwd: folder })) as { cwd?: unknown } | undefined;
     if (res?.cwd !== folder) throw new Error(`Hermes didn't move it to ${folder}${typeof res?.cwd === "string" ? `: it works in ${res.cwd}` : ""}.`);
+    this.patchChat(chatId, (c) => ({ ...c, folder }));
   }
 
   /**
@@ -2821,6 +2824,7 @@ export class Hermes {
       items: historyItems(transcriptMessages(res.messages)),
       model: pickFromInfo(res.info),
       live: withLive(undefined, res.info),
+      ...folderIn(res.info),
     };
     this.usageFrom.set(res.session_id, countersOf((res.info as { usage?: unknown } | undefined)?.usage) ?? ZERO_COUNTERS);
     this.runtimeOwners.set(res.session_id, { profile, chatId: chat.id });
@@ -3987,7 +3991,7 @@ export class Hermes {
       const picking = this.approvalPickFor === session_id;
       this.patchChat(chat.id, (c) => {
         const live = withLive(c.live, payload);
-        return { ...c, ...(model && { model }), live: picking && live ? { ...live, approvals: c.live?.approvals } : live };
+        return { ...c, ...(model && { model }), ...folderIn(payload), live: picking && live ? { ...live, approvals: c.live?.approvals } : live };
       });
       // Between turns its usage is where the next turn starts; one sent during a turn is part of the way through it.
       const counters = countersOf(payload.usage);
@@ -4448,6 +4452,7 @@ export class Hermes {
           runtimeId: res.session_id,
           model: pickFromInfo(res.info) ?? c.model,
           live: withLive(undefined, res.info, res.usage),
+          ...folderIn(res.info),
           running: c.running || !!res.running,
           savedAt: undefined,
           items: withRows(
@@ -4728,6 +4733,7 @@ export class Hermes {
           // List rows carry the stored token and cost totals too.
           usage: newerListedUsage(c?.usage, chatUsageOf(r, Date.now())),
           ...(lineage && { lineage: c?.lineage && sameIds(c.lineage, lineage) ? c.lineage : lineage }),
+          ...folderIn(r),
         };
         return c && sameFields(c, next) ? c : next;
       });
@@ -4965,6 +4971,30 @@ export class Hermes {
     return readServerFile((q) => this.rest("GET", q), path, this.snapshot.profile, session);
   }
 
+  /** A folder's entries where `profile`'s tools run (`GET /api/fs/list`), or none and why: `ENOENT`, `ENOTDIR`, `EACCES`. */
+  private async fsList(path: string, profile: string): Promise<{ entries: { name: string; isDirectory: boolean }[]; error?: string }> {
+    const res = JSON.parse(await this.restGet(`api/fs/list?${new URLSearchParams({ path, profile })}`, LIST_MAX_BYTES)) as { entries?: unknown; error?: unknown };
+    const entries = (Array.isArray(res.entries) ? res.entries : []).flatMap((e: { name?: unknown; isDirectory?: unknown }) =>
+      typeof e?.name === "string" ? [{ name: e.name, isDirectory: e.isDirectory === true }] : [],
+    );
+    return { entries, ...(typeof res.error === "string" && { error: res.error }) };
+  }
+
+  /**
+   * What is at `path` where the profile shown runs its tools (ADR 0163), by listing it: a listing is a folder,
+   * `ENOTDIR` a file, `ENOENT` nothing. `unknown` when Hermes can't say: not connected, no such route, a refusal, a
+   * listing too long to read. The listing names no chat, so a file in a chat's sandbox reads as missing.
+   * Never rejects.
+   */
+  async pathKind(path: ServerPath): Promise<PathKind> {
+    try {
+      const { error } = await this.fsList(path, this.snapshot.profile);
+      return error === undefined ? "folder" : error === "ENOTDIR" ? "file" : error === "ENOENT" ? "missing" : "unknown";
+    } catch {
+      return "unknown";
+    }
+  }
+
   /**
    * A file on the dashboard's own machine, for the preview pane: found in its folder's listing and read through the
    * managed files routes, as the Server files screen reads it (ADR 0012), within that screen's preview limits. For
@@ -5007,11 +5037,7 @@ export class Hermes {
               throw new Error(message);
             },
           );
-        const res = JSON.parse(await this.restGet(`api/fs/list?${new URLSearchParams({ path, profile })}`, LIST_MAX_BYTES)) as { entries?: unknown; error?: unknown };
-        const entries = (Array.isArray(res.entries) ? res.entries : []).flatMap((e: { name?: unknown; isDirectory?: unknown }) =>
-          typeof e?.name === "string" ? [{ name: e.name, isDirectory: e.isDirectory === true }] : [],
-        );
-        return { entries, ...(typeof res.error === "string" && { error: res.error }) };
+        return this.fsList(path, profile);
       },
       // Read as Preview reads it, naming the chat (ADR 0062). `read-text` reads at most 512 KB of the file.
       confirm: async (path, session) => {
@@ -5662,6 +5688,12 @@ const obj = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? (
  * The model is `Chat.model` (`pickFromInfo`).
  * Context fullness only as Hermes measured it: none until it has.
  */
+/** A chat's working folder as a session row or a session's `info` names it (`cwd`), to spread into the chat; nothing when it names none. */
+function folderIn(from: unknown): { folder?: string } {
+  const cwd = obj(from)?.cwd;
+  return typeof cwd === "string" && cwd ? { folder: cwd } : {};
+}
+
 function withLive(prev: SessionLive | undefined, info?: unknown, usage?: unknown): SessionLive | undefined {
   const i = obj(info);
   const u = obj(usage) ?? obj(i?.usage);

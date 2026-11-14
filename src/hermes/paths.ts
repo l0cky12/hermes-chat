@@ -174,7 +174,7 @@ export function folderOf(path: ServerPath): ServerPath {
 
 /**
  * One request to open a path. `saysFolder`: the reply wrote it with a `/` at its end. `session`: the chat whose
- * sandbox it may be in (ADR 0062). `as`: the owner picked in the path menu; left out, it is a click.
+ * sandbox it may be in (preview.ts `readServerFile`). `as`: the owner picked in the path menu; left out, it is a click.
  */
 export type PathOpen = { path: ServerPath; saysFolder: boolean; session?: string; as?: "preview" | "terminal" };
 
