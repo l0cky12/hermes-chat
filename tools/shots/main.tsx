@@ -7,8 +7,10 @@ import { connect } from "../../src/hermes/transport";
 import { appearanceStore } from "../../src/ui/appearance";
 import { captureAppDiagnostics } from "../../src/hermes/logs";
 
-const mode = new URLSearchParams(location.search).get("mode") ?? "dark";
-localStorage.setItem("hermes-chat.appearance", JSON.stringify({ scheme: mode }));
+// `?mode=light` for the light theme, `?size=12` for another interface size.
+const query = new URLSearchParams(location.search);
+const mode = query.get("mode") ?? "dark";
+localStorage.setItem("hermes-chat.appearance", JSON.stringify({ scheme: mode, uiSize: Number(query.get("size")) || undefined }));
 appearanceStore(localStorage, document.documentElement);
 
 const server = new FakeHermes();
