@@ -90,9 +90,47 @@ describe("The artifact editor", () => {
     expect(changes.textContent).toMatch(/added.*removed/);
     await user.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText(/Saved\. Hermes has your edit, read back from the server\./);
-    // Saved as the Preview read it: a link from a tool call names no chat's sandbox (ADR 0062, ADR 0170).
-    expect(server.fsWrites).toEqual([{ profile: "default", path: "/srv/out/plan.md", text: "# Launch plan\n\nShip it.\n" }]);
+    // Saved naming the chat whose tool call named it, as the Preview read it (ADR 0062, ADR 0170).
+    expect(server.fsWrites).toEqual([{ profile: "default", path: "/srv/out/plan.md", text: "# Launch plan\n\nShip it.\n", session: "plan" }]);
     expect(document.querySelector(".artifact-id .badge")!.textContent).toMatch(/^Saved /);
+  });
+
+  it("reads, keeps and saves a file in the sandbox of the chat whose tool call named it", async () => {
+    const s = new FakeHermes();
+    s.sessions = [row("plan", 1, { pinned: true, title: "Launch planning" }), row("ops", 2, { pinned: true, title: "Ops review" })];
+    s.transcripts.plan = [{ role: "user", text: "Write the report", row_id: 1, timestamp: 1_790_000_000 }, ...call("w1", "/workspace/report.md", 2)];
+    s.transcripts.ops = [{ role: "user", text: "Write the report", row_id: 1, timestamp: 1_790_000_000 }, ...call("w2", "/workspace/report.md", 2)];
+    // Each chat's `/workspace` is a folder of its own; the profile's is a third.
+    s.sandbox = { profile: "/srv/box/profile", chats: { plan: "/srv/box/plan", ops: "/srv/box/ops" } };
+    s.serverFiles["/srv/box/profile/report.md"] = "Profile report\n";
+    s.serverFiles["/srv/box/plan/report.md"] = "Plan report\n";
+    s.serverFiles["/srv/box/ops/report.md"] = "Ops report\n";
+    const { server, user } = await launch(s);
+    const report = () => screen.findByRole("textbox", { name: "Text of report.md" }) as Promise<HTMLTextAreaElement>;
+    const editReport = async () => {
+      const tool = (await screen.findAllByRole("button", { name: /^write_file/ }))[0];
+      if (tool.getAttribute("aria-expanded") === "false") await user.click(tool);
+      await user.click(screen.getByRole("button", { name: "report.md" }));
+      await user.click(await within(pane()).findByRole("button", { name: "Edit" }));
+    };
+    await editReport();
+    expect((await report()).value).toBe("Plan report\n");
+    await user.type(await report(), "plan draft");
+    // The other chat's file of the same path is its own, with no draft from the first.
+    await user.click(screen.getByText("Ops review"));
+    await editReport();
+    await waitFor(async () => expect((await report()).value).toBe("Ops report\n"));
+    await user.type(await report(), "ops draft");
+    await user.click(screen.getByRole("button", { name: "Review changes…" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText(/Saved\. Hermes has your edit, read back from the server\./);
+    expect(server.fsWrites).toEqual([{ profile: "default", path: "/workspace/report.md", text: "Ops report\nops draft", session: "ops" }]);
+    expect(server.serverFiles["/srv/box/plan/report.md"]).toBe("Plan report\n");
+    expect(server.serverFiles["/srv/box/profile/report.md"]).toBe("Profile report\n");
+    // The first chat's draft is still there.
+    await user.click(screen.getByText("Launch planning"));
+    await editReport();
+    await waitFor(async () => expect((await report()).value).toBe("Plan report\nplan draft"));
   });
 
   it("shows Hermes's proposed edit against the exact text it was made for, and applies it only when asked", async () => {
