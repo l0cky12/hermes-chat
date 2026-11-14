@@ -3,11 +3,11 @@
 // storage between launches, and the test checks which chat is on screen after the restart.
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import { memoryCache, type MemoryCache } from "../hermes/memoryCache";
 import { connect, type Hermes } from "../hermes/transport";
-import { UI_PREFS_KEY, getUIPrefs, setUIPrefs } from "../hermes/uiPrefs";
+import { UI_PREFS_KEY, getUIPrefs, setUIPrefs, type ReopenOn } from "../hermes/uiPrefs";
 import { Main } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
@@ -36,15 +36,20 @@ function server() {
 const onScreen = () => document.querySelector(".chat-title span")?.textContent;
 const storedLastOpen = () => JSON.parse(localStorage.getItem(UI_PREFS_KEY) ?? "{}").lastOpenChat;
 
-/** The app starting: signed in, the list read from Hermes, and every answer landed. */
-async function launch(s: FakeHermes, cache?: MemoryCache, { reopenLast = true } = {}) {
+/**
+ * The app starting: signed in, the list read from Hermes, and every answer landed. `reopenLast`: why the main screen
+ * shows, "launch" unless given; null for a screen that reopens nothing. `shown`: the run's chats on screen, which App
+ * keeps across main screens.
+ */
+async function launch(s: FakeHermes, cache?: MemoryCache, { reopenLast = "launch" as ReopenOn | null, shown = undefined as Map<string, string | null> | undefined } = {}) {
   const hermes = await connect(s.openPipe, undefined, cache);
   running.push(hermes);
   render(
     <Main
       hermes={hermes}
       connection={{ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }}
-      reopenLast={reopenLast}
+      reopenLast={reopenLast ?? undefined}
+      shown={shown}
       onSignOut={async () => {}}
     />,
   );
@@ -74,7 +79,60 @@ async function switchTo(user: ReturnType<typeof userEvent.setup>, hermes: Hermes
   await act(async () => void (await hermes.idle()));
 }
 
+describe("by default", () => {
+  it("starts every launch on the New chat pane, and keeps the last chat opened for the setting", async () => {
+    const s = server();
+    const first = await launch(s);
+    expect(onScreen()).toBe("New chat");
+    await openFromList(first.user, "NAS disks");
+    expect(storedLastOpen()).toEqual({ default: "nas" });
+    await quit();
+
+    await launch(s);
+    expect(onScreen()).toBe("New chat");
+    expect(screen.getByRole("button", { name: /NAS disks/ }).getAttribute("aria-current")).not.toBe("true");
+    expect(storedLastOpen()).toEqual({ default: "nas" });
+  });
+
+  it("shows what is on screen in this run when the screen shows again, not the chat from before the launch", async () => {
+    const s = server();
+    const shown = new Map<string, string | null>();
+    // Keeps the profile shown last, as the app does on this computer.
+    const cache = memoryCache();
+    setUIPrefs({ lastOpenChat: { default: "nas", work: "deploy" } });
+    await launch(s, cache, { shown });
+    expect(onScreen()).toBe("New chat");
+    await quit();
+    const again = await launch(s, cache, { reopenLast: "switch", shown });
+    expect(onScreen()).toBe("New chat");
+
+    // A profile switched to shows on the New chat pane too, and keeps its chat for the next launch.
+    await switchTo(again.user, again.hermes, "work");
+    expect(onScreen()).toBe("New chat");
+    await quit();
+    const inWork = await launch(s, cache, { reopenLast: "switch", shown });
+    expect(inWork.hermes.getSnapshot().profile).toBe("work");
+    expect(onScreen()).toBe("New chat");
+    expect(storedLastOpen()).toEqual({ default: "nas", work: "deploy" });
+
+    await switchTo(inWork.user, inWork.hermes, "default");
+    await openFromList(inWork.user, "Nightly backup");
+    await quit();
+    await launch(s, cache, { reopenLast: "switch", shown });
+    expect(onScreen()).toBe("Nightly backup");
+  });
+
+  it("shows the connection's last chat on a switch to one not on screen yet in this run", async () => {
+    setUIPrefs({ lastOpenChat: { default: "nas" } });
+    await launch(server(), undefined, { reopenLast: "switch", shown: new Map() });
+    expect(onScreen()).toBe("NAS disks");
+  });
+});
+
 describe("across a restart", () => {
+  // The owner turned "Reopen last chat on launch" on; it is off by default (ADR 0162).
+  beforeEach(() => void setUIPrefs({ reopenLastChat: true }));
+
   it("reopens the chat that was on screen when the app closed", async () => {
     const s = server();
     const first = await launch(s);
@@ -98,7 +156,7 @@ describe("across a restart", () => {
 
     const hermes = await connect(s.openPipe, undefined, cache);
     running.push(hermes);
-    render(<Main hermes={hermes} connection={{ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }} reopenLast onSignOut={async () => {}} />);
+    render(<Main hermes={hermes} connection={{ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }} reopenLast="launch" onSignOut={async () => {}} />);
     // First render: the saved list already has it, so the New chat pane never shows.
     expect(onScreen()).toBe("Nightly backup");
     await waitFor(() => expect(hermes.hasListed()).toBe(true));
@@ -144,7 +202,7 @@ describe("across a restart", () => {
     const first = await launch(s);
     await openFromList(first.user, "NAS disks");
     await quit();
-    await launch(s, undefined, { reopenLast: false });
+    await launch(s, undefined, { reopenLast: null });
     expect(onScreen()).toBe("New chat");
   });
 
@@ -169,7 +227,7 @@ describe("across a restart", () => {
     const hermes = await connect(s.openPipe);
     running.push(hermes);
     const user = userEvent.setup();
-    render(<Main hermes={hermes} connection={{ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }} reopenLast onSignOut={async () => {}} />);
+    render(<Main hermes={hermes} connection={{ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }} reopenLast="launch" onSignOut={async () => {}} />);
     await user.keyboard("{Control>}n{/Control}");
     release();
     await waitFor(() => expect(hermes.hasListed()).toBe(true));
@@ -180,6 +238,9 @@ describe("across a restart", () => {
 });
 
 describe("per profile", () => {
+  // The owner turned "Reopen last chat on launch" on; it is off by default (ADR 0162).
+  beforeEach(() => void setUIPrefs({ reopenLastChat: true }));
+
   it("keeps each profile's last chat apart and reopens the one for the profile shown", async () => {
     const s = server();
     const cache = memoryCache();
@@ -209,6 +270,9 @@ describe("per profile", () => {
 });
 
 describe("a chat that is gone", () => {
+  // The owner turned "Reopen last chat on launch" on; it is off by default (ADR 0162).
+  beforeEach(() => void setUIPrefs({ reopenLastChat: true }));
+
   it("falls back to the New chat pane and forgets the chat when Hermes no longer lists it", async () => {
     const s = server();
     const first = await launch(s);
@@ -247,16 +311,16 @@ describe("a chat that is gone", () => {
 });
 
 describe("the Settings toggle", () => {
-  it("turns reopening off and on", async () => {
+  it("is off by default, and turns reopening on and off", async () => {
     const { user } = await launch(server());
     await user.click(screen.getByRole("button", { name: /^Settings/ }));
     await user.click(await screen.findByRole("button", { name: "Launch, tray & updates" }));
     const toggle = await screen.findByRole("switch", { name: "Reopen last chat on launch" });
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
-    await user.click(toggle);
     expect(toggle.getAttribute("aria-checked")).toBe("false");
-    expect(getUIPrefs().reopenLastChat).toBe(false);
     await user.click(toggle);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
     expect(getUIPrefs().reopenLastChat).toBe(true);
+    await user.click(toggle);
+    expect(getUIPrefs().reopenLastChat).toBe(false);
   });
 });

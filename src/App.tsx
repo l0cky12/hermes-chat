@@ -19,7 +19,7 @@ import { draftKey, drafts } from "./hermes/drafts";
 import { PersonaStore, personaKey } from "./hermes/personaStore";
 import { sending, unsaved, type Sending } from "./hermes/unsaved";
 import { connOf, restoreBlocked, savedBackupEnv } from "./hermes/backup";
-import { chatToReopen, forgetOpenChat, rememberOpenChat } from "./hermes/uiPrefs";
+import { chatToReopen, forgetOpenChat, rememberOpenChat, type ReopenOn } from "./hermes/uiPrefs";
 import { PROJECTS_KEY, projectLinks, projectScope } from "./hermes/projectLinks";
 import { chatContext, contextLedger, knownWindow, type ChatContexts } from "./hermes/projectContextFiles";
 import { ProjectsStore, type Project } from "./hermes/projects";
@@ -393,6 +393,15 @@ function Screens({ links }: { links: LinkInbox }) {
   const [kept, setKept] = useState<Kept>({ password: true, headers: true });
   // Whether the main screen reopens the profile's last open chat: at launch, and on switching to a connection.
   const [coldStart, setColdStart] = useState(true);
+  // The main screen has shown in this run. Only the first is the launch, which reopens a chat only with "Reopen last
+  // chat on launch" on (ADR 0162); any after it is a switch, a sign-in again, or a failed one putting the last back.
+  const [launched, setLaunched] = useState(false);
+  // Each profile's chat on screen in this run, by prefScope, kept across main screens: what a later one shows again.
+  const shownThisRun = useRef<ShownThisRun>(new Map()).current;
+  const mainShown = !!hermes && !!connection && linksReady;
+  useEffect(() => {
+    if (mainShown) setLaunched(true);
+  }, [mainShown]);
   const [setup, setSetup] = useState<Setup>();
   const setupRef = useRef(setup);
   setupRef.current = setup;
@@ -818,7 +827,8 @@ function Screens({ links }: { links: LinkInbox }) {
           headers={headers}
           notSaved={notSaved}
           kept={kept}
-          reopenLast={coldStart && !linkHere}
+          shown={shownThisRun}
+          reopenLast={coldStart && !linkHere ? (launched ? "switch" : "launch") : undefined}
           covered={!!setup && !confirmingSetup}
           link={linkHere}
           linkSuperseded={badLink?.at}
@@ -1026,13 +1036,17 @@ const tauriScreenshotWiring: Screenshots = {
     }),
 };
 
+/** Each profile's chat on screen in this run, by prefScope; null: the New chat pane. */
+type ShownThisRun = Map<string, string | null>;
+
 export function Main({
   hermes,
   connection: given,
   headers = [],
   notSaved,
   kept = { password: true, headers: true },
-  reopenLast = false,
+  reopenLast,
+  shown,
   covered = false,
   onSetUp,
   saved = [],
@@ -1111,8 +1125,16 @@ export function Main({
   notSaved?: string;
   /** What the keyring kept at sign-in. */
   kept?: Kept;
-  /** This is the app starting: open the profile's last open chat, if the owner wants it reopened. */
-  reopenLast?: boolean;
+  /**
+   * Open the profile's last open chat if chatToReopen says to: "launch" for the first main screen of the run, "switch"
+   * for any after it.
+   */
+  reopenLast?: ReopenOn;
+  /**
+   * Each profile's chat on screen in this run, by prefScope (null: the New chat pane), kept by App across main screens.
+   * A "switch" shows a profile's again rather than the stored last open chat, which may be from before the launch.
+   */
+  shown?: ShownThisRun;
   /** Setup is open over the app: nothing here takes focus or keys. */
   covered?: boolean;
   /** Opens setup from Settings. */
@@ -1318,7 +1340,14 @@ export function Main({
   // The chat to reopen at launch, until Hermes's list shows it is there or gone, or the owner goes somewhere first.
   // Kept per connection and profile, so the same profile name on another server keeps its own (connections.ts).
   const pref = prefScope(connection, profile);
-  const [reopening, setReopening] = useState(() => (reopenLast ? chatToReopen(pref) : undefined));
+  const [reopening, setReopening] = useState(() =>
+    reopenLast === "switch" && shown?.has(pref) ? (shown.get(pref) ?? undefined) : reopenLast ? chatToReopen(pref, reopenLast) : undefined,
+  );
+  // Showing nothing reopened is showing the New chat pane: a later screen in this run shows that again (ADR 0162).
+  useEffect(() => {
+    if (!reopening) shown?.set(pref, null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, as the screen first shows
+  }, []);
   // One pane, or two side by side. The chat to reopen opens at once when the list saved on this computer has it, so the
   // New chat pane doesn't show first.
   const [panes, setPanes] = useState<Pane[]>(() => {
@@ -1735,7 +1764,9 @@ export function Main({
   // the chat to reopen at the next launch as it was.
   const rememberChat = (id: string | null) => {
     const chat = id === null ? undefined : hermes.getSnapshot().chats.find((c) => c.id === id);
-    if (!chat || !isBotChat(chat)) rememberOpenChat(pref, id);
+    if (chat && isBotChat(chat)) return;
+    rememberOpenChat(pref, id);
+    shown?.set(pref, id);
   };
   const openChat = (
     id: string | null,
@@ -2066,6 +2097,8 @@ export function Main({
     activeKeyRef.current = keep;
     setActiveKey(keep);
     setReopening(undefined);
+    // The profile shows on the New chat pane; its stored last open chat stays for the next launch.
+    shown?.set(prefScope(connection, name), null);
     if (!keepSettings) setSettingsOpen(false);
     setProjectOpen(false);
     setToast(null);
@@ -2412,9 +2445,10 @@ export function Main({
     } else if (listed) {
       patchPane(firstPane.current, { chatId: null });
       forgetOpenChat(pref, reopening);
+      shown?.set(pref, null);
     } else return;
     setReopening(undefined);
-  }, [hermes, reopening, chats, pref]);
+  }, [hermes, reopening, chats, pref, shown]);
 
   useEffect(() => {
     if (!toast) return;
@@ -3554,6 +3588,12 @@ export function Main({
                 note: (from, to) => noteRename(connection, from, to),
                 clear: () => clearRename(connection),
                 renamed: async (from, to) => {
+                  // This run's chat on screen moves with the profile, as this computer's data does.
+                  const fromPref = prefScope(connection, from);
+                  if (shown?.has(fromPref)) {
+                    shown.set(prefScope(connection, to), shown.get(fromPref) ?? null);
+                    shown.delete(fromPref);
+                  }
                   try {
                     await renameProfileLocally(connection, from, to, profileStores());
                   } finally {

@@ -14,7 +14,7 @@ import { nonEmptyText } from "./values";
 
 export const UI_PREFS_KEY = "hermes-ui-prefs";
 /** The shape the document has now. Bump it, and add a step to UI_PREFS_MIGRATIONS, when a field changes meaning. */
-export const UI_PREFS_VERSION = 4;
+export const UI_PREFS_VERSION = 5;
 
 export type Theme = "light" | "dark" | "system";
 export const THEMES: readonly Theme[] = ["light", "dark", "system"];
@@ -27,7 +27,7 @@ export type StickyModelPick = ModelPick & { profile?: string };
 
 export type UIPrefs = {
   theme: Theme;
-  /** Open the chat that was on screen when the app last closed. */
+  /** Open the chat that was on screen when the app last closed. Off by default: launch starts on a new chat (ADR 0162). */
   reopenLastChat: boolean;
   /** Ask GitHub, or the update server, for a newer version as the app starts (updates.ts). */
   checkUpdatesOnLaunch: boolean;
@@ -101,7 +101,7 @@ export const STATUS_BAR_ITEMS = ["context", "model", "status"] as const;
 
 export const DEFAULT_UI_PREFS: Readonly<UIPrefs> = Object.freeze({
   theme: "system",
-  reopenLastChat: true,
+  reopenLastChat: false,
   checkUpdatesOnLaunch: true,
   lastOpenChat: Object.freeze({}) as Record<string, string>,
   modelPicker: null,
@@ -136,11 +136,14 @@ export const UI_PREFS_MIGRATIONS: UIPrefsMigrations = {
   2: (doc) => (doc.agentOffice === "desks" || doc.agentOffice === "scene" ? { ...doc, agentOffice: "building" } : doc),
   // The floor plan replaces the building as the default in version 4 (ADR 0161): whoever had the building sees the plan.
   3: (doc) => (doc.agentOffice === "building" ? { ...doc, agentOffice: "plan" } : doc),
+  // Launch starts on a new chat in version 5 (ADR 0162). Every document so far held the old default, on, so it can't
+  // tell an owner who chose it from one who never looked: everyone starts on a new chat, and Settings turns it back on.
+  4: (doc) => (doc.reopenLastChat === true ? { ...doc, reopenLastChat: false } : doc),
 };
 
 const isDoc = (v: unknown): v is UIPrefsDoc => typeof v === "object" && v !== null && !Array.isArray(v);
 /** A document's version: no `v` is version 0; anything that isn't a whole number isn't trusted at all. */
-const versionOf = (doc: UIPrefsDoc) => (doc.v === undefined ? 0 : Number.isInteger(doc.v) ? (doc.v as number) : -1);
+export const versionOf = (doc: UIPrefsDoc) => (doc.v === undefined ? 0 : Number.isInteger(doc.v) ? (doc.v as number) : -1);
 
 /**
  * `raw` brought up to version `to`, one step at a time. A document from a newer app is read as it is: its fields are
@@ -430,8 +433,14 @@ export function forgetOpenChat(profile: string, chatId: string): void {
   if (getUIPrefs().lastOpenChat[profile] === chatId) rememberOpenChat(profile, null);
 }
 
-/** The chat to reopen for `profile` at launch: its last open chat, if the owner wants it reopened. */
-export function chatToReopen(profile: string): string | undefined {
+/** Why the main screen is showing, for chatToReopen: the first time in the run, or any time after (App.tsx). */
+export type ReopenOn = "launch" | "switch";
+
+/**
+ * The chat to reopen for `profile`: its last open chat. On a switch to its connection it always reopens, so switching
+ * back brings it back; at launch only if the owner turned "Reopen last chat on launch" on (ADR 0162).
+ */
+export function chatToReopen(profile: string, on: ReopenOn): string | undefined {
   const prefs = getUIPrefs();
-  return prefs.reopenLastChat ? prefs.lastOpenChat[profile] : undefined;
+  return on === "switch" || prefs.reopenLastChat ? prefs.lastOpenChat[profile] : undefined;
 }

@@ -23,6 +23,7 @@ import {
 import { draftKey, drafts } from "./drafts";
 import { projectScope } from "./projectLinks";
 import { sha256 } from "./importTranscripts";
+import { migrateUIPrefs, readUIPrefs, UI_PREFS_VERSION } from "./uiPrefs";
 import { storageDefaultsFile } from "./projectDefaults";
 
 /** A Storage in memory. `quota`: how many more writes succeed before it is full. */
@@ -211,6 +212,49 @@ describe("a backup", () => {
     // Restoring the same backup again changes nothing.
     const again = await restore(entries, fresh);
     expect(again.report.outcomes.every((o) => o.state === "unchanged")).toBe(true);
+  });
+
+  it("keeps a restored Reopen last chat on launch, whatever version the preferences here were stored at", async () => {
+    const from = await populated();
+    const prefs = JSON.parse(from.storage.getItem("hermes-ui-prefs")!);
+    from.storage.setItem("hermes-ui-prefs", JSON.stringify({ ...prefs, v: UI_PREFS_VERSION, reopenLastChat: true }));
+    const entries = await makeBackup(from, CATEGORY_IDS);
+    // Nothing stored yet, a document from before version 5 (ADR 0162), and one from this version.
+    for (const here of [undefined, { v: 4, theme: "light", reopenLastChat: false }, { v: UI_PREFS_VERSION, theme: "light" }]) {
+      const into = env();
+      if (here) into.storage.setItem("hermes-ui-prefs", JSON.stringify(here));
+      await restore(entries, into, conn, ["default", "work"], "replace");
+      const stored = JSON.parse(into.storage.getItem("hermes-ui-prefs")!);
+      expect(stored.v).toBe(UI_PREFS_VERSION);
+      expect(readUIPrefs(migrateUIPrefs(stored))).toMatchObject({ theme: "dark", reopenLastChat: true });
+    }
+  });
+
+  it("restores Reopen last chat on launch over a document from before version 5 that stored the same Settings", async () => {
+    const from = await populated();
+    const prefs = JSON.parse(from.storage.getItem("hermes-ui-prefs")!);
+    from.storage.setItem("hermes-ui-prefs", JSON.stringify({ ...prefs, v: UI_PREFS_VERSION, reopenLastChat: true }));
+    const entries = await makeBackup(from, CATEGORY_IDS);
+    // Stored as the backup holds them, but read with reopening off: version 5 turned it off (ADR 0162).
+    const into = env();
+    into.storage.setItem("hermes-ui-prefs", JSON.stringify({ v: 4, theme: "dark", checkUpdatesOnLaunch: false, terminalKind: "local", reopenLastChat: true }));
+    into.storage.setItem("hermes-chat.appearance", from.storage.getItem("hermes-chat.appearance")!);
+    into.storage.setItem("hermes-chat.terminal-target", from.storage.getItem("hermes-chat.terminal-target")!);
+    const { report } = await restore(entries, into, conn, ["default", "work"], "replace");
+    expect(report.outcomes.find((o) => o.id === "settings")?.state).toBe("restored");
+    expect(readUIPrefs(migrateUIPrefs(JSON.parse(into.storage.getItem("hermes-ui-prefs")!))).reopenLastChat).toBe(true);
+  });
+
+  it("leaves a preferences document it can't read as it was, besides the Settings it restores", async () => {
+    const entries = await makeBackup(await populated(), CATEGORY_IDS);
+    const into = env();
+    const template = { id: "tpl-here", name: "Here", description: "", body: "Kept" };
+    into.storage.setItem("hermes-ui-prefs", JSON.stringify({ v: "invalid", templates: [template] }));
+    const backup = await readBackup(entries);
+    const mapping = defaultMapping(backup, connOf(conn), ["default", "work"]);
+    const plan = planRestore(backup, await loadCurrent(into), connOf(conn), mapping, { ...all("skip"), settings: "replace" });
+    await applyRestore(into, plan, ok);
+    expect(JSON.parse(into.storage.getItem("hermes-ui-prefs")!)).toMatchObject({ v: "invalid", theme: "dark", templates: [template] });
   });
 
   it("goes to another connection only once the owner maps each place", async () => {

@@ -20,7 +20,7 @@ import { PROJECTS_KEY, PROJECTS_VERSION, readLinks, type ScopeLinks } from "./pr
 import { savedDefaultsFile, storageDefaultsFile, toDefaults, type DefaultsFile, type ProjectDefaults } from "./projectDefaults";
 import { readTags, savedTagsFile } from "./tags";
 import { toTemplates, type Template } from "./templates";
-import { readUIPrefs, UI_PREFS_KEY } from "./uiPrefs";
+import { migrateUIPrefs, readUIPrefs, UI_PREFS_KEY, versionOf } from "./uiPrefs";
 import { TERMINAL_TARGET_KEY } from "./terminal";
 import { QUEUE_LIMIT, type ChatQueue } from "./model";
 import { APPEARANCE_KEY, loadAppearance } from "../ui/appearance";
@@ -324,6 +324,17 @@ const prefsDoc = (s: BackupStorage): Record<string, unknown> => {
     return {};
   }
 };
+/**
+ * The stored prefs brought up to this version, as the app reads them, for a backup to hold and a restore to compare
+ * with and write into. Read as stored, an older document's values can differ from what the app shows (ADR 0162 turns a
+ * stored `reopenLastChat: true` off), so a restore could find them unchanged, or write values its migrations then undo.
+ * One whose version isn't a version stays as it is, since migrating it would drop every field, another category's among
+ * them.
+ */
+const currentPrefsDoc = (s: BackupStorage) => {
+  const doc = prefsDoc(s);
+  return versionOf(doc) < 0 ? doc : migrateUIPrefs(doc);
+};
 const settingsRaw = (s: BackupStorage) => {
   const doc = prefsDoc(s);
   return stable([Object.fromEntries(SETTINGS_FIELDS.filter((f) => f in doc).map((f) => [f, doc[f]])), s.getItem(APPEARANCE_KEY), s.getItem(TERMINAL_TARGET_KEY)]);
@@ -336,7 +347,7 @@ export const CATEGORIES = {
     holds: "Theme, appearance and custom themes, startup and display choices, the model pick and favorites, status bar, screenshot shortcut, terminal target and which computer it opens on",
     scoped: false,
     async load({ storage }) {
-      const doc = prefsDoc(storage);
+      const doc = currentPrefsDoc(storage);
       const recs: Rec[] = SETTINGS_FIELDS.filter((f) => f in doc).map((f) => ({ scope: "", key: f, value: doc[f] }));
       for (const [key, k] of [["appearance", APPEARANCE_KEY], ["terminalTarget", TERMINAL_TARGET_KEY]] as const) {
         const v = storage.getItem(k);
@@ -351,7 +362,7 @@ export const CATEGORIES = {
     },
     async save({ storage }, before, recs) {
       if (settingsRaw(storage) !== before.raw) throw new ChangedError();
-      const doc = prefsDoc(storage);
+      const doc = currentPrefsDoc(storage);
       for (const f of SETTINGS_FIELDS) delete doc[f];
       const get = (key: string) => recs.find((r) => r.key === key)?.value;
       for (const r of recs) if (SETTINGS_FIELDS.includes(r.key)) doc[r.key] = r.value;
@@ -360,7 +371,7 @@ export const CATEGORIES = {
       writeAll(
         storage,
         new Map([
-          [UI_PREFS_KEY, JSON.stringify({ v: 1, ...doc })],
+          [UI_PREFS_KEY, JSON.stringify(doc)],
           [APPEARANCE_KEY, appearance === undefined ? null : JSON.stringify(appearance)],
           [TERMINAL_TARGET_KEY, terminal === undefined ? null : String(terminal)],
         ]),
@@ -380,13 +391,13 @@ export const CATEGORIES = {
     holds: "Your message templates: names, descriptions and text, and the project each is offered in",
     scoped: false,
     async load({ storage }) {
-      const list = toTemplates(prefsDoc(storage).templates) ?? [];
+      const list = toTemplates(currentPrefsDoc(storage).templates) ?? [];
       return { recs: list.map((t) => ({ scope: "", key: t.id, value: t })), raw: templatesRaw(storage) };
     },
     async save({ storage }, before, recs) {
       if (templatesRaw(storage) !== before.raw) throw new ChangedError();
-      const doc = prefsDoc(storage);
-      writeAll(storage, new Map([[UI_PREFS_KEY, JSON.stringify({ v: 1, ...doc, templates: recs.map((r) => r.value) })]]));
+      const doc = currentPrefsDoc(storage);
+      writeAll(storage, new Map([[UI_PREFS_KEY, JSON.stringify({ ...doc, templates: recs.map((r) => r.value) })]]));
     },
     check(key, value) {
       const t = toTemplates([value])?.[0];
