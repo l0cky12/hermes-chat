@@ -7,6 +7,7 @@ It answers by the last user message:
 - with "slow": forty words, one every quarter second, so a Stop lands mid-reply.
 - anything else: "Stub model reply."
 """
+import ipaddress
 import json
 import sys
 import time
@@ -95,4 +96,15 @@ class Handler(BaseHTTPRequestHandler):
             pass  # Hermes hung up: the turn was stopped.
 
 
-ThreadingHTTPServer((sys.argv[1], int(sys.argv[2])), Handler).serve_forever()
+def bind_address(host):
+    """`host` as an IPv4 address in 127.0.0.0/8 other than 127.0.0.1, as `canonical-gateway.py` takes, or exits."""
+    try:
+        address = ipaddress.IPv4Address(host)
+    except ipaddress.AddressValueError:
+        sys.exit(f"{host}: bind an IPv4 127.x.x.x literal other than 127.0.0.1, not a name or another address")
+    if address not in ipaddress.IPv4Network("127.0.0.0/8") or address == ipaddress.IPv4Address("127.0.0.1"):
+        sys.exit(f"{host}: bind a 127.x.x.x other than 127.0.0.1, so the port stays local and apart from the owner's")
+    return str(address)
+
+
+ThreadingHTTPServer((bind_address(sys.argv[1]), int(sys.argv[2])), Handler).serve_forever()

@@ -5,7 +5,8 @@ password sign-in the app uses. This is `hermes gateway run` with the Webapp on (
 things that are not protocol code:
 
 - It binds the address you give instead of `webapp.host`, which takes only `127.0.0.1`, `::1`, `localhost` or a
-  wildcard. A `127.0.0.x` other than `127.0.0.1` keeps the sign-in gate on without opening the port to the network.
+  wildcard. The address must be an IPv4 `127.x.x.x` other than `127.0.0.1`: Hermes turns the sign-in gate off on that
+  one literal, and anything outside 127.0.0.0/8 opens the port to the network.
 - It serves a one-line page instead of the built Webapp bundle, so nothing is written to the Hermes checkout.
 
 Use a throwaway `HERMES_HOME`, never the owner's. A new one gets a `config.yaml` whose model is the stub
@@ -24,13 +25,25 @@ Then:
       HERMES_LIVE_STUB=1 npx vitest run src/hermes/sessionProtocol.live.test.ts
 """
 import dataclasses
+import ipaddress
 import os
 import sys
 from pathlib import Path
 
-host, port, model_url = sys.argv[1], int(sys.argv[2]), sys.argv[3]
-if host in ("127.0.0.1", "localhost", "::1", "0.0.0.0", "::"):
-    sys.exit(f"{host}: bind a 127.0.0.x other than 127.0.0.1, so the sign-in gate is on and the port stays local")
+
+
+def bind_address(host):
+    """`host` as an IPv4 address in 127.0.0.0/8 other than 127.0.0.1, or exits."""
+    try:
+        address = ipaddress.IPv4Address(host)
+    except ipaddress.AddressValueError:
+        sys.exit(f"{host}: bind an IPv4 127.x.x.x literal other than 127.0.0.1, not a name or another address")
+    if address not in ipaddress.IPv4Network("127.0.0.0/8") or address == ipaddress.IPv4Address("127.0.0.1"):
+        sys.exit(f"{host}: bind a 127.x.x.x other than 127.0.0.1, so the sign-in gate is on and the port stays local")
+    return str(address)
+
+
+host, port, model_url = bind_address(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
 home = Path(os.environ.get("HERMES_HOME") or sys.exit("set HERMES_HOME to a throwaway folder"))
 if home.resolve() == (Path.home() / ".hermes").resolve():
     sys.exit(f"{home} is the default Hermes home: use a throwaway one")
