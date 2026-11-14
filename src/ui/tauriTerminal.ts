@@ -20,7 +20,7 @@ function channelFor(onEvent: (e: TerminalEvent) => void) {
 }
 
 export const tauriTerminal: TerminalApi = {
-  open: (target, cols, rows, onEvent) => invoke<number>("terminal_open", { target, cols, rows, onEvent: channelFor(onEvent) }).catch(asError),
+  open: (target, cols, rows, onEvent, folder) => invoke<number>("terminal_open", { target, cols, rows, folder, onEvent: channelFor(onEvent) }).catch(asError),
   write: (id, data) => invoke<void>("terminal_write", { id, data }).catch(asError),
   resize: (id, cols, rows) => invoke<void>("terminal_resize", { id, cols, rows }).catch(asError),
   close: (id) => void invoke("terminal_close", { id }).catch(() => {}),
@@ -29,5 +29,5 @@ export const tauriTerminal: TerminalApi = {
 /** A shell on this computer: Rust starts the owner's own login shell; the target only labels it (ADR 0039). */
 export const tauriLocalTerminal: TerminalApi = {
   ...tauriTerminal,
-  open: (_target, cols, rows, onEvent) => invoke<number>("terminal_open_local", { cols, rows, onEvent: channelFor(onEvent) }).catch(asError),
+  open: (_target, cols, rows, onEvent, folder) => invoke<number>("terminal_open_local", { cols, rows, folder, onEvent: channelFor(onEvent) }).catch(asError),
 };

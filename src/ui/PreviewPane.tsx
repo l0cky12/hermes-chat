@@ -37,8 +37,10 @@ import {
   type ViewUrl,
   type WebTarget,
 } from "../hermes/preview";
+import { folderOf, resolvePath } from "../hermes/paths";
 import { Markdown } from "./Markdown";
 import { HIGHLIGHT_MAX_CHARS } from "./markdownPipeline";
+import { PathsIn } from "./previewContext";
 import { Spinner } from "./bits";
 import { Menu } from "./ChatMenu";
 import {
@@ -236,11 +238,9 @@ export function PreviewPane({
             />
           ) : null
         ) : here.kind === "server" ? (
-          <FileBody
-            key={`server:${here.host ? "host" : ""}:${here.session ?? ""}:${here.path}:${history.reloadSeq}`}
-            name={here.path}
-            load={() => readServer(here.path, here.host, here.session)}
-          />
+          <ServerFilePaths key={`server:${here.host ? "host" : ""}:${here.session ?? ""}:${here.path}:${history.reloadSeq}`} here={here}>
+            <FileBody name={here.path} load={() => readServer(here.path, here.host, here.session)} />
+          </ServerFilePaths>
         ) : (
           <FileBody key={`local:${here.path}:${history.reloadSeq}`} name={here.name} load={() => local.read(here)} />
         )}
@@ -670,6 +670,20 @@ function FileBody({ name, load }: { name: string; load: () => Promise<FileView> 
     );
   if (v.kind === "image") return <ImageView src={v.src} name={name} size={v.size} />;
   return <TextView view={v} name={name} />;
+}
+
+/**
+ * The paths in a Server file (ADR 0167): a relative one is relative to the folder the file is in, in the same chat's
+ * sandbox. A file on the dashboard's own machine names no path where tools run, so none of its paths link.
+ */
+function ServerFilePaths({ here, children }: { here: Extract<PreviewTarget, { kind: "server" }>; children: ReactNode }) {
+  const path = here.host ? undefined : resolvePath(here.path, undefined);
+  if (!path) return <>{children}</>;
+  return (
+    <PathsIn folder={folderOf(path)} session={here.session}>
+      {children}
+    </PathsIn>
+  );
 }
 
 function ImageView({ src, name, size }: { src: string; name: string; size?: number }) {
