@@ -109,6 +109,8 @@ export type CapabilitySpec = {
   routes?: RegExp[];
   /** JSON-RPC methods whose answers settle it. */
   methods?: string[];
+  /** Which of those answers show it works, when an answer can come back without proving that. Any answer otherwise. */
+  settles?: (answer: unknown) => boolean;
   /** Dashboard routes whose `POST`, `PUT`, `PATCH` or `DELETE` is refused here while the capability is unsupported. */
   writeRoutes?: RegExp[];
   /** JSON-RPC methods that change something, refused here while the capability is unsupported. */
@@ -190,6 +192,8 @@ export const CAPABILITIES: readonly CapabilitySpec[] = [
       },
     },
     methods: ["approval.respond"],
+    // An answer that settled nothing (`resolved: 0`) is what turn isolation gives a real Approval too.
+    settles: (answer) => isObj(answer) && answer.resolved !== undefined && answer.resolved !== 0,
     writeMethods: /^approval\.respond$/,
   },
   {
@@ -647,7 +651,8 @@ function valid(spec: CapabilitySpec, key: string, answer: unknown): boolean {
       return false;
     }
   }
-  return spec.probe && probeKey(spec) === key ? spec.probe.shape(value) : value !== undefined;
+  if (spec.probe && probeKey(spec) === key) return spec.probe.shape(value);
+  return spec.settles ? spec.settles(value) : value !== undefined;
 }
 
 /** A write refused here because the connected Hermes lacks what it needs. Nothing was sent. */

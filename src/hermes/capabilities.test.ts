@@ -449,6 +449,15 @@ describe("what the app's own requests show", () => {
     expect(t.caps.get("toolsets").state).toBe("supported");
   });
 
+  it("counts an Approval answer as support only when it settled something", () => {
+    const t = store(NEW);
+    t.caps.connected(1, "default", {}, Promise.resolve({}));
+    t.caps.observe(1, { method: "approval.respond" }, undefined, { resolved: 0 });
+    expect(t.caps.get("approvalAnswers").state).toBe("unknown");
+    t.caps.observe(1, { method: "approval.respond" }, undefined, { resolved: 1 });
+    expect(t.caps.get("approvalAnswers").state).toBe("supported");
+  });
+
   it("keeps a screen's newer answer when a check that started earlier answers late, either way", async () => {
     for (const late of [() => Promise.reject(answered(502, "Bad Gateway")), () => Promise.resolve({ path: "/", entries: [] })]) {
       const held: ((v: Promise<unknown>) => void)[] = [];
