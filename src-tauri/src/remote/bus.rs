@@ -120,57 +120,8 @@ fn serve_into(conn: Connection, queue: bool, inbox: &'static Inbox) {
 mod tests {
     use super::*;
     use crate::lock::Locked;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use crate::test_common::{connect, private_bus};
     use std::sync::Mutex;
-
-    /// A private session bus of its own, so tests never touch the owner's.
-    struct PrivateBus {
-        address: String,
-        daemon: std::process::Child,
-        dir: std::path::PathBuf,
-    }
-
-    impl Drop for PrivateBus {
-        fn drop(&mut self) {
-            let _ = self.daemon.kill();
-            let _ = self.daemon.wait();
-            let _ = std::fs::remove_dir_all(&self.dir);
-        }
-    }
-
-    fn private_bus() -> PrivateBus {
-        use std::io::BufRead;
-        static N: AtomicU64 = AtomicU64::new(0);
-        let n = N.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("hermes-chat-test-bus-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let config = dir.join("bus.conf");
-        std::fs::write(
-            &config,
-            format!(
-                r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
-<busconfig><type>session</type><listen>unix:dir={}</listen><auth>EXTERNAL</auth>
-<policy context="default"><allow send_destination="*" eavesdrop="true"/><allow eavesdrop="true"/><allow own="*"/></policy></busconfig>"#,
-                dir.display()
-            ),
-        )
-        .unwrap();
-        let mut daemon = std::process::Command::new("dbus-daemon")
-            .arg(format!("--config-file={}", config.display()))
-            .args(["--nofork", "--print-address=1"])
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .expect("dbus-daemon");
-        let mut line = String::new();
-        std::io::BufReader::new(daemon.stdout.take().unwrap()).read_line(&mut line).unwrap();
-        PrivateBus { address: line.trim().to_owned(), daemon, dir }
-    }
-
-    fn connect(address: &str) -> Connection {
-        let mut ch = dbus::channel::Channel::open_private(address).unwrap();
-        ch.register().unwrap();
-        Connection::from(ch)
-    }
 
     #[test]
     fn of_apps_starting_at_once_exactly_one_owns_the_name() {

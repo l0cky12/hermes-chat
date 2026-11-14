@@ -155,8 +155,9 @@ fn toast_xml(title: &str, body: &str) -> String {
 mod desktop {
     use super::Clickable;
     use dbus::arg::{PropMap, Variant};
-    use dbus::blocking::Connection;
+    use dbus::blocking::{BlockingSender, Connection};
     use dbus::message::MatchRule;
+    use dbus::Message;
     use std::sync::{mpsc, OnceLock};
     use std::time::{Duration, Instant};
     use tauri::AppHandle;
@@ -181,17 +182,22 @@ mod desktop {
         posted: tokio::sync::oneshot::Sender<Result<(), String>>,
     }
 
-    /// A notification posted, with the activation token the service gave it and the webview's tag.
+    /// A notification posted, with the unique bus name of the service that took it, the activation token it gave, and
+    /// the webview's tag.
     struct Shown {
         id: u32,
+        owner: String,
         token: Option<String>,
         tag: Option<String>,
     }
 
+    /// What the bus said, with the unique name of the connection that said it.
     enum Signal {
-        Token(u32, String),
-        Action(u32, String),
-        Closed(u32),
+        Token(String, u32, String),
+        Action(String, u32, String),
+        Closed(String, u32),
+        /// The service's name left this unique name: the notifications it took are gone with it.
+        OwnerGone(String),
     }
 
     static POSTS: OnceLock<mpsc::SyncSender<Post>> = OnceLock::new();
@@ -244,34 +250,53 @@ mod desktop {
         }
     }
 
+    type Act = Box<dyn Fn(super::Action, Option<String>, Option<String>)>;
+
     /// The session bus, and the notifications posted on it whose click is still listened for.
     struct Bus {
         conn: Connection,
         signals: mpsc::Receiver<Signal>,
-        app: AppHandle,
+        act: Act,
         clickable: Clickable<Shown>,
     }
 
     impl Bus {
-        /// Listens for what happens to notifications; listening before posting means no signal is missed.
         fn open(app: AppHandle) -> Result<Bus, dbus::Error> {
-            let conn = Connection::new_session()?;
+            Bus::on(Connection::new_session()?, Box::new(move |action, token, tag| super::act(&app, action, token, tag)))
+        }
+
+        /// Listens for what happens to notifications; listening before posting means no signal is missed. Any client on
+        /// the session bus can send a signal that looks like the service's, so each says who sent it.
+        fn on(conn: Connection, act: Act) -> Result<Bus, dbus::Error> {
             let (tx, signals) = mpsc::channel();
             let rule = |member: &'static str| MatchRule::new_signal(SERVICE, member).with_path(PATH);
+            let from = |m: &Message| m.sender().map(|s| s.to_string()).unwrap_or_default();
             let token = tx.clone();
-            conn.add_match(rule("ActivationToken"), move |(id, t): (u32, String), _, _| token.send(Signal::Token(id, t)).is_ok())?;
+            conn.add_match(rule("ActivationToken"), move |(id, t): (u32, String), _, m| token.send(Signal::Token(from(m), id, t)).is_ok())?;
             let action = tx.clone();
-            conn.add_match(rule("ActionInvoked"), move |(id, key): (u32, String), _, _| action.send(Signal::Action(id, key)).is_ok())?;
-            conn.add_match(rule("NotificationClosed"), move |(id, _): (u32, u32), _, _| tx.send(Signal::Closed(id)).is_ok())?;
-            Ok(Bus { conn, signals, app, clickable: Clickable::new() })
+            conn.add_match(rule("ActionInvoked"), move |(id, key): (u32, String), _, m| action.send(Signal::Action(from(m), id, key)).is_ok())?;
+            let closed = tx.clone();
+            conn.add_match(rule("NotificationClosed"), move |(id, _): (u32, u32), _, m| closed.send(Signal::Closed(from(m), id)).is_ok())?;
+            let owner = MatchRule::new_signal("org.freedesktop.DBus", "NameOwnerChanged").with_sender("org.freedesktop.DBus");
+            conn.add_match(owner, move |(name, old, _): (String, String, String), _, _| {
+                name != SERVICE || old.is_empty() || tx.send(Signal::OwnerGone(old)).is_ok()
+            })?;
+            Ok(Bus { conn, signals, act, clickable: Clickable::new() })
         }
 
         fn notify(&mut self, title: &str, body: &str, tag: Option<String>, deny: bool) -> Result<(), dbus::Error> {
             let mut hints = PropMap::new();
             hints.insert("desktop-entry".into(), Variant(Box::new("hermes-chat".to_owned())));
-            let proxy = self.conn.with_proxy(SERVICE, PATH, CALL_TIMEOUT);
-            let (id,): (u32,) = proxy.method_call(SERVICE, "Notify", ("Hermes Chat", 0u32, "", title, body, super::actions(deny), hints, -1i32))?;
-            self.clickable.add(Instant::now(), Shown { id, token: None, tag });
+            let call = Message::new_method_call(SERVICE, PATH, SERVICE, "Notify")
+                .map_err(|e| dbus::Error::new_failed(&e))?
+                .append3("Hermes Chat", 0u32, "")
+                .append3(title, body, super::actions(deny))
+                .append2(hints, -1i32);
+            // The reply comes from the service's unique name, which is who may act on this notification.
+            let reply = self.conn.send_with_reply_and_block(call, CALL_TIMEOUT)?;
+            let id: u32 = reply.read1()?;
+            let owner = reply.sender().map(|s| s.to_string()).unwrap_or_default();
+            self.clickable.add(Instant::now(), Shown { id, owner, token: None, tag });
             Ok(())
         }
 
@@ -283,19 +308,20 @@ mod desktop {
             }
             for s in self.signals.try_iter() {
                 match s {
-                    Signal::Token(n, t) => {
-                        if let Some(shown) = self.clickable.find(|s| s.id == n) {
+                    Signal::Token(from, n, t) => {
+                        if let Some(shown) = self.clickable.find(|s| s.id == n && s.owner == from) {
                             shown.token = Some(t);
                         }
                     }
-                    Signal::Action(n, key) => {
+                    Signal::Action(from, n, key) => {
                         if let Some(action) = super::invoked(&key) {
-                            if let Some(Shown { token, tag, .. }) = self.clickable.take(|s| s.id == n) {
-                                super::act(&self.app, action, token, tag);
+                            if let Some(Shown { token, tag, .. }) = self.clickable.take(|s| s.id == n && s.owner == from) {
+                                (self.act)(action, token, tag);
                             }
                         }
                     }
-                    Signal::Closed(n) => drop(self.clickable.take(|s| s.id == n)),
+                    Signal::Closed(from, n) => drop(self.clickable.take(|s| s.id == n && s.owner == from)),
+                    Signal::OwnerGone(old) => while self.clickable.take(|s| s.owner == old).is_some() {},
                 }
             }
             self.clickable.prune(Instant::now());
@@ -305,7 +331,87 @@ mod desktop {
 
     #[cfg(test)]
     mod tests {
+        use super::super::Action;
         use super::*;
+        use crate::lock::Locked;
+        use crate::test_common::{connect, private_bus};
+        use dbus::channel::{MatchingReceiver, Sender};
+        use std::sync::{Arc, Mutex};
+
+        /// A stand-in notification service on a private bus: it takes the service's name, from the one before it if
+        /// any, as a restarted service does, and answers each Notify with its next id. Messages sent to it go out as its
+        /// signals.
+        fn service(address: &str) -> mpsc::Sender<Message> {
+            let (send, sends) = mpsc::channel::<Message>();
+            let (ready, owned) = mpsc::channel();
+            let address = address.to_owned();
+            std::thread::spawn(move || {
+                let conn = connect(&address);
+                conn.request_name(SERVICE, true, true, true).unwrap();
+                let mut next = 0u32;
+                conn.start_receive(
+                    MatchRule::new_method_call(),
+                    Box::new(move |call, c| {
+                        if call.member().is_some_and(|m| &*m == "Notify") {
+                            let args = call.read_all::<(String, u32, String, String, String, Vec<String>, PropMap, i32)>();
+                            assert!(args.is_ok(), "the freedesktop Notify call: {args:?}");
+                            next += 1;
+                            let _ = c.send(call.method_return().append1(next));
+                        }
+                        true
+                    }),
+                );
+                ready.send(()).unwrap();
+                loop {
+                    if conn.process(Duration::from_millis(10)).is_err() {
+                        return;
+                    }
+                    for signal in sends.try_iter() {
+                        let _ = conn.send(signal);
+                    }
+                }
+            });
+            owned.recv().unwrap();
+            send
+        }
+
+        fn invoked(id: u32, key: &str) -> Message {
+            Message::new_signal(PATH, SERVICE, "ActionInvoked").unwrap().append2(id, key)
+        }
+
+        #[test]
+        fn only_the_service_that_took_a_notification_acts_on_it() {
+            let bus = private_bus();
+            let first = service(&bus.address);
+            let acted = Arc::new(Mutex::new(vec![]));
+            let into = acted.clone();
+            let mut b = Bus::on(connect(&bus.address), Box::new(move |action, _, tag| into.locked().push((action, tag.unwrap())))).unwrap();
+            let heard = |b: &mut Bus, n: usize| {
+                let end = Instant::now() + Duration::from_secs(10);
+                while acted.locked().len() < n && Instant::now() < end {
+                    b.listen();
+                }
+                acted.locked().clone()
+            };
+
+            b.notify("Hermes is asking for approval", "…", Some("approval".into()), true).unwrap();
+            // Another client on the bus sends what looks like the service's Deny; it is ignored, and the service's own
+            // Review after it still opens the card.
+            let intruder = connect(&bus.address);
+            intruder.send(invoked(1, "deny")).unwrap();
+            intruder.channel().flush();
+            first.send(invoked(1, "review")).unwrap();
+            assert_eq!(heard(&mut b, 1), [(Action::Open, "approval".to_owned())]);
+
+            // A new service takes the name: what the old one took is gone with it, though the old one is still on the
+            // bus. The new one's Deny on its own notification counts.
+            b.notify("Hermes is asking for approval", "…", Some("before restart".into()), true).unwrap();
+            let second = service(&bus.address);
+            first.send(invoked(2, "deny")).unwrap();
+            b.notify("Hermes is asking for approval", "…", Some("after restart".into()), true).unwrap();
+            second.send(invoked(1, "deny")).unwrap();
+            assert_eq!(heard(&mut b, 2), [(Action::Open, "approval".to_owned()), (Action::Deny, "after restart".to_owned())]);
+        }
 
         #[test]
         fn past_8_waiting_on_a_stalled_service_a_notification_is_refused() {
