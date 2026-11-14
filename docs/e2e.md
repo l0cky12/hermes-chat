@@ -1,6 +1,6 @@
 # End-to-end tests
 
-`npm run e2e` tests features the way a person uses them, with no display, no person and no Hermes server. Each test starts the whole app in headless Chromium, clicks and types with real browser input, and checks two things: what the screen shows, and what `FakeHermes` received. ADR 0163 records the design.
+`npm run e2e` tests features the way a person uses them, with no display, no person and no Hermes server. Each test starts the whole app in headless Chromium, clicks and types with real browser input, and checks two things: what the screen shows, and what `FakeHermes` received. ADR 0166 records the design.
 
 ## Run it
 
