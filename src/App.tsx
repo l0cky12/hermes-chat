@@ -2946,7 +2946,10 @@ export function Main({
   const readSelection = summonSelection ? summon?.readSelection : undefined;
   useEffect(() => {
     if (!readSelection) return;
-    const read = () => void readSelection().then((s) => selectionWatch.remember(s), () => {});
+    const read = () => {
+      const ticket = selectionWatch.reading();
+      void readSelection().then((s) => selectionWatch.remember(ticket, s), () => {});
+    };
     read();
     window.addEventListener("blur", read);
     return () => window.removeEventListener("blur", read);
@@ -2965,9 +2968,10 @@ export function Main({
     if (chatCovered()) return;
     focusPane(active.key);
     if (fromElsewhere && readSelection)
-      void untilFocused()
-        .then(readSelection)
-        .then((s) => prefillRef.current(selectionWatch.take(s)), () => {});
+      void untilFocused().then(() => {
+        const ticket = selectionWatch.reading();
+        return readSelection().then((s) => prefillRef.current(selectionWatch.take(ticket, s)), () => {});
+      });
   };
   useEffect(() => summon?.onSummoned((s) => onSummonedRef.current(s)), [summon]);
 

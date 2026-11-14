@@ -9,22 +9,36 @@
  */
 export type Selections = { primary?: string | null; clipboard?: string | null };
 
-/** What the selections held when last read, to tell new text from text the owner already had. */
+/**
+ * What the selections held when last read, to tell new text from text the owner already had. Reads are answered out of
+ * order (a selection's owner may take up to a second), so each starts with a ticket from `reading()`, and one that lands
+ * after a read started later has landed is dropped.
+ */
 export class SelectionWatch {
   private last: Selections = {};
+  private started = 0;
+  private landed = 0;
 
-  /** Keeps what `now` read. A selection that couldn't be read keeps what it held when last read. */
-  remember(now: Selections) {
+  /** The ticket for a read starting now. */
+  reading(): number {
+    return ++this.started;
+  }
+
+  /** Keeps what the read `ticket` found. A selection that couldn't be read keeps what it held when last read. */
+  remember(ticket: number, now: Selections) {
+    if (ticket <= this.landed) return;
+    this.landed = ticket;
     this.last = {
       primary: now.primary === undefined ? this.last.primary : now.primary,
       clipboard: now.clipboard === undefined ? this.last.clipboard : now.clipboard,
     };
   }
 
-  /** The selection that changed since the last read, PRIMARY first; `now` is remembered either way. */
-  take(now: Selections): string | undefined {
+  /** The selection that changed since the last read, PRIMARY first; `now` is remembered either way. None for a stale read. */
+  take(ticket: number, now: Selections): string | undefined {
+    if (ticket <= this.landed) return undefined;
     const last = this.last;
-    this.remember(now);
+    this.remember(ticket, now);
     if (typeof now.primary === "string" && now.primary !== last.primary) return now.primary;
     if (typeof now.clipboard === "string" && now.clipboard !== last.clipboard) return now.clipboard;
     return undefined;

@@ -32,7 +32,10 @@ function fakeRust() {
   const fns = new Set<(s: Summoned) => void>();
   const api: SummonApi = {
     onSummoned: (fn) => (fns.add(fn), () => fns.delete(fn)),
-    readSelection: async () => (fake.reads++, { ...fake.selections }),
+    readSelection: () => {
+      fake.reads++;
+      return fake.holding ? new Promise<Selections>((answer) => fake.held.push(answer)) : Promise.resolve({ ...fake.selections });
+    },
   };
   const summon = async (s: Summoned = { fromElsewhere: true }) => {
     await act(async () => fns.forEach((fn) => fn(s)));
@@ -41,7 +44,8 @@ function fakeRust() {
   };
   /** The owner leaves for another app. */
   const leave = () => act(async () => void window.dispatchEvent(new Event("blur")));
-  const fake = { api, summon, leave, selections: {} as Selections, reads: 0 };
+  /** `holding`: reads wait in `held` until the test answers them, in any order. */
+  const fake = { api, summon, leave, selections: {} as Selections, reads: 0, holding: false, held: [] as ((s: Selections) => void)[] };
   return fake;
 }
 
@@ -170,6 +174,24 @@ describe("Starting a message with the text selected in another app (ADR 0172)", 
     rust.selections = { primary: "a line of Hermes's reply", clipboard: null };
     await rust.summon();
     expect(composer().value).toBe("");
+  }, 30_000);
+
+  it("doesn't quote the text again when the read on leaving lands after the summon's read", async () => {
+    const { rust } = await onNewChat({ primary: "before" });
+    rust.holding = true;
+    await rust.leave();
+    await rust.summon();
+    expect(rust.held).toHaveLength(2);
+    await act(async () => rust.held[1]!({ primary: "error: disk full" }));
+    expect(composer().value).toBe("> error: disk full\n\n");
+    await act(async () => rust.held[0]!({ primary: "before" }));
+    rust.holding = false;
+    // The next read on leaving can't read the selection, so what the summon read stays what was last seen.
+    rust.selections = {};
+    await rust.leave();
+    rust.selections = { primary: "error: disk full" };
+    await rust.summon();
+    expect(composer().value).toBe("> error: disk full\n\n");
   }, 30_000);
 
   it("starts a message once, not again on the next summon", async () => {
