@@ -140,6 +140,8 @@ const scenes = {
   },
   "new-chat": { query: "", steps: [] },
   chat: { query: "", steps: [click("button", "Nightly backup")] },
+  // A code block and inline code in the default code font, at 1280 × 800.
+  "code-font": { query: "", width: 1280, height: 800, steps: [click("button", "Nightly backup")] },
   "chat-light": { query: "?mode=light", steps: [click("button", "Nightly backup")] },
   "new-chat-light": { query: "?mode=light", steps: [] },
   search: { query: "", steps: [click("button", "Nightly backup"), key("k", { ctrlKey: true })] },

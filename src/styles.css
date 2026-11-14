@@ -33,7 +33,9 @@
   --chat-width: 740px;
   /* Appearance (src/ui/appearance.ts) sets --ui-font, --mono-font, --mono-size and the root font size, the interface
      size. Other text sizes are calc(Nrem / 14): N px at the default 14px, scaling with the choice. */
-  --mono: var(--mono-font, "JetBrains Mono"), "JetBrains Mono", "Fira Code", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  /* Only the generic family behind the chosen font: WebKitGTK searches the system for each named family it lacks
+     (ui-monospace included, which it doesn't treat as generic) again at every font size (#456). */
+  --mono: var(--mono-font, monospace), monospace;
   --mono-size: 13px;
   color-scheme: dark;
   /* system-ui first: WebKitGTK searches the system for each named font that isn't installed, again at every font size,
