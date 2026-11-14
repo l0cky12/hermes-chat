@@ -80,6 +80,22 @@ describe("Notification actions", () => {
     expect(actions.deny).not.toHaveBeenCalled();
   });
 
+  it("ignores an action on a notification posted before the webview reloaded, though Rust still holds it", async () => {
+    const before = await desktop();
+    const old = { open: vi.fn(), deny: vi.fn() };
+    await before.desktopNotify(APPROVAL, old);
+    const oldTag = before.tags()[0]!;
+    const after = await desktop();
+    const fresh = { open: vi.fn(), deny: vi.fn() };
+    await after.desktopNotify(APPROVAL, fresh);
+    expect(after.tags()[1]).not.toBe(oldTag);
+    after.act({ tag: oldTag, action: "deny" });
+    after.act({ tag: oldTag, action: "open" });
+    expect(fresh.deny).not.toHaveBeenCalled();
+    expect(fresh.open).not.toHaveBeenCalled();
+    expect(old.deny).not.toHaveBeenCalled();
+  });
+
   it("keeps the newest 64 notifications' actions, as Rust does", async () => {
     const { desktopNotify, act, tags } = await desktop();
     const all = Array.from({ length: 65 }, () => ({ open: vi.fn() }));
