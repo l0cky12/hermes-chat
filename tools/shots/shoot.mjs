@@ -274,6 +274,12 @@ const longSkills = `(() => {
 Object.assign(scenes, {
   "wsb-rail": { query: "", ...wsb, steps: [] },
   "wsb-diagnostics": { query: "", ...wsb, steps: [openSettings, tab("Diagnostics"), `new Promise((r) => setTimeout(r, 3000))`, scrollTo("#capability-approvalAnswers")] },
+  // A Hermes with turn isolation, where approval.respond doesn't reach a waiting Approval.
+  "wsb-diagnostics-turn-isolation": {
+    query: "",
+    ...wsb,
+    steps: [`window.shots.server.turnIsolation = true`, openSettings, tab("Diagnostics"), `new Promise((r) => setTimeout(r, 3000))`, scrollTo("#capability-approvalAnswers")],
+  },
   "wsb-skills": { query: "", ...wsb, steps: [longSkills, openSettings, tab("Skills")] },
   "wsb-skills-focus": {
     query: "",
