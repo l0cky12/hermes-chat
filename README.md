@@ -511,6 +511,7 @@ npm run app     # run the desktop app in development mode
 | `npm run dev` | Runs only the Vite dev server on port 1420. The page can't connect to Hermes outside the Tauri window. |
 | `npm run build` | Type-checks with `tsc --noEmit`, and builds the frontend into `dist/`. |
 | `npm test` | Runs the frontend tests (Vitest and jsdom) against a fake Hermes. |
+| `npm run e2e` | Runs each feature end to end in headless Chromium against a fake Hermes, with screenshots and `e2e/out/summary.json`. See [`docs/e2e.md`](docs/e2e.md) and ADR 0166. |
 | `npm run tauri -- build --no-bundle` | Builds the release binary `src-tauri/target/release/hermes-chat`. No installer bundles are configured. |
 | `cd src-tauri && cargo test --lib --test transport --test media --test screenshot` | Runs the Rust tests. The `dist/` folder must exist first, so run `npm run build` or `mkdir -p dist`. |
 | `HERMES_HOME=$(mktemp -d) ~/.hermes/hermes-agent/venv/bin/python tools/cron-golden.py ~/.hermes/hermes-agent` | Regenerates `src/hermes/cronGolden.json`, what Hermes's own scheduler code makes of a set of schedules, which `schedule.test.ts` checks the schedule preview against. |
@@ -522,7 +523,7 @@ npm run app     # run the desktop app in development mode
 
 The benchmark times opening, streaming, find-in-chat, scrolling, two simultaneous streams, and divider dragging. It needs `$CHROME` or Playwright's cached headless shell (`npx playwright install chromium-headless-shell`). Set `THROTTLE=4` to slow the CPU four times. `bench/parse.ts` times only the Markdown parse and highlight work for the same streamed reply, in Node (usage in the file).
 
-GitHub Actions (`.github/workflows/ci.yml`) runs `npm test`, `npm run build`, and the Rust tests on every pull request and on pushes to `main`.
+GitHub Actions (`.github/workflows/ci.yml`) runs `npm test`, `npm run build`, `npm run e2e`, and the Rust tests on every pull request and on pushes to `main`.
 
 ## Project defaults
 
