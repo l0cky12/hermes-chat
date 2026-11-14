@@ -361,6 +361,7 @@ export function RepositoryScreen({
         >
           <label htmlFor={`${pathId}-target`}>SSH target</label>
           <input
+            spellCheck={false}
             id={`${pathId}-target`}
             className="mono"
             placeholder="liam@hermes or a host alias from ~/.ssh/config"
@@ -404,6 +405,7 @@ export function RepositoryScreen({
           <FolderGit2 size={15} aria-hidden /> Folder on the server
         </label>
         <input
+          spellCheck={false}
           id={pathId}
           className="repo-path mono"
           placeholder="~/projects/app"

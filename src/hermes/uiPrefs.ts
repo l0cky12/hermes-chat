@@ -1,8 +1,9 @@
 // Display preferences for this computer: the theme, whether the last chat reopens at launch and which chat each profile
 // had open, whether reasoning shows, the model last picked and the starred models, which items the status bar shows,
 // the screenshot shortcut and preview pane width, which computer the Terminal opens on, what sending does while a
-// reply runs, Idle compaction, which of the chat list's sections show and which are collapsed, how the agent office shows,
-// and the keyboard shortcuts the owner changed. All preferences live in one versioned localStorage document.
+// reply runs, whether message boxes check spelling, Idle compaction, which of the chat list's sections show and which are
+// collapsed, how the agent office shows, and the keyboard shortcuts the owner changed. All preferences live in one
+// versioned localStorage document.
 // it (chatCache.ts) and later settings add fields here rather than new keys. Nothing here goes to Hermes. Every
 // settings feature reads and writes through this module.
 
@@ -54,6 +55,8 @@ export type UIPrefs = {
    * or `steer` it into the running reply. Ctrl+Enter does the other.
    */
   followUp: FollowUp;
+  /** Whether the boxes a message to Hermes is written in underline misspelled words (#578). Other fields keep their own. */
+  spellCheck: boolean;
   /** Idle compaction: compact a chat open on Hermes here once it has sat idle with its context window this full (ADR 0119). */
   idleCompact: IdleCompactPrefs;
   /** The chat list's sections that show, in their own order (ADR 0063). Never empty: at least one stays on. */
@@ -113,6 +116,7 @@ export const DEFAULT_UI_PREFS: Readonly<UIPrefs> = Object.freeze({
   templates: [],
   terminalKind: "server",
   followUp: "queue",
+  spellCheck: true,
   idleCompact: Object.freeze({ enabled: false, percent: 70, idleMinutes: 15 }),
   chatSectionsShown: SECTION_KEYS.filter((k) => k !== "archived"),
   chatSectionsCollapsed: ["snoozed", "archived", "settled"] as SectionKey[],
@@ -272,6 +276,7 @@ export function readUIPrefs(doc: UIPrefsDoc, d: Readonly<UIPrefs> = DEFAULT_UI_P
     templates: toTemplates(doc.templates) ?? [...d.templates],
     terminalKind: doc.terminalKind === "server" || doc.terminalKind === "local" ? doc.terminalKind : d.terminalKind,
     followUp: doc.followUp === "queue" || doc.followUp === "steer" ? doc.followUp : d.followUp,
+    spellCheck: typeof doc.spellCheck === "boolean" ? doc.spellCheck : d.spellCheck,
     idleCompact: toIdleCompact(doc.idleCompact, d.idleCompact) ?? { ...d.idleCompact },
     chatSectionsShown: toShown(doc.chatSectionsShown) ?? [...d.chatSectionsShown],
     chatSectionsCollapsed: toSections(doc.chatSectionsCollapsed) ?? [...d.chatSectionsCollapsed],

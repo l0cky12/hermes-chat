@@ -43,6 +43,7 @@ import {
   type SubagentTree,
 } from "../hermes/subagents";
 import { composing } from "./bits";
+import { useSpellCheck } from "./SpellCheckSettings";
 import type { QuestionKind } from "../hermes/model";
 import { clockTimeWithSeconds, plural } from "../hermes/values";
 
@@ -720,6 +721,7 @@ function namesOf(list: Subagent[]): string {
 }
 
 function Controls({ s, under, api }: { s: Subagent; under: Subagent[]; api: SubagentsApi }) {
+  const spellCheck = useSpellCheck();
   const [text, setText] = useState("");
   const [typing, setTyping] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -804,6 +806,7 @@ function Controls({ s, under, api }: { s: Subagent; under: Subagent[]; api: Suba
             aria-label={`Steer ${target}`}
             aria-describedby={`${hintId}`}
             placeholder="What it should do differently"
+            spellCheck={spellCheck}
             disabled={busy}
             onFocus={() => setTyping(true)}
             onBlur={() => setTyping(false)}

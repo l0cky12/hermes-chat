@@ -46,6 +46,7 @@ import { BranchButton } from "./Branch";
 import { useWindowHidden } from "./windowState";
 import { EditButton, RegenerateButton, VariantNav } from "./Replay";
 import { CopyButton, replyMarkdown } from "./CopyMessage";
+import { useSpellCheck } from "./SpellCheckSettings";
 import { turnsOf, type ReplayKind, type Variant } from "../hermes/replay";
 import type { FollowUp } from "../hermes/uiPrefs";
 import { sttRoute } from "../hermes/sttRoute";
@@ -1610,6 +1611,7 @@ function Composer({
   const keys = useBindings();
   // The chat's staged attachments, kept by the desk under its Draft key so they outlive this composer (ADR 0145).
   const attachments = useSyncExternalStore(screenshots.subscribe, () => screenshots.stagedIn(draftKey));
+  const spellCheck = useSpellCheck();
   const annotations = useSyncExternalStore(screenshots.subscribe, screenshots.annotationLabels);
   const focused = useRef(autoFocus);
   focused.current = autoFocus;
@@ -2019,6 +2021,7 @@ function Composer({
           rows={1}
           autoFocus={autoFocus}
           placeholder="Message Hermes"
+          spellCheck={spellCheck}
           value={text}
           {...slash.inputProps}
           onChange={(e) => onText(e.target.value, inputKind(e.nativeEvent))}

@@ -366,7 +366,7 @@ function FilterBar({
           ))}
         </select>,
       )}
-      {field("Model", <input type="text" placeholder="Any" value={filter.model ?? ""} onChange={(e) => onChange({ model: e.target.value })} />)}
+      {field("Model", <input spellCheck={false} type="text" placeholder="Any" value={filter.model ?? ""} onChange={(e) => onChange({ model: e.target.value })} />)}
       {field("Active from", <input type="date" value={filter.from ?? ""} max={filter.to} onChange={(e) => onChange({ from: e.target.value || undefined })} />)}
       {field("Until", <input type="date" value={filter.to ?? ""} min={filter.from} onChange={(e) => onChange({ to: e.target.value || undefined })} />)}
       {field(

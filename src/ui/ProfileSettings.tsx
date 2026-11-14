@@ -697,7 +697,7 @@ function ModelPicker({
           </option>
         ))}
       </select>
-      <input aria-label={f.modelName} list={listId} className="mono" value={model} disabled={!provider || disabled} onChange={(e) => onChange(provider, e.target.value)} />
+      <input spellCheck={false} aria-label={f.modelName} list={listId} className="mono" value={model} disabled={!provider || disabled} onChange={(e) => onChange(provider, e.target.value)} />
       <datalist id={listId}>
         {models.map((m) => (
           <option key={m} value={m} />
@@ -993,6 +993,7 @@ function ProfileForm({
                 {isDefault ? f.displayName : f.name}
               </label>
               <input
+                spellCheck={false}
                 id={nameId}
                 className={isDefault ? undefined : "mono"}
                 autoFocus
@@ -1233,7 +1234,7 @@ function DeleteProfile({
           <label className="field-label" htmlFor={typedId}>
             {d.confirmLabel(row.name)}
           </label>
-          <input id={typedId} className="mono" autoFocus value={typed} disabled={busy} onChange={(e) => setTyped(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !composing(e) && matches && !busy && void go()} />
+          <input spellCheck={false} id={typedId} className="mono" autoFocus value={typed} disabled={busy} onChange={(e) => setTyped(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !composing(e) && matches && !busy && void go()} />
         </div>
         {problem && (
           <p className="sign-in-error" role="alert">

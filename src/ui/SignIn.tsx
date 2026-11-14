@@ -156,7 +156,7 @@ export function SignIn({
               <>
                 <label className="field">
                   <span className="field-label">Dashboard username</span>
-                  <input value={d.username} onChange={(e) => set({ username: e.target.value })} />
+                  <input spellCheck={false} value={d.username} onChange={(e) => set({ username: e.target.value })} />
                 </label>
                 <label className="field">
                   <span className="field-label">Dashboard password</span>
