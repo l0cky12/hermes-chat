@@ -115,6 +115,7 @@ export function applyAppearance(a: Appearance, root: HTMLElement, mode: Mode = r
   font("--ui-font", a.uiFont);
   font("--mono-font", a.monoFont);
   root.style.fontSize = `${a.uiSize}px`;
+  root.style.setProperty("--ui-scale", String(a.uiSize / DEFAULT_APPEARANCE.uiSize));
   root.style.setProperty("--mono-size", `${a.monoSize}px`);
   root.classList.toggle("wrap-code", a.wordWrap);
   root.lang = htmlLang(locale);

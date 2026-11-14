@@ -43,6 +43,9 @@
   color: var(--text);
   background: var(--bg);
 }
+/* Icons take their size in px from their props; Appearance sets --ui-scale (the interface size over 14px) so they grow
+   and shrink with the text. */
+svg.lucide { zoom: var(--ui-scale, 1); }
 /* Status colors dark enough to read on a light background. */
 :root[data-mode="light"] {
   color-scheme: light;
@@ -1251,9 +1254,10 @@ mark.hl { background: rgba(245, 184, 74, 0.22); color: var(--warn); border-radiu
 .switch:focus-visible { outline: 2px solid var(--line-2); outline-offset: 2px; }
 /* settings search: the box at the top of the sidebar (or in the narrow bar), and the sections of every tab that hold what's typed */
 .settings-search { position: relative; display: flex; align-items: center; width: 100%; min-width: 0; }
+/* The icon scales with the interface size (svg.lucide), so the room left for it does too. */
 .settings-search > svg { position: absolute; left: 10px; color: var(--muted); pointer-events: none; }
 .settings-search input {
-  flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line-2); border-radius: 8px; padding: 7px 34px 7px 31px; outline: none;
+  flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line-2); border-radius: 8px; padding: 7px 34px 7px calc(31rem / 14); outline: none;
   font: inherit; font-size: calc(13rem / 14); color: var(--text);
 }
 .settings-search input:focus { border-color: var(--line-3); }

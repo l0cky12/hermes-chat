@@ -4,7 +4,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { ModelSettingsApi } from "../hermes/modelSettings";
-import { DEFAULT_APPEARANCE, appearanceStore, cssFamily, loadAppearance } from "./appearance";
+import { DEFAULT_APPEARANCE, UI_SIZES, appearanceStore, cssFamily, loadAppearance } from "./appearance";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { SettingsScreen } from "./Settings";
 import { BUILTIN_THEMES } from "./themes";
@@ -57,6 +57,17 @@ describe("Applied appearance", () => {
     store.set({ uiFont: "", wordWrap: false });
     expect(root.style.getPropertyValue("--ui-font")).toBe("");
     expect(root.classList.contains("wrap-code")).toBe(false);
+  });
+
+  it("scales icons with the interface size, leaving them as drawn at the default", () => {
+    const root = document.createElement("html");
+    const store = appearanceStore(memoryStorage(), root);
+    expect(root.style.getPropertyValue("--ui-scale")).toBe("1");
+    for (const uiSize of UI_SIZES) {
+      store.set({ uiSize });
+      // A 14px icon is as big as 14px text at this size.
+      expect(14 * Number(root.style.getPropertyValue("--ui-scale"))).toBeCloseTo(uiSize, 6);
+    }
   });
 
   it("quotes a family name so quotes and backslashes in it stay part of the name", () => {

@@ -54,3 +54,9 @@ describe("Reduced motion", () => {
     for (const selector of STATUS) expect(declarations(still, selector), selector).toMatch(/box-shadow:/);
   });
 });
+
+describe("Icons", () => {
+  it("scale with the interface size Appearance sets", () => {
+    expect(declarations(css, "svg.lucide")).toContain("zoom: var(--ui-scale, 1)");
+  });
+});
