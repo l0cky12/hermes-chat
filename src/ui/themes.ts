@@ -95,10 +95,6 @@ export function themeVars(p: Palette, mode: Mode, contrast = DEFAULT_CONTRAST): 
   const bg = p.background;
   const text = k > 0 ? mix(p.text, extreme, 0.5 * k) : mix(p.text, bg, 0.12 * -k);
   const shade = (w: number) => mix(bg, text, clamp(w, 0, 1));
-  // Past 1, a tone keeps going from the text color toward black or white, whichever stands out more from the
-  // background, for a custom palette whose own text is too faint for AA.
-  const far = contrastRatio("#ffffff", bg) >= contrastRatio("#000000", bg) ? "#ffffff" : "#000000";
-  const tone = (w: number) => (w <= 1 ? shade(w) : mix(text, far, clamp(w - 1, 0, 1)));
   const lift = dark ? 0 : 0.02; // Light backgrounds need a little more for the same step.
   // Softer goes less far than sharper, so muted text stays readable at the lowest setting.
   const spread = (up: number, down: number) => (k > 0 ? up * k : down * k);
@@ -114,7 +110,8 @@ export function themeVars(p: Palette, mode: Mode, contrast = DEFAULT_CONTRAST): 
   const hover2 = 0.07 + lift / 2;
   // Text sits on each surface, and on the selected chat's row: the strongest hover tint over the list panel.
   const under = [...Object.values(surfaces), mix(surfaces["--sidebar"], text, hover2)];
-  const faint = Math.max((dark ? 0.335 : 0.42) + spread(0.2, 0.08), readableWeight(tone, under));
+  const { tone, weight } = readableTone(shade, text, [extreme, dark ? "#000000" : "#ffffff"], under);
+  const faint = Math.max((dark ? 0.335 : 0.42) + spread(0.2, 0.08), weight);
   return {
     ...surfaces,
     "--line": alpha(text, 0.07 + 0.04 * k + lift),
@@ -140,10 +137,24 @@ export function themeVars(p: Palette, mode: Mode, contrast = DEFAULT_CONTRAST): 
 /** WCAG AA for body text: the least contrast any text the app shows may have against what it sits on. */
 const MIN_TEXT_CONTRAST = 4.5;
 
-/** The least tone weight whose color reads at AA on every surface, or 2 (black or white) if none does. */
-function readableWeight(tone: (w: number) => string, surfaces: string[]) {
-  for (let w = 0; w < 2; w += 0.01) if (surfaces.every((s) => contrastRatio(tone(w), s) >= MIN_TEXT_CONTRAST)) return w;
-  return 2;
+/**
+ * The faintest text that reads at AA on every surface: the least weight along a tone from the background to the text
+ * color (0 to 1) and on to one of `ends` (1 to 2), for a custom palette whose own text is too faint. The first end
+ * that reaches AA wins; when none does, the one whose worst surface reads best.
+ */
+function readableTone(shade: (w: number) => string, text: string, ends: string[], surfaces: string[]) {
+  const worst = (c: string) => Math.min(...surfaces.map((s) => contrastRatio(c, s)));
+  const picks = ends.map((end) => {
+    const tone = (w: number) => (w <= 1 ? shade(w) : mix(text, end, clamp(w - 1, 0, 1)));
+    let weight = 2;
+    for (let w = 0; w < 2; w += 0.01)
+      if (worst(tone(w)) >= MIN_TEXT_CONTRAST) {
+        weight = w;
+        break;
+      }
+    return { tone, weight, worst: worst(tone(weight)) };
+  });
+  return picks.find((p) => p.worst >= MIN_TEXT_CONTRAST) ?? picks.reduce((a, b) => (b.worst > a.worst ? b : a));
 }
 
 /** Which mode shows: the scheme picked, or the system's when it's System. */

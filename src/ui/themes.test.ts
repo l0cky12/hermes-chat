@@ -96,6 +96,14 @@ describe("Theme colors", () => {
     }
   });
 
+  it("go toward white for a dark-mode palette on a grey where only white reaches AA on every surface", () => {
+    const grey = { background: "#767676", surface: "#767676", text: "#777777", accent: "#d08b6e" };
+    const v = themeVars(grey, "dark", 50);
+    for (const key of ["--faint", "--muted"])
+      for (const [on, surface] of Object.entries(surfaces(v)))
+        expect(contrastRatio(v[key], surface), `${key} on ${on}`).toBeGreaterThanOrEqual(4.5);
+  });
+
   it("never draw muted text fainter than faint text", () => {
     for (const theme of BUILTIN_THEMES)
       for (const mode of ["light", "dark"] as const)
