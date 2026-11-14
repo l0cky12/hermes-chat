@@ -2,7 +2,7 @@
 // source; the Rust side copies it to the native window (main_window.rs), which WebKitGTK and WebView2 don't do alone.
 import { useEffect } from "react";
 
-export const APP_NAME = "Hermes Chat";
+const APP_NAME = "Hermes Chat";
 
 /**
  * `(<unread>) <chat> - Hermes Chat`. No count while nothing is unread, and the app's name alone while no chat is open
