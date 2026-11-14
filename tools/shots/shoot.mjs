@@ -286,6 +286,28 @@ Object.assign(scenes, {
     ...wsb,
     steps: [longSkills, openSettings, tab("Skills"), `document.getElementById("skill-code-review-edit").focus()`, { press: "Tab" }, `document.getElementById("skill-code-review-edit").scrollIntoView({ block: "center" })`],
   },
+  // A server file a tool call wrote, opened in the Preview from the tool call's chip: the toolbar's Edit (ADR 0170).
+  "wsb-preview-edit": {
+    query: "",
+    ...wsb,
+    steps: [
+      `(() => {
+        const s = window.shots.server, path = "/home/liam/notes/backup-runbook.md";
+        const args = { path }, t = 1_790_000_000;
+        s.serverFiles[path] = "# Backup runbook\\n\\nThe nightly restic job runs at 02:30 from restic-backup.timer.\\n\\n## When it fails\\n\\n1. Check that no other restic process is running.\\n2. Clear a stale lock with restic unlock.\\n3. Re-run the backup by hand and confirm a new snapshot.\\n";
+        s.transcripts.backup = [...s.transcripts.backup,
+          { role: "user", text: "Write that down as a runbook in my notes." },
+          { role: "assistant", text: "", tool_calls: [{ id: "w1", type: "function", function: { name: "write_file", arguments: JSON.stringify(args) } }] },
+          { role: "tool", name: "write_file", tool_call_id: "w1", args, context: path, result: JSON.stringify({ bytes_written: 260, dirs_created: false, resolved_path: path, files_modified: [path] }) },
+          { role: "assistant", text: "Saved the runbook to \`/home/liam/notes/backup-runbook.md\`." }];
+      })()`,
+      click("button", "Nightly backup"),
+      click(".tool-line", "write_file"),
+      click(".preview-chip", "backup-runbook.md"),
+      `new Promise((r) => setTimeout(r, 1500))`,
+      unfocus,
+    ],
+  },
   // Pass 2: Settings → General → Chats, where Check spelling is (#578).
   "wsb-settings-chats": {
     query: "",
