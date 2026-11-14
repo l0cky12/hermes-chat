@@ -4233,7 +4233,6 @@ div.export-preview.export-page { height: auto; padding: 10px 12px; background: v
 .settings p.work-empty { margin: 4px 2px; font-size: calc(12.5rem / 14); color: var(--faint); }
 .leave-overlay .leave-dialog.work-dialog { max-width: min(480px, calc(100% - 32px)); width: 100%; max-height: calc(100vh - 32px); }
 .leave-overlay .leave-dialog.work-dialog.wide { max-width: min(640px, calc(100% - 32px)); padding: 0; }
-.leave-overlay .leave-dialog.work-dialog:focus { outline: none; }
 .work-form { display: flex; flex-direction: column; gap: 10px; }
 .wide .work-form { padding: 18px 20px; }
 .work-form > input, .work-fields input, .work-fields select, .work-fields textarea, .work-add textarea, .work-sheet-foot select {

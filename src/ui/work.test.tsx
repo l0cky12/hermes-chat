@@ -144,10 +144,12 @@ describe("the Work page", () => {
     await waitFor(() => expect(within(column("ready")).getByText("Write the summary")).toBeTruthy());
   });
 
-  it("closes a task's sheet on Escape, as soon as it opens", async () => {
+  it("keeps focus in a task's sheet from the moment it opens, and closes it on Escape", async () => {
     const { user } = await launch();
     await user.click(card("Research the API"));
     await screen.findByRole("dialog", { name: "Research the API" });
+    await user.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(screen.getByRole("dialog", { name: "Research the API" }).contains(document.activeElement)).toBe(true);
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).toBeNull();
   });

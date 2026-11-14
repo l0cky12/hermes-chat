@@ -346,9 +346,9 @@ function Dialog({ wide, onClose, children }: { wide?: boolean; onClose: () => vo
   const box = useRef<HTMLDivElement>(null);
   const keys = useModal(box);
   const titleId = useId();
-  // A dialog without a field to focus (the task sheet) takes focus itself, so Escape and Tab reach it.
+  // A dialog without a field to focus (the task sheet) focuses its first control, so Escape and Tab stay in it.
   useEffect(() => {
-    if (!box.current?.contains(document.activeElement)) box.current?.focus();
+    if (!box.current?.contains(document.activeElement)) box.current?.querySelector<HTMLElement>("button, input, select, textarea")?.focus();
   }, []);
   return (
     <div className="leave-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -358,7 +358,6 @@ function Dialog({ wide, onClose, children }: { wide?: boolean; onClose: () => vo
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        tabIndex={-1}
         onKeyDown={(e) => {
           keys(e);
           if (e.key === "Escape") {
