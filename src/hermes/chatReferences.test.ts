@@ -92,11 +92,11 @@ describe("ReferenceDesk", () => {
     const { desk, calls } = deferred();
     desk.add("k", { chatId: "a", title: "A" });
     desk.add("k", { chatId: "a", title: "A" });
-    expect(desk.in("k")).toEqual([{ chatId: "a", title: "A", state: "summarizing" }]);
+    expect(desk.in("k")).toEqual([{ id: "a", chatId: "a", title: "A", state: "summarizing" }]);
     expect(calls).toHaveLength(1);
     calls[0].resolve("A's summary");
     await tick();
-    expect(desk.in("k")).toEqual([{ chatId: "a", title: "A", state: "ready", summary: "A's summary" }]);
+    expect(desk.in("k")).toEqual([{ id: "a", chatId: "a", title: "A", state: "ready", summary: "A's summary" }]);
   });
 
   it("says why a summary failed, and Retry starts again", async () => {
@@ -104,7 +104,7 @@ describe("ReferenceDesk", () => {
     desk.add("k", { chatId: "a", title: "A" });
     calls[0].reject(new Error("no model"));
     await tick();
-    expect(desk.in("k")).toEqual([{ chatId: "a", title: "A", state: "failed", why: "no model" }]);
+    expect(desk.in("k")).toEqual([{ id: "a", chatId: "a", title: "A", state: "failed", why: "no model" }]);
     desk.retry("k", "a");
     expect(desk.in("k")[0].state).toBe("summarizing");
     calls[1].resolve("done");
@@ -142,5 +142,13 @@ describe("ReferenceDesk", () => {
       ["c", "summarizing"],
       ["a", "ready"],
     ]);
+  });
+
+  it("puts back a summary read from a stored message, which names no chat, and sends it again as it was", () => {
+    const { desk } = deferred();
+    const readBack = { title: "Deploy", summary: "Shipped." };
+    desk.putBack("k", [readBack, readBack]);
+    expect(desk.in("k")).toEqual([{ id: "sent:Deploy", title: "Deploy", state: "ready", summary: "Shipped." }]);
+    expect(desk.take("k")).toEqual([readBack]);
   });
 });

@@ -14,23 +14,23 @@ export function ReferenceChips({
   onTextModelSettings,
 }: {
   refs: readonly Reference[];
-  onRetry: (chatId: string) => void;
-  onRemove: (chatId: string) => void;
+  onRetry: (id: string) => void;
+  onRemove: (id: string) => void;
   onTextModelSettings?: () => void;
 }) {
   const [shown, setShown] = useState<string>();
-  const open = refs.find((r): r is Extract<Reference, { state: "ready" }> => r.chatId === shown && r.state === "ready");
+  const open = refs.find((r): r is Extract<Reference, { state: "ready" }> => r.id === shown && r.state === "ready");
   return (
     <>
       <div className="chips">
         {refs.map((r) => (
-          <span key={r.chatId} className={`chip ref-chip ${r.state}`}>
+          <span key={r.id} className={`chip ref-chip ${r.state}`}>
             <button
               className="ref-chip-main"
               aria-label={`Referenced chat ${r.title}, ${STATE[r.state]}${r.state === "ready" ? ". Show the summary" : ""}`}
               aria-expanded={r.state === "ready" ? open === r : undefined}
               title={r.state === "ready" ? "Show the summary that goes with the message" : r.state === "failed" ? r.why : "Hermes is summarizing this chat"}
-              onClick={() => r.state === "ready" && setShown(open === r ? undefined : r.chatId)}
+              onClick={() => r.state === "ready" && setShown(open === r ? undefined : r.id)}
             >
               <Link2 size={12} aria-hidden />
               <span className="chip-name">{r.title}</span>
@@ -38,7 +38,7 @@ export function ReferenceChips({
                 {r.state === "summarizing" ? <Spinner /> : r.state === "ready" ? "Summary ready" : <CircleAlert size={12} className="ref-warn" aria-hidden />}
               </span>
             </button>
-            <button title="Remove" aria-label={`Remove the reference to ${r.title}`} onClick={() => onRemove(r.chatId)}>
+            <button title="Remove" aria-label={`Remove the reference to ${r.title}`} onClick={() => onRemove(r.id)}>
               <X size={12} />
             </button>
           </span>
@@ -47,9 +47,9 @@ export function ReferenceChips({
       {refs.map(
         (r) =>
           r.state === "failed" && (
-            <div key={r.chatId} className="attach-note ref-failed" role="alert">
+            <div key={r.id} className="attach-note ref-failed" role="alert">
               Couldn't summarize {r.title}: {r.why}{" "}
-              <button className="link-btn" onClick={() => onRetry(r.chatId)}>
+              <button className="link-btn" onClick={() => onRetry(r.id)}>
                 Retry
               </button>
               {r.fix === "text-model" && onTextModelSettings && (

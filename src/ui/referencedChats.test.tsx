@@ -116,6 +116,8 @@ describe("Referencing a chat", () => {
     expect(sent(fake)).toEqual([]);
     await act(async () => answer());
     await waitFor(() => expect(chip("summary ready")).toBeTruthy());
+    // The note follows the summary: once it is ready there is nothing to wait for.
+    expect(screen.queryByText(/Wait for the summary/)).toBeNull();
     await user.click(composer());
     await user.keyboard("{Enter}");
     await waitFor(() => expect(sent(fake)).toHaveLength(1));
@@ -147,7 +149,11 @@ describe("Referencing a chat", () => {
     fake.oneshotFailure = undefined;
     await user.click(within(alert).getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(chip("summary ready")).toBeTruthy());
-    expect(screen.queryByText(/Couldn't summarize/)).toBeNull();
+    expect(screen.queryByText(/Couldn't summarize|Retry or remove/)).toBeNull();
+    // Retry leaves the caret in the composer, so Enter sends.
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(sent(fake)).toHaveLength(1));
+    expect(sent(fake)[0]).toMatch(/^hi\n\n--- Attached Context ---\n\n\[Referenced chat: Deploy pipeline\]/);
   });
 
   it("carries the reference with the first message of a new chat", async () => {

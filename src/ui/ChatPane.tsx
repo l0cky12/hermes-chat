@@ -1657,6 +1657,12 @@ function Composer({
     }
   });
   const [refused, setRefused] = useState<string[]>([]);
+  // Set when a send waited on a summary; what it says follows the references, and it goes once they are all ready.
+  const [refsHeld, setRefsHeld] = useState(false);
+  const unready = refs.find((r) => r.state !== "ready");
+  useEffect(() => {
+    if (!unready) setRefsHeld(false);
+  }, [unready]);
   const [dragging, setDragging] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const talk = useSyncExternalStore(conversation?.subscribe ?? noDesk, conversation?.getSnapshot ?? (() => NOT_TALKING));
@@ -1929,9 +1935,10 @@ function Composer({
     if (!sendable || steering) return;
     if (compare?.refuse) return setRefused([compare.refuse]);
     // A summary goes with the message it was written with, so the message waits for every summary to be ready.
-    const unready = refs.find((r) => r.state !== "ready");
-    if (unready)
-      return setRefused([unready.state === "summarizing" ? `Wait for the summary of ${unready.title}, or remove it.` : `Retry or remove the reference to ${unready.title}.`]);
+    if (unready) {
+      setRefused([]);
+      return setRefsHeld(true);
+    }
     // A message without references goes as it always did, with no arguments for them.
     const go = (files: Attachment[], skill?: SkillCall) => {
       if (references && refs.length) onSend(text.trim(), files, skill, references.desk.take(draftKey));
@@ -2035,14 +2042,22 @@ function Composer({
           {r}
         </div>
       ))}
+      {refsHeld && unready && (
+        <div className="attach-note" role="alert">
+          {unready.state === "summarizing" ? `Wait for the summary of ${unready.title}, or remove it.` : `Retry or remove the reference to ${unready.title}.`}
+        </div>
+      )}
       {slash.view}
       <div className={`composer ${dragging ? "dragging" : ""}`}>
         {dragging && <div className="drop-overlay">Drop files to attach</div>}
         {refs.length > 0 && (
           <ReferenceChips
             refs={refs}
-            onRetry={(chatId) => references?.desk.retry(draftKey, chatId)}
-            onRemove={(chatId) => references?.desk.remove(draftKey, chatId)}
+            onRetry={(id) => {
+              references?.desk.retry(draftKey, id);
+              taRef.current?.focus();
+            }}
+            onRemove={(id) => references?.desk.remove(draftKey, id)}
             onTextModelSettings={references?.onTextModelSettings}
           />
         )}

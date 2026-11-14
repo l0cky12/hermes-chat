@@ -1058,6 +1058,8 @@ div.route-result { display: flex; flex-direction: column; gap: 6px; }
 .chip .ref-chip-main { display: inline-flex; align-items: center; gap: 6px; width: auto; height: auto; min-width: 0; color: inherit; }
 .chip .ref-chip-main:hover { background: none; }
 .ref-chip.summarizing .ref-chip-main, .ref-chip.failed .ref-chip-main { cursor: default; }
+.chip.ref-chip { max-width: 340px; }
+.ref-chip .chip-size { flex: none; white-space: nowrap; }
 .ref-warn { color: var(--warn); }
 .ref-failed .link-btn { font-size: inherit; margin-left: 6px; }
 .ref-summary {
@@ -1090,6 +1092,8 @@ div.route-result { display: flex; flex-direction: column; gap: 6px; }
 /* Skills in the same menu (src/hermes/skillCommands.ts): a heading after the commands, and a description of up to two lines. */
 .cmd-group { padding: 8px 8px 2px; margin-top: 4px; border-top: 1px solid var(--line); color: var(--faint); font-size: calc(11rem / 14); font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
 .cmd-scope.skill { background: var(--raised-3); color: var(--text-2); }
+.cmd-option.chat { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.cmd-option.chat .cmd-desc { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cmd-option.skill .cmd-desc { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .skill-note { font-size: calc(12rem / 14); color: var(--muted); padding: 0 6px 8px; }
 .skill-note.error { color: var(--bad); }

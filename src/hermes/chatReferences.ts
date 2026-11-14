@@ -10,13 +10,15 @@ import { errorText } from "./values";
 export type ReferableChat = { id: string; title: string; updatedAt: number };
 
 /**
- * A chat referenced in an unsent message. `summarizing` until Hermes answers, then `ready` with the summary, or `failed`
- * with why; `fix: "text-model"` when the fix is the profile's Text generation model, as for Regenerate title.
+ * A chat referenced in an unsent message, known in it by `id`: the chat's id, or for a summary read back from a stored
+ * message, which names no chat, one made from its title. `summarizing` until Hermes answers, then `ready` with the
+ * summary, or `failed` with why; `fix: "text-model"` when the fix is the profile's Text generation model, as for
+ * Regenerate title.
  */
-export type Reference = { chatId: string; title: string } & (
-  | { state: "summarizing" }
-  | { state: "ready"; summary: string }
-  | { state: "failed"; why: string; fix?: "text-model" }
+export type Reference = { id: string; title: string } & (
+  | { state: "summarizing"; chatId: string }
+  | { state: "ready"; chatId?: string; summary: string }
+  | { state: "failed"; chatId: string; why: string; fix?: "text-model" }
 );
 
 /** Most characters of one message sent to be summarized, and of the whole transcript. */
@@ -117,41 +119,44 @@ export class ReferenceDesk {
   in = (key: string): readonly Reference[] => this.byKey.get(key) ?? NONE;
 
   add(key: string, chat: { chatId: string; title: string }) {
-    if (this.in(key).some((r) => r.chatId === chat.chatId)) return;
-    const entry: Reference = { chatId: chat.chatId, title: chat.title, state: "summarizing" };
+    if (this.in(key).some((r) => r.id === chat.chatId)) return;
+    const entry: Reference = { id: chat.chatId, chatId: chat.chatId, title: chat.title, state: "summarizing" };
     this.set(key, [...this.in(key), entry]);
     this.start(key, entry);
   }
 
-  retry(key: string, chatId: string) {
-    const was = this.in(key).find((r) => r.chatId === chatId);
+  retry(key: string, id: string) {
+    const was = this.in(key).find((r) => r.id === id);
     if (was?.state !== "failed") return;
-    const entry: Reference = { chatId, title: was.title, state: "summarizing" };
+    const entry: Reference = { id, chatId: was.chatId, title: was.title, state: "summarizing" };
     this.set(key, this.in(key).map((r) => (r === was ? entry : r)));
     this.start(key, entry);
   }
 
-  remove(key: string, chatId: string) {
-    this.set(key, this.in(key).filter((r) => r.chatId !== chatId));
+  remove(key: string, id: string) {
+    this.set(key, this.in(key).filter((r) => r.id !== id));
   }
 
   /** The ready references of a message being sent; the message's list is emptied. */
   take(key: string): SentReference[] {
-    const ready = this.in(key).flatMap((r) => (r.state === "ready" ? [{ chatId: r.chatId, title: r.title, summary: r.summary }] : []));
+    const ready = this.in(key).flatMap((r) => (r.state === "ready" ? [{ ...(r.chatId !== undefined && { chatId: r.chatId }), title: r.title, summary: r.summary }] : []));
     this.set(key, []);
     return ready;
   }
 
-  /** References of a message that didn't go, back on its Draft after any added meanwhile. One read back from a stored message names no chat, so it can't come back. */
+  /** References of a message that didn't go, back on its Draft after any added meanwhile. */
   putBack(key: string, refs: readonly SentReference[]) {
-    const fresh = refs.flatMap(({ chatId, title, summary }) => (chatId && !this.in(key).some((k) => k.chatId === chatId) ? [{ chatId, title, summary }] : []));
-    if (fresh.length) this.set(key, [...this.in(key), ...fresh.map((r): Reference => ({ ...r, state: "ready" }))]);
+    const fresh = refs
+      .map(({ chatId, title, summary }): Reference => ({ id: chatId ?? `sent:${title}`, ...(chatId !== undefined && { chatId }), title, state: "ready", summary }))
+      .filter((r, i, all) => !this.in(key).some((k) => k.id === r.id) && all.findIndex((o) => o.id === r.id) === i);
+    if (fresh.length) this.set(key, [...this.in(key), ...fresh]);
   }
 
-  private start(key: string, entry: Reference) {
-    this.summarize(entry.chatId).then(
-      (summary) => this.settle(key, entry, { chatId: entry.chatId, title: entry.title, state: "ready", summary }),
-      (e) => this.settle(key, entry, { chatId: entry.chatId, title: entry.title, state: "failed", ...this.explain(e) }),
+  private start(key: string, entry: Extract<Reference, { state: "summarizing" }>) {
+    const { id, chatId, title } = entry;
+    this.summarize(chatId).then(
+      (summary) => this.settle(key, entry, { id, chatId, title, state: "ready", summary }),
+      (e) => this.settle(key, entry, { id, chatId, title, state: "failed", ...this.explain(e) }),
     );
   }
 
