@@ -5,3 +5,4 @@ src-tauri/gen
 tools/shots/out
 /release/
 /e2e/out/
+*.tsbuildinfo

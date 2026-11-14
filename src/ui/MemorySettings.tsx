@@ -465,7 +465,7 @@ export function MemorySettings({
       {kept.map(
         (text, i) =>
           editing.draft !== text && (
-            <button key={i} className="btn small-btn" disabled={!!busy} onClick={() => {
+            <button key={text} className="btn small-btn" disabled={!!busy} onClick={() => {
                 // The text it replaces is kept too, if it was an unsaved edit.
                 if (editing.draft !== editing.entry.text) keep(editing.draft);
                 setEditing({ ...editing, draft: text, fromKept: text });
@@ -802,7 +802,7 @@ export function MemorySettings({
         {kept.map((text, i) => {
           const name = kept.length === 1 ? "Your kept edit" : `Your kept edit ${i + 1}`;
           return (
-            <div key={i} className="set-block memory-recovered" role="group" aria-label={name}>
+            <div key={text} className="set-block memory-recovered" role="group" aria-label={name}>
               <div className="field-label">
                 {name} <span className="muted small">(not saved anywhere; leaving this screen asks before it goes)</span>
               </div>
