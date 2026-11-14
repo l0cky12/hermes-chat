@@ -25,6 +25,7 @@ pkgbase = hermes-chat-git
 	optdepends = xdg-desktop-portal: take screenshots on GNOME and KDE Plasma
 	optdepends = desktop-file-utils: let other apps open hermes-chat:// chat links
 	optdepends = libayatana-appindicator: show the tray icon and use Close to tray
+	optdepends = hunspell-en_us: underline misspelled words as you write (or another language's hunspell dictionary)
 	provides = hermes-chat
 	conflicts = hermes-chat
 	options = !debug
