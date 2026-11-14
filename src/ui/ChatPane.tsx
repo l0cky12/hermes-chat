@@ -1929,7 +1929,12 @@ function Composer({
     const unready = refs.find((r) => r.state !== "ready");
     if (unready)
       return setRefused([unready.state === "summarizing" ? `Wait for the summary of ${unready.title}, or remove it.` : `Retry or remove the reference to ${unready.title}.`]);
-    const taken = () => (references && refs.length ? references.desk.take(draftKey) : undefined);
+    // A message without references goes as it always did, with no arguments for them.
+    const go = (files: Attachment[], skill?: SkillCall) => {
+      if (references && refs.length) onSend(text.trim(), files, skill, references.desk.take(draftKey));
+      else if (skill) onSend(text.trim(), files, skill);
+      else onSend(text.trim(), files);
+    };
     const skill = slash.skill;
     if (skill) {
       // Hermes builds a skill's message for the chat's session when it goes, so it can't wait in the queue or steer a
@@ -1938,7 +1943,7 @@ function Composer({
       if (attachments.length) return setRefused(["Files can't go with a message that runs a skill. Send them in a message of their own."]);
       if (queueing && onQueue) return setRefused(["A message that runs a skill can't be queued. Send it while connected, with no reply running and nothing queued."]);
       if (offline || running) return;
-      onSend(text.trim(), [], skill.call, taken());
+      go([], skill.call);
       setRefused([]);
       return;
     }
@@ -1959,7 +1964,7 @@ function Composer({
       if (why) return setRefused([why]);
     } else {
       if (offline || running) return;
-      onSend(text.trim(), [...attachments], undefined, taken());
+      go([...attachments]);
     }
     screenshots.change({ kind: "sent", key: draftKey, paths: attachments.map((a) => a.path) });
     setRefused(fellBack ? [fellBack] : []);
