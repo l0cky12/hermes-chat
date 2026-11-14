@@ -1,7 +1,7 @@
 import { type ReactNode, type RefObject, Suspense, lazy, useCallback, useLayoutEffect, useMemo, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { ArrowLeft, ArrowRight, Columns2, FolderCog, GitBranch, PanelBottom, PanelLeft, PanelRight, PanelTop, X } from "lucide-react";
-import { CONNECT_STOPPED, LIVE_MIN_GAP_MS, RenameConflict, TitleModelUnavailable, connect, openSaved, readSaved, toSource, type Delivery, type Hermes, type Notify } from "./hermes/transport";
+import { CONNECT_STOPPED, LIVE_MIN_GAP_MS, RenameConflict, TitleModelUnavailable, connect, openSaved, readSaved, toSource, type Delivery, type Hermes, type NoticeCard, type Notify } from "./hermes/transport";
 import { invoke } from "@tauri-apps/api/core";
 import type { CommandHost } from "./ui/SlashCommands";
 import { STEER, type ServerCommandList } from "./hermes/commands";
@@ -241,8 +241,20 @@ const liveConnections = () => (liveStore ??= new LiveConnections((ids) => savedC
  * A connection's desktop notifications. With more than one connection live, each names its server, so an Approval
  * from a background connection says where it waits.
  */
-const notifyFor = (c: SavedConnection): Notify => (n) =>
-  desktopNotify(liveConnections().size > 1 ? { title: `${savedConnections().get(c.id)?.name ?? c.name}: ${n.title}`, body: n.body } : n);
+const notifyFor = (c: SavedConnection): Notify => (n, actions) =>
+  desktopNotify(liveConnections().size > 1 ? { title: `${savedConnections().get(c.id)?.name ?? c.name}: ${n.title}`, body: n.body } : n, actions);
+
+/** The inbox entry for the waiting card a notification is about, so its click goes where the entry's would. */
+const noticeEntry = (card: NoticeCard): InboxEntry => ({
+  key: `notice ${card.profile} ${card.chatId} ${card.itemId}`,
+  kind: "approval",
+  profile: card.profile,
+  chatId: card.chatId,
+  title: card.title,
+  itemId: card.itemId,
+  at: 0,
+  summary: "",
+});
 
 const account: Account = {
   get connections() {
@@ -783,6 +795,19 @@ function Screens({ links }: { links: LinkInbox }) {
     setOpening({ link: { connection: savedConnectionRefs.refFor(m.connection), profile: e.profile, chatId: e.chatId }, at: Date.now(), connection: m.connection.id });
     void switchTo(m.connection);
   };
+  // A notification clicked from a background connection opens its chat there, as its inbox entry does. The target's
+  // own notifications are Main's.
+  const openElsewhereRef = useRef(openElsewhere);
+  openElsewhereRef.current = openElsewhere;
+  useEffect(() => {
+    const stops = registry.list().map((m) =>
+      m.hermes.onNoticeOpen((card) => {
+        if (registry.target()?.hermes !== m.hermes) openElsewhereRef.current({ ...noticeEntry(card), server: { id: m.connection.id, name: m.connection.name } });
+      }),
+    );
+    return () => stops.forEach((stop) => stop());
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- again whenever the live connections change; `registry` is one store for the app
+  }, [registry.getSnapshot()]);
   /** Dismisses background connections' entries in their own connections' dismissals. */
   const dismissElsewhere = (es: InboxEntry[]) => {
     for (const s of overview) {
@@ -2211,6 +2236,17 @@ export function Main({
       setGoTo({ entry: e, approval: e.kind === "approval" && !e.ended });
     }, e.profile !== profile ? "profile" : "leave");
   };
+  // A notification's click opens the card it is about, as its inbox entry does (ADR 0171).
+  const openEntryRef = useRef(openEntry);
+  openEntryRef.current = openEntry;
+  useEffect(() => hermes.onNoticeOpen((card) => openEntryRef.current(noticeEntry(card))), [hermes]);
+  // The waiting Approval card an inbox entry is about, when this connection's shown profile holds it: the inbox shows
+  // it whole, to answer there as in the chat (ADR 0171).
+  const approvalOf = (e: InboxEntry) => {
+    if (e.server || e.ended || e.kind !== "approval" || e.profile !== profile || !e.itemId) return undefined;
+    const card = chats.find((c) => c.id === e.chatId)?.items.find((i) => i.id === e.itemId);
+    return card?.kind === "approval" && isWaiting(card) ? card : undefined;
+  };
 
   // A reply's desk goes where its inbox entry goes. A subagent's desk is always in the profile shown (ADR 0077), and
   // opens in the pane already showing its chat, or else the active one.
@@ -3321,6 +3357,8 @@ export function Main({
           checkTimes={hermes.checkTimes}
           leaving={leavingNote(profile, chats)}
           onOpen={(e) => (e.server ? (setInboxOpen(false), guard(() => onOpenElsewhere?.(e))) : openEntry(e))}
+          approvalOf={approvalOf}
+          onAnswer={(e, choice, confirmed) => e.itemId && void hermes.answerApproval(e.chatId, e.itemId, choice, confirmed)}
           onDismiss={(e) => (e.server ? onDismissElsewhere?.([e]) : acks.dismiss(e, inbox.entries))}
           onClearDone={(es) => {
             acks.dismissAll(

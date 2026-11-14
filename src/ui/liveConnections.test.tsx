@@ -27,7 +27,7 @@ const keyring = new Map<string, string>();
 const connects: { url: string; password: string; saved: string }[] = [];
 /** The connections Rust holds, by the attempt that opened each. */
 const held = new Map<string, { url: string; saved: string; pipe: Pipe }>();
-const notices: { title: string; body: string }[] = [];
+const notices: { title: string; body: string; tag?: string; deny?: boolean }[] = [];
 /** A sign-in that waits until the test lets it go, by URL. */
 const held_back: Record<string, Promise<void>> = {};
 /** What the tray was told needs the owner, in order. */
@@ -84,7 +84,7 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "tray_inbox":
         return void trayCounts.push(args.count as number);
       case "notify_desktop":
-        return void notices.push(args as { title: string; body: string });
+        return void notices.push(args as (typeof notices)[number]);
       case "password_load":
       case "headers_load":
         return keyring.get(slot) ?? null;
@@ -184,6 +184,23 @@ describe("Live connections", () => {
 
     // Each server only ever got its own password.
     for (const c of connects) expect(c.password).toBe(passwords[c.url]);
+
+    // An Approval on Home, now in the background, comes as a notification. Clicking it makes Home the target and shows
+    // its card, answering nothing (ADR 0171).
+    act(() => void servers[BRAVO].askApproval(servers[BRAVO].runtimeIdOf("c1")!, { command: "rm -rf /srv/home-cache" }));
+    await waitFor(() => expect(notices.some((n) => n.title === "Home: Hermes is asking for approval")).toBe(true));
+    const homeNotice = notices.find((n) => n.title === "Home: Hermes is asking for approval")!;
+    expect(homeNotice).toMatchObject({ deny: true, tag: expect.any(String) });
+    act(() => events.get("notification-action")?.({ payload: { tag: homeNotice.tag, action: "open" } }));
+    expect(await screen.findByText("Home · default")).toBeTruthy();
+    expect(await screen.findByText("rm -rf /srv/home-cache")).toBeTruthy();
+    expect(connects.length).toBe(2);
+    expect(servers[BRAVO].approvalAnswers).toEqual([]);
+    await userEvent.click(screen.getByRole("button", { name: "Deny" }));
+    await waitFor(() => expect(servers[BRAVO].approvalAnswers.map((a) => a.choice)).toEqual(["deny"]));
+    await openRail();
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Switch connection" })).getByText("alpha.example.com"));
+    expect(await screen.findByText("alpha.example.com · default")).toBeTruthy();
 
     // Bravo is the background one now. Disconnecting it from Settings closes it alone: alpha's chat and draft stay.
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));

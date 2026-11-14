@@ -7,7 +7,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, readRow, row } from "../hermes/fakeHermes";
 import { FakeTray } from "../hermes/fakeTray";
 import { memoryCache } from "../hermes/memoryCache";
-import { connect, type Hermes } from "../hermes/transport";
+import { connect, type Hermes, type NoticeActions } from "../hermes/transport";
 import { setUIPrefs } from "../hermes/uiPrefs";
 import { Main } from "../App";
 
@@ -29,7 +29,7 @@ let launches = 0;
 const nowS = () => Date.now() / 1000;
 
 /** Signed in to `default`, with an Unread chat there and in `work`, and a reply waiting on an Approval in `work`. */
-async function launch(setup: (server: FakeHermes) => void = () => {}) {
+async function launch(setup: (server: FakeHermes) => void = () => {}, notified: (NoticeActions | undefined)[] = []) {
   const server = new FakeHermes();
   server.sessions = [
     readRow("backup", 1, { pinned: true, title: "Nightly backup" }),
@@ -43,7 +43,7 @@ async function launch(setup: (server: FakeHermes) => void = () => {}) {
   };
   server.liveSessions = [{ id: "rt-w", session_key: "migrate", status: "waiting", last_active: nowS() - 300 }];
   setup(server);
-  const hermes = await connect(server.openPipe, undefined, memoryCache());
+  const hermes = await connect(server.openPipe, undefined, memoryCache(), async (_, actions) => void notified.push(actions));
   running.push(hermes);
   const tray = new FakeTray();
   render(<Main hermes={hermes} tray={tray} connection={{ mode: "ssh", sshTarget: `liam@hermes-${++launches}`, url: "", username: "liam" }} onSignOut={async () => {}} />);
@@ -302,5 +302,105 @@ describe("The inbox", () => {
     expect(inbox().textContent).toMatch(/Not connected to Hermes: showing what was last seen\./);
     expect(rows()[0].getAttribute("aria-label")).toMatch(/As last seen\.$/);
     expect(screen.getByRole("button", { name: "Check now" })).toHaveProperty("disabled", true);
+  });
+});
+
+describe("Answering an Approval from the inbox (ADR 0171)", () => {
+  /** The inbox open on a chat here waiting on an Approval, and the row that lists it. */
+  async function waiting(over: Record<string, unknown> = {}) {
+    const l = await launch();
+    let chatId = "";
+    await act(async () => {
+      chatId = await l.hermes.newChat();
+      await l.hermes.send(chatId, "Clean up the logs");
+    });
+    const asked = l.server.askApproval(l.server.runtimeIdOf(chatId)!, over);
+    await act(async () => void (await l.hermes.idle()));
+    await l.user.click(screen.getByRole("button", { name: /Nightly backup/ }));
+    l.openInbox();
+    const row = () => rows().find((r) => r.getAttribute("aria-label")!.startsWith("Needs approval: Clean up the logs"))?.closest("li") ?? null;
+    return { ...l, chatId, card: asked.id, row };
+  }
+
+  it("shows the chat's card under the entry, command and all, and Approve once answers it the chat's way", async () => {
+    const { server, hermes, chatId, card, row, user } = await waiting();
+    const answers = within(row()!);
+    expect(answers.getByText("rm -rf /var/log/old").closest("pre")).toBeTruthy();
+    expect(answers.getByText("recursive delete")).toBeTruthy();
+    const cardButtons = answers.getAllByRole("button").filter((b) => b.closest(".approval"));
+    expect(cardButtons.map((b) => b.textContent)).toEqual(["Approve once", "Allow for this chat…", "Always allow…", "Deny"]);
+    // Nothing takes focus from the entries when the card shows.
+    expect(document.activeElement?.classList.contains("inbox-open")).toBe(true);
+
+    await user.click(answers.getByRole("button", { name: "Approve once" }));
+    await act(async () => void (await hermes.idle()));
+    expect(server.approvalAnswers).toEqual([{ id: card, choice: "once", via: expect.any(String) }]);
+    expect(hermes.getSnapshot().chats.find((c) => c.id === chatId)?.items.find((i) => i.id === card)).toMatchObject({ answer: "once" });
+    // Answered, the entry leaves the inbox, which stays open with focus on an entry.
+    expect(row()).toBeNull();
+    expect(inbox()).toBeTruthy();
+    expect(document.activeElement?.classList.contains("inbox-open")).toBe(true);
+  });
+
+  it("asks again before a broader grant, as the chat's card does", async () => {
+    const { server, hermes, card, row, user } = await waiting();
+    await user.click(within(row()!).getByRole("button", { name: "Always allow…" }));
+    expect(server.approvalAnswers).toEqual([]);
+    expect(within(row()!).getByText(/Always allow commands Hermes flags as “recursive delete”\?/)).toBeTruthy();
+    await user.click(within(row()!).getByRole("button", { name: "Back" }));
+    expect(server.approvalAnswers).toEqual([]);
+    await user.click(within(row()!).getByRole("button", { name: "Always allow…" }));
+    await user.click(within(row()!).getByRole("button", { name: "Yes, always allow" }));
+    await act(async () => void (await hermes.idle()));
+    expect(server.approvalAnswers).toEqual([{ id: card, choice: "always", via: expect.any(String) }]);
+  });
+
+  it("denies from the inbox", async () => {
+    const { server, hermes, card, row, user } = await waiting({ choices: ["once", "deny"] });
+    expect(within(row()!).queryByRole("button", { name: /Allow/ })).toBeNull();
+    await user.click(within(row()!).getByRole("button", { name: "Deny" }));
+    await act(async () => void (await hermes.idle()));
+    expect(server.approvalAnswers).toEqual([{ id: card, choice: "deny", via: expect.any(String) }]);
+  });
+
+  it("answers nothing while Hermes can't be reached", async () => {
+    const { server, hermes, row, user } = await waiting();
+    await act(async () => void server.drop());
+    await waitFor(() => expect(hermes.getSnapshot().status).not.toBe("connected"));
+    const once = within(row()!).getByRole("button", { name: "Approve once" });
+    expect(once.getAttribute("aria-disabled")).toBe("true");
+    await user.click(once);
+    expect(server.approvalAnswers).toEqual([]);
+  });
+
+  it("shows no answers for a chat waiting in another profile, which only opens", async () => {
+    const { openInbox } = await launch();
+    openInbox();
+    const work = rows()[0].closest("li")!;
+    expect(rows()[0].getAttribute("aria-label")).toMatch(/^Needs approval: Migrate db, in work/);
+    expect(within(work).queryByRole("button", { name: /Approve|Deny|Allow/ })).toBeNull();
+    expect(work.querySelector(".approval")).toBeNull();
+  });
+});
+
+describe("Clicking a notification about an Approval (ADR 0171)", () => {
+  it("opens the chat at its card, from another chat and with the inbox shut, and answers nothing", async () => {
+    const notified: (NoticeActions | undefined)[] = [];
+    const { server, hermes, user } = await launch(undefined, notified);
+    let chatId = "";
+    await act(async () => {
+      chatId = await hermes.newChat();
+      await hermes.send(chatId, "Clean up the logs");
+    });
+    await user.click(screen.getByRole("button", { name: /Nightly backup/ }));
+    hermes.setFocused(false);
+    const { id } = server.askApproval(server.runtimeIdOf(chatId)!);
+    await act(async () => void (await hermes.idle()));
+    expect(notified.at(-1)).toBeDefined();
+
+    await act(async () => notified.at(-1)!.open());
+    await waitFor(() => expect(document.activeElement?.getAttribute("data-item")).toBe(id));
+    expect(document.activeElement?.classList.contains("approval")).toBe(true);
+    expect(server.approvalAnswers).toEqual([]);
   });
 });

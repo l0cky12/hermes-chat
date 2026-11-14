@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { editFlags, FakeHermes, row } from "./fakeHermes";
-import { connect, NOTICES, type Notify } from "./transport";
+import { connect, NOTICES, type NoticeActions, type NoticeCard, type Notify } from "./transport";
 
 /** A new chat with a reply under way, out of focus unless `focused`; `shown` collects the notifications. */
 async function replying(opts: { focused?: boolean; notify?: Notify } = {}) {
@@ -96,6 +96,66 @@ describe("Desktop notifications", () => {
       await hermes.send(id, "again");
       expect(chat().items.at(-1)).toMatchObject({ kind: "user", text: "again" });
     });
+});
+
+describe("Acting on a notification about a waiting card (ADR 0171)", () => {
+  /** A reply under way out of focus, with what each notification offers kept beside it. */
+  async function offering() {
+    const offered: (NoticeActions | undefined)[] = [];
+    const r = await replying({ notify: async (_, actions) => void offered.push(actions) });
+    const opened: NoticeCard[] = [];
+    r.hermes.onNoticeOpen((card) => opened.push(card));
+    return { ...r, offered, opened };
+  }
+
+  it("opens the Approval's card on a click, and answers nothing", async () => {
+    const { server, hermes, id, runtime, chat, offered, opened } = await offering();
+    const { id: card } = server.askApproval(runtime);
+    await hermes.idle();
+    expect(offered).toHaveLength(1);
+    offered[0]!.open();
+    expect(opened).toEqual([{ profile: "default", chatId: id, title: chat().title, itemId: card }]);
+    await hermes.idle();
+    expect(server.approvalAnswers).toEqual([]);
+    expect(chat().items.find((i) => i.id === card)).not.toHaveProperty("answer");
+  });
+
+  it("denies the Approval it is about the way the card's Deny button does, and offers nothing that approves", async () => {
+    const { server, hermes, runtime, chat, offered } = await offering();
+    const { id: card } = server.askApproval(runtime);
+    await hermes.idle();
+    expect(Object.keys(offered[0]!).sort()).toEqual(["deny", "open"]);
+    offered[0]!.deny!();
+    await hermes.idle();
+    expect(server.approvalAnswers).toEqual([{ id: card, choice: "deny", via: expect.any(String) }]);
+    expect(chat().items.find((i) => i.id === card)).toMatchObject({ answer: "deny" });
+    // Clicked again, or once Hermes stopped waiting: nothing more goes.
+    offered[0]!.deny!();
+    await hermes.idle();
+    expect(server.approvalAnswers).toHaveLength(1);
+  });
+
+  it("leaves an Approval answered in the chat meanwhile as the chat answered it", async () => {
+    const { server, hermes, id, runtime, offered } = await offering();
+    const { id: card } = server.askApproval(runtime);
+    await hermes.idle();
+    await hermes.answerApproval(id, card!, "once");
+    await hermes.idle();
+    offered[0]!.deny!();
+    await hermes.idle();
+    expect(server.approvalAnswers.map((a) => a.choice)).toEqual(["once"]);
+  });
+
+  it("offers a question's card to open, with no Deny, and a finished reply nothing", async () => {
+    const { server, hermes, runtime, offered } = await offering();
+    server.askSudo(runtime);
+    await hermes.idle();
+    finish(server, runtime);
+    await hermes.idle();
+    expect(offered).toHaveLength(2);
+    expect(Object.keys(offered[0]!)).toEqual(["open"]);
+    expect(offered[1]).toBeUndefined();
+  });
 });
 
 describe("The chat on screen, out of focus", () => {
