@@ -91,6 +91,20 @@ describe("The Bots view", () => {
     expect(screen.getByRole("button", { name: "New chat with Scribe" })).toBeTruthy();
   });
 
+  it("shows only the bots whose name holds what is typed in the search box, in any case, and not their description", async () => {
+    const { user } = await launch();
+    await openBots(user);
+    const search = within(bots()).getByRole("textbox", { name: "Search bots" });
+    await user.type(search, "SCRI");
+    expect(botRows().map((r) => r.querySelector(".bots-name")?.textContent)).toEqual(["Scribe"]);
+    await user.clear(search);
+    await user.type(search, "release");
+    expect(botRows()).toEqual([]);
+    expect(within(bots()).getByText("No bots match “release”.")).toBeTruthy();
+    await user.clear(search);
+    expect(botRows().length).toBe(2);
+  });
+
   it("opens a bot's Bot Chat in its profile, and keeps it out of the chat list", async () => {
     const { server, hermes, user } = await launch();
     await openBots(user);

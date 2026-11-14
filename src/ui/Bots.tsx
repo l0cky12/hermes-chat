@@ -3,7 +3,7 @@
 // pen beside it starts an ordinary chat in the bot's profile. The same rows (`BotList`) fill the chat list panel while
 // a Bot Chat is open (bot mode).
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { ChevronDown, ChevronRight, Loader, RefreshCw, ShieldAlert, SquarePen, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Loader, RefreshCw, Search, ShieldAlert, SquarePen, X } from "lucide-react";
 import { BotModeUnsupportedError, type Bot, type BotActivity } from "../hermes/bots";
 import { ago, composing, storedTime, useReturnFocus } from "./bits";
 import { useLocale } from "../i18n/locale";
@@ -54,6 +54,7 @@ export function Bots({
   /** This Hermes turned out to have no Bot Mode, and why. */
   const [unsupported, setUnsupported] = useState<string>();
   const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState("");
   const root = useRef<HTMLElement>(null);
   const headId = useId();
   const reads = useRef(0);
@@ -145,8 +146,14 @@ export function Bots({
           {last ? ` Showing them as of ${ago(l, last.at)}.` : ""}
         </p>
       )}
+      {!unsupported && bots && (
+        <div className="model-search">
+          <Search size={14} aria-hidden />
+          <input placeholder="Search bots" aria-label="Search bots" value={query} onChange={(e) => setQuery(e.target.value)} />
+        </div>
+      )}
       {!unsupported && (
-        <BotList bots={bots} busy={loading} pictures={pictures} activity={activity} profile={profile} leaving={leaving} onOpen={onOpen} onNewChat={onNewChat} />
+        <BotList bots={bots} query={query} busy={loading} pictures={pictures} activity={activity} profile={profile} leaving={leaving} onOpen={onOpen} onNewChat={onNewChat} />
       )}
       {!bots && !error && !unsupported && connected && <div className="empty-hint inbox-empty">Reading the bots…</div>}
     </section>
@@ -156,10 +163,12 @@ export function Bots({
 /**
  * The bots' rows, in the Bots view and in the chat list panel's bot mode: pinned first, hidden ones behind a
  * disclosure, Up and Down between them. A row in another profile than `profile` asks first while `leaving` says what
- * switching leaves behind. `current`: the profile of the bot whose Bot Chat is open.
+ * switching leaves behind. `current`: the profile of the bot whose Bot Chat is open. `query`: show only the bots whose name
+ * holds it, in any case.
  */
 export function BotList({
   bots,
+  query = "",
   busy,
   pictures,
   activity,
@@ -170,6 +179,7 @@ export function BotList({
   onNewChat,
 }: {
   bots?: Bot[];
+  query?: string;
   busy?: boolean;
   pictures: Record<string, string>;
   activity: (bot: Bot, roster: readonly Bot[]) => BotActivity;
@@ -210,8 +220,10 @@ export function BotList({
   };
 
   // Pinned bots first, then Hermes's order. Hidden ones wait behind a disclosure, as in Hermes's own list.
-  const shown = (bots ?? []).filter((b) => !b.hidden).sort((a, b) => Number(b.pinned) - Number(a.pinned));
-  const hidden = (bots ?? []).filter((b) => b.hidden);
+  const q = query.trim().toLowerCase();
+  const matching = (bots ?? []).filter((b) => b.name.toLowerCase().includes(q));
+  const shown = matching.filter((b) => !b.hidden).sort((a, b) => Number(b.pinned) - Number(a.pinned));
+  const hidden = matching.filter((b) => b.hidden);
   const row = (b: Bot) => (
     <Row
       key={b.profile}
@@ -262,6 +274,7 @@ export function BotList({
         )}
         {showHidden && hidden.map(row)}
       </ul>
+      {bots && q && !matching.length && <div className="empty-hint inbox-empty">No bots match “{query.trim()}”.</div>}
     </>
   );
 }
