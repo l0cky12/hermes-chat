@@ -146,7 +146,7 @@ createRoot(document.getElementById("root")!).render(
     onSwitchConnection={() => {}}
     onTestConnection={async () => ({ ok: true, route: { kind: "ssh", target: "liam@hermes", local: "127.0.0.1:9119" }, version: "0.22.6", unsecure: false }) as never}
     tray={trayWiring as never}
-    summon={{ onSummoned: (fn) => ((shots.summon = fn as never), () => {}), readSelection: async () => shots.selection } as never}
+    summon={{ onSummoned: (fn: (s: { fromElsewhere: boolean }) => void) => ((shots.summon = fn), () => {}), readSelection: async () => shots.selection } as never}
     screenshots={screenshots}
     onSignOut={async () => {}}
   />,
