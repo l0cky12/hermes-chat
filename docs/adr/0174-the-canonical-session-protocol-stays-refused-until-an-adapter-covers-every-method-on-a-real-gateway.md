@@ -108,5 +108,5 @@ Each step is a pull request that changes no behaviour until the last.
 - A change that adds a JSON-RPC method names it in `APP_METHODS`, or it doesn't compile, and adds a row to `canonicalVerbs.ts`, or `sessionProtocol.test.ts` fails. A row whose canonical answer nobody has checked says so (`unprobed`).
 - Nothing changes for the owner. A Hermes that speaks the canonical protocol is still refused at sign-in with the same words. The way out today is to sign in to the standalone dashboard's address, not the gateway's Webapp address.
 - The risk the owner named remains until step 5. What this change adds is that one command says whether a Hermes build is canonical and which rows moved.
-- `tools/canonical-gateway.py` runs a real gateway with the Webapp on, bound to a `127.0.0.x` address so the password gate is on, and `tools/canonical-stub-model.py` is the model behind it. Neither is part of the app.
+- `tools/canonical-gateway.py` runs a real gateway with the Webapp on, bound to an IPv4 `127.x.x.x` other than `127.0.0.1` so the password gate is on, on a new, empty Hermes home every run. It refuses the owner's `~/.hermes` (symlinks resolved), and stops if a file operation reaches it; `--self-check` proves both. `tools/canonical-stub-model.py` is the model behind it. Neither is part of the app.
 - `docs/research/hermes-gateway-api.md` has the dated findings.
