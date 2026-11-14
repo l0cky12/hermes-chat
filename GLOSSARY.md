@@ -207,6 +207,10 @@ _Avoid_: project settings (the project screen also renames and deletes), workspa
 A local file the owner sends with a message: an image Hermes looks at, or any other file Hermes can read. Hermes takes images up to 25 MB and other files up to 256 MB.
 _Avoid_: upload, file (when the attachment is meant)
 
+**Referenced chat**:
+Another of the owner's chats in the same profile, picked with "@" in the composer so a message can build on it. Hermes summarizes it with the profile's Text generation model, and the summary goes with that one message as attached context the model reads and no client shows. The message shows which chats it referenced. A reference is kept only while the app runs until its message is sent; a message waits for every summary, and can't be queued or steered (ADR 0163).
+_Avoid_: chat reference or `ChatRef` (a chat named by connection, profile and id), mention, link, attachment
+
 **Screenshot**:
 An image of a region or window of the owner's screen, taken from the composer by a shortcut or the camera button, and staged as an Attachment. It stays on this computer until the message is sent. A capture staged in a composer is deleted when the owner removes it or its chat is deleted or archived, and is staged in one chat at a time; a failed or uncertain message keeps its Screenshot for Retry until confirmed, reconciled or dismissed.
 _Avoid_: screen capture, snapshot
@@ -612,6 +616,7 @@ _Avoid_: capability (a feature Hermes supports, ADR 0044), approval (Hermes aski
 - **Screen** vs a web page in the **Preview**: both can show a site, but the Screen's browser runs on the server and is the agent's, with its sign-ins; the Preview loads the page on this computer, isolated from the app, and is the owner's alone.
 - **Artifact** vs **Edit** (of a Server file): both edit a text file's text with the same checked save, but an Artifact is an Output, edited beside the chat on the machine its tool wrote it on, with Hermes's proposed edits and kept versions. A Server file edit is made in the Files tab and only reaches the dashboard's machine.
 - **Output** vs a path in a reply: Outputs counts only what a tool's own result says it wrote. A reply that says "saved to /srv/x.pdf", or a `terminal` command that creates a file, makes no Output, though the owner can add that file by its path.
+- **Referenced chat** vs **Chat reference**: a Referenced chat is a chat whose summary goes with a message; a Chat reference (`ChatRef`) is how code names any chat across connections. The code calls the first `Reference` (chatReferences.ts).
 - **Inbox** vs **Rail inbox**: the Inbox is the chat list's first section, one profile's Active chats; the Rail inbox, opened from the tray's Open Inbox, lists what needs the owner across every profile on the server, chats in any state included. Settling a chat doesn't dismiss its Rail inbox entry, and dismissing an entry doesn't settle the chat (ADR 0063).
 - **Bot Mode** vs the chat list's **bot mode**: Bot Mode is Hermes's feature, which a server has or lacks; the list's bot mode is the panel showing the bots while a Bot Chat is open. The code calls the first `botMode` (capabilities.ts) and the second `botsInList` (App.tsx).
 - **Settled** vs **Archived**: they are different things. Archiving sets Hermes's own "archived" flag and hides a chat in every Hermes client; settling is this app's view of the owner's attention, stored as the "pinned" flag. Neither touches the other (ADR 0005).
