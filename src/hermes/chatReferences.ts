@@ -47,6 +47,7 @@ export function summaryInput(rows: StoredBranchRow[]): string {
   const whole = said.join("\n\n");
   if (whole.length <= TRANSCRIPT_CHARS) return wrap(said);
   const [first, ...rest] = said;
+  // Room is kept for the left-out line, which says how many went.
   let room = TRANSCRIPT_CHARS - first.length - 60;
   const newest: string[] = [];
   for (let i = rest.length - 1; i >= 0 && rest[i].length + 2 <= room; i--) {

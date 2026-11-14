@@ -4282,6 +4282,7 @@ function ChatView({
     if (row?.kind !== "user") return;
     const typed = savedDrafts.get(shownDraft);
     savedDrafts.set(shownDraft, typed ? `${typed}\n\n${row.text}` : row.text);
+    referenceDesk.putBack(shownDraft, row.outgoing?.references ?? []);
     hermes.dismiss(chat.id, itemId);
   };
 
