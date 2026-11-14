@@ -99,30 +99,47 @@ export function themeVars(p: Palette, mode: Mode, contrast = DEFAULT_CONTRAST): 
   // Softer goes less far than sharper, so muted text stays readable at the lowest setting.
   const spread = (up: number, down: number) => (k > 0 ? up * k : down * k);
   const onAccent = mix(p.accent, "#000000", 0.88);
-  return {
+  const surfaces = {
     "--bg": bg,
     "--sidebar": dark ? mix(bg, "#000000", 0.1) : mix(bg, "#000000", 0.03),
     "--raised": p.surface,
     "--raised-2": mix(p.surface, text, 0.04 + lift),
     "--raised-3": mix(p.surface, text, 0.09 + lift),
+    "--code-bg": dark ? mix(bg, "#000000", 0.2) : mix(bg, text, 0.035),
+  };
+  const hover2 = 0.07 + lift / 2;
+  // Text sits on each surface, and on the selected chat's row: the strongest hover tint over the list panel.
+  const under = [...Object.values(surfaces), mix(surfaces["--sidebar"], text, hover2)];
+  const faint = Math.max((dark ? 0.335 : 0.42) + spread(0.2, 0.08), readableWeight(shade, under));
+  return {
+    ...surfaces,
     "--line": alpha(text, 0.07 + 0.04 * k + lift),
     "--line-2": alpha(text, 0.12 + 0.06 * k + lift),
     "--line-3": alpha(text, 0.22 + 0.08 * k),
     "--hover": alpha(text, 0.04 + lift / 2),
-    "--hover-2": alpha(text, 0.07 + lift / 2),
+    "--hover-2": alpha(text, hover2),
     "--text": text,
     "--text-2": shade(0.89 + 0.08 * k),
     "--text-strong": mix(text, extreme, dark ? 0.45 : 0.6),
-    "--muted": shade((dark ? 0.57 : 0.67) + spread(0.18, 0.1)),
-    "--faint": shade((dark ? 0.335 : 0.42) + spread(0.2, 0.08)),
+    // Never fainter than faint, which the floor may have lifted past muted's own shade.
+    "--muted": shade(Math.max((dark ? 0.57 : 0.67) + spread(0.18, 0.1), faint)),
+    "--faint": shade(faint),
     "--accent": p.accent,
     "--accent-soft": alpha(p.accent, dark ? 0.16 : 0.12),
     "--on-accent": contrastRatio(onAccent, p.accent) >= contrastRatio("#ffffff", p.accent) ? onAccent : "#ffffff",
     "--on-text": dark ? mix(bg, "#000000", 0.25) : p.surface,
-    "--code-bg": dark ? mix(bg, "#000000", 0.2) : mix(bg, text, 0.035),
     "--code-inline": mix(text, p.accent, dark ? 0.3 : 0.75),
     "--overlay": alpha(bg, 0.85),
   };
+}
+
+/** WCAG AA for body text: the least contrast any text the app shows may have against what it sits on. */
+const MIN_TEXT_CONTRAST = 4.5;
+
+/** The least shade weight whose color reads at AA on every surface, or 1 (the text color) if none does. */
+function readableWeight(shade: (w: number) => string, surfaces: string[]) {
+  for (let w = 0; w < 1; w += 0.01) if (surfaces.every((s) => contrastRatio(shade(w), s) >= MIN_TEXT_CONTRAST)) return w;
+  return 1;
 }
 
 /** Which mode shows: the scheme picked, or the system's when it's System. */
