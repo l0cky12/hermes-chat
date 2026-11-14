@@ -68,8 +68,8 @@ const reporter = {
           screenshots: [...notes.filter((a) => a.type === "screenshot").map((a) => a.message), ...failure],
         };
       });
-      const errors = m.errors().map(text);
-      return { name, file: rel(m.moduleId), ok: !errors.length && tests.every((t) => t.status !== "failed"), errors, tests };
+      const errors = [...m.errors(), ...[...m.children.allSuites()].flatMap((s) => s.errors())].map(text);
+      return { name, file: rel(m.moduleId), ok: m.state() !== "failed" && !errors.length && tests.every((t) => t.status !== "failed"), errors, tests };
     });
     const all = rows.flatMap((f) => f.tests);
     const counts = { passed: 0, failed: 0, skipped: 0 };
@@ -99,7 +99,7 @@ if (!summary) {
 }
 
 for (const f of summary.features) {
-  for (const e of f.errors) console.log(`FAIL ${f.name} (the file didn't load)\n${indent(e)}`);
+  for (const e of f.errors) console.log(`FAIL ${f.name} (outside a test: the file didn't load or a hook failed)\n${indent(e)}`);
   for (const t of f.tests.filter((t) => t.status !== "skipped")) {
     console.log(`${LABEL[t.status]} ${f.name} › ${t.name} (${t.durationMs} ms)`);
     if (t.status === "failed") for (const line of [...t.errors, ...t.screenshots.filter((s) => s.includes("failure-screenshots"))]) console.log(indent(line));

@@ -34,7 +34,7 @@ Screenshots: e2e/out/screenshots/
 
 Under a failure come its error and the screenshot taken when it failed. A test skipped by `-t` gets no line, only a count. A line `Commands no handler answered: …` lists Rust commands the app invoked that the fake Rust side doesn't know (see below).
 
-The exit code is 0 when every test that ran passed, 1 when a test failed, a file didn't load or no test ran, and 2 for an unknown feature or option.
+The exit code is 0 when every test that ran passed, 1 when a test failed, a file didn't load, a hook failed or no test ran, and 2 for an unknown feature or option.
 
 Each run deletes `e2e/out/` first.
 
@@ -70,7 +70,7 @@ Each run deletes `e2e/out/` first.
 ```
 
 - `status` is `passed`, `failed` or `skipped`.
-- A feature's `errors` are why its file didn't load. A test's `errors` are its failed assertions.
+- A feature's `errors` are failures outside any test: its file didn't load, or a `beforeAll` or `afterAll` hook failed. A test's `errors` are its failed assertions.
 - `screenshots` are paths from the repository root: the ones the test took, then the one taken when it failed.
 - `unhandledErrors` are errors thrown outside any test. Any of them fails the run.
 - `unhandledCommands` are the Rust commands no handler answered, in every test that ran.
