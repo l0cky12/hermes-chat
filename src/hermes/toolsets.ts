@@ -32,6 +32,7 @@
 
 import { RestError, type ToolsetGuards } from "./pipe";
 import { errorText, textOrEmpty } from "./values";
+import type { AppMethod } from "./canonicalVerbs";
 
 export type { ToolsetGuards };
 
@@ -111,7 +112,7 @@ const cautionKey = (c: Caution) =>
 const PROVIDER_TOOLSETS = ["web", "browser", "image_gen", "video_gen", "x_search", "tts", "stt", "computer_use"];
 
 /** One JSON-RPC call over the connection's WS socket; resolves to the result, rejects with a `code` on Hermes's error. */
-export type Rpc = (method: string, params: Record<string, unknown>) => Promise<unknown>;
+export type Rpc = (method: AppMethod, params: Record<string, unknown>) => Promise<unknown>;
 
 /**
  * What one open chat is offered, read from Hermes. `read`: the tool names its agent has now. `closed`: Hermes no longer

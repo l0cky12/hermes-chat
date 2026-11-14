@@ -27,6 +27,7 @@
 import { answered } from "./persona";
 import { RestError } from "./pipe";
 import { errorText, isObj } from "./values";
+import type { AppMethod } from "./canonicalVerbs";
 
 /** Which of the profile's memory files an entry is in, by the name `learning.*` gives it. */
 export type MemorySource = "memory" | "profile";
@@ -113,7 +114,7 @@ export type MemoryReplaced = { text: string; saved: string; savedAt: number };
  * REST writes to `api/learning/node`. Without `send`, only the socket calls are used.
  */
 export type MemoryIO = {
-  rpc(method: string, params: Record<string, unknown>): Promise<unknown>;
+  rpc(method: AppMethod, params: Record<string, unknown>): Promise<unknown>;
   get(pathAndQuery: string): Promise<unknown>;
   send?(method: "PUT" | "DELETE", pathAndQuery: string, body: unknown): Promise<unknown>;
 };
@@ -299,7 +300,7 @@ async function extras(io: MemoryIO, profile: string): Promise<Pick<MemoryView, "
 export function memoryApi(io: MemoryIO, now = () => Date.now()): MemoryApi {
   // What saves from here replaced, by profile and file, most recent first. Lives as long as this connection's client.
   const replaced = new Map<string, MemoryReplaced[]>();
-  const rpc = (method: string, params: Record<string, unknown>) => io.rpc(method, params).catch((e) => Promise.reject(classify(e)));
+  const rpc = (method: AppMethod, params: Record<string, unknown>) => io.rpc(method, params).catch((e) => Promise.reject(classify(e)));
   /** Whether the server has the profile-scoped REST routes: unknown until the first read finds out. */
   let restRoutes: boolean | undefined = io.send ? undefined : false;
 
@@ -318,7 +319,7 @@ export function memoryApi(io: MemoryIO, now = () => Date.now()): MemoryApi {
   };
 
   /** A socket answer as `Answer`; a lost one as `MemoryUnsureError`. */
-  const socketWrite = async (method: string, params: Record<string, unknown>): Promise<Answer> => {
+  const socketWrite = async (method: AppMethod, params: Record<string, unknown>): Promise<Answer> => {
     let res: unknown;
     try {
       res = await io.rpc(method, params);
