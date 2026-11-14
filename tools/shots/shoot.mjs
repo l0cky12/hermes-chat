@@ -280,6 +280,12 @@ Object.assign(scenes, {
     ...wsb,
     steps: [longSkills, openSettings, tab("Skills"), `document.getElementById("skill-code-review-edit").focus()`, { press: "Tab" }, `document.getElementById("skill-code-review-edit").scrollIntoView({ block: "center" })`],
   },
+  // Pass 2: Settings → General → Chats, where Check spelling is (#578).
+  "wsb-settings-chats": {
+    query: "",
+    ...wsb,
+    steps: [openSettings, sub("Chats"), unfocus, `[...document.querySelectorAll("section")].find((s) => s.textContent.startsWith("Sending while Hermes replies")).scrollIntoView({ block: "start" })`],
+  },
 });
 const wanted = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(scenes);
 
