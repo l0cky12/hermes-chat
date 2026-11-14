@@ -456,6 +456,12 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 .msg.assistant :not(pre) > code {
   background: var(--raised-2); padding: 1.5px 5px; border-radius: 5px; font-size: 0.86em; color: var(--code-inline);
 }
+/* A path in a reply (previewContext.tsx `PathLink`, ADR 0163): the words' own colour, so a reply full of paths doesn't
+   turn link blue, with a dotted line under it for what a click opens. */
+.path-link { color: inherit; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; cursor: pointer; border-radius: 3px; }
+.path-link:hover { text-decoration: underline solid currentColor; }
+.path-link:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
+.path-link[aria-busy="true"] { cursor: progress; }
 .msg.assistant table { border-collapse: collapse; margin: 0.4em 0 0.9em; font-size: calc(13.5rem / 14); }
 .msg.assistant th, .msg.assistant td { border-bottom: 1px solid var(--line-2); padding: 6px 14px 6px 0; text-align: left; }
 .msg.assistant th { color: var(--muted); font-weight: 500; }

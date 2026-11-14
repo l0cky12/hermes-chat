@@ -1,57 +1,126 @@
-// How links and tool calls in the transcript open the Preview (PreviewPane.tsx), and the link menu a right click on one
-// opens. `LinksProvider`, mounted once by Main, owns the one menu open at a time. Without a provider, as in the
-// benchmark harness, a link still never navigates the app's own window, and a right click shows WebKit's own menu.
-import { createContext, useCallback, useContext, useId, useState, type ReactNode } from "react";
+// How links, paths and tool calls in the transcript open the Preview (PreviewPane.tsx) and the Terminal, and the menu
+// a right click on a link or a path opens. `LinksProvider`, mounted once by Main, owns the one menu open at a time.
+// Without a provider, as in the benchmark harness, a link still never navigates the app's own window, and a right
+// click shows WebKit's own menu.
+import { createContext, useCallback, useContext, useId, useMemo, useState, type ReactNode } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { Copy, ExternalLink, PanelRight } from "lucide-react";
+import { Copy, ExternalLink, PanelRight, SquareTerminal } from "lucide-react";
 import { linkTarget, withoutBidi, type LinkTarget, type PreviewTarget } from "../hermes/preview";
+import { resolvePath, type PathOpen } from "../hermes/paths";
 import { Menu } from "./ChatMenu";
 import type { WebPages } from "./tauriPreview";
 import { errorText } from "../hermes/values";
 
-type OpenMenu = { link: LinkTarget; at: { x: number; y: number } };
-type ShowLinkMenu = (e: ReactMouseEvent<HTMLElement>, link: LinkTarget) => void;
+/** What the one open menu is for: a link, or a path in a reply. */
+type MenuOf = { link: LinkTarget } | { path: PathOpen };
+type OpenMenu = MenuOf & { at: { x: number; y: number } };
+type ShowMenu = (e: ReactMouseEvent<HTMLElement>, of: MenuOf) => void;
+/** Opens a path (paths.ts `pathOpener`). Resolves once something opened or the owner was told why not. */
+type OpenPath = (open: PathOpen) => Promise<void>;
 
 const PreviewContext = createContext<((t: PreviewTarget) => void) | undefined>(undefined);
-const LinkMenuContext = createContext<ShowLinkMenu | undefined>(undefined);
+const MenuContext = createContext<ShowMenu | undefined>(undefined);
+const PathContext = createContext<OpenPath | undefined>(undefined);
+const PathsInContext = createContext<{ folder?: string; session?: string }>({});
 
 export const useOpenPreview = () => useContext(PreviewContext);
 
 /** An `onContextMenu` that opens the link menu for `link` instead of WebKit's own. Undefined with no provider. */
-export const useLinkMenu = () => useContext(LinkMenuContext);
+export const useLinkMenu = () => {
+  const show = useContext(MenuContext);
+  return useMemo(() => show && ((e: ReactMouseEvent<HTMLElement>, link: LinkTarget) => show(e, { link })), [show]);
+};
 
 /**
- * How every link in the app behaves: a click opens it in the Preview, a right click (or the Menu key, or Shift+F10)
- * opens the link menu. The menu keeps its own copy of the link, so a streaming reply re-rendering it (ADR 0068) leaves
- * the open menu as it was.
+ * What the paths under it are relative to, and whose they are (ADR 0163). `folder`: the folder a relative path joins,
+ * a chat's working folder; without one, only full paths link. `session`: the chat whose sandbox a path may be in
+ * (ADR 0062).
+ */
+export function PathsIn({ folder, session, children }: { folder?: string; session?: string; children: ReactNode }) {
+  const value = useMemo(() => ({ folder, session }), [folder, session]);
+  return <PathsInContext.Provider value={value}>{children}</PathsInContext.Provider>;
+}
+
+/**
+ * How every link and path in the app behaves: a click opens a link in the Preview, and a path in the Preview or the
+ * Terminal (`path`); a right click (or the Menu key, or Shift+F10) opens its menu. The menu keeps its own copy of what
+ * it is for, so a streaming reply re-rendering it (ADR 0068) leaves the open menu as it was. Without `path`, a path in
+ * a reply stays text.
  */
 export function LinksProvider({
   preview,
+  path,
   web,
   onToast,
   children,
 }: {
   preview: (t: PreviewTarget) => void;
+  path?: OpenPath;
   web: Pick<WebPages, "openInBrowser">;
   onToast: (text: string) => void;
   children: ReactNode;
 }) {
   const [menu, setMenu] = useState<OpenMenu>();
   // Stable, so opening a menu re-renders no link, and Menu's listeners aren't set up again on each render.
-  const show = useCallback<ShowLinkMenu>((e, link) => {
+  const show = useCallback<ShowMenu>((e, of) => {
     e.preventDefault();
     // From the keyboard the event has no pointer position, so the menu opens under the link's first line.
     const r = e.currentTarget.getClientRects()[0] ?? e.currentTarget.getBoundingClientRect();
-    setMenu({ link, at: e.clientX || e.clientY ? { x: e.clientX, y: e.clientY } : { x: r.left + 8, y: r.bottom } });
+    setMenu({ ...of, at: e.clientX || e.clientY ? { x: e.clientX, y: e.clientY } : { x: r.left + 8, y: r.bottom } });
   }, []);
   const close = useCallback(() => setMenu(undefined), []);
   return (
     <PreviewContext.Provider value={preview}>
-      <LinkMenuContext.Provider value={show}>
-        {children}
-        {menu && <LinkMenu {...menu} onClose={close} preview={preview} web={web} onToast={onToast} />}
-      </LinkMenuContext.Provider>
+      <PathContext.Provider value={path}>
+        <MenuContext.Provider value={show}>
+          {children}
+          {menu && "link" in menu && <LinkMenu {...menu} onClose={close} preview={preview} web={web} onToast={onToast} />}
+          {menu && "path" in menu && path && <PathMenu {...menu} onClose={close} open={path} onToast={onToast} />}
+        </MenuContext.Provider>
+      </PathContext.Provider>
     </PreviewContext.Provider>
+  );
+}
+
+/** Copies `text`, and says whether it took: `what` is "link" or "path". */
+function copy(text: string, what: string, onToast: (text: string) => void) {
+  const failed = (e?: unknown) => onToast(`Couldn't copy the ${what}${e ? `: ${errorText(e)}` : "."}`);
+  if (!navigator.clipboard?.writeText) return failed();
+  navigator.clipboard.writeText(text).then(() => onToast(`${what[0].toUpperCase()}${what.slice(1)} copied.`), failed);
+}
+
+/**
+ * Open in the Preview, Open in the Terminal and Copy path. The Preview reads the path as a file without asking what it
+ * is. The Terminal opens a folder shell in a folder, and in the folder a file is in.
+ */
+function PathMenu({ path, at, onClose, open, onToast }: { path: PathOpen; at: OpenMenu["at"]; onClose: () => void; open: OpenPath; onToast: (text: string) => void }) {
+  // Close first, so focus is back on the path before the Preview or the Terminal takes it.
+  const act = (f: () => void) => () => {
+    onClose();
+    f();
+  };
+  return (
+    <Menu label="Path" x={at.x} y={at.y} onClose={onClose}>
+      <button role="menuitem" className="menu-item" onClick={act(() => void open({ ...path, as: "preview" }))}>
+        <span className="menu-icon">
+          <PanelRight size={15} />
+        </span>
+        <span className="menu-label">Open in the Preview</span>
+      </button>
+      <button role="menuitem" className="menu-item" onClick={act(() => void open({ ...path, as: "terminal" }))}>
+        <span className="menu-icon">
+          <SquareTerminal size={15} />
+        </span>
+        <span className="menu-label">Open in the Terminal</span>
+      </button>
+      <div className="menu-sep" role="separator" />
+      <button role="menuitem" className="menu-item" onClick={act(() => copy(path.path, "path", onToast))}>
+        <span className="menu-icon">
+          <Copy size={15} />
+        </span>
+        <span className="menu-label">Copy path</span>
+      </button>
+    </Menu>
   );
 }
 
@@ -67,17 +136,12 @@ function LinkMenu({
   preview,
   web,
   onToast,
-}: OpenMenu & { onClose: () => void; preview: (t: PreviewTarget) => void; web: Pick<WebPages, "openInBrowser">; onToast: (text: string) => void }) {
+}: { link: LinkTarget; at: OpenMenu["at"]; onClose: () => void; preview: (t: PreviewTarget) => void; web: Pick<WebPages, "openInBrowser">; onToast: (text: string) => void }) {
   const noteId = useId();
   // Close first, so focus is back on the link before the Preview or the browser takes it.
   const act = (f: () => void) => () => {
     onClose();
     f();
-  };
-  const copy = (text: string) => {
-    const failed = (e?: unknown) => onToast(`Couldn't copy the link${e ? `: ${errorText(e)}` : "."}`);
-    if (!navigator.clipboard?.writeText) return failed();
-    navigator.clipboard.writeText(text).then(() => onToast("Link copied."), failed);
   };
   return (
     <Menu label="Link" x={at.x} y={at.y} onClose={onClose}>
@@ -123,7 +187,7 @@ function LinkMenu({
           <div className="menu-sep" role="separator" />
         </>
       )}
-      <button role="menuitem" className="menu-item" onClick={act(() => copy(link.kind === "elsewhere" ? link.href : link.url))}>
+      <button role="menuitem" className="menu-item" onClick={act(() => copy(link.kind === "elsewhere" ? link.href : link.url, "link", onToast))}>
         <span className="menu-icon">
           <Copy size={15} />
         </span>
@@ -190,6 +254,44 @@ export function PreviewLink({
         })
       }
       rel="noreferrer"
+    >
+      {children}
+    </a>
+  );
+}
+
+/**
+ * A path in a reply (ADR 0163). A click, or Enter, opens it: a file in the Preview, a folder in a folder shell. It is
+ * an `<a>` with no `href`, so nothing can ever send the app's window to it. A relative path with no folder to join
+ * (`PathsIn`), and any path where nothing opens paths, stays the reply's own words.
+ */
+export function PathLink({ written, folder, title, children }: { written: string; folder: boolean; title?: string; children?: ReactNode }) {
+  const open = useContext(PathContext);
+  const menu = useContext(MenuContext);
+  const within = useContext(PathsInContext);
+  const [busy, setBusy] = useState(false);
+  const path = resolvePath(written, within.folder);
+  if (!open || !path) return <>{children}</>;
+  const request: PathOpen = { path, saysFolder: folder, ...(within.session && { session: within.session }) };
+  const go = () => {
+    if (busy) return;
+    setBusy(true);
+    void open(request).finally(() => setBusy(false));
+  };
+  return (
+    <a
+      className="path-link"
+      role="link"
+      tabIndex={0}
+      aria-busy={busy || undefined}
+      title={linkTip(`${withoutBidi(path)}\nOn the Hermes server: a file opens in the Preview, a folder in the Terminal.`, title)}
+      onClick={go}
+      onKeyDown={(e) => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        go();
+      }}
+      onContextMenu={menu && ((e) => menu(e, { path: request }))}
     >
       {children}
     </a>

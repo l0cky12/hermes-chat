@@ -1,12 +1,12 @@
 // Markdown with highlighted, copyable code blocks, typeset math, mermaid diagrams and find-in-chat marks. Ported from
 // the prototype. Single newlines are kept as line breaks, since replies often put one item per line. Links open in the
-// preview pane, never in the app's own window (previewContext.tsx).
+// preview pane, never in the app's own window, and a path opens in the Preview or the Terminal (previewContext.tsx).
 import { Children, Fragment, isValidElement, memo, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, CodeXml, Copy, Image as ImageIcon, Workflow } from "lucide-react";
 import "katex/dist/katex.min.css";
-import { PreviewLink } from "./previewContext";
+import { PathLink, PreviewLink } from "./previewContext";
 import { splitBlocks, type Blocks } from "./markdownBlocks";
 import { rehypePlugins, remarkPlugins } from "./markdownPipeline";
 import { drawDiagram, drawnAlready, subscribeTheme, themeNow, type Drawing } from "./mermaid";
@@ -140,11 +140,19 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
 // every code block's DOM and build it again on each streamed delta (#224).
 const components: Components = {
   pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-  a: ({ href, title, children }) => (
-    <PreviewLink href={href} title={title}>
-      {children}
-    </PreviewLink>
-  ),
+  // A path comes from markdownPipeline.ts `rehypePaths` as `data-path`, never as an address.
+  a: ({ href, title, children, ...rest }) => {
+    const path = rest as { "data-path"?: unknown; "data-folder"?: unknown };
+    return typeof path["data-path"] === "string" ? (
+      <PathLink written={path["data-path"]} folder={path["data-folder"] !== undefined} title={title}>
+        {children}
+      </PathLink>
+    ) : (
+      <PreviewLink href={href} title={title}>
+        {children}
+      </PreviewLink>
+    );
+  },
   // Keyed by address: a click loads one image, and Markdown whose text changes under it can put another in its place (#488).
   img: ({ src, alt, title }) => {
     const address = typeof src === "string" ? src : undefined;

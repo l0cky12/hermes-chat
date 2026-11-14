@@ -7,7 +7,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import { Markdown } from "./Markdown";
 import { replyMarkdown } from "./CopyMessage";
-import { LinksProvider } from "./previewContext";
+import { LinksProvider, PathsIn } from "./previewContext";
+import type { PathOpen } from "../hermes/paths";
 
 const invoke = vi.fn(async (_cmd: string, _args?: unknown): Promise<unknown> => undefined);
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (cmd: string, args?: unknown) => invoke(cmd, args) }));
@@ -158,6 +159,112 @@ describe("A link's tooltip (#471)", () => {
 
   it("is just the address and where it opens when the Markdown gives no title", () => {
     expect(tip("[x](https://a.test/)")).toBe("https://a.test/\nOpens in the preview");
+  });
+});
+
+describe("A path in a reply (ADR 0163)", () => {
+  /** A reply in a chat that works in `/srv/app`, with `open` standing in for what opens a path. */
+  function reply(text: string, { open = vi.fn(async (_: PathOpen) => {}), folder = "/srv/app" as string | null, query = "" } = {}) {
+    const onToast = vi.fn();
+    const { container } = renderDom(
+      <LinksProvider preview={vi.fn()} path={open} web={{ openInBrowser: vi.fn() }} onToast={onToast}>
+        <PathsIn folder={folder ?? undefined} session="chat-1">
+          <Markdown text={text} query={query} />
+        </PathsIn>
+      </LinksProvider>,
+    );
+    const paths = () => [...container.querySelectorAll<HTMLElement>("a.path-link")];
+    return { container, open, onToast, paths, words: () => paths().map((a) => a.textContent), path: (words: string) => paths().find((a) => a.textContent === words)! };
+  }
+
+  it("is a link in running text, in a code span and as a Markdown link's address, and never an address to follow", () => {
+    const { container, paths, words } = reply(
+      "Edited src/ui/Markdown.tsx:12, `~/notes/` and `package.json`. See [the config](/etc/hosts) and [the docs](file:///srv/docs/x.md), and/or 1/2 of https://example.com/a/b.ts.",
+    );
+    expect(words()).toEqual(["src/ui/Markdown.tsx:12", "~/notes/", "package.json", "the config", "the docs"]);
+    expect(paths().every((a) => !a.hasAttribute("href"))).toBe(true);
+    expect(container.querySelector("code > a.path-link")?.textContent).toBe("~/notes/");
+    expect([...container.querySelectorAll("a[href]")].map((a) => a.getAttribute("href"))).toEqual(["https://example.com/a/b.ts"]);
+  });
+
+  it("links the path inside a longer code span, and leaves code blocks and math as they are", () => {
+    const { container, words } = reply("Run `cat /etc/hosts.conf`.\n\n```sh\ncat /etc/hosts.conf\n```\n\nThen $x/y + /a/b$ and `x/y`.");
+    expect(words()).toEqual(["/etc/hosts.conf"]);
+    expect(container.querySelector("pre")!.textContent).toBe("cat /etc/hosts.conf\n");
+    expect(container.querySelector("pre a")).toBeNull();
+  });
+
+  it("holds a find-in-chat mark inside its link", () => {
+    const { path } = reply("Edited src/ui/Markdown.tsx today.", { query: "markdown" });
+    expect(path("src/ui/Markdown.tsx").querySelector("mark.hit")?.textContent).toBe("Markdown");
+  });
+
+  it("leaves an address that could run script emptied, as before", () => {
+    const { container, words } = reply("[x](javascript:alert(1)) and [y](https://a.test/)");
+    expect(words()).toEqual([]);
+    expect(container.querySelector("a")!.getAttribute("href")).toBe("");
+  });
+
+  it("stays text when it is relative and nothing says to what, while a full path still links", () => {
+    expect(reply("Edited src/a.ts and /etc/hosts.conf, and `./run.sh`.", { folder: null }).words()).toEqual(["/etc/hosts.conf"]);
+  });
+
+  it("stays text where nothing opens paths", () => {
+    expect(render("See /etc/hosts.conf and `src/ui`.")).toBe("<p>See /etc/hosts.conf and <code>src/ui</code>.</p>");
+  });
+
+  it("says its full path first in its tooltip, whatever title the Markdown gives", () => {
+    const { path } = reply('In src/a.ts and [the notes](../notes/a.md "/etc/passwd\u202Eevil").');
+    const where = "On the Hermes server: a file opens in the Preview, a folder in the Terminal.";
+    expect(path("src/a.ts").title).toBe(`/srv/app/src/a.ts\n${where}`);
+    expect(path("the notes").title).toBe(`/srv/notes/a.md\n${where}\n/etc/passwd\uFFFDevil`);
+  });
+
+  it("opens on a click and on Enter, as a folder when it is written as one, naming the chat", async () => {
+    const { open, path } = reply("Edited src/a.ts in docs/adr/.");
+    await userEvent.click(path("src/a.ts"));
+    expect(open).toHaveBeenLastCalledWith({ path: "/srv/app/src/a.ts", saysFolder: false, session: "chat-1" });
+    path("docs/adr/").focus();
+    await userEvent.keyboard("{Enter}");
+    expect(open).toHaveBeenLastCalledWith({ path: "/srv/app/docs/adr", saysFolder: true, session: "chat-1" });
+    expect(open).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows it is busy until it has opened, and takes no second click meanwhile", async () => {
+    let opened!: () => void;
+    const open = vi.fn((_: PathOpen) => new Promise<void>((done) => (opened = done)));
+    const { path } = reply("Edited src/a.ts.", { open });
+    await userEvent.click(path("src/a.ts"));
+    expect(path("src/a.ts").getAttribute("aria-busy")).toBe("true");
+    await userEvent.click(path("src/a.ts"));
+    expect(open).toHaveBeenCalledTimes(1);
+    await act(async () => opened());
+    expect(path("src/a.ts").hasAttribute("aria-busy")).toBe(false);
+  });
+
+  it("offers the Preview, the Terminal and its full path to copy on a right click", async () => {
+    const writeText = vi.fn(async (_text: string) => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    try {
+      const { open, onToast, path } = reply("Edited src/a.ts.");
+      const item = async (name: string) => {
+        fireEvent.contextMenu(path("src/a.ts"));
+        const menu = screen.getByRole("menu", { name: "Path" });
+        expect([...menu.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Open in the Preview", "Open in the Terminal", "Copy path"]);
+        await userEvent.click(screen.getByRole("menuitem", { name }));
+        expect(screen.queryByRole("menu")).toBeNull();
+      };
+      await item("Open in the Preview");
+      expect(open).toHaveBeenLastCalledWith({ path: "/srv/app/src/a.ts", saysFolder: false, session: "chat-1", as: "preview" });
+      await item("Open in the Terminal");
+      expect(open).toHaveBeenLastCalledWith({ path: "/srv/app/src/a.ts", saysFolder: false, session: "chat-1", as: "terminal" });
+      await item("Copy path");
+      expect(writeText).toHaveBeenCalledWith("/srv/app/src/a.ts");
+      await waitFor(() => expect(onToast).toHaveBeenCalledWith("Path copied."));
+      expect(open).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
