@@ -3588,6 +3588,12 @@ export function Main({
                 note: (from, to) => noteRename(connection, from, to),
                 clear: () => clearRename(connection),
                 renamed: async (from, to) => {
+                  // This run's chat on screen moves with the profile, as this computer's data does.
+                  const fromPref = prefScope(connection, from);
+                  if (shown?.has(fromPref)) {
+                    shown.set(prefScope(connection, to), shown.get(fromPref) ?? null);
+                    shown.delete(fromPref);
+                  }
                   try {
                     await renameProfileLocally(connection, from, to, profileStores());
                   } finally {

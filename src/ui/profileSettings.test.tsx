@@ -6,7 +6,7 @@
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { connectionScope } from "../hermes/connections";
+import { connectionScope, prefScope } from "../hermes/connections";
 import { FakeHermes } from "../hermes/fakeHermes";
 import { memoryCache } from "../hermes/memoryCache";
 import { connect, type Hermes } from "../hermes/transport";
@@ -29,7 +29,8 @@ afterEach(async () => {
 
 let launches = 0;
 
-async function launch(setup: (s: FakeHermes) => void = () => {}) {
+/** `shown`: the run's chats on screen, which App keeps across main screens. */
+async function launch(setup: (s: FakeHermes) => void = () => {}, shown?: Map<string, string | null>) {
   const server = new FakeHermes();
   server.otherProfiles = { work: [], research: [] };
   server.profileModel.work = { model: "gpt-6.1", provider: "openai", reasoning_effort: "medium", fast: false };
@@ -39,7 +40,7 @@ async function launch(setup: (s: FakeHermes) => void = () => {}) {
   const hermes = await connect(server.openPipe, undefined, memoryCache());
   running.push(hermes);
   const connection = { mode: "ssh" as const, sshTarget: `liam@hermes-profiles-${++launches}`, url: "", username: "liam" };
-  render(<Main hermes={hermes} connection={connection} onSignOut={async () => {}} />);
+  render(<Main hermes={hermes} connection={connection} shown={shown} onSignOut={async () => {}} />);
   await waitFor(() => expect(hermes.hasListed()).toBe(true));
   await act(async () => void (await hermes.idle()));
   const user = userEvent.setup();
@@ -102,6 +103,21 @@ describe("Settings → Profiles", { timeout: 30_000 }, () => {
     expect(localStorage.getItem(draft)).toBeNull();
     expect(localStorage.getItem(`hermes-chat.draft.${connectionScope(connection, "coder", "chat-1")}`)).toBe("half a thought");
     expect(await screen.findByText("Renamed work to coder.")).toBeTruthy();
+  });
+
+  it("moves the profile's chat on screen in this run with it, so a later main screen shows that and not a stored one", async () => {
+    const shown = new Map<string, string | null>();
+    const { user, list, connection } = await launch(undefined, shown);
+    shown.set(prefScope(connection, "work"), null);
+    await user.click(within(option(list, "work")).getByRole("button", { name: "Edit work" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit profile: work" });
+    await user.clear(within(dialog).getByLabelText("Name"));
+    await user.type(within(dialog).getByLabelText("Name"), "coder");
+    await user.click(within(dialog).getByRole("button", { name: /Save changes/ }));
+    expect(await screen.findByText("Renamed work to coder.")).toBeTruthy();
+    expect(shown.has(prefScope(connection, "work"))).toBe(false);
+    expect(shown.has(prefScope(connection, "coder"))).toBe(true);
+    expect(shown.get(prefScope(connection, "coder"))).toBeNull();
   });
 
   it("gives default a display name only, shown in the list and the switcher", async () => {
