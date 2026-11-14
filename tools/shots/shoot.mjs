@@ -172,6 +172,9 @@ const scenes = {
   },
   // Automations (ADR 0108). Tall pages: the screenshot covers the whole screen, scrolled to the part named.
   automations: { query: "", steps: [click("button[aria-label='Automations']")] },
+  work: { query: "", steps: [click("button[aria-label='Work']")] },
+  "work-task": { query: "", steps: [click("button[aria-label='Work']"), click(".work-card", "Compare three NAS backup tools")] },
+  "work-new": { query: "", steps: [click("button[aria-label='Work']"), click(".btn", "New task")] },
   "automation-editor": { query: "", height: 1700, steps: [click("button[aria-label='Automations']"), click("button", "New automation")] },
   "automation-preview": { query: "", height: 1100, steps: [click("button[aria-label='Automations']"), click("button", "New automation"), scrollTo(".automation-preview")] },
   "automation-history": { query: "", height: 1400, steps: [click("button[aria-label='Automations']"), click("button", "triage-issues"), scrollTo(".delivery-list")] },

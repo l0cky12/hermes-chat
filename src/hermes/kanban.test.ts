@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { STALLED_MS, WAKE_GRACE_MS, handoffOf, handoffs, waitingLabel, type Handoff } from "./dispatched";
 import { FakeHermes, row } from "./fakeHermes";
-import { KanbanWatch, POLL_EVERY_MS, SCAN_EVERY_MS, type SeenTask } from "./kanban";
+import { KanbanWatch, NoKanbanPlugin, POLL_EVERY_MS, SCAN_EVERY_MS, canMove, moveNeeds, moveSettled, refused, taskEdits, type SeenTask, type Workflow } from "./kanban";
 import { chatSections } from "./snooze";
 import { LIVE_MIN_GAP_MS, connect, type Hermes } from "./transport";
 import { RestError } from "./pipe";
@@ -477,5 +477,101 @@ describe("the board scan's schedule", () => {
     await vi.advanceTimersByTimeAsync(SCAN_EVERY_MS * 4);
     expect(asked).toBe(5);
     watch.stop();
+  });
+});
+
+describe("the Work page's board (issue #595)", () => {
+  const wf: Workflow = {
+    columns: ["triage", "ready", "running", "blocked", "review", "done"].map((key) => ({ key, label: key, dropTarget: !["running", "review"].includes(key) })),
+    manual: { ready: ["blocked", "done"], blocked: ["ready"], review: ["done", "running"] },
+  };
+
+  async function work(server = new FakeHermes()) {
+    const hermes = await connect(server.openPipe);
+    running.push(hermes);
+    return { server, hermes, api: hermes.kanban };
+  }
+
+  it("allows only the workflow's manual moves into columns that take a drop", () => {
+    expect(canMove(wf, "ready", "done")).toBe(true);
+    expect(canMove(wf, "ready", "triage")).toBe(false);
+    expect(canMove(wf, "review", "running")).toBe(false);
+    expect(canMove(wf, "ready", "ready")).toBe(false);
+    expect(canMove(wf, "unknown", "done")).toBe(false);
+  });
+
+  it("asks for a summary to complete, unless from review, and a reason to block", () => {
+    expect(moveNeeds("ready", "done")).toBe("summary");
+    expect(moveNeeds("review", "done")).toBeUndefined();
+    expect(moveNeeds("ready", "blocked")).toBe("reason");
+    expect(moveNeeds("blocked", "ready")).toBeUndefined();
+  });
+
+  it("holds a move until the board no longer shows the task where it was", () => {
+    const task = (status: string) => ({ id: "t_1", title: "x", body: "", assignee: "", status, priority: 0, comments: 0 });
+    expect(moveSettled([{ name: "ready", tasks: [task("ready")] }], { id: "t_1", from: "ready" })).toBe(false);
+    expect(moveSettled([{ name: "done", tasks: [task("done")] }], { id: "t_1", from: "ready" })).toBe(true);
+    expect(moveSettled([], { id: "t_1", from: "ready" })).toBe(true);
+  });
+
+  it("sends only the fields an edit changed", () => {
+    const t = { id: "t_1", title: "Ship", body: "", assignee: "researcher", status: "ready", priority: 1, comments: 0 };
+    expect(taskEdits(t, { title: " Ship ", body: "", priority: 1, assignee: "researcher" })).toEqual({});
+    expect(taskEdits(t, { title: "Ship it", body: "now", priority: 2, assignee: "" })).toEqual({ title: "Ship it", body: "now", priority: 2, assignee: "" });
+  });
+
+  it("tells a refused write from one that may have landed", () => {
+    expect(refused(new RestError(409, "{}"))).toBe(true);
+    expect(refused(new RestError(502, "{}"))).toBe(false);
+    expect(refused(new Error("error sending request"))).toBe(false);
+  });
+
+  it("reads the current board and the workflow", async () => {
+    const { server, api } = await work();
+    server.kanban.add("default", { title: "Research", assignee: "researcher", body: "Look into it", priority: 2 });
+    const board = await api.loadBoard();
+    expect(board.assignees).toEqual(["researcher", "writer"]);
+    expect(board.columns.find((c) => c.name === "ready")!.tasks).toEqual([
+      { id: expect.stringMatching(/^t_/), title: "Research", body: "Look into it", assignee: "researcher", status: "ready", priority: 2, comments: 0 },
+    ]);
+    expect(canMove(await api.loadWorkflow(), "ready", "done")).toBe(true);
+  });
+
+  it("says the plugin is missing when the board answers 404", async () => {
+    const server = new FakeHermes();
+    server.kanban.missing = true;
+    const { api } = await work(server);
+    await expect(api.loadBoard()).rejects.toBeInstanceOf(NoKanbanPlugin);
+  });
+
+  it("blocks with a reason and leaves the BLOCKED: comment, and completes with a summary", async () => {
+    const { server, api } = await work();
+    const t = server.kanban.add("default", { title: "Research" });
+    expect(await api.moveTask(t.id, "blocked", " waiting on keys ")).toBeUndefined();
+    expect(server.kanban.writes).toEqual([`PATCH ${t.id} {"status":"blocked","block_reason":"waiting on keys"}`, `POST ${t.id}/comments {"body":"BLOCKED: waiting on keys"}`]);
+    expect((await api.loadTask(t.id)).comments.map((c) => c.body)).toEqual(["BLOCKED: waiting on keys"]);
+    await api.moveTask(t.id, "done", "Wrote it up");
+    expect(server.kanban.writes.at(-1)).toBe(`PATCH ${t.id} {"status":"done","result":"Wrote it up","summary":"Wrote it up"}`);
+    expect(server.kanban.find(t.id)!.status).toBe("done");
+  });
+
+  it("keeps a block whose comment failed, and says so", async () => {
+    const { server, api } = await work();
+    const t = server.kanban.add("default", { title: "Research" });
+    const patch = server.kanban.route.bind(server.kanban);
+    server.kanban.route = (req) => (req.path.endsWith("/comments") ? () => { throw new RestError(500, "{}"); } : patch(req));
+    expect(await api.moveTask(t.id, "blocked", "why")).toMatch(/^Blocked t_\w+, but its BLOCKED: comment wasn't saved/);
+    expect(server.kanban.find(t.id)!.status).toBe("blocked");
+  });
+
+  it("creates one task per idempotency key, however often it's sent", async () => {
+    const { server, api } = await work();
+    server.kanban.createWarning = "No dispatcher is running";
+    const fields = { title: " New ", body: "", priority: 0, assignee: "writer" };
+    const first = await api.createTask(fields, "k1");
+    expect(first).toEqual({ id: expect.stringMatching(/^t_/), warning: "No dispatcher is running" });
+    expect((await api.createTask(fields, "k1")).id).toBe(first.id);
+    expect(server.kanban.boards.default.tasks.map((t) => t.title)).toEqual(["New"]);
+    expect(server.kanban.writes[0]).toBe(`POST {"title":"New","assignee":"writer","priority":0,"idempotency_key":"k1"}`);
   });
 });

@@ -3,7 +3,7 @@
 // rail's foot. Right-clicking a chat opens its menu (ChatMenu.tsx).
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Hourglass, LockOpen, PanelLeftClose, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
+import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Hourglass, LockOpen, PanelLeftClose, Pin, Search, Settings, SquareKanban, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
 import { waitingLabel, type Handoff } from "../hermes/dispatched";
 import type { Chat, CheckTimes, ConnectionStatus, OtherProfile, OtherProfiles } from "../hermes/model";
 import { SOURCE_LABEL, isWaiting } from "../hermes/model";
@@ -42,6 +42,8 @@ export function Rail({
   botsNeedYou = false,
   onOffice,
   officeOpen = false,
+  onWork,
+  workOpen = false,
   onOutputs,
   outputsOpen = false,
   onSettings,
@@ -75,6 +77,9 @@ export function Rail({
   /** Opens or closes the agent office (Office.tsx, ADR 0077); none while Settings turns it off. */
   onOffice?: () => void;
   officeOpen?: boolean;
+  /** Opens or closes the Work page, the kanban board of bot work (Work.tsx, ADR 0171); none when this Hermes has no kanban plugin. */
+  onWork?: () => void;
+  workOpen?: boolean;
   /** Opens Outputs, the files Hermes's tools wrote (Outputs.tsx). */
   onOutputs?: () => void;
   outputsOpen?: boolean;
@@ -174,6 +179,17 @@ export function Rail({
             {...bind("office", { label: "Office", note: "Every agent at work, in the building or a list" })}
           >
             <Building2 size={18} />
+          </button>
+        )}
+        {onWork && (
+          <button
+            className={`icon-btn rail-primary ${workOpen ? "on" : ""}`}
+            aria-label="Work"
+            aria-pressed={workOpen}
+            onClick={onWork}
+            {...bind("work", { label: "Work", note: "The board of tasks your bots are working on" })}
+          >
+            <SquareKanban size={18} />
           </button>
         )}
       </div>

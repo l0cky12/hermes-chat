@@ -40,6 +40,7 @@ export type CapabilityId =
   | "scheduledJobs"
   | "automations"
   | "outputs"
+  | "kanban"
   | "botMode"
   | "subagents"
   | "subagentRoster";
@@ -309,6 +310,17 @@ export const CAPABILITIES: readonly CapabilitySpec[] = [
     anchor: "outputs",
     probe: { kind: "rest", path: (profile) => `api/fs/list?${new URLSearchParams({ path: "/", profile })}`, maxBytes: 512 * 1024, shape: isObj },
     routes: [/^api\/fs\/list$/],
+  },
+  {
+    id: "kanban",
+    label: "Work",
+    usedBy: "The Work page, and the tasks shown under the chats that dispatched them",
+    needs: "The dashboard's kanban plugin, under /api/plugins/kanban.",
+    without: "The Work button doesn't show, and chats don't show the tasks they dispatched.",
+    anchor: "work",
+    probe: { kind: "rest", path: () => "api/plugins/kanban/boards", maxBytes: 512 * 1024, shape: (b) => isObj(b) && isList(b.boards) },
+    routes: [/^api\/plugins\/kanban\/boards$/],
+    writeRoutes: [/^api\/plugins\/kanban\//],
   },
   {
     id: "botMode",

@@ -3381,9 +3381,27 @@ export type KanbanRow = {
   current_run_id: string | null;
   subscribed: boolean;
   runs: { id: string; status: string }[];
+  body?: string | null;
+  priority?: number;
+  tenant?: string | null;
+  latest_summary?: string | null;
+  comments?: { id: number; author: string; body: string; created_at: number }[];
 };
 
 const KANBAN_COLUMNS = ["triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done", "archived"];
+/** The plugin's `GET workflow`, as a fixture: the dispatcher's columns (scheduled, running, review) take no drop. */
+const KANBAN_WORKFLOW = {
+  columns: KANBAN_COLUMNS.filter((c) => c !== "archived").map((key) => ({ key, label: key[0].toUpperCase() + key.slice(1), drag_target: !["scheduled", "running", "review"].includes(key) })),
+  manual: {
+    triage: ["todo", "ready", "blocked"],
+    todo: ["triage", "ready", "blocked", "done"],
+    ready: ["todo", "blocked", "done"],
+    running: ["blocked", "done"],
+    blocked: ["ready", "todo", "done"],
+    review: ["ready", "blocked", "done"],
+    done: ["ready"],
+  },
+};
 /**
  * The notice Hermes's poller sends for a task's move, after `[board] @assignee Kanban <id>`, by the status it moved to
  * (`_KANBAN_EVENT_FORMATTERS` in `tui_gateway/session_notifications.py` at v0.22.7). Archiving sends none, so no wake.
@@ -3405,6 +3423,14 @@ export class FakeKanban {
   current = "default";
   /** No kanban plugin: every route answers 404 Not Found. */
   missing = false;
+  /** Every write the Work page sent, as `METHOD path body`. */
+  writes: string[] = [];
+  /** The next write answers this instead, once: a status refuses it, `"lost"` applies it and then fails as a dropped answer would. */
+  failNext?: number | "lost";
+  /** What `POST tasks` warns, such as no dispatcher. */
+  createWarning?: string;
+  private keys = new Map<string, string>();
+  private commentSeq = 0;
   /** How long after a task moves the poller wakes its chat. */
   wakeDelayMs = 0;
   /** How the wake turn is sent: at once in one go unless set, as the stand-in streams it (bridge.ts). `userRowId`: the stored notice that began it. */
@@ -3481,10 +3507,13 @@ export class FakeKanban {
   }
 
   route(req: RestRequest): (() => unknown) | undefined {
-    const m = /^\/api\/plugins\/kanban\/(boards|board|tasks)(?:\/([^/]+))?$/.exec(req.path);
-    if (!m || req.method !== "GET" || this.missing) return undefined;
-    const [, what, rawId] = m;
+    const m = /^\/api\/plugins\/kanban\/(boards|board|workflow|tasks)(?:\/([^/]+)(\/comments)?)?$/.exec(req.path);
+    if (!m || this.missing) return undefined;
+    const [, what, rawId, comments] = m;
+    if (req.method !== "GET") return what === "tasks" ? () => this.write(req.method, rawId && decodeURIComponent(rawId), !!comments, req.body ?? {}) : undefined;
+    if (comments) return undefined;
     return () => {
+      if (what === "workflow") return KANBAN_WORKFLOW;
       if (what === "boards")
         return {
           boards: Object.entries(this.boards).map(([slug, b]) => ({ slug, name: b.name, archived: false, is_current: slug === this.current, counts: {}, total: b.tasks.length })),
@@ -3493,11 +3522,60 @@ export class FakeKanban {
       const slug = req.query.get("board") ?? this.current;
       const board = this.boards[slug];
       if (!board) this.refuse(404, `board '${slug}' does not exist`);
-      if (what === "board") return { columns: KANBAN_COLUMNS.map((name) => ({ name, tasks: board.tasks.filter((t) => t.status === name).map(listed) })), assignees: [], tenants: [], latest_event_id: 0, now: now() };
+      if (what === "board")
+        return {
+          columns: KANBAN_COLUMNS.filter((c) => c !== "archived").map((name) => ({ name, tasks: board.tasks.filter((t) => t.status === name).map(listed) })),
+          assignees: ["researcher", "writer"],
+          tenants: [],
+          latest_event_id: 0,
+          now: now(),
+        };
       const task = board.tasks.find((t) => t.id === decodeURIComponent(rawId ?? ""));
       if (!task) this.refuse(404, `task '${rawId}' does not exist`);
-      return { task: listed(task), events: [], runs: task.runs, comments: [], links: [] };
+      return { task: listed(task), events: [], runs: task.runs, comments: task.comments ?? [], links: [] };
     };
+  }
+
+  /** `POST tasks`, `PATCH tasks/{id}` and `POST tasks/{id}/comments`, as the plugin answers them. */
+  private write(method: string, id: string | undefined, comments: boolean, body: Record<string, unknown>) {
+    this.writes.push([method, id && (comments ? `${id}/comments` : id), JSON.stringify(body)].filter(Boolean).join(" "));
+    const fail = this.failNext;
+    this.failNext = undefined;
+    if (typeof fail === "number") this.refuse(fail, "refused");
+    const answer = (() => {
+      if (method === "POST" && !id) {
+        const key = typeof body.idempotency_key === "string" ? body.idempotency_key : undefined;
+        const again = key && this.keys.get(key);
+        const task =
+          (again && this.find(again)) ||
+          this.add(this.current, {
+            title: String(body.title ?? ""),
+            body: typeof body.body === "string" ? body.body : null,
+            assignee: typeof body.assignee === "string" ? body.assignee : null,
+            priority: typeof body.priority === "number" ? body.priority : 0,
+            status: typeof body.assignee === "string" ? "ready" : "triage",
+          });
+        if (key) this.keys.set(key, task.id);
+        return { task: listed(task), ...(this.createWarning && { warning: this.createWarning }) };
+      }
+      const task = id ? this.find(id) : undefined;
+      if (!task) this.refuse(404, `task '${id}' does not exist`);
+      if (method === "POST" && comments) {
+        (task.comments ??= []).push({ id: ++this.commentSeq, author: "dashboard", body: String(body.body ?? ""), created_at: now() });
+        return { ok: true };
+      }
+      if (method !== "PATCH" || comments) this.refuse(405, "Method Not Allowed");
+      if (typeof body.title === "string") task.title = body.title;
+      if (typeof body.body === "string") task.body = body.body || null;
+      if (typeof body.priority === "number") task.priority = body.priority;
+      if (typeof body.assignee === "string") task.assignee = body.assignee || null;
+      if (typeof body.block_reason === "string") task.latest_summary = body.block_reason;
+      if (typeof body.summary === "string") task.latest_summary = body.summary;
+      if (typeof body.status === "string") this.move(task.id, body.status);
+      return { task: listed(task) };
+    })();
+    if (fail === "lost") throw new Error("error sending request: connection reset");
+    return answer;
   }
 
   private refuse(status: number, detail: unknown): never {
@@ -3506,6 +3584,6 @@ export class FakeKanban {
 }
 
 /** A task as the routes list it: the stored row less what the plugin keeps to itself. */
-function listed({ subscribed: _, ...t }: KanbanRow) {
-  return t;
+function listed({ subscribed: _, comments, ...t }: KanbanRow) {
+  return { body: null, priority: 0, tenant: null, latest_summary: null, ...t, comment_count: comments?.length ?? 0 };
 }

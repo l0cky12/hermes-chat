@@ -45,6 +45,7 @@ const NEW: Record<string, unknown> = {
   "GET api/cron/jobs": [],
   "GET api/webhooks": { enabled: true, subscriptions: [] },
   "GET api/fs/list": { path: "/", entries: [] },
+  "GET api/plugins/kanban/boards": { boards: [{ slug: "default", is_current: true }], current: "default" },
 };
 
 const noRoute = () => answered(404, "Not Found");
@@ -149,6 +150,7 @@ describe("a check of a new Hermes (upstream 74b2ed6)", () => {
       scheduledJobs: "supported",
       automations: "supported",
       outputs: "supported",
+      kanban: "supported",
       botMode: "supported",
       // Only a chat's own subagent.list can learn this.
       subagents: "unknown",
