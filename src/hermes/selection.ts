@@ -3,23 +3,30 @@
 // or else what was copied there if that changed. Text that hasn't changed is what the owner already had here, so it
 // never starts a message twice. It goes into the composer and nowhere else until the owner sends it.
 
-/** What Rust read: `undefined` where empty, unreadable, too long or marked as a password. */
-export type Selections = { primary?: string; clipboard?: string };
+/**
+ * What Rust read of each selection (selection.rs): its text; `null` where there is nothing to use (empty, blank, too long
+ * or marked as a password); left out where it couldn't be read, as when its owner didn't answer in time.
+ */
+export type Selections = { primary?: string | null; clipboard?: string | null };
 
 /** What the selections held when last read, to tell new text from text the owner already had. */
 export class SelectionWatch {
   private last: Selections = {};
 
+  /** Keeps what `now` read. A selection that couldn't be read keeps what it held when last read. */
   remember(now: Selections) {
-    this.last = now;
+    this.last = {
+      primary: now.primary === undefined ? this.last.primary : now.primary,
+      clipboard: now.clipboard === undefined ? this.last.clipboard : now.clipboard,
+    };
   }
 
   /** The selection that changed since the last read, PRIMARY first; `now` is remembered either way. */
   take(now: Selections): string | undefined {
     const last = this.last;
-    this.last = now;
-    if (now.primary !== undefined && now.primary !== last.primary) return now.primary;
-    if (now.clipboard !== undefined && now.clipboard !== last.clipboard) return now.clipboard;
+    this.remember(now);
+    if (typeof now.primary === "string" && now.primary !== last.primary) return now.primary;
+    if (typeof now.clipboard === "string" && now.clipboard !== last.clipboard) return now.clipboard;
     return undefined;
   }
 }

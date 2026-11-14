@@ -29,6 +29,20 @@ describe("New selected text", () => {
     expect(w.take({ primary: "journalctl -u nginx" })).toBeUndefined();
   });
 
+  it("keeps what a selection held when a later read couldn't read it, so unchanged text isn't new again", () => {
+    const w = new SelectionWatch();
+    w.remember({ primary: "a line of Hermes's reply", clipboard: "copied" });
+    w.remember({});
+    expect(w.take({ primary: "a line of Hermes's reply", clipboard: "copied" })).toBeUndefined();
+  });
+
+  it("counts text selected again after the selection was cleared as new", () => {
+    const w = new SelectionWatch();
+    w.remember({ primary: "df -h", clipboard: null });
+    w.remember({ primary: null, clipboard: null });
+    expect(w.take({ primary: "df -h", clipboard: null })).toBe("df -h");
+  });
+
   it("counts text selected in this app before leaving it as already seen", () => {
     const w = new SelectionWatch();
     w.remember({ primary: "a line of Hermes's reply" });

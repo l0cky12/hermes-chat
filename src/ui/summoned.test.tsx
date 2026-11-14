@@ -163,6 +163,15 @@ describe("Starting a message with the text selected in another app (ADR 0172)", 
     expect(composer().value).toBe("");
   }, 30_000);
 
+  it("adds nothing for text that didn't change though the read on leaving couldn't read it", async () => {
+    const { rust } = await onNewChat({ primary: "a line of Hermes's reply", clipboard: null });
+    rust.selections = {};
+    await rust.leave();
+    rust.selections = { primary: "a line of Hermes's reply", clipboard: null };
+    await rust.summon();
+    expect(composer().value).toBe("");
+  }, 30_000);
+
   it("starts a message once, not again on the next summon", async () => {
     const { rust } = await onNewChat();
     rust.selections = { primary: "df -h" };

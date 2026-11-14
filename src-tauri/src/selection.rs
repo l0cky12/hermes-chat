@@ -13,12 +13,15 @@ const MAX_CHARS: usize = 100_000;
 /// The target KeePassXC, KDE's Klipper and other password managers add to a secret they copy.
 pub const PASSWORD_HINT: &str = "x-kde-passwordManagerHint";
 
-/// The PRIMARY selection (what is selected now) and the clipboard (what was copied). `None`: empty, unreadable, longer
-/// than `MAX_CHARS`, or marked as a password.
+/// The PRIMARY selection (what is selected now) and the clipboard (what was copied). `Some(None)`: nothing to use there
+/// (empty, blank, longer than `MAX_CHARS`, or marked as a password). `None`, left out of the JSON: it couldn't be read,
+/// as when its owner doesn't answer in time, so the webview keeps what it last read of it.
 #[derive(Serialize, Default, Debug, PartialEq, Eq)]
 pub struct Selections {
-    pub primary: Option<String>,
-    pub clipboard: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clipboard: Option<Option<String>>,
 }
 
 /// `text` as a selection a message can start with.
@@ -35,7 +38,7 @@ pub async fn read(app: &tauri::AppHandle) -> Result<Selections, String> {
         text_of(&gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD), move |t| drop(clipboard_tx.send(t)));
     })
     .map_err(|e| e.to_string())?;
-    let answer = |rx: oneshot::Receiver<Option<String>>| async move { tokio::time::timeout(ANSWER_TIMEOUT, rx).await.ok()?.ok()? };
+    let answer = |rx: oneshot::Receiver<Option<String>>| async move { tokio::time::timeout(ANSWER_TIMEOUT, rx).await.ok()?.ok() };
     let (primary, clipboard) = tokio::join!(answer(primary), answer(clipboard));
     Ok(Selections { primary, clipboard })
 }
@@ -61,5 +64,13 @@ mod tests {
         assert_eq!(usable(Some("  df -h\n")), Some("  df -h\n".to_owned()), "kept as selected, spaces and all");
         assert_eq!(usable(Some(&"é".repeat(MAX_CHARS))).map(|t| t.chars().count()), Some(MAX_CHARS), "counted in characters, not bytes");
         assert_eq!(usable(Some(&"x".repeat(MAX_CHARS + 1))), None);
+    }
+
+    #[test]
+    fn a_selection_that_couldnt_be_read_is_left_out_and_one_with_nothing_to_use_is_null() {
+        let read = Selections { primary: None, clipboard: Some(None) };
+        assert_eq!(serde_json::to_string(&read).unwrap(), r#"{"clipboard":null}"#);
+        let read = Selections { primary: Some(Some("df -h".into())), clipboard: None };
+        assert_eq!(serde_json::to_string(&read).unwrap(), r#"{"primary":"df -h"}"#);
     }
 }

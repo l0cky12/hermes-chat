@@ -21,7 +21,7 @@ export const tauriSummon: SummonApi = {
     const stop = listen<Summoned | null>("summoned", (e) => fn({ fromElsewhere: e.payload?.fromElsewhere === true })).catch(() => undefined);
     return () => void stop.then((s) => s?.());
   },
-  readSelection: () => invoke<{ primary?: string | null; clipboard?: string | null }>("read_selection").then((s) => ({ primary: s.primary ?? undefined, clipboard: s.clipboard ?? undefined })),
+  readSelection: () => invoke<Selections>("read_selection"),
 };
 
 /** The real one in the desktop app; none in a browser. */
