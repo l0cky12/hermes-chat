@@ -60,3 +60,14 @@ describe("Icons", () => {
     expect(declarations(css, "svg.lucide")).toContain("zoom: var(--ui-scale, 1)");
   });
 });
+
+describe("Sign-in and setup", () => {
+  it("ring whichever control has the keyboard's focus, inputs included", () => {
+    const ring = declarations(css, ":is(.first-run, .setup) :is(input, select, textarea, button, a):focus-visible");
+    expect(ring).toMatch(/outline: 2px solid var\(--accent\)/);
+  });
+
+  it("draw placeholders in faint text, which themes keep at AA", () => {
+    expect(declarations(css, ":is(.first-run, .setup) input::placeholder")).toContain("color: var(--faint)");
+  });
+});
