@@ -2323,16 +2323,21 @@ button.provider-row:hover:not(:disabled) { background: var(--hover); }
 .skill-row + .skill-row { border-top: 1px solid var(--line); }
 .skills-where { overflow-wrap: anywhere; }
 .skills-state > div { flex: 1; min-width: 0; }
-.skill-name { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+/* One line, whatever its badges: the category gives way, so every row is the same height. */
+.skill-name { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: nowrap; overflow: hidden; }
+.skill-name > * { flex: none; }
+.skill-name > .skill-category { flex: 0 1 auto; }
 .skill-desc { position: relative; min-width: 0; }
-.skill-desc-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The whole description, under the pointer resting on the line: for a mouse only, as the owner asked (ADR 0113). */
+/* Two lines, always two lines tall, so a short description's row matches a long one's. */
+.skill-desc-line { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; min-height: 3em; }
+/* The whole description, under the line while the pointer rests on it or a control in its row has focus. */
 .skill-desc-tip {
   display: none; position: absolute; left: 0; top: calc(100% + 4px); z-index: 10; width: min(560px, 90cqw); padding: 10px 12px;
   background: var(--raised-3); border: 1px solid var(--line-3); border-radius: 8px; font-size: calc(12.5rem / 14); line-height: 1.5; color: var(--text);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); white-space: pre-line;
 }
 @media (hover: hover) { .skill-desc:hover .skill-desc-tip { display: block; } }
+.skill-row:focus-within .skill-desc-tip { display: block; }
 .skill-category { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 /* Which profile Skills, Memory and Persona show (ProfilePicker.tsx, ADR 0118), in place of the profile's name. */
 .profile-pick {

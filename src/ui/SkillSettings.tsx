@@ -408,7 +408,7 @@ export function SkillSettings({
       </span>
     );
   };
-  /** One line; the pointer resting on it shows the whole text (ADR 0113). The tip repeats the text, so it's hidden from readers. */
+  /** Two lines; the pointer resting on them, or focus in the row, shows the whole text. The tip repeats the text, so it's hidden from readers. */
   const skillDesc = (s: SkillRow) => (
     <div className="skill-desc">
       <div id={`${domId(s.name)}-desc`} className="skill-desc-line">
