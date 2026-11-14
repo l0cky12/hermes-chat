@@ -66,6 +66,8 @@ export type UIPrefs = {
   officeQuality: OfficeQuality;
   /** How many days a finished entry stays in the inbox before it is dismissed on its own, as if by hand; null: never. */
   inboxAutoDismissDays: number | null;
+  /** Start a message with the text selected in another app when `hermes-chat --show` or `--toggle` brings the window forward (ADR 0172). */
+  summonSelection: boolean;
   /**
    * The keyboard shortcuts the owner changed (ui/keybindings.ts, ADR 0147): each command's chords, by command id. Only
    * overrides, so a command never changed takes whatever default this version gives it. Checked for shape here only;
@@ -119,6 +121,7 @@ export const DEFAULT_UI_PREFS: Readonly<UIPrefs> = Object.freeze({
   agentOffice: "plan",
   officeQuality: "normal",
   inboxAutoDismissDays: null,
+  summonSelection: true,
   keybindings: Object.freeze({}) as Record<string, string[]>,
 });
 
@@ -281,6 +284,7 @@ export function readUIPrefs(doc: UIPrefsDoc, d: Readonly<UIPrefs> = DEFAULT_UI_P
       doc.inboxAutoDismissDays === null || (typeof doc.inboxAutoDismissDays === "number" && Number.isFinite(doc.inboxAutoDismissDays) && doc.inboxAutoDismissDays > 0)
         ? doc.inboxAutoDismissDays
         : d.inboxAutoDismissDays,
+    summonSelection: typeof doc.summonSelection === "boolean" ? doc.summonSelection : d.summonSelection,
     keybindings: toKeybindings(doc.keybindings) ?? { ...d.keybindings },
   };
 }

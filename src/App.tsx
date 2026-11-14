@@ -1,7 +1,7 @@
 import { type ReactNode, type RefObject, Suspense, lazy, useCallback, useLayoutEffect, useMemo, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { ArrowLeft, ArrowRight, Columns2, FolderCog, GitBranch, PanelBottom, PanelLeft, PanelRight, PanelTop, X } from "lucide-react";
-import { CONNECT_STOPPED, LIVE_MIN_GAP_MS, RenameConflict, TitleModelUnavailable, connect, openSaved, readSaved, toSource, type Delivery, type Hermes, type Notify } from "./hermes/transport";
+import { CONNECT_STOPPED, LIVE_MIN_GAP_MS, RenameConflict, TitleModelUnavailable, connect, openSaved, readSaved, toSource, type Delivery, type Hermes, type NoticeCard, type Notify } from "./hermes/transport";
 import { invoke } from "@tauri-apps/api/core";
 import type { CommandHost } from "./ui/SlashCommands";
 import { STEER, type ServerCommandList } from "./hermes/commands";
@@ -32,7 +32,8 @@ import { desktopNotify } from "./hermes/tauriNotify";
 import { ScreenshotDesk, type ScreenshotApi } from "./hermes/screenshots";
 import { ReferenceDesk } from "./hermes/chatReferences";
 import { deadline } from "./hermes/remoteFiles";
-import { desktopSummon, type SummonApi } from "./hermes/summon";
+import { desktopSummon, type SummonApi, type Summoned } from "./hermes/summon";
+import { SelectionWatch, quoted, untilFocused } from "./hermes/selection";
 import { onDesktopScreenshot, screenshotSupport, showWindow, syncScreenshotOutbox, tauriScreenshots, type ScreenshotSupport } from "./hermes/tauriScreenshot";
 import { AtConnectionLimit, ConnectionManager, DisconnectConnection, RailConnections, RemoveConnection, SwitchConnection, atLimitText, liveCounts } from "./ui/Connections";
 import { checkShortcut, shortcutLabel, shortcutOf } from "./ui/shortcut";
@@ -162,6 +163,8 @@ const INBOX_CHECK_EVERY_MS = 30_000;
 const TOAST_MS = 5_000;
 const ACTION_TOAST_MS = 15_000;
 
+/** The card or message to show in a chat once it opens: an item, or else the chat's waiting Approval. */
+type LinkReveal = { itemId?: string; approval: boolean };
 /** A short notice above the composer; `undo` puts back what it reports. `at` restarts the timer for a repeat. */
 type Toast = { text: string; undo?: () => void; action?: { label: string; run: () => void }; at: number };
 
@@ -244,8 +247,20 @@ const liveConnections = () => (liveStore ??= new LiveConnections((ids) => savedC
  * A connection's desktop notifications. With more than one connection live, each names its server, so an Approval
  * from a background connection says where it waits.
  */
-const notifyFor = (c: SavedConnection): Notify => (n) =>
-  desktopNotify(liveConnections().size > 1 ? { title: `${savedConnections().get(c.id)?.name ?? c.name}: ${n.title}`, body: n.body } : n);
+const notifyFor = (c: SavedConnection): Notify => (n, actions) =>
+  desktopNotify(liveConnections().size > 1 ? { title: `${savedConnections().get(c.id)?.name ?? c.name}: ${n.title}`, body: n.body } : n, actions);
+
+/** The inbox entry for the waiting card a notification is about, so its click goes where the entry's would. */
+const noticeEntry = (card: NoticeCard): InboxEntry => ({
+  key: `notice ${card.profile} ${card.chatId} ${card.itemId}`,
+  kind: "approval",
+  profile: card.profile,
+  chatId: card.chatId,
+  title: card.title,
+  itemId: card.itemId,
+  at: 0,
+  summary: "",
+});
 
 const account: Account = {
   get connections() {
@@ -454,7 +469,7 @@ function Screens({ links }: { links: LinkInbox }) {
   useSyncExternalStore(registry.subscribe, registry.getSnapshot);
   const overview = registry.overview();
   // A message to open a chat on another live connection once it is the target: an inbox entry or a chat link for it.
-  const [opening, setOpening] = useState<{ link: ChatLink; at: number; connection: string }>();
+  const [opening, setOpening] = useState<{ link: ChatLink; at: number; connection: string; reveal?: LinkReveal }>();
   // Connect asked at the limit: the live connections to choose one to disconnect from.
   const [atLimit, setAtLimit] = useState<SavedConnection>();
   // A background connection with work under way, asked about before Disconnect closes it.
@@ -783,9 +798,28 @@ function Screens({ links }: { links: LinkInbox }) {
   const openElsewhere = (e: InboxEntry) => {
     const m = e.server && registry.get(e.server.id);
     if (!m) return;
-    setOpening({ link: { connection: savedConnectionRefs.refFor(m.connection), profile: e.profile, chatId: e.chatId }, at: Date.now(), connection: m.connection.id });
+    const approval = e.kind === "approval" && !e.ended;
+    setOpening({
+      link: { connection: savedConnectionRefs.refFor(m.connection), profile: e.profile, chatId: e.chatId },
+      at: Date.now(),
+      connection: m.connection.id,
+      ...((e.itemId || approval) && { reveal: { itemId: e.itemId, approval } }),
+    });
     void switchTo(m.connection);
   };
+  // A notification clicked from a background connection opens its chat there, as its inbox entry does. The target's
+  // own notifications are Main's.
+  const openElsewhereRef = useRef(openElsewhere);
+  openElsewhereRef.current = openElsewhere;
+  useEffect(() => {
+    const stops = registry.list().map((m) =>
+      m.hermes.onNoticeOpen((card) => {
+        if (registry.target()?.hermes !== m.hermes) openElsewhereRef.current({ ...noticeEntry(card), server: { id: m.connection.id, name: m.connection.name } });
+      }),
+    );
+    return () => stops.forEach((stop) => stop());
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- again whenever the live connections change; `registry` is one store for the app
+  }, [registry.getSnapshot()]);
   /** Dismisses background connections' entries in their own connections' dismissals. */
   const dismissElsewhere = (es: InboxEntry[]) => {
     for (const s of overview) {
@@ -1161,8 +1195,11 @@ export function Main({
   guardClose?: CloseGuard;
   onSignOut: () => Promise<void>;
   updates?: Updater;
-  /** A chat link to open (ADR 0037); `at` tells one from the next. Main takes it with `onLinkTaken`. */
-  link?: { link: ChatLink; at: number };
+  /**
+   * A chat link to open (ADR 0037); `at` tells one from the next. Main takes it with `onLinkTaken`. `reveal`: the card or
+   * message to show once the chat is open, for an inbox entry or notification from a background connection.
+   */
+  link?: { link: ChatLink; at: number; reveal?: LinkReveal };
   onLinkTaken?: (at: number) => void;
   /** When a newer link that can't open arrived: it replaces whatever an older link was doing, notice and all. */
   linkSuperseded?: number;
@@ -1439,7 +1476,7 @@ export function Main({
   // The model pick is sticky: new chats start on it, in this profile, until the owner picks another. It is kept on this
   // computer only and never becomes the profile's default. Picked in another profile, it gives way to this profile's
   // own model. A chat on screen shows the model it runs on, and a pick there switches that chat alone.
-  const { modelPicker, modelPicks, modelFavorites, previewWidth, screenshotShortcut, agentOffice, inboxAutoDismissDays } = useSyncExternalStore(subscribeUIPrefs, getUIPrefs);
+  const { modelPicker, modelPicks, modelFavorites, previewWidth, screenshotShortcut, agentOffice, inboxAutoDismissDays, summonSelection } = useSyncExternalStore(subscribeUIPrefs, getUIPrefs);
   const keys = useBindings();
   const officeShown = officeOpen && agentOffice !== "off";
   // Who sits where in the building. It outlives the building's view, so hidden to the tray, minimized, behind Settings
@@ -2231,6 +2268,17 @@ export function Main({
       setGoTo({ entry: e, approval: e.kind === "approval" && !e.ended });
     }, e.profile !== profile ? "profile" : "leave");
   };
+  // A notification's click opens the card it is about, as its inbox entry does (ADR 0173).
+  const openEntryRef = useRef(openEntry);
+  openEntryRef.current = openEntry;
+  useEffect(() => hermes.onNoticeOpen((card) => openEntryRef.current(noticeEntry(card))), [hermes]);
+  // The waiting Approval card an inbox entry is about, when this connection's shown profile holds it: the inbox shows
+  // it whole, to answer there as in the chat (ADR 0173).
+  const approvalOf = (e: InboxEntry) => {
+    if (e.server || e.ended || e.kind !== "approval" || e.profile !== profile || !e.itemId) return undefined;
+    const card = chats.find((c) => c.id === e.chatId)?.items.find((i) => i.id === e.itemId);
+    return card?.kind === "approval" && isWaiting(card) ? card : undefined;
+  };
 
   // A reply's desk goes where its inbox entry goes. A subagent's desk is always in the profile shown (ADR 0077), and
   // opens in the pane already showing its chat, or else the active one.
@@ -2603,7 +2651,7 @@ export function Main({
   // first as the switcher does, and open the chat. A link that can't open changes nothing on screen, so the composer
   // and its draft stay as they were. Nothing is ever sent. `attempt` tells a retry from the try it replaces, so an
   // answer that comes back late, or after Cancel, is dropped.
-  type LinkJob = { link: ChatLink; at: number; attempt: number; stage: "check" | "wait" | "locate" | "confirm" | "switch"; found?: Found; from?: string; gen?: number };
+  type LinkJob = { link: ChatLink; at: number; reveal?: LinkReveal; attempt: number; stage: "check" | "wait" | "locate" | "confirm" | "switch"; found?: Found; from?: string; gen?: number };
   const [linkJob, setLinkJob] = useState<LinkJob>();
   const [linkError, setLinkError] = useState<LinkNoticeView>();
   const linkJobRef = useRef(linkJob);
@@ -2620,7 +2668,7 @@ export function Main({
   };
   const retryLink = (job: LinkJob) => {
     setLinkError(undefined);
-    const next: LinkJob = { link: job.link, at: job.at, attempt: job.attempt + 1, stage: "check" };
+    const next: LinkJob = { link: job.link, at: job.at, reveal: job.reveal, attempt: job.attempt + 1, stage: "check" };
     linkJobRef.current = next;
     setLinkJob(next);
   };
@@ -2630,7 +2678,7 @@ export function Main({
     onLinkTaken?.(link.at);
     if (linkJobRef.current?.at === link.at) return;
     setLinkError(undefined);
-    const job: LinkJob = { link: link.link, at: link.at, attempt: 0, stage: "check" };
+    const job: LinkJob = { link: link.link, at: link.at, reveal: link.reveal, attempt: 0, stage: "check" };
     linkJobRef.current = job;
     setLinkJob(job);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- take each arrived link once, keyed on its `at`; `onLinkTaken` is a new function each render and would run it on every render
@@ -2658,7 +2706,8 @@ export function Main({
         // Already asked, just above.
         openChat(found.chatId, { pane, keepSettings: true });
         setSettingsOpen(false);
-        requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(`[data-pane="${CSS.escape(pane)}"] .composer textarea`)?.focus());
+        if (job.reveal) setFocusItem({ pane, chatId: found.chatId, ...job.reveal });
+        else requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(`[data-pane="${CSS.escape(pane)}"] .composer textarea`)?.focus());
       },
       "leave",
       stayed(job),
@@ -2891,12 +2940,40 @@ export function Main({
 
   // `hermes-chat --show`, `--toggle` or a second launch brought the window forward: the cursor goes back in the selected pane's
   // composer, its draft as it was. Settings or another screen over the chat stays as it was left, unsaved edits and all.
-  const onSummonedRef = useRef(() => {});
-  onSummonedRef.current = () => {
-    if (covered || covering || previewCovers || searchOpen) return;
+  // From another app, text selected or copied there since the window last lost focus is quoted after that draft, never
+  // sent (ADR 0172). The selections are read only with the setting on.
+  const [selectionWatch] = useState(() => new SelectionWatch());
+  const readSelection = summonSelection ? summon?.readSelection : undefined;
+  useEffect(() => {
+    if (!readSelection) return;
+    const read = () => {
+      const ticket = selectionWatch.reading();
+      void readSelection().then((s) => selectionWatch.remember(ticket, s), () => {});
+    };
+    read();
+    window.addEventListener("blur", read);
+    return () => window.removeEventListener("blur", read);
+  }, [readSelection, selectionWatch]);
+  const chatCovered = () => covered || covering || previewCovers || searchOpen;
+  const prefillRef = useRef((_: string | undefined) => {});
+  prefillRef.current = (text) => {
+    if (!text || chatCovered()) return;
+    flushSync(() => keepDraft(draftKey(connection, profile, active.chatId), quoted(text)));
     focusPane(active.key);
+    const composer = document.querySelector<HTMLTextAreaElement>(`[data-pane="${CSS.escape(active.key)}"] .composer textarea`);
+    composer?.setSelectionRange(composer.value.length, composer.value.length);
   };
-  useEffect(() => summon?.onSummoned(() => onSummonedRef.current()), [summon]);
+  const onSummonedRef = useRef((_: Summoned) => {});
+  onSummonedRef.current = ({ fromElsewhere }) => {
+    if (chatCovered()) return;
+    focusPane(active.key);
+    if (fromElsewhere && readSelection)
+      void untilFocused().then(() => {
+        const ticket = selectionWatch.reading();
+        return readSelection().then((s) => prefillRef.current(selectionWatch.take(ticket, s)), () => {});
+      });
+  };
+  useEffect(() => summon?.onSummoned((s) => onSummonedRef.current(s)), [summon]);
 
 
   // Each pane's tab strip above its chat, and the pane as a place to drop a chat dragged from the list or a tab.
@@ -3397,6 +3474,8 @@ export function Main({
           checkTimes={hermes.checkTimes}
           leaving={leavingNote(profile, chats)}
           onOpen={(e) => (e.server ? (setInboxOpen(false), guard(() => onOpenElsewhere?.(e))) : openEntry(e))}
+          approvalOf={approvalOf}
+          onAnswer={(e, choice, confirmed) => e.itemId && void hermes.answerApproval(e.chatId, e.itemId, choice, confirmed)}
           onDismiss={(e) => (e.server ? onDismissElsewhere?.([e]) : acks.dismiss(e, inbox.entries))}
           onClearDone={(es) => {
             acks.dismissAll(

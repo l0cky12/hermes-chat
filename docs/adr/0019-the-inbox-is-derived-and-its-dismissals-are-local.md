@@ -1,5 +1,7 @@
 # The inbox is worked out from what the app already reads, and its dismissals are kept here
 
+> **Updated by [ADR 0173](0173-an-approval-is-answered-in-the-inbox-with-the-chats-own-card-and-a-notification-opens-or-denies-it.md).** A waiting Approval in the profile shown shows the chat's own card under its entry, answered there the chat's way. Every other entry still only opens its chat.
+
 The inbox lists, for every profile on the server signed in to, the chats with a reply running, an Approval waiting, a failure or a Failed message, and something new and unread. It adds no store of its own on the server and no event stream of its own. Each entry is worked out from three sources the app already has or reads cheaply:
 
 1. **The shown profile, over its socket.** Replies running, Approval cards (one entry per card, keyed by its request id), error rows, Failed messages, and Unread chats in its list.

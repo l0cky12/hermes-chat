@@ -32,6 +32,8 @@ pub mod remote;
 pub mod repo_git;
 pub mod saved_password;
 pub mod screenshot;
+#[cfg(target_os = "linux")]
+pub mod selection;
 pub mod server_page;
 pub mod snapshot;
 mod ssh_guard;
@@ -632,6 +634,20 @@ async fn attach_picked_files(app: tauri::AppHandle, attachable: State<'_, Attach
     }
     attachable.add(paths.clone());
     Ok(paths)
+}
+
+/// The text selected and copied in other apps, for the message `hermes-chat --show` or `--toggle` can start (ADR
+/// 0172). Elsewhere than Linux there is none to read, and the window only comes forward.
+#[tauri::command]
+#[cfg(target_os = "linux")]
+async fn read_selection(app: tauri::AppHandle) -> Result<selection::Selections, String> {
+    selection::read(&app).await
+}
+
+#[tauri::command]
+#[cfg(not(target_os = "linux"))]
+async fn read_selection() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({}))
 }
 
 /// Attaches the files the owner copied in a file manager and pasted into the composer, by path, as a drop does (ADR
@@ -1713,9 +1729,10 @@ async fn preview_annotate_stage(
     Ok(screenshot::Capture { path, note: None })
 }
 
+/// `tag`: the webview's name for a notification about a waiting card; `deny`: it offers Deny (ADR 0173).
 #[tauri::command]
-async fn notify_desktop(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
-    notify::show(app, title, body).await
+async fn notify_desktop(app: tauri::AppHandle, title: String, body: String, tag: Option<String>, deny: Option<bool>) -> Result<(), String> {
+    notify::show(app, title, body, tag, deny.unwrap_or(false)).await
 }
 
 /// The installed font families, for the Appearance settings.
@@ -1931,13 +1948,13 @@ pub fn run(screenshot: bool, link: Option<String>) {
                     let _ = handle.emit(remote::EVENT, ());
                 }
                 // A second launch or `--show` brings back this window, hidden to the tray or not (ADR 0034).
-                remote::Request::Show { token } => summon::activate(&handle, false, token),
-                remote::Request::Toggle { token } => summon::activate(&handle, true, token),
+                remote::Request::Show { token } => summon::activate(&handle, false, true, token),
+                remote::Request::Toggle { token } => summon::activate(&handle, true, true, token),
                 // A chat link opened while the app runs: kept for the window, which comes forward to show it.
                 remote::Request::OpenLink { link, token } => {
                     if handle.state::<links::Links>().put(link) {
                         let _ = handle.emit(links::EVENT, ());
-                        summon::activate(&handle, false, token);
+                        summon::activate(&handle, false, false, token);
                     }
                 }
             });
@@ -1961,6 +1978,7 @@ pub fn run(screenshot: bool, link: Option<String>) {
             hermes_read_preview,
             attach_picked_files,
             attach_copied_files,
+            read_selection,
             stage_clipboard_file,
             hermes_request,
             hermes_transcribe,

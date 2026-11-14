@@ -111,7 +111,14 @@ if (relay) {
 }
 
 const hermes = await connect(server.openPipe);
-(window as unknown as { shots: unknown }).shots = { server, hermes };
+// `openInbox()` is the tray's Open Inbox; `summon(s)` is `hermes-chat --show`, with `selection` as what Rust reads from
+// the selection and the clipboard (ADR 0172).
+const shots: { server: FakeHermes; hermes: typeof hermes; openInbox?: () => void; summon?: (s: { fromElsewhere: boolean }) => void; selection: object } = {
+  server,
+  hermes,
+  selection: {},
+};
+(window as unknown as { shots: unknown }).shots = shots;
 // Settings → General's desktop parts, as the desktop app wires them: two saved connections, the tray and screenshots. The
 // tray and screenshot answers are made up, as Rust would give them on a desktop that shows tray icons.
 const current = { id: "conn-home-0001", name: "Home server", mode: "ssh" as const, sshTarget: "liam@hermes", url: "", username: "liam", addedAt: 0, lastUsedAt: Date.now() - 60e3 };
@@ -122,7 +129,7 @@ const trayWiring = {
   setCloseToTray: async (on: boolean) => (tray = { ...tray, closeToTray: on }),
   onStatus: () => () => {},
   onNewChat: () => () => {},
-  onOpenInbox: () => () => {},
+  onOpenInbox: (fn: () => void) => ((shots.openInbox = fn), () => {}),
   reportInbox: () => {},
 };
 const screenshots = {
@@ -139,6 +146,7 @@ createRoot(document.getElementById("root")!).render(
     onSwitchConnection={() => {}}
     onTestConnection={async () => ({ ok: true, route: { kind: "ssh", target: "liam@hermes", local: "127.0.0.1:9119" }, version: "0.22.6", unsecure: false }) as never}
     tray={trayWiring as never}
+    summon={{ onSummoned: (fn: (s: { fromElsewhere: boolean }) => void) => ((shots.summon = fn), () => {}), readSelection: async () => shots.selection } as never}
     screenshots={screenshots}
     onSignOut={async () => {}}
   />,

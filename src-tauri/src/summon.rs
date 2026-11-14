@@ -3,10 +3,19 @@
 //! who wants a key binds `hermes-chat --toggle` in their desktop's own config, such as a Hyprland `bind`
 //! or, on Windows, the Shortcut key of a shortcut that runs it.
 
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
 
-/// Tells the webview the window was brought forward, so it puts the cursor back in the composer.
+/// Tells the webview the window was brought forward, so it puts the cursor back in the composer: `Summoned`.
 pub const SUMMONED_EVENT: &str = "summoned";
+
+/// `fromElsewhere`: another app had focus, and the owner asked for the window itself, not a chat link, so the webview
+/// may start a message with the text selected there (ADR 0172).
+#[derive(Serialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+struct Summoned {
+    from_elsewhere: bool,
+}
 /// Where the removed global shortcut kept its setting. Nothing reads it now; it is deleted at startup.
 const OLD_SETTING_FILE: &str = "global-shortcut.json";
 
@@ -42,9 +51,10 @@ fn remove_old_setting(dir: &std::path::Path) {
     }
 }
 
-/// Brings the one window forward, or hides it when it is already in front and `hide_if_active` (`--toggle`). `token`:
-/// a Wayland activation token from the desktop, so the compositor lets the window take focus.
-pub fn activate<R: Runtime>(app: &AppHandle<R>, hide_if_active: bool, token: Option<String>) {
+/// Brings the one window forward, or hides it when it is already in front and `hide_if_active` (`--toggle`).
+/// `asked_for_window`: `--show`, `--toggle` or a second launch, not a chat link. `token`: a Wayland activation token from
+/// the desktop, so the compositor lets the window take focus.
+pub fn activate<R: Runtime>(app: &AppHandle<R>, hide_if_active: bool, asked_for_window: bool, token: Option<String>) {
     let Some(window) = app.get_webview_window("main") else { return };
     let app = app.clone();
     let w = window.clone();
@@ -62,7 +72,7 @@ pub fn activate<R: Runtime>(app: &AppHandle<R>, hide_if_active: bool, token: Opt
         // Hidden to the tray or not, the tray and the webview learn it is back (tray.rs, ADR 0034).
         crate::tray::seen(&app, false);
         raise(&w, token);
-        let _ = app.emit(SUMMONED_EVENT, ());
+        let _ = app.emit(SUMMONED_EVENT, Summoned { from_elsewhere: asked_for_window && !focused });
         #[cfg(target_os = "linux")]
         if !in_front && wayland() {
             std::thread::spawn(nudge_compositor);

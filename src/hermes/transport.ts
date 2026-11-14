@@ -217,13 +217,21 @@ export type ChatCache = {
   /** False: storage refused it, so it lasts until the app closes. */
   saveBranches(profile: string, store: BranchStore): boolean;
 };
+/**
+ * What clicking a notification about a waiting card does: `open` shows the card in its chat. `deny`, for an Approval
+ * only, answers it with Deny the way the card's own button does. Nothing a notification offers approves (ADR 0173).
+ */
+export type NoticeActions = { open: () => void; deny?: () => void };
+/** The waiting card a notification's click opens. */
+export type NoticeCard = { profile: string; chatId: string; title: string; itemId: string };
 /** Shows a desktop notification; rejects if it can't. */
-export type Notify = (n: { title: string; body: string }) => Promise<void>;
+export type Notify = (n: { title: string; body: string }, actions?: NoticeActions) => Promise<void>;
 /** What notifications say. They never quote a chat's title or messages, or what a Question asks. */
 export const NOTICES = {
   finished: { title: "Hermes finished a reply", body: "Open Hermes Chat to read it." },
   approval: { title: "Hermes is asking for approval", body: "A command is waiting for your answer in Hermes Chat." },
   question: { title: "Hermes has a question", body: "A question is waiting for your answer in Hermes Chat." },
+  notDenied: { title: "The approval wasn't denied", body: "Open Hermes Chat to see where it stands and answer there." },
 };
 
 const noCache: ChatCache = {
@@ -722,6 +730,7 @@ export class Hermes {
   /** Approvals already notified, or that arrived in focus, by runtime session and request id. Hermes lists one again
    * after a reconnect. */
   private notified = new Set<string>();
+  private noticeOpens = new Set<(card: NoticeCard) => void>();
   /** The latest write marking each chat read, while it is under way. */
   private readWrites = new Map<string, Promise<void>>();
   /** Chats marked read since the list sync under way read the list, which may predate the write. */
@@ -4220,7 +4229,14 @@ export class Hermes {
     const cards = reqs.flatMap((r) => questionCard(r) ?? []);
     const fresh = cards.filter((q) => !this.notified.has(`${runtimeId} ${q.id}`));
     for (const q of fresh) this.notified.add(`${runtimeId} ${q.id}`);
-    if (fresh.length) this.alert(questionSpec(fresh[0]).notice);
+    if (fresh.length) {
+      const q = fresh[0];
+      const card: NoticeCard = { profile: this.profile, chatId, title: this.snapshot.chats.find((c) => c.id === chatId)?.title ?? "", itemId: q.id };
+      this.alert(questionSpec(q).notice, {
+        open: () => this.noticeOpens.forEach((fn) => fn(card)),
+        ...(q.kind === "approval" && { deny: () => this.track(this.denyNoticed(card, runtimeId)) }),
+      });
+    }
     this.patchChat(chatId, (c) => {
       const shown = new Set(c.items.map((i) => i.id));
       const items = [...c.items];
@@ -4672,8 +4688,27 @@ export class Hermes {
   }
 
   /** A desktop notification, out of focus only. A missing notification service, or one that refuses, changes nothing. */
-  private alert(n: { title: string; body: string }) {
-    if (!this.focused || this.role === "background") this.track(Promise.resolve().then(() => this.notify(n)));
+  private alert(n: { title: string; body: string }, actions?: NoticeActions) {
+    if (!this.focused || this.role === "background") this.track(Promise.resolve().then(() => this.notify(n, actions)));
+  }
+
+  /**
+   * Deny from an Approval's notification. It answers only the request the notification was about: in its profile, still
+   * shown, in the same runtime session, and still waiting. Anything else is left alone, and a notification says it
+   * wasn't denied, since Deny leaves the window where it is.
+   */
+  private async denyNoticed(card: NoticeCard, runtimeId: string | undefined) {
+    const chat = () => (this.profile === card.profile ? this.snapshot.chats.find((c) => c.id === card.chatId) : undefined);
+    if (runtimeId && chat()?.runtimeId === runtimeId) await this.answerApproval(card.chatId, card.itemId, "deny");
+    const now = chat()?.items.find((i) => i.id === card.itemId);
+    if (now?.kind === "approval" && now.answer === "deny") return;
+    await this.notify(NOTICES.notDenied, { open: () => this.noticeOpens.forEach((fn) => fn(card)) });
+  }
+
+  /** Calls `fn` with the card a notification is about each time the owner clicks it. */
+  onNoticeOpen(fn: (card: NoticeCard) => void): () => void {
+    this.noticeOpens.add(fn);
+    return () => void this.noticeOpens.delete(fn);
   }
 
   /**

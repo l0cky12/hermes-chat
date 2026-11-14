@@ -2696,6 +2696,10 @@ label.memory-pick { cursor: pointer; }
 .inbox-summary { color: var(--muted); font-size: calc(12rem / 14); line-height: 1.4; }
 .inbox-row.is-stale .inbox-summary { font-style: italic; }
 .inbox-dismiss { margin-top: 6px; flex: none; }
+/* A waiting Approval's card, under its entry (ADR 0173). */
+.inbox-row { flex-wrap: wrap; }
+.inbox-row > .approval { flex-basis: 100%; margin: 0 8px 8px; padding: 10px 12px; }
+.inbox-row > .approval .approval-actions { flex-wrap: wrap; }
 .inbox-empty { padding: 12px 16px; }
 .bots-btn { position: relative; }
 .bots-btn .dot { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); }

@@ -259,6 +259,31 @@ Object.assign(scenes, {
   "settings-narrow-sheet": { query: "?profiles=1", ...narrow, steps: [openSettings, click(".settings-crumb"), tab("Model"), click(".settings-crumb")] },
   "settings-narrow-search": { query: "?profiles=1", ...narrow, steps: [openSettings, click(".settings-bar-search"), typeSearch("reasoning effort")] },
 });
+// The improvement report's Workstream C at 1280 × 800 (ADR 0173, 0172): a waiting Approval's inbox entry, the Launch
+// settings, and the composer after `hermes-chat --show` from an app with a line of a log selected.
+const report = { width: 1280, height: 800 };
+const approvalWaiting = `(async () => {
+  const { hermes: h, server: s } = window.shots;
+  await h.send("backup", "Prune the snapshots older than a week");
+  s.askApproval(s.runtimeIdOf("backup"), { command: "restic forget --keep-daily 7 --prune", description: "delete snapshots older than 7 days" });
+})()`;
+const pause = (ms) => `new Promise((r) => setTimeout(r, ${ms}))`;
+Object.assign(scenes, {
+  "c-inbox-approval": { query: "", ...report, steps: [approvalWaiting, click("button", "NAS disk usage"), "window.shots.openInbox()"] },
+  "c-launch-settings": { query: "", ...report, steps: [openSettings, sub("Launch")] },
+  "c-summoned-selection": {
+    query: "",
+    ...report,
+    steps: [
+      click("button", "Nightly backup"),
+      typeIn("What does this mean, and is the backup at risk?"),
+      `window.shots.selection = { primary: "Fatal: unable to create lock in backend: repository is already locked by PID 4127\\n  lock was created at 2026-11-13 02:00:04 (6h ago)" }`,
+      "document.activeElement.blur()",
+      "window.shots.summon({ fromElsewhere: true })",
+      pause(2000),
+    ],
+  },
+});
 const wanted = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(scenes);
 
 function chrome() {

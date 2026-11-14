@@ -1,12 +1,14 @@
 // The inbox: what needs the owner, or finished, across the server's profiles (hermes/inbox.ts). It opens beside the
 // rail over the chat list, and leaves the chat panes as they are, so the chats on screen stay read. Opening an entry
-// goes to its chat, in its profile, and to the Approval card or message it is about. Nothing here answers, retries
-// or resends: that happens in the chat, the usual way.
-import { useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+// goes to its chat, in its profile, and to the Approval card or message it is about. A waiting Approval in the profile
+// shown also shows its card here, the chat's own, answered the same way (ADR 0173). Nothing else here answers,
+// retries or resends: that happens in the chat, the usual way.
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react";
 import { CircleAlert, CircleCheck, CircleHelp, Loader, RefreshCw, ShieldAlert, X } from "lucide-react";
-import type { LiveSessions, OtherProfiles } from "../hermes/model";
+import type { ApprovalChoice, ApprovalItem, LiveSessions, OtherProfiles } from "../hermes/model";
 import { INBOX_FILTERS, dismissable, needsOwner, type InboxEntry, type InboxFilter, type InboxKind } from "../hermes/inbox";
 import type { CheckTimesStore } from "../hermes/otherProfiles";
+import { ApprovalCard } from "./ApprovalCard";
 import { ago, composing, storedTime, useReturnFocus } from "./bits";
 import { useLocale } from "../i18n/locale";
 
@@ -50,6 +52,8 @@ export function Inbox({
   checkTimes,
   leaving,
   onOpen,
+  approvalOf,
+  onAnswer,
   onDismiss,
   onClearDone,
   onRefresh,
@@ -68,6 +72,9 @@ export function Inbox({
   checkTimes: CheckTimesStore;
   leaving?: string;
   onOpen: (e: InboxEntry) => void;
+  /** The waiting Approval card `e` is about, when it can be answered here. */
+  approvalOf?: (e: InboxEntry) => ApprovalItem | undefined;
+  onAnswer?: (e: InboxEntry, choice: ApprovalChoice, confirmed?: boolean) => void;
   onDismiss: (e: InboxEntry) => void;
   /** Dismisses the finished entries the filter shows. */
   onClearDone: (es: InboxEntry[]) => void;
@@ -107,6 +114,10 @@ export function Inbox({
   }, [onClose]);
 
   const shown = entries.filter((e) => (INBOX_FILTERS[filter] as readonly InboxKind[]).includes(e.kind));
+  // When the list last changed, so a card's buttons ignore a click aimed at a row that moved under the pointer.
+  const shownKeys = shown.map((e) => e.key).join("\n");
+  const [movedAt, setMovedAt] = useState(0);
+  useEffect(() => setMovedAt(performance.now()), [shownKeys]);
   const count = (f: InboxFilter) => entries.filter((e) => (INBOX_FILTERS[f] as readonly InboxKind[]).includes(e.kind) && (f === "running" || needsOwner(e))).length;
 
   // Opening puts focus on the first entry, or on Close when there is none.
@@ -124,6 +135,11 @@ export function Inbox({
   const dismiss = (e: InboxEntry) => {
     setFocusAt(shown.indexOf(e));
     onDismiss(e);
+  };
+  // An answered card's entry leaves the list, so focus goes to the row that takes its place.
+  const answer = (e: InboxEntry, choice: ApprovalChoice, confirmed?: boolean) => {
+    setFocusAt(shown.indexOf(e));
+    onAnswer?.(e, choice, confirmed);
   };
   const done = shown.filter((e) => e.kind === "completed");
   const clearDone = () => {
@@ -192,9 +208,14 @@ export function Inbox({
         </div>
       )}
       <ul className="inbox-list" ref={list} aria-label={FILTER_LABEL[filter]}>
-        {shown.map((e) => (
-          <Row key={e.key} entry={e} server={e.server?.name ?? server} onOpen={() => open(e)} onDismiss={() => dismiss(e)} />
-        ))}
+        {shown.map((e) => {
+          const card = approvalOf?.(e);
+          return (
+            <Row key={e.key} entry={e} server={e.server?.name ?? server} onOpen={() => open(e)} onDismiss={() => dismiss(e)}>
+              {card && <ApprovalCard item={card} offline={!connected} movedAt={movedAt} onAnswer={(c, confirmed) => answer(e, c, confirmed)} />}
+            </Row>
+          );
+        })}
       </ul>
       {!shown.length && <div className="empty-hint inbox-empty">{emptyNote(filter)}</div>}
     </section>
@@ -209,7 +230,20 @@ function emptyNote(filter: InboxFilter): string {
   return "Nothing needs you.";
 }
 
-function Row({ entry: e, server, onOpen, onDismiss }: { entry: InboxEntry; server: string; onOpen: () => void; onDismiss: () => void }) {
+function Row({
+  entry: e,
+  server,
+  onOpen,
+  onDismiss,
+  children,
+}: {
+  entry: InboxEntry;
+  server: string;
+  onOpen: () => void;
+  onDismiss: () => void;
+  /** The entry's Approval card, below it. */
+  children?: ReactNode;
+}) {
   const l = useLocale();
   const Icon = KIND_ICON[e.kind];
   const when = e.at || e.noticedAt;
@@ -249,6 +283,7 @@ function Row({ entry: e, server, onOpen, onDismiss }: { entry: InboxEntry; serve
           <X size={14} />
         </button>
       )}
+      {children}
     </li>
   );
 }

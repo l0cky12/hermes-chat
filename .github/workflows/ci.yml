@@ -75,6 +75,9 @@ jobs:
       # Pastes into a WebKitGTK view, on a display of its own because it empties the clipboard.
       - run: xvfb-run -a cargo test --test clipboard -- --ignored
         working-directory: src-tauri
+      # Reads the selection and the clipboard (ADR 0172), on a display of its own because it takes both.
+      - run: xvfb-run -a cargo test --test selection -- --ignored
+        working-directory: src-tauri
       # The preview's native page view: WebKitGTK needs a display and a session bus, and GTK takes one thread for the
       # whole process, so each ignored page_view test runs in a process of its own. WebKit sandboxes the page with
       # bubblewrap, which needs the unprivileged user namespaces Ubuntu 24.04's AppArmor turns off by default.

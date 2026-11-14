@@ -6,7 +6,9 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import { connect, type Hermes } from "../hermes/transport";
-import type { SummonApi } from "../hermes/summon";
+import type { Selections } from "../hermes/selection";
+import type { SummonApi, Summoned } from "../hermes/summon";
+import { setUIPrefs } from "../hermes/uiPrefs";
 import { Main } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
@@ -22,11 +24,29 @@ afterEach(async () => {
   localStorage.clear();
 });
 
-/** Rust's `summoned` event: `summon()` is the window being brought forward. */
+/**
+ * Rust's `summoned` event: `summon()` is the window being brought forward from another app. `selections` is what Rust
+ * reads from the selection and the clipboard (selection.rs); `reads` counts how often it was asked.
+ */
 function fakeRust() {
-  const fns = new Set<() => void>();
-  const api: SummonApi = { onSummoned: (fn) => (fns.add(fn), () => fns.delete(fn)) };
-  return { api, summon: () => act(() => fns.forEach((fn) => fn())) };
+  const fns = new Set<(s: Summoned) => void>();
+  const api: SummonApi = {
+    onSummoned: (fn) => (fns.add(fn), () => fns.delete(fn)),
+    readSelection: () => {
+      fake.reads++;
+      return fake.holding ? new Promise<Selections>((answer) => fake.held.push(answer)) : Promise.resolve({ ...fake.selections });
+    },
+  };
+  const summon = async (s: Summoned = { fromElsewhere: true }) => {
+    await act(async () => fns.forEach((fn) => fn(s)));
+    // The selection is read once the window has focus, then lands in the composer.
+    await act(async () => void (await new Promise((r) => setTimeout(r, 0))));
+  };
+  /** The owner leaves for another app. */
+  const leave = () => act(async () => void window.dispatchEvent(new Event("blur")));
+  /** `holding`: reads wait in `held` until the test answers them, in any order. */
+  const fake = { api, summon, leave, selections: {} as Selections, reads: 0, holding: false, held: [] as ((s: Selections) => void)[] };
+  return fake;
 }
 
 describe("Being brought forward", () => {
@@ -84,5 +104,119 @@ describe("Being brought forward", () => {
     await rust.summon();
     expect(heading.isConnected).toBe(true);
     expect(document.activeElement).toBe(key);
+  }, 30_000);
+});
+
+let launches = 0;
+
+describe("Starting a message with the text selected in another app (ADR 0172)", () => {
+  afterEach(() => void setUIPrefs({ summonSelection: true }));
+  const composer = () => screen.getByPlaceholderText<HTMLTextAreaElement>("Message Hermes");
+
+  async function onNewChat(selections: Selections = {}) {
+    const server = new FakeHermes();
+    const hermes = await connect(server.openPipe);
+    running.push(hermes);
+    const rust = fakeRust();
+    rust.selections = selections;
+    const user = userEvent.setup();
+    // A server of its own each time, so no Draft is left from another test.
+    render(<Main hermes={hermes} connection={{ mode: "ssh", sshTarget: `liam@hermes-${++launches}`, url: "", username: "liam" }} summon={rust.api} onSignOut={async () => {}} />);
+    await act(async () => void (await hermes.idle()));
+    return { hermes, rust, user };
+  }
+
+  it("quotes what was selected there after the draft, puts the cursor after it, and sends nothing", async () => {
+    const { hermes, rust, user } = await onNewChat({ primary: "old", clipboard: "copied before" });
+    await user.click(composer());
+    await user.keyboard("Why does this fail?");
+    await rust.leave();
+    composer().blur();
+    rust.selections = { primary: "error: disk full\n  at /var/log", clipboard: "copied before" };
+    await rust.summon();
+    expect(composer().value).toBe("Why does this fail?\n\n> error: disk full\n>   at /var/log\n\n");
+    expect(document.activeElement).toBe(composer());
+    expect(composer().selectionStart).toBe(composer().value.length);
+    expect(hermes.getSnapshot().chats).toEqual([]);
+    // Undo takes it back out, as one step.
+    await user.keyboard("{Control>}z{/Control}");
+    expect(composer().value).toBe("Why does this fail?");
+  }, 30_000);
+
+  it("uses what was copied there when nothing new was selected", async () => {
+    const { rust } = await onNewChat({ primary: "same", clipboard: "old copy" });
+    await rust.leave();
+    rust.selections = { primary: "same", clipboard: "https://ci.example/run/42" };
+    await rust.summon();
+    expect(composer().value).toBe("> https://ci.example/run/42\n\n");
+  }, 30_000);
+
+  it("only brings the window forward when nothing changed, nothing can be read, or for a chat link", async () => {
+    const { rust } = await onNewChat({ primary: "seen", clipboard: "seen too" });
+    await rust.leave();
+    await rust.summon();
+    expect(composer().value).toBe("");
+    expect(document.activeElement).toBe(composer());
+
+    rust.selections = {};
+    await rust.summon();
+    expect(composer().value).toBe("");
+
+    rust.selections = { primary: "selected before a chat link" };
+    await rust.summon({ fromElsewhere: false });
+    expect(composer().value).toBe("");
+  }, 30_000);
+
+  it("adds nothing for text that didn't change though the read on leaving couldn't read it", async () => {
+    const { rust } = await onNewChat({ primary: "a line of Hermes's reply", clipboard: null });
+    rust.selections = {};
+    await rust.leave();
+    rust.selections = { primary: "a line of Hermes's reply", clipboard: null };
+    await rust.summon();
+    expect(composer().value).toBe("");
+  }, 30_000);
+
+  it("doesn't quote the text again when the read on leaving lands after the summon's read", async () => {
+    const { rust } = await onNewChat({ primary: "before" });
+    rust.holding = true;
+    await rust.leave();
+    await rust.summon();
+    expect(rust.held).toHaveLength(2);
+    await act(async () => rust.held[1]!({ primary: "error: disk full" }));
+    expect(composer().value).toBe("> error: disk full\n\n");
+    await act(async () => rust.held[0]!({ primary: "before" }));
+    rust.holding = false;
+    // The next read on leaving can't read the selection, so what the summon read stays what was last seen.
+    rust.selections = {};
+    await rust.leave();
+    rust.selections = { primary: "error: disk full" };
+    await rust.summon();
+    expect(composer().value).toBe("> error: disk full\n\n");
+  }, 30_000);
+
+  it("starts a message once, not again on the next summon", async () => {
+    const { rust } = await onNewChat();
+    rust.selections = { primary: "df -h" };
+    await rust.summon();
+    await rust.summon();
+    expect(composer().value).toBe("> df -h\n\n");
+  }, 30_000);
+
+  it("never reads the selection once Settings turns it off", async () => {
+    const { rust, user } = await onNewChat();
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: "Launch, tray & updates" }));
+    const toggle = await screen.findByRole("switch", { name: "Start a message with the selected text" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    await user.click(toggle);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    await user.click(screen.getByRole("button", { name: "Back to chat" }));
+    rust.reads = 0;
+    rust.selections = { primary: "secret-ish" };
+    await rust.leave();
+    await rust.summon();
+    expect(rust.reads).toBe(0);
+    expect(composer().value).toBe("");
+    expect(document.activeElement).toBe(composer());
   }, 30_000);
 });

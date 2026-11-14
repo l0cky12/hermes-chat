@@ -42,7 +42,7 @@ afterEach(() => {
 
 describe("reading", () => {
   it("is the defaults when nothing is stored", () => {
-    expect(getUIPrefs()).toEqual({ theme: "system", reopenLastChat: false, checkUpdatesOnLaunch: true, lastOpenChat: {}, modelPicker: null, modelPicks: {}, modelFavorites: [], statusBar: ["context", "model", "status"], previewWidth: null, screenshotShortcut: "Ctrl+Shift+S", templates: [], terminalKind: "server", followUp: "queue", idleCompact: { enabled: false, percent: 70, idleMinutes: 15 }, chatSectionsShown: ["pinned", "inbox", "snoozed", "working", "settled"], chatSectionsCollapsed: ["snoozed", "archived", "settled"], agentOffice: "plan", officeQuality: "normal", inboxAutoDismissDays: null, keybindings: {} });
+    expect(getUIPrefs()).toEqual({ theme: "system", reopenLastChat: false, checkUpdatesOnLaunch: true, lastOpenChat: {}, modelPicker: null, modelPicks: {}, modelFavorites: [], statusBar: ["context", "model", "status"], previewWidth: null, screenshotShortcut: "Ctrl+Shift+S", templates: [], terminalKind: "server", followUp: "queue", idleCompact: { enabled: false, percent: 70, idleMinutes: 15 }, chatSectionsShown: ["pinned", "inbox", "snoozed", "working", "settled"], chatSectionsCollapsed: ["snoozed", "archived", "settled"], agentOffice: "plan", officeQuality: "normal", inboxAutoDismissDays: null, summonSelection: true, keybindings: {} });
     expect(getUIPrefs()).toEqual(DEFAULT_UI_PREFS);
   });
 
@@ -94,6 +94,7 @@ describe("reading", () => {
       agentOffice: "plan",
       officeQuality: "normal",
       inboxAutoDismissDays: null,
+      summonSelection: true,
       keybindings: { search: ["Ctrl+J"] },
     });
   });
