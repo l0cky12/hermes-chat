@@ -1,15 +1,21 @@
 // The Bots view (ADR 0066): one row per bot, which is a Hermes profile, with its picture, name, description, its Bot
 // Chat's last message and what it is doing. A row opens the bot's Bot Chat, found by title every time (bots.ts); the
 // pen beside it starts an ordinary chat in the bot's profile. The same rows (`BotList`) fill the chat list panel while
-// a Bot Chat is open (bot mode).
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { ChevronDown, ChevronRight, Loader, RefreshCw, Search, ShieldAlert, SquarePen, X } from "lucide-react";
+// a Bot Chat is open (bot mode). New bot makes a profile through Settings → Profiles' New profile form, and the new
+// bot's row is shown once the roster is read again (ADR 0164).
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import { ChevronDown, ChevronRight, Loader, Plus, RefreshCw, Search, ShieldAlert, SquarePen, X } from "lucide-react";
 import { BotModeUnsupportedError, type Bot, type BotActivity } from "../hermes/bots";
+import { PROFILE_ROUTES, type ProfileAction } from "../hermes/profiles";
 import { ago, composing, storedTime, useReturnFocus } from "./bits";
+import { ProfileForm, type FormResult, type ProfilesWiring } from "./ProfileSettings";
 import { useLocale } from "../i18n/locale";
 
 /** How often the roster is read again while the view is open. Hermes's desktop polls every 5 seconds; this is enough. */
 export const BOTS_REFRESH_MS = 15_000;
+
+const NO_SUBSCRIBE = () => () => {};
+const NO_SNAPSHOT = () => undefined;
 
 const ACTIVITY_LABEL: Record<NonNullable<BotActivity>, string> = { replying: "Replying", "needs-you": "Needs you" };
 
@@ -17,7 +23,7 @@ const ACTIVITY_LABEL: Record<NonNullable<BotActivity>, string> = { replying: "Re
  * `last`: the roster as last read, and when, shown until `load` reads it again (`Hermes.bots`). `pictures`: each bot's
  * picture, by profile. `activity`: what the bot is doing in its Bot Chat. `leaving`: what switching away from the shown
  * profile leaves behind, asked about before a row in another profile opens. `onUnsupported`: this Hermes turned out to
- * have no Bot Mode.
+ * have no Bot Mode. `profiles`: Settings → Profiles' wiring, for New bot; without it there is no New bot.
  */
 export function Bots({
   server,
@@ -33,6 +39,7 @@ export function Bots({
   onRefresh,
   onClose,
   onUnsupported,
+  profiles,
 }: {
   server: string;
   profile: string;
@@ -47,6 +54,7 @@ export function Bots({
   onRefresh: () => void;
   onClose: () => void;
   onUnsupported?: (why: string) => void;
+  profiles?: Omit<ProfilesWiring, "showTab">;
 }) {
   const l = useLocale();
   const bots = last?.roster;
@@ -58,6 +66,20 @@ export function Bots({
   const root = useRef<HTMLElement>(null);
   const headId = useId();
   const reads = useRef(0);
+  /** New bot's form is open. */
+  const [making, setMaking] = useState(false);
+  /** What the last New bot made, and the profile whose row takes focus once the roster lists it. */
+  const [made, setMade] = useState<{ text: string; warn: boolean; focus?: string }>();
+  const newBtn = useRef<HTMLButtonElement>(null);
+  // Drawn again when the server is found to lack the create route.
+  const store = profiles?.capabilities;
+  useSyncExternalStore(store?.subscribe ?? NO_SUBSCRIBE, store?.getSnapshot ?? NO_SNAPSHOT);
+  const lacking = (a: ProfileAction) => !!store?.lacksAction("profiles", a);
+  const newWhy = !connected
+    ? "Not connected to Hermes."
+    : lacking("create")
+      ? `This Hermes server has no route for ${PROFILE_ROUTES.create}, so it can't make a bot.`
+      : undefined;
   useReturnFocus();
 
   const read = async () => {
@@ -95,6 +117,26 @@ export function Bots({
     return () => document.removeEventListener("pointerdown", away, true);
   }, [onClose]);
 
+  // The bot New bot made takes focus once the roster lists it.
+  const focus = made?.focus;
+  useEffect(() => {
+    if (!focus || !bots?.some((b) => b.profile === focus)) return;
+    const open = root.current?.querySelector<HTMLElement>(`.bots-row[data-profile="${CSS.escape(focus)}"] .bots-open`);
+    open?.focus();
+    open?.scrollIntoView({ block: "nearest" });
+    setMade((m) => m && { ...m, focus: undefined });
+  }, [focus, bots]);
+
+  const onMade = (result: FormResult) => {
+    setMaking(false);
+    const name = result.select;
+    const said = result.notice?.text ?? (name ? `Created ${name}.` : "");
+    setMade({ text: `${said} Open its row to start its Bot Chat.`.trim(), warn: result.notice?.tone === "warn", focus: name });
+    // A search could hide the new bot's row; it is shown once made.
+    if (name) setQuery("");
+    void read();
+  };
+
   // Focus goes to the first bot once the list is read, or to Close when there is none to show, so Escape closes it.
   const first = useRef(true);
   useEffect(() => {
@@ -118,6 +160,23 @@ export function Bots({
             {server}
           </span>
         </div>
+        {profiles && !unsupported && (
+          <button
+            ref={newBtn}
+            className="icon-btn bots-make"
+            title={newWhy ?? "New bot"}
+            aria-label="New bot"
+            disabled={!!newWhy}
+            onClick={() => {
+              // Focus is the form's now: a roster that arrives later doesn't move it to the first bot.
+              first.current = false;
+              setMade(undefined);
+              setMaking(true);
+            }}
+          >
+            <Plus size={16} />
+          </button>
+        )}
         <button
           className="icon-btn"
           title="Check now"
@@ -134,7 +193,15 @@ export function Bots({
           <X size={16} />
         </button>
       </header>
-      <p className="inbox-note bots-about">Each bot is a profile on the server with one Bot Chat that always continues. The pen starts a separate chat with the bot.</p>
+      <p className="inbox-note bots-about">
+        Each bot is a profile on the server with one Bot Chat that always continues. The pen starts a separate chat with the bot.
+        {profiles && !unsupported && " New bot (+) makes a profile for one."}
+      </p>
+      {made && (
+        <p className={`inbox-note bots-note bots-made${made.warn ? " err" : ""}`} role="status">
+          {made.text}
+        </p>
+      )}
       {unsupported && (
         <p className="inbox-note bots-note err" role="alert">
           {unsupported} Hermes Chat shows no Bots button for it.
@@ -156,6 +223,19 @@ export function Bots({
         <BotList bots={bots} query={query} busy={loading} pictures={pictures} activity={activity} profile={profile} leaving={leaving} onOpen={onOpen} onNewChat={onNewChat} />
       )}
       {!bots && !error && !unsupported && connected && <div className="empty-hint inbox-empty">Reading the bots…</div>}
+      {making && profiles && (
+        <ProfileForm
+          wiring={profiles}
+          rows={bots?.map((b) => ({ name: b.profile }))}
+          lacking={lacking}
+          returnTo={newBtn}
+          heading="New bot"
+          createLabel="Create bot"
+          noEdit
+          onDone={onMade}
+          onClose={() => setMaking(false)}
+        />
+      )}
     </section>
   );
 }
@@ -311,7 +391,7 @@ function Row({
     .filter(Boolean)
     .join(". ");
   return (
-    <li className={`inbox-row bots-row${activity ? ` is-${activity}` : ""}${b.hidden ? " is-hidden" : ""}${current ? " is-current" : ""}`}>
+    <li data-profile={b.profile} className={`inbox-row bots-row${activity ? ` is-${activity}` : ""}${b.hidden ? " is-hidden" : ""}${current ? " is-current" : ""}`}>
       <button className="bots-open" aria-label={label} aria-current={current || undefined} onClick={onOpen}>
         <span className={`bots-face${b.color ? " has-color" : ""}`} style={b.color ? { background: b.color } : undefined} aria-hidden>
           {picture ? <img src={picture} alt="" /> : (b.name.trim()[0] ?? "?").toUpperCase()}

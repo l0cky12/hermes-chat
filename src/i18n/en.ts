@@ -252,6 +252,7 @@ export const en = {
       displayName: "Display name",
       displayHint: "Hermes's built-in profile keeps the id default; this changes only the name shown.",
       displayEmpty: "Give it a name, or cancel to keep the one it has.",
+      namesUnread: "Wait for the list of profiles, so the name can be checked against it.",
       displayLong: (max: number) => `Up to ${max} characters.`,
       gatewayWarn: "Renaming stops this profile's running gateway for up to 10 seconds. Messaging channels reconnect after.",
       description: "Description",
