@@ -5415,7 +5415,9 @@ const sessionPath = (chatId: string) => `api/sessions/${encodeURIComponent(chatI
 
 /** A session's title as the list shows it: an untitled one by its first words. */
 function listTitle(r: Pick<SessionRow, "title" | "preview">, known?: string): string {
-  return r.title || r.preview || known || "Untitled chat";
+  // Hermes's preview of an untitled chat is its first message on one line, with any attached context after the words.
+  const preview = r.preview?.replace(/\s*--- (?:Context Warnings|Attached Context) ---[\s\S]*$/, "").trim();
+  return r.title || preview || known || "Untitled chat";
 }
 
 /** `prompt.submit` went out and the connection dropped before Hermes answered it. */

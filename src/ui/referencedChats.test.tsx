@@ -169,4 +169,11 @@ describe("Referencing a chat", () => {
     expect(sent(fake)[0]).toMatch(/^carry on from there\n\n--- Attached Context ---\n\n\[Referenced chat: Deploy pipeline\]\n/);
     await waitFor(() => expect(screen.getByText("Referenced: Deploy pipeline")).toBeTruthy());
   });
+
+  it("titles an untitled chat by its typed words, not the summary Hermes's preview carries after them", async () => {
+    const fake = server();
+    fake.sessions.push(row("fresh", 0, { title: null, preview: "carry on from there --- Attached Context --- [Referenced chat: Deploy pipeline] The owner referenced" }));
+    const { hermes } = await launch(fake);
+    expect(hermes.getSnapshot().chats.find((c) => c.id === "fresh")?.title).toBe("carry on from there");
+  });
 });
