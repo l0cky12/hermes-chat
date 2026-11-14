@@ -97,11 +97,13 @@ def tripwire(protected):
     sys.addaudithook(hook)
 
 
-def fresh_run():
-    """A new, empty run folder, and the environment that keeps Hermes inside it."""
-    RUNS.mkdir(parents=True, exist_ok=True)
-    root = Path(tempfile.mkdtemp(prefix="run-", dir=RUNS)).resolve()
-    refuse_inside(root, "the run folder")
+def fresh_run(runs=RUNS, protected=REAL_HERMES):
+    """A new, empty run folder, and the environment that keeps Hermes inside it. Checks where `runs` leads before
+    creating anything, so a symlink there into `protected` makes nothing inside it."""
+    refuse_inside(runs, "the runs folder", protected)
+    runs.mkdir(parents=True, exist_ok=True)
+    root = Path(tempfile.mkdtemp(prefix="run-", dir=runs)).resolve()
+    refuse_inside(root, "the run folder", protected)
     env = {k: v for k, v in os.environ.items() if not k.startswith("HERMES_") or k.startswith("HERMES_DASHBOARD_BASIC_AUTH_")}
     env.update(
         HOME=str(root / "home"),
@@ -140,6 +142,7 @@ def self_check():
 
     expect(exits(lambda: refuse_inside(USER_HOME / ".hermes", "a home")), f"refuses the owner's Hermes home {REAL_HERMES}")
     expect(exits(lambda: refuse_inside(USER_HOME / ".hermes" / "profiles" / "x", "a home")), "refuses a folder inside it")
+    refuse_inside(RUNS, "the runs folder")
     RUNS.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=RUNS) as scratch:
         link = Path(scratch) / "looks-throwaway"
@@ -171,6 +174,13 @@ def self_check():
         ran = subprocess.run([sys.executable, "-I", "-c", probe + f"open({str(Path(scratch) / 'elsewhere')!r}, 'w').write('x')", str(stand_in)], capture_output=True, text=True)
         expect(ran.returncode == 0, f"lets it write outside (exit {ran.returncode})")
 
+        # A runs folder that is a symlink into the stand-in: refused before anything is made there.
+        runs_link = Path(scratch) / "runs-link"
+        runs_link.symlink_to(stand_in, target_is_directory=True)
+        before = sorted(p.name for p in stand_in.iterdir())
+        expect(exits(lambda: fresh_run(runs_link / "hermes-canonical-runs", stand_in.resolve())), "refuses a runs folder that leads into it")
+        expect(sorted(p.name for p in stand_in.iterdir()) == before, "makes nothing inside it on the way")
+
     sys.exit(1 if failures else 0)
 
 
@@ -183,10 +193,10 @@ def main():
     refuse_inside(sys.executable, "the Python")
     refuse_inside(Path(__file__), "this script")
 
+    tripwire(REAL_HERMES)
     root, env = fresh_run()
     os.environ.clear()
     os.environ.update(env)
-    tripwire(REAL_HERMES)
     home, work, dist = root / "hermes", root / "work", root / "dist"
     work.mkdir()
     dist.mkdir()
