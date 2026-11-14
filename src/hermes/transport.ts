@@ -231,7 +231,7 @@ export const NOTICES = {
   finished: { title: "Hermes finished a reply", body: "Open Hermes Chat to read it." },
   approval: { title: "Hermes is asking for approval", body: "A command is waiting for your answer in Hermes Chat." },
   question: { title: "Hermes has a question", body: "A question is waiting for your answer in Hermes Chat." },
-  notDenied: { title: "The approval wasn't denied", body: "It was answered already, or isn't in the profile shown. Open Hermes Chat to see it." },
+  notDenied: { title: "The approval wasn't denied", body: "Open Hermes Chat to see where it stands and answer there." },
 };
 
 const noCache: ChatCache = {
