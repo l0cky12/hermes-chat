@@ -736,7 +736,7 @@ export function ProfileForm({
 }: {
   wiring: Omit<ProfilesWiring, "showTab">;
   row?: ProfileRow;
-  rows: readonly Pick<ProfileRow, "name">[];
+  rows: readonly Pick<ProfileRow, "name">[] | undefined;
   lacking: (a: ProfileAction) => boolean;
   returnTo: RefObject<HTMLElement | null>;
   heading?: string;
@@ -807,7 +807,7 @@ export function ProfileForm({
         : undefined
     : (() => {
         if (row && !nameChanged) return undefined;
-        const i = nameIssue(trimmed, rows, row?.name);
+        const i = nameIssue(trimmed, rows ?? [], row?.name);
         return i === undefined ? undefined : i === "empty" ? f.issues.empty : i === "invalid" ? f.issues.invalid : f.issues[i](trimmed);
       })();
   const busy = row && nameChanged && !isDefault ? wiring.busy(row.name) : undefined;
@@ -817,7 +817,9 @@ export function ProfileForm({
   const descWhy = descChanged ? (row ? why("describe") : undefined) : undefined;
   const modelWhy = row && modelChanged ? why("setModel") : undefined;
   const createWhy = row ? undefined : why("create");
-  const saveWhy = createWhy ?? (!connected ? w.notConnected : undefined) ?? (issue && (row ? nameChanged : true) ? issue : undefined) ?? busyText ?? renameWhy ?? descWhy ?? modelWhy;
+  // `rows` undefined: the profiles there are aren't read yet, so New waits rather than send a name it can't check.
+  const unreadWhy = !row && !rows ? f.namesUnread : undefined;
+  const saveWhy = createWhy ?? (!connected ? w.notConnected : undefined) ?? (issue && (row ? nameChanged : true) ? issue : undefined) ?? unreadWhy ?? busyText ?? renameWhy ?? descWhy ?? modelWhy;
   const nothing = row && !nameChanged && !descChanged && !modelChanged;
 
   /** Leaves the dialog, asking first when it holds changes; never while a save or Write for me runs. */

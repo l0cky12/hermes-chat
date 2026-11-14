@@ -186,10 +186,12 @@ describe("New bot in the Bots view", () => {
     expect(server.restRequests.filter((r) => r.method !== "GET")).toEqual([]);
   });
 
-  it("keeps focus in the form when the roster arrives after it opened", async () => {
+  /** The Bots view with its first roster read still pending: `arrive` gives it `roster` and answers the read. */
+  async function pending() {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    const hermes = await connect(new FakeHermes().openPipe, undefined, memoryCache());
+    const server = new FakeHermes();
+    const hermes = await connect(server.openPipe, undefined, memoryCache());
     running.push(hermes);
     let answer = () => {};
     const view = (last?: { roster: Bot[]; at: number }) => (
@@ -222,19 +224,41 @@ describe("New bot in the Bots view", () => {
     );
     const { rerender } = render(view());
     expect(screen.getByText("Reading the bots…")).toBeTruthy();
+    const arrive = (roster: Bot[]) =>
+      act(async () => {
+        rerender(view({ roster, at: Date.now() }));
+        answer();
+      });
+    return { user, onClose, server, arrive };
+  }
+
+  it("keeps focus in the form when the roster arrives after it opened", async () => {
+    const { user, onClose, arrive } = await pending();
     await user.click(screen.getByRole("button", { name: "New bot" }));
     const name = within(form()).getByLabelText("Name");
     await user.type(name, "ada");
-    const roster = rosterOf({ profiles: [{ name: "default", canonical_session: null }] });
-    await act(async () => {
-      rerender(view({ roster, at: Date.now() }));
-      answer();
-    });
+    await arrive(rosterOf({ profiles: [{ name: "default", canonical_session: null }] }));
     expect(botRows()).toHaveLength(1);
     expect(document.activeElement).toBe(name);
     await user.keyboard("{Escape}");
     expect(within(form()).getByText("The changes you made here aren't saved.")).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("waits for the roster before creating, so a taken name never reaches Hermes", async () => {
+    const { user, server, arrive } = await pending();
+    await user.click(screen.getByRole("button", { name: "New bot" }));
+    await user.type(within(form()).getByLabelText("Name"), "scribe");
+    const create = within(form()).getByRole("button", { name: /Create bot/ });
+    expect(create).toHaveProperty("disabled", true);
+    expect(within(form()).getByRole("status").textContent).toBe("Wait for the list of profiles, so the name can be checked against it.");
+    await user.click(create);
+    await user.keyboard("{Enter}");
+    expect(server.restRequests.filter((r) => r.method !== "GET")).toEqual([]);
+    await arrive(rosterOf({ profiles: [{ name: "default", canonical_session: null }, { name: "scribe", canonical_session: null }] }));
+    expect(within(form()).getByText("There's already a profile named scribe. Pick another name.")).toBeTruthy();
+    expect(create).toHaveProperty("disabled", true);
+    expect(server.restRequests.filter((r) => r.method !== "GET")).toEqual([]);
   });
 
   it("closes only the form on Escape, with focus back on New bot", async () => {

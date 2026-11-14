@@ -217,7 +217,7 @@ export function Bots({
       {making && profiles && (
         <ProfileForm
           wiring={profiles}
-          rows={(bots ?? []).map((b) => ({ name: b.profile }))}
+          rows={bots?.map((b) => ({ name: b.profile }))}
           lacking={lacking}
           returnTo={newBtn}
           heading="New bot"
