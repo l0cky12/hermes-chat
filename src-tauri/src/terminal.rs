@@ -14,7 +14,7 @@
 
 use crate::backlog::Backlog;
 use crate::lock::Locked;
-use crate::ssh_guard::{self, Kind, Target};
+use crate::ssh_guard::{self, Folder, Kind, Target};
 use base64::Engine;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -33,6 +33,10 @@ const INPUT_BUDGET: usize = 1024 * 1024;
 pub enum TerminalError {
     #[error("Enter an SSH target such as liam@hermes or a host alias from ~/.ssh/config.")]
     BadTarget,
+    #[error("A shell can't start in this folder on the server: its path must start with / or ~/, and can't have a quote ('), a backslash, an exclamation mark or a control character in it.")]
+    BadFolder,
+    #[error("There's no folder at this path on this computer.")]
+    NoFolder,
     #[error("Couldn't open a terminal: {0}")]
     Pty(String),
     #[error("Couldn't start ssh: {0}")]
@@ -87,11 +91,12 @@ pub struct Terminals {
     open: Mutex<HashMap<u64, Session>>,
 }
 
-/// `ssh` to `target` in a terminal of `cols` × `rows`.
-pub fn ssh_command(target: &str) -> Result<Command, TerminalError> {
+/// `ssh` to `target` in a terminal, its shell started in `folder` on the server when one is given (ADR 0163).
+pub fn ssh_command(target: &str, folder: Option<&str>) -> Result<Command, TerminalError> {
     let target = Target::parse(target).ok_or(TerminalError::BadTarget)?;
+    let folder = folder.map(|f| Folder::parse(f).ok_or(TerminalError::BadFolder)).transpose()?;
     let mut command = Command::new("ssh");
-    command.args(ssh_guard::args(target, Kind::Terminal, None));
+    command.args(ssh_guard::args(target, Kind::Terminal { folder }, None));
     Ok(command)
 }
 
@@ -126,19 +131,32 @@ fn windows_shell(var: impl Fn(&str) -> Option<OsString>, is_file: impl Fn(&Path)
     LocalShell { program, args, home: var("USERPROFILE").map(PathBuf::from) }
 }
 
-/// The owner's own shell on this computer, started in their home folder (ADR 0039). Nothing the webview sends picks
-/// the program or its arguments.
-pub fn local_shell_command() -> Command {
+/// `folder` as a path on this computer: `~/x` is under `home`, anything else is taken as written.
+fn local_folder(folder: &str, home: Option<&Path>) -> Option<PathBuf> {
+    match folder.strip_prefix("~/") {
+        Some(under_home) => home.map(|h| h.join(under_home)),
+        None => Some(PathBuf::from(folder)),
+    }
+}
+
+/// The owner's own shell on this computer, started in their home folder (ADR 0039), or in `folder` when one is given
+/// (ADR 0163). Nothing the webview sends picks the program or its arguments, and no shell reads `folder`: it is the
+/// process's working folder, so any character in it is only a character.
+pub fn local_shell_command(folder: Option<&str>) -> Result<Command, TerminalError> {
     #[cfg(windows)]
     let shell = windows_shell(|k| std::env::var_os(k), Path::is_file);
     #[cfg(not(windows))]
     let shell = unix_shell(|k| std::env::var_os(k), Path::is_file);
     let mut command = Command::new(shell.program);
     command.args(shell.args);
-    if let Some(home) = shell.home.filter(|h| h.is_dir()) {
-        command.current_dir(home);
+    let start = match folder {
+        Some(folder) => Some(local_folder(folder, shell.home.as_deref()).filter(|f| f.is_absolute() && f.is_dir()).ok_or(TerminalError::NoFolder)?),
+        None => shell.home.filter(|h| h.is_dir()),
+    };
+    if let Some(start) = start {
+        command.current_dir(start);
     }
-    command
+    Ok(command)
 }
 
 impl Terminals {
@@ -524,14 +542,14 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn the_local_shell_is_a_login_shell_in_the_home_folder() {
-        let c = local_shell_command();
+        let c = local_shell_command(None).unwrap();
         let args: Vec<_> = c.as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(args, ["-l"]);
         assert!(std::path::Path::new(c.as_std().get_program()).is_absolute());
         // It runs, in a terminal, where it was started.
         let t = Terminals::default();
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let id = t.open(local_shell_command(), 80, 24, move |e| drop(tx.send(e))).unwrap();
+        let id = t.open(local_shell_command(None).unwrap(), 80, 24, move |e| drop(tx.send(e))).unwrap();
         t.write(id, b"echo \"at:$PWD\"; exit 4\r").unwrap();
         let mut out = String::new();
         let code = loop {
@@ -585,11 +603,165 @@ mod tests {
     #[test]
     fn refuses_a_target_ssh_would_read_as_an_option() {
         for bad in ["", "  ", "-oProxyCommand=evil", "liam@hermes ls"] {
-            assert!(matches!(ssh_command(bad), Err(TerminalError::BadTarget)), "{bad:?}");
+            assert!(matches!(ssh_command(bad, None), Err(TerminalError::BadTarget)), "{bad:?}");
         }
-        let c = ssh_command(" liam@hermes ").unwrap();
+        let c = ssh_command(" liam@hermes ", None).unwrap();
         let args: Vec<_> = c.as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(args.last().map(String::as_str), Some("liam@hermes"));
         assert_eq!(args[args.len() - 2], "--");
+    }
+
+    #[test]
+    fn a_terminal_in_a_folder_is_one_cd_after_the_target_and_refuses_a_folder_it_cant_quote() {
+        let c = ssh_command("liam@hermes", Some("~/notes/a b")).unwrap();
+        let args: Vec<_> = c.as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(args[args.len() - 3..], ["--", "liam@hermes", r#"cd ~/'notes/a b'; exec "$SHELL" -l"#]);
+        for bad in ["/it's", "/a\\b", "/now!", "/a\nb", "src/ui", "~"] {
+            let refused = ssh_command("liam@hermes", Some(bad)).err().map(|e| e.to_string());
+            assert!(refused.as_deref().is_some_and(|e| e.starts_with("A shell can't start in this folder on the server")), "{bad:?}: {refused:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_local_shell_in_a_folder_starts_there_whatever_is_in_its_name() {
+        let root = std::env::temp_dir().join(format!("hermes-local-folder-{}", std::process::id()));
+        let folder = root.join("it's $(touch pwned); `x` \\ !");
+        std::fs::create_dir_all(&folder).unwrap();
+        let c = local_shell_command(Some(folder.to_str().unwrap())).unwrap();
+        assert_eq!(c.as_std().get_current_dir(), Some(folder.as_path()));
+        assert_eq!(c.as_std().get_args().collect::<Vec<_>>(), ["-l"], "the folder is no argument of the shell");
+        for missing in [root.join("gone"), PathBuf::from("relative/path")] {
+            assert!(matches!(local_shell_command(missing.to_str()), Err(TerminalError::NoFolder)), "{missing:?}");
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_local_folder_under_the_home_folder_is_joined_to_it() {
+        let home = Path::new("/home/me");
+        assert_eq!(local_folder("~/notes/a b", Some(home)), Some(home.join("notes/a b")));
+        assert_eq!(local_folder("~/", Some(home)), Some(home.join("")));
+        assert_eq!(local_folder("~/notes", None), None);
+        assert_eq!(local_folder("/srv/app", None), Some("/srv/app".into()));
+    }
+
+    /// A shell to run the folder command in, as sshd runs it: `program leading… -c <command>`.
+    #[cfg(unix)]
+    struct InstalledShell {
+        name: String,
+        program: PathBuf,
+        leading: &'static [&'static str],
+    }
+
+    /// The shells of `NAMES` on `PATH`, then those `HERMES_TEST_SHELLS` names by full path (`:` between them), and the
+    /// names that weren't found.
+    #[cfg(unix)]
+    fn installed_shells() -> (Vec<InstalledShell>, Vec<&'static str>) {
+        const NAMES: [&str; 9] = ["sh", "dash", "bash", "zsh", "fish", "tcsh", "csh", "ksh", "mksh"];
+        let on_path = |name: &str| std::env::split_paths(&std::env::var_os("PATH")?).map(|dir| dir.join(name)).find(|p| p.is_file());
+        let mut found: Vec<InstalledShell> =
+            NAMES.iter().filter_map(|name| Some(InstalledShell { name: name.to_string(), program: on_path(name)?, leading: &[] })).collect();
+        if let Some(busybox) = on_path("busybox") {
+            found.push(InstalledShell { name: "busybox sh".into(), program: busybox, leading: &["sh"] });
+        }
+        for extra in std::env::var("HERMES_TEST_SHELLS").unwrap_or_default().split(':').filter(|p| !p.is_empty()) {
+            let program = PathBuf::from(extra);
+            assert!(program.is_file(), "HERMES_TEST_SHELLS names {extra}, which isn't a file");
+            found.push(InstalledShell { name: program.file_name().unwrap().to_string_lossy().into_owned(), program, leading: &[] });
+        }
+        let missing = NAMES.into_iter().filter(|name| !found.iter().any(|s| s.name.starts_with(name))).collect();
+        (found, missing)
+    }
+
+    /// Every file and folder under `dir`, by name.
+    #[cfg(unix)]
+    fn names_under(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .flat_map(|entry| {
+                let entry = entry.unwrap();
+                let mut names = vec![entry.file_name().to_string_lossy().into_owned()];
+                if entry.file_type().unwrap().is_dir() {
+                    names.extend(names_under(&entry.path()));
+                }
+                names
+            })
+            .collect()
+    }
+
+    /// The folder's `cd` command (ssh_guard.rs `Folder::command`) run by each shell here the way sshd runs it for a
+    /// login shell, `<shell> -c <command>`, with `$SHELL` a program that prints where it was started. Folder names
+    /// that are shell syntax land the shell in that folder, and none of them runs.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "runs every shell installed here; HERMES_TEST_SHELLS=/full/path/zsh:/full/path/fish adds more"]
+    fn a_folder_named_with_shell_syntax_lands_every_installed_shell_in_it_and_runs_none_of_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("hermes-folder-shells-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (home, start) = (root.join("home"), root.join("start"));
+        let probe = root.join("probe");
+        std::fs::create_dir_all(&start).unwrap();
+        std::fs::write(&probe, "#!/bin/sh\nprintf 'at:%s\\n' \"$(pwd -P)\"\n").unwrap();
+        std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        const NAMES: [&str; 14] = [
+            "plain",
+            "a b",
+            "$(touch pwned)",
+            "`touch pwned`",
+            ";touch pwned",
+            "&& touch pwned",
+            "|| touch pwned #",
+            "> pwned",
+            "$HOME",
+            "*",
+            "~",
+            "-n",
+            "a\"b",
+            "caf\u{e9} \u{65e5}\u{672c}",
+        ];
+        let mut folders: Vec<(String, PathBuf)> = Vec::new();
+        for name in NAMES {
+            folders.push((root.join("work").join(name).to_str().unwrap().to_owned(), root.join("work").join(name)));
+            folders.push((format!("~/{name}/in"), home.join(name).join("in")));
+        }
+        folders.push(("~/".into(), home.clone()));
+        for (_, on_disk) in &folders {
+            std::fs::create_dir_all(on_disk).unwrap();
+        }
+
+        let (shells, missing) = installed_shells();
+        assert!(!shells.is_empty(), "no shell found on PATH");
+        let run = |shell: &InstalledShell, folder: &str| {
+            let command = Folder::parse(folder).unwrap_or_else(|| panic!("{folder:?} is a folder")).command();
+            let out = std::process::Command::new(&shell.program)
+                .args(shell.leading)
+                .args(["-c", &command])
+                .current_dir(&start)
+                .env("SHELL", &probe)
+                .env("HOME", &home)
+                .output()
+                .unwrap();
+            (String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
+        };
+        for shell in &shells {
+            for (folder, on_disk) in &folders {
+                let (stdout, stderr) = run(shell, folder);
+                let landed = format!("at:{}\n", on_disk.canonicalize().unwrap().display());
+                assert_eq!(stdout, landed, "{} in {folder:?} ({}), stderr: {stderr}", shell.name, shell.program.display());
+            }
+            let (stdout, stderr) = run(shell, "/nowhere/$(touch pwned)");
+            let stayed = format!("at:{}\n", start.canonicalize().unwrap().display());
+            assert_eq!(stdout, stayed, "{} starts where ssh put it when the folder isn't there, stderr: {stderr}", shell.name);
+            assert!(!stderr.is_empty(), "{} says why it couldn't change folder", shell.name);
+        }
+        assert!(!names_under(&root).iter().any(|name| name == "pwned"), "a folder's name ran as a command: {:?}", names_under(&root));
+        eprintln!(
+            "covered: {}; not installed: {}",
+            shells.iter().map(|s| format!("{} ({})", s.name, s.program.display())).collect::<Vec<_>>().join(", "),
+            if missing.is_empty() { "none".to_owned() } else { missing.join(", ") }
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

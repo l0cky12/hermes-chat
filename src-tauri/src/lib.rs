@@ -1744,16 +1744,18 @@ fn permission<R: tauri::Runtime>(webview: &tauri::Webview<R>, kind: PermissionKi
 }
 
 /// Opens a terminal on the server: `ssh` to `target` (the sign-in's SSH target, or one the owner gave the terminal),
-/// `cols` × `rows`, its output and end sent to `on_event` (terminal.rs, ADR 0022).
+/// `cols` × `rows`, its output and end sent to `on_event` (terminal.rs, ADR 0022). `folder`: a folder on the server
+/// its shell starts in, a path a reply named (ADR 0163).
 #[tauri::command]
 async fn terminal_open(
     terminals: State<'_, terminal::Terminals>,
     target: String,
     cols: u16,
     rows: u16,
+    folder: Option<String>,
     on_event: Channel<terminal::TerminalEvent>,
 ) -> Result<u64, terminal::TerminalError> {
-    let command = terminal::ssh_command(&target)?;
+    let command = terminal::ssh_command(&target, folder.as_deref())?;
     terminals.open(command, cols, rows, move |e| {
         let _ = on_event.send(e);
     })
@@ -1776,16 +1778,17 @@ fn terminal_close(terminals: State<'_, terminal::Terminals>, id: u64) {
     terminals.close(id);
 }
 
-/// Opens a terminal on this computer: the owner's own login shell, in their home folder (ADR 0039). The webview picks
-/// neither the program nor its arguments.
+/// Opens a terminal on this computer: the owner's own login shell, in their home folder (ADR 0039), or in `folder`
+/// (ADR 0163). The webview picks neither the program nor its arguments.
 #[tauri::command]
 async fn terminal_open_local(
     terminals: State<'_, terminal::Terminals>,
     cols: u16,
     rows: u16,
+    folder: Option<String>,
     on_event: Channel<terminal::TerminalEvent>,
 ) -> Result<u64, terminal::TerminalError> {
-    terminals.open(terminal::local_shell_command(), cols, rows, move |e| {
+    terminals.open(terminal::local_shell_command(folder.as_deref())?, cols, rows, move |e| {
         let _ = on_event.send(e);
     })
 }
