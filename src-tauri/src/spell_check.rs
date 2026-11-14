@@ -7,8 +7,10 @@ use webkit2gtk::WebContextExt;
 /// English, used when no dictionary matches the system's languages.
 const FALLBACK: &str = "en_US";
 
-/// The dictionary tags Enchant knows for the locale names GLib gives (`en_US.UTF-8`, `en_US`, `en`, `C`), in order:
-/// `en_US`, `en`. The codeset and modifier go, and `C` and `POSIX`, which name no language, are left out.
+/// The dictionary tags Enchant knows for the locale names GLib gives, in order: `en_US.UTF-8`, `en_US`, `en`, `C` give
+/// `en_US`. The codeset and modifier go, and `C` and `POSIX`, which name no language, are left out. A bare language
+/// goes when a country's form of it is there, since Enchant loads the same dictionary for both and every suggestion
+/// would show twice.
 pub fn languages<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     for name in names {
@@ -17,6 +19,8 @@ pub fn languages<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
             found.push(tag.to_owned());
         }
     }
+    let regional: Vec<String> = found.iter().filter_map(|t| t.split_once('_').map(|(language, _)| language.to_owned())).collect();
+    found.retain(|t| t.contains('_') || !regional.contains(t));
     found
 }
 
@@ -39,9 +43,11 @@ mod tests {
 
     #[test]
     fn takes_the_locales_languages_without_codeset_or_modifier() {
-        assert_eq!(languages(["en_US.UTF-8", "en_US", "en.UTF-8", "en", "C"]), ["en_US", "en"]);
-        assert_eq!(languages(["de_DE.UTF-8@euro", "de_DE@euro", "de_DE", "de", "C"]), ["de_DE", "de"]);
-        assert_eq!(languages(["sr_RS@latin", "sr@latin", "sr_RS", "sr", "C"]), ["sr_RS", "sr"]);
+        assert_eq!(languages(["en_US.UTF-8", "en_US", "en.UTF-8", "en", "C"]), ["en_US"]);
+        assert_eq!(languages(["de_DE.UTF-8@euro", "de_DE@euro", "de_DE", "de", "C"]), ["de_DE"]);
+        assert_eq!(languages(["sr_RS@latin", "sr@latin", "sr_RS", "sr", "C"]), ["sr_RS"]);
+        // LANGUAGE=fr:en_GB with LANG=en_GB.UTF-8: a bare language with no country's form stays.
+        assert_eq!(languages(["fr", "en_GB.UTF-8", "en_GB", "en.UTF-8", "en", "C"]), ["fr", "en_GB"]);
     }
 
     #[test]
