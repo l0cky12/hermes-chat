@@ -1,5 +1,5 @@
 //! Desktop notifications. Clicking one brings the app's window forward. One about a waiting card is tagged by the
-//! webview, and the click tells the webview, which opens the card; one about an Approval also offers Deny (ADR 0171).
+//! webview, and the click tells the webview, which opens the card; one about an Approval also offers Deny (ADR 0173).
 //!
 //! On Linux they go straight over the freedesktop Notifications D-Bus service that mako, dunst and swaync provide, and
 //! a click comes with the Wayland activation token the service hands over, so the compositor lets the window take
@@ -457,7 +457,7 @@ mod desktop {
 
     static SHOWN: Mutex<Clickable<ToastNotification>> = Mutex::new(Clickable::new());
 
-    /// A toast offers no Deny: its click opens the card (ADR 0171).
+    /// A toast offers no Deny: its click opens the card (ADR 0173).
     pub(super) async fn show(app: AppHandle, title: String, body: String, tag: Option<String>, _deny: bool) -> Result<(), String> {
         let posted = tokio::task::spawn_blocking(move || post(&app, &title, &body, tag)).await.map_err(|e| e.to_string())?;
         posted.map_err(|e| format!("Windows wouldn't show the notification: {}", e.message()))

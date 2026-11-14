@@ -1729,7 +1729,7 @@ async fn preview_annotate_stage(
     Ok(screenshot::Capture { path, note: None })
 }
 
-/// `tag`: the webview's name for a notification about a waiting card; `deny`: it offers Deny (ADR 0171).
+/// `tag`: the webview's name for a notification about a waiting card; `deny`: it offers Deny (ADR 0173).
 #[tauri::command]
 async fn notify_desktop(app: tauri::AppHandle, title: String, body: String, tag: Option<String>, deny: Option<bool>) -> Result<(), String> {
     notify::show(app, title, body, tag, deny.unwrap_or(false)).await

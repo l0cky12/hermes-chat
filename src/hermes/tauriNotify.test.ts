@@ -1,5 +1,5 @@
 // What a desktop notification asks Rust to show, and what the owner's click or Deny on it does once Rust sends back its
-// tag (src-tauri/src/notify.rs, ADR 0171). Rust is faked by stand-ins for `invoke` and `listen`.
+// tag (src-tauri/src/notify.rs, ADR 0173). Rust is faked by stand-ins for `invoke` and `listen`.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { invoke, listen } = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }));

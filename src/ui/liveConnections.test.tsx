@@ -186,7 +186,7 @@ describe("Live connections", () => {
     for (const c of connects) expect(c.password).toBe(passwords[c.url]);
 
     // An Approval on Home, now in the background, comes as a notification. Clicking it makes Home the target and shows
-    // its card, answering nothing (ADR 0171).
+    // its card, answering nothing (ADR 0173).
     let homeCard = "";
     act(() => void (homeCard = servers[BRAVO].askApproval(servers[BRAVO].runtimeIdOf("c1")!, { command: "rm -rf /srv/home-cache" }).id!));
     await waitFor(() => expect(notices.some((n) => n.title === "Home: Hermes is asking for approval")).toBe(true));

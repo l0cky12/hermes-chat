@@ -305,7 +305,7 @@ describe("The inbox", () => {
   });
 });
 
-describe("Answering an Approval from the inbox (ADR 0171)", () => {
+describe("Answering an Approval from the inbox (ADR 0173)", () => {
   /** The inbox open on a chat here waiting on an Approval, and the row that lists it. */
   async function waiting(over: Record<string, unknown> = {}) {
     const l = await launch();
@@ -383,7 +383,7 @@ describe("Answering an Approval from the inbox (ADR 0171)", () => {
   });
 });
 
-describe("Clicking a notification about an Approval (ADR 0171)", () => {
+describe("Clicking a notification about an Approval (ADR 0173)", () => {
   it("opens the chat at its card, from another chat and with the inbox shut, and answers nothing", async () => {
     const notified: (NoticeActions | undefined)[] = [];
     const { server, hermes, user } = await launch(undefined, notified);

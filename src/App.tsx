@@ -2268,12 +2268,12 @@ export function Main({
       setGoTo({ entry: e, approval: e.kind === "approval" && !e.ended });
     }, e.profile !== profile ? "profile" : "leave");
   };
-  // A notification's click opens the card it is about, as its inbox entry does (ADR 0171).
+  // A notification's click opens the card it is about, as its inbox entry does (ADR 0173).
   const openEntryRef = useRef(openEntry);
   openEntryRef.current = openEntry;
   useEffect(() => hermes.onNoticeOpen((card) => openEntryRef.current(noticeEntry(card))), [hermes]);
   // The waiting Approval card an inbox entry is about, when this connection's shown profile holds it: the inbox shows
-  // it whole, to answer there as in the chat (ADR 0171).
+  // it whole, to answer there as in the chat (ADR 0173).
   const approvalOf = (e: InboxEntry) => {
     if (e.server || e.ended || e.kind !== "approval" || e.profile !== profile || !e.itemId) return undefined;
     const card = chats.find((c) => c.id === e.chatId)?.items.find((i) => i.id === e.itemId);

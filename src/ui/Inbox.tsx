@@ -1,7 +1,7 @@
 // The inbox: what needs the owner, or finished, across the server's profiles (hermes/inbox.ts). It opens beside the
 // rail over the chat list, and leaves the chat panes as they are, so the chats on screen stay read. Opening an entry
 // goes to its chat, in its profile, and to the Approval card or message it is about. A waiting Approval in the profile
-// shown also shows its card here, the chat's own, answered the same way (ADR 0171). Nothing else here answers,
+// shown also shows its card here, the chat's own, answered the same way (ADR 0173). Nothing else here answers,
 // retries or resends: that happens in the chat, the usual way.
 import { useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react";
 import { CircleAlert, CircleCheck, CircleHelp, Loader, RefreshCw, ShieldAlert, X } from "lucide-react";

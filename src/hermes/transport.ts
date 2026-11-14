@@ -219,7 +219,7 @@ export type ChatCache = {
 };
 /**
  * What clicking a notification about a waiting card does: `open` shows the card in its chat. `deny`, for an Approval
- * only, answers it with Deny the way the card's own button does. Nothing a notification offers approves (ADR 0171).
+ * only, answers it with Deny the way the card's own button does. Nothing a notification offers approves (ADR 0173).
  */
 export type NoticeActions = { open: () => void; deny?: () => void };
 /** The waiting card a notification's click opens. */

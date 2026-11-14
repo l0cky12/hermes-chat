@@ -1,6 +1,6 @@
 // The real notifications: Rust posts them to the desktop's notification service (src-tauri/src/notify.rs). One about a
 // waiting card goes with a tag, and Rust sends the tag back with what the owner did with it: opened it, or chose Deny
-// where the service shows actions (ADR 0171). Rust keeps its notifications across a reload of the webview, so each
+// where the service shows actions (ADR 0173). Rust keeps its notifications across a reload of the webview, so each
 // webview's tags start with its own random prefix: an action whose tag isn't kept here, as one from before a reload,
 // does nothing more than bring the window forward, which Rust does itself.
 import { invoke } from "@tauri-apps/api/core";

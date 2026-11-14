@@ -98,7 +98,7 @@ describe("Desktop notifications", () => {
     });
 });
 
-describe("Acting on a notification about a waiting card (ADR 0171)", () => {
+describe("Acting on a notification about a waiting card (ADR 0173)", () => {
   /** A reply under way out of focus, with what each notification offers kept beside it. */
   async function offering() {
     const offered: (NoticeActions | undefined)[] = [];

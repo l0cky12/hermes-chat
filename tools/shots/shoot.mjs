@@ -259,7 +259,7 @@ Object.assign(scenes, {
   "settings-narrow-sheet": { query: "?profiles=1", ...narrow, steps: [openSettings, click(".settings-crumb"), tab("Model"), click(".settings-crumb")] },
   "settings-narrow-search": { query: "?profiles=1", ...narrow, steps: [openSettings, click(".settings-bar-search"), typeSearch("reasoning effort")] },
 });
-// The improvement report's Workstream C at 1280 × 800 (ADR 0171, 0172): a waiting Approval's inbox entry, the Launch
+// The improvement report's Workstream C at 1280 × 800 (ADR 0173, 0172): a waiting Approval's inbox entry, the Launch
 // settings, and the composer after `hermes-chat --show` from an app with a line of a log selected.
 const report = { width: 1280, height: 800 };
 const approvalWaiting = `(async () => {
