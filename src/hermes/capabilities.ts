@@ -84,7 +84,9 @@ type Probe =
  */
 type WriteCheck = {
   send: (io: CapabilityIO, profile: string) => Promise<unknown>;
-  read: (outcome: { answer: unknown } | { failure: Failure }) => { state: CapabilityState; why: string };
+  /** A read sent alongside, for what the write's answer alone can't tell; undefined when it fails. */
+  context?: (io: CapabilityIO, profile: string) => Promise<unknown>;
+  read: (outcome: { answer: unknown } | { failure: Failure }, context: unknown) => { state: CapabilityState; why: string };
 };
 
 export type CapabilitySpec = {
@@ -165,19 +167,26 @@ export const CAPABILITIES: readonly CapabilitySpec[] = [
     notChecked: "Checked when Diagnostics opens, or once this app answers an Approval.",
     // `approval.respond` at Hermes `f0d94882` (`tui_gateway/methods_prompt.py`): a session id no live session has fails
     // "session not found" (4001) before anything is settled, unless the request id is one an Approval waits under,
-    // which a made-up id never is. A Hermes without the method answers "method not found".
+    // which a made-up id never is. A Hermes without the method answers "method not found". With turn isolation the
+    // method is there but doesn't reach a waiting Approval (`tui_gateway/compute_host_bridge.py`), so the profile's
+    // `dashboard.turn_isolation` decides.
     writeCheck: {
       send: (io) => io.rpc("approval.respond", { session_id: PROBE_NAME, request_id: PROBE_NAME, choice: "deny" }),
-      read: (o) => {
-        const bridge =
-          " This check can't tell whether Hermes runs each turn in a process of its own (turn isolation). There approval.respond doesn't reach the Approval, and this app answers in reply to Hermes's request instead.";
-        if ("answer" in o)
-          return isObj(o.answer) && o.answer.resolved === 0
-            ? { state: "supported", why: `Hermes has approval.respond: it found nothing waiting for an Approval that can't exist.${bridge}` }
-            : { state: "unknown", why: "Hermes answered the check in a way this app doesn't expect." };
-        if (o.failure.rpcCode === SESSION_NOT_FOUND)
-          return { state: "supported", why: `Hermes has approval.respond: it answered "session not found" for an Approval that can't exist, and settled nothing.${bridge}` };
-        return stateOfFailure(o.failure);
+      context: (io, profile) => io.get(`api/config?${new URLSearchParams({ profile })}`, 2 * 1024 * 1024).then(turnIsolationOf),
+      read: (o, isolation) => {
+        const has = "answer" in o ? isObj(o.answer) && o.answer.resolved === 0 : o.failure.rpcCode === SESSION_NOT_FOUND;
+        if (!has) return "answer" in o ? { state: "unknown", why: "Hermes answered the check in a way this app doesn't expect." } : stateOfFailure(o.failure);
+        if (isolation === true)
+          return {
+            state: "unsupported",
+            why: "Hermes has approval.respond, but runs each turn in a process of its own (dashboard.turn_isolation), where approval.respond doesn't reach a waiting Approval. This app answers in reply to Hermes's request instead.",
+          };
+        if (isolation === false)
+          return { state: "supported", why: "Hermes has approval.respond, found nothing waiting for an Approval that can't exist, and doesn't run turns in a process of their own (turn isolation)." };
+        return {
+          state: "unknown",
+          why: "Hermes has approval.respond, but this app couldn't read whether Hermes runs each turn in a process of its own (dashboard.turn_isolation), where approval.respond doesn't reach a waiting Approval.",
+        };
       },
     },
     methods: ["approval.respond"],
@@ -446,6 +455,17 @@ export function failureOf(e: unknown): Failure {
 const NO_SUCH_METHOD = -32601;
 /** Hermes's "session not found": the method is there, and no live session has that id. */
 const SESSION_NOT_FOUND = 4001;
+
+/**
+ * Whether a `GET /api/config` answer turns on `dashboard.turn_isolation`, read as Hermes reads it (`is_truthy_value`):
+ * undefined when the answer isn't a config. A config that doesn't name it is from a Hermes without turn isolation.
+ */
+function turnIsolationOf(text: string): boolean | undefined {
+  const config: unknown = JSON.parse(text);
+  if (!isObj(config)) return undefined;
+  const v = isObj(config.dashboard) ? config.dashboard.turn_isolation : undefined;
+  return typeof v === "string" ? ["1", "true", "yes", "on"].includes(v.trim().toLowerCase()) : !!v;
+}
 /** JSON-RPC "invalid params", and Hermes's own code for params its contract refuses: the method is there, in another shape. */
 const BAD_PARAMS = new Set([-32602, 4000]);
 
@@ -1009,11 +1029,14 @@ export class CapabilityStore {
     this.setCapRaw(spec.id, fresh()[spec.id]);
     const rev = this.revs.get(spec.id);
     let found: { state: CapabilityState; why: string };
+    const context = check.context ? within(check.context(this.io, scope.profile), this.timeoutMs).catch(() => undefined) : undefined;
+    let outcome: { answer: unknown } | { failure: Failure };
     try {
-      found = check.read({ answer: await within(check.send(this.io, scope.profile), this.timeoutMs) });
+      outcome = { answer: await within(check.send(this.io, scope.profile), this.timeoutMs) };
     } catch (e) {
-      found = check.read({ failure: failureOf(e) });
+      outcome = { failure: failureOf(e) };
     }
+    found = check.read(outcome, await context);
     if (this.current(scope, run) && this.revs.get(spec.id) === rev) {
       this.missing.delete(spec.id);
       this.setCap(spec.id, { source: "probed", ...found });

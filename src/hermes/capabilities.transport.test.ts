@@ -254,7 +254,7 @@ describe("Diagnostics' write checks (ADR 0169)", () => {
     server.event(runtime, "message.start");
     const { id } = server.askApproval(runtime);
     await hermes.idle();
-    return { hermes, id: id! };
+    return { hermes, chat, id: id! };
   }
 
   it("settles both on a Hermes that has them, and changes no toolset and answers no Approval", { timeout: 10_000 }, async () => {
@@ -264,7 +264,7 @@ describe("Diagnostics' write checks (ADR 0169)", () => {
     await hermes.capabilities.checkWrites();
     expect(hermes.capabilities.get("toolsetSwitches")).toMatchObject({ state: "supported", source: "probed" });
     expect(hermes.capabilities.get("approvalAnswers")).toMatchObject({ state: "supported", source: "probed" });
-    expect(hermes.capabilities.get("approvalAnswers").why).toMatch(/can't tell whether Hermes runs each turn in a process of its own/);
+    expect(hermes.capabilities.get("approvalAnswers").why).toMatch(/doesn't run turns in a process of their own/);
     // The one PUT names the toolset no toolset is, and FastAPI refused its body: no toolset changed.
     expect(writesSent(server).slice(writesBefore).map((r) => [r.method, r.path])).toEqual([["PUT", "/api/tools/toolsets/__hermes_chat_probe__"]]);
     expect(server.toolsetWrites).toEqual([]);
@@ -286,15 +286,18 @@ describe("Diagnostics' write checks (ADR 0169)", () => {
     expect(server.openRequests.has(id)).toBe(true);
   });
 
-  it("says it can't tell the compute-host bridge apart, where approval.respond doesn't reach the Approval", { timeout: 10_000 }, async () => {
+  it("finds Answering Approvals not supported with turn isolation, where approval.respond doesn't reach the Approval", { timeout: 10_000 }, async () => {
     const server = new FakeHermes();
     server.turnIsolation = true;
-    const { hermes, id } = await waiting(server);
+    const { hermes, chat, id } = await waiting(server);
     await hermes.capabilities.checkWrites();
     const cap = hermes.capabilities.get("approvalAnswers");
-    expect(cap.state).toBe("supported");
-    expect(cap.why).toMatch(/turn isolation\). There approval.respond doesn't reach the Approval/);
+    expect(cap).toMatchObject({ state: "unsupported", source: "probed" });
+    expect(cap.why).toMatch(/dashboard.turn_isolation\), where approval.respond doesn't reach a waiting Approval/);
     expect(server.openRequests.has(id)).toBe(true);
+    // Answering it goes in reply to Hermes's request, which reaches the compute-host child.
+    await hermes.answerApproval(chat, id, "once");
+    expect(server.approvalAnswers.map((a) => [a.id, a.via])).toEqual([[id, "response"]]);
   });
 
   it("sends them again only on Check again once settled, and finds a route Hermes gained", { timeout: 10_000 }, async () => {

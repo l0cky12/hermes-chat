@@ -660,18 +660,27 @@ describe("checking again", () => {
   });
 
   it("reads each write check's answer: supported, missing, or what it can't tell", async () => {
+    const isolation = (on: unknown) => ({ "GET api/config": { model: "m", dashboard: { turn_isolation: on, compute_host_respawn_max: 3 } } });
     const cases: [Record<string, unknown>, string, string][] = [
-      [{ "PUT api/tools/toolsets/__hermes_chat_probe__": answered(422, "bool_parsing"), "RPC approval.respond": new RpcError(4001, "session not found") }, "supported", "supported"],
-      [{ "PUT api/tools/toolsets/__hermes_chat_probe__": answered(400, "Unknown toolset"), "RPC approval.respond": { resolved: 0 } }, "supported", "supported"],
+      [{ "PUT api/tools/toolsets/__hermes_chat_probe__": answered(422, "bool_parsing"), "RPC approval.respond": new RpcError(4001, "session not found"), ...isolation(false) }, "supported", "supported"],
+      [{ "PUT api/tools/toolsets/__hermes_chat_probe__": answered(400, "Unknown toolset"), "RPC approval.respond": { resolved: 0 }, ...isolation(false) }, "supported", "supported"],
+      // A config from before turn isolation names no `dashboard.turn_isolation`.
+      [{ "RPC approval.respond": new RpcError(4001, "session not found"), "GET api/config": { model: "m" } }, "unsupported", "supported"],
+      // Turn isolation: approval.respond is there but doesn't reach a waiting Approval.
+      [{ "RPC approval.respond": new RpcError(4001, "session not found"), ...isolation(true) }, "unsupported", "unsupported"],
+      [{ "RPC approval.respond": { resolved: 0 }, ...isolation(" On ") }, "unsupported", "unsupported"],
+      // The config can't be read, so whether the answer reaches the Approval isn't known.
+      [{ "RPC approval.respond": new RpcError(4001, "session not found") }, "unsupported", "unknown"],
+      [{ "RPC approval.respond": new RpcError(4001, "session not found"), "GET api/config": "<html>" }, "unsupported", "unknown"],
       [{ "PUT api/tools/toolsets/__hermes_chat_probe__": noRoute(), "RPC approval.respond": noMethod("approval.respond") }, "unsupported", "unsupported"],
       [{ "PUT api/tools/toolsets/__hermes_chat_probe__": { ok: true }, "RPC approval.respond": { resolved: 1 } }, "unknown", "unknown"],
       [{ "PUT api/tools/toolsets/__hermes_chat_probe__": answered(503, "busy"), "RPC approval.respond": new RpcError(5004, "boom") }, "unreachable", "unreachable"],
     ];
-    for (const [answers, switches, approvals] of cases) {
+    for (const [i, [answers, switches, approvals]] of cases.entries()) {
       const t = store({ ...NEW, ...answers });
       await connectAndCheck(t);
       await t.caps.checkWrites();
-      expect([t.caps.get("toolsetSwitches").state, t.caps.get("approvalAnswers").state], JSON.stringify(Object.keys(answers))).toEqual([switches, approvals]);
+      expect([t.caps.get("toolsetSwitches").state, t.caps.get("approvalAnswers").state], `case ${i}`).toEqual([switches, approvals]);
     }
   });
 

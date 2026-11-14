@@ -413,9 +413,11 @@ describe("in the app", () => {
   });
 
   it.each([
-    ["has them", (_: FakeHermes) => {}, "Supported"],
-    ["lacks them", (s: FakeHermes) => ((s.toolsetRoutes = "read-only"), (s.approvalRespond = false)), "Not supported"],
-  ])("settles Toolset switches and Answering Approvals when Diagnostics opens, on a Hermes that %s (#571, #572)", { timeout: 15_000 }, async (_, setUp, shown) => {
+    ["has them", (_: FakeHermes) => {}, "Supported", "Supported"],
+    ["lacks them", (s: FakeHermes) => ((s.toolsetRoutes = "read-only"), (s.approvalRespond = false)), "Not supported", "Not supported"],
+    // approval.respond is there, but doesn't reach an Approval waiting in a compute-host child.
+    ["runs turns in a process of their own", (s: FakeHermes) => (s.turnIsolation = true), "Supported", "Not supported"],
+  ])("settles Toolset switches and Answering Approvals when Diagnostics opens, on a Hermes that %s (#571, #572)", { timeout: 15_000 }, async (_, setUp, switches, answers) => {
     const s = new FakeHermes();
     setUp(s);
     const { hermes, user } = await launch(s);
@@ -424,8 +426,8 @@ describe("in the app", () => {
     expect([hermes.capabilities.get("toolsetSwitches").state, hermes.capabilities.get("approvalAnswers").state]).toEqual(["unknown", "unknown"]);
     await user.click(screen.getByRole("button", { name: "Settings" }));
     await user.click(screen.getByRole("tab", { name: /Diagnostics/ }));
-    await waitFor(() => expect(within(row$("Toolset switches")).getByText(shown)).toBeTruthy());
-    await waitFor(() => expect(within(row$("Answering Approvals")).getByText(shown)).toBeTruthy());
+    await waitFor(() => expect(within(row$("Toolset switches")).getByText(switches)).toBeTruthy());
+    await waitFor(() => expect(within(row$("Answering Approvals")).getByText(answers)).toBeTruthy());
     expect(within(row$("Toolset switches")).queryByText(/not checked yet/)).toBeNull();
     expect(s.toolsetWrites).toEqual([]);
     expect(s.approvalAnswers).toEqual([]);
