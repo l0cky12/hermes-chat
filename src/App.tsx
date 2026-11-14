@@ -391,9 +391,15 @@ function Screens({ links }: { links: LinkInbox }) {
   // Why the keyring couldn't save the password at sign-in, shown once signed in.
   const [notSaved, setNotSaved] = useState<string>();
   const [kept, setKept] = useState<Kept>({ password: true, headers: true });
-  // Why the main screen is about to show, for whether it reopens the profile's last open chat (chatToReopen). null: it
-  // doesn't.
-  const [coldStart, setColdStart] = useState<ReopenOn | null>("launch");
+  // Whether the main screen reopens the profile's last open chat: at launch, and on switching to a connection.
+  const [coldStart, setColdStart] = useState(true);
+  // The main screen has shown in this run. Only the first is the launch, which reopens a chat only with "Reopen last
+  // chat on launch" on (ADR 0162); any after it is a switch, a sign-in again, or a failed one putting the last back.
+  const [launched, setLaunched] = useState(false);
+  const mainShown = !!hermes && !!connection && linksReady;
+  useEffect(() => {
+    if (mainShown) setLaunched(true);
+  }, [mainShown]);
   const [setup, setSetup] = useState<Setup>();
   const setupRef = useRef(setup);
   setupRef.current = setup;
@@ -582,7 +588,7 @@ function Screens({ links }: { links: LinkInbox }) {
         setKept({ password: true, headers: true });
         setError(undefined);
         // The connection's own last open chat, in the profile it showed last.
-        setColdStart("switch");
+        setColdStart(true);
         // A switch this one overtook, to a connection still opening, leaves no "Connecting to…" behind.
         setSwitchingTo(undefined);
         makeTarget(h, c, d);
@@ -656,9 +662,8 @@ function Screens({ links }: { links: LinkInbox }) {
         setKept(kept);
         setHeaders(headerNames(d));
         setError(undefined);
-        // The last chat open was on the connection before, or this one as it was before the change. With none before,
-        // the app is starting: the sign-in screen showed at launch, or after signing out.
-        setColdStart(!before ? "launch" : beforeConnection?.id !== c.id ? "switch" : null);
+        // The last chat open was on the connection before, or this one as it was before the change.
+        setColdStart(!before || beforeConnection?.id !== c.id);
         signedInWith.current = d;
         setConnection(c);
         makeTarget(h, c, d);
@@ -709,7 +714,7 @@ function Screens({ links }: { links: LinkInbox }) {
       }
       if (!inUse) return;
       showSignIn(undefined);
-      setColdStart(null);
+      setColdStart(false);
       if (!store.recent().length) setSetup({ mode: "first-run", initial: BLANK, target: store.draft(BLANK) });
     });
 
@@ -820,7 +825,7 @@ function Screens({ links }: { links: LinkInbox }) {
           headers={headers}
           notSaved={notSaved}
           kept={kept}
-          reopenLast={linkHere ? undefined : coldStart ?? undefined}
+          reopenLast={coldStart && !linkHere ? (launched ? "switch" : "launch") : undefined}
           covered={!!setup && !confirmingSetup}
           link={linkHere}
           linkSuperseded={badLink?.at}
@@ -853,7 +858,7 @@ function Screens({ links }: { links: LinkInbox }) {
               // Everything is read first, then shown at once: the sign-in screen keeps the details it mounts with.
               registry.remove(connection.id);
               const { initial, error } = await signOutToSignIn(hermes, connection, account);
-              setColdStart(null);
+              setColdStart(false);
               showSignIn(connection, initial, error);
             })
           }
@@ -1113,7 +1118,10 @@ export function Main({
   notSaved?: string;
   /** What the keyring kept at sign-in. */
   kept?: Kept;
-  /** The app starting, or a switch to this connection: open the profile's last open chat if chatToReopen says to. */
+  /**
+   * Open the profile's last open chat if chatToReopen says to: "launch" for the first main screen of the run, "switch"
+   * for any after it.
+   */
   reopenLast?: ReopenOn;
   /** Setup is open over the app: nothing here takes focus or keys. */
   covered?: boolean;
@@ -1321,6 +1329,12 @@ export function Main({
   // Kept per connection and profile, so the same profile name on another server keeps its own (connections.ts).
   const pref = prefScope(connection, profile);
   const [reopening, setReopening] = useState(() => (reopenLast ? chatToReopen(pref, reopenLast) : undefined));
+  // A launch on the New chat pane is the profile's chat on screen too, so the screen showing again later in this run (a
+  // switch back, a sign-in again) shows it, or whatever the owner opened since, and not a chat from before the launch.
+  useEffect(() => {
+    if (reopenLast === "launch" && !reopening) rememberOpenChat(pref, null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, as the screen first shows
+  }, []);
   // One pane, or two side by side. The chat to reopen opens at once when the list saved on this computer has it, so the
   // New chat pane doesn't show first.
   const [panes, setPanes] = useState<Pane[]>(() => {

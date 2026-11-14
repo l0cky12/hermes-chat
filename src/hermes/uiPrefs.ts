@@ -433,7 +433,7 @@ export function forgetOpenChat(profile: string, chatId: string): void {
   if (getUIPrefs().lastOpenChat[profile] === chatId) rememberOpenChat(profile, null);
 }
 
-/** Why the main screen is showing, for chatToReopen: the app starting, or a switch to another connection. */
+/** Why the main screen is showing, for chatToReopen: the first time in the run, or any time after (App.tsx). */
 export type ReopenOn = "launch" | "switch";
 
 /**

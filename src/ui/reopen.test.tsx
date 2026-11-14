@@ -7,7 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import { memoryCache, type MemoryCache } from "../hermes/memoryCache";
 import { connect, type Hermes } from "../hermes/transport";
-import { UI_PREFS_KEY, getUIPrefs, setUIPrefs } from "../hermes/uiPrefs";
+import { UI_PREFS_KEY, getUIPrefs, setUIPrefs, type ReopenOn } from "../hermes/uiPrefs";
 import { Main } from "../App";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
@@ -36,15 +36,18 @@ function server() {
 const onScreen = () => document.querySelector(".chat-title span")?.textContent;
 const storedLastOpen = () => JSON.parse(localStorage.getItem(UI_PREFS_KEY) ?? "{}").lastOpenChat;
 
-/** The app starting: signed in, the list read from Hermes, and every answer landed. */
-async function launch(s: FakeHermes, cache?: MemoryCache, { reopenLast = true } = {}) {
+/**
+ * The app starting: signed in, the list read from Hermes, and every answer landed. `reopenLast`: why the main screen
+ * shows, "launch" unless given; null for a screen that reopens nothing.
+ */
+async function launch(s: FakeHermes, cache?: MemoryCache, { reopenLast = "launch" as ReopenOn | null } = {}) {
   const hermes = await connect(s.openPipe, undefined, cache);
   running.push(hermes);
   render(
     <Main
       hermes={hermes}
       connection={{ mode: "ssh", sshTarget: "liam@hermes", url: "", username: "liam" }}
-      reopenLast={reopenLast ? "launch" : undefined}
+      reopenLast={reopenLast ?? undefined}
       onSignOut={async () => {}}
     />,
   );
@@ -75,7 +78,7 @@ async function switchTo(user: ReturnType<typeof userEvent.setup>, hermes: Hermes
 }
 
 describe("by default", () => {
-  it("starts every launch on the New chat pane, though the chat on screen is kept", async () => {
+  it("starts every launch on the New chat pane, and keeps that as the chat on screen", async () => {
     const s = server();
     const first = await launch(s);
     expect(onScreen()).toBe("New chat");
@@ -86,6 +89,23 @@ describe("by default", () => {
     await launch(s);
     expect(onScreen()).toBe("New chat");
     expect(screen.getByRole("button", { name: /NAS disks/ }).getAttribute("aria-current")).not.toBe("true");
+    expect(storedLastOpen()).toEqual({});
+  });
+
+  it("shows what is on screen since the launch when the screen shows again in the same run, as on a switch back", async () => {
+    const s = server();
+    setUIPrefs({ lastOpenChat: { default: "nas" } });
+    await launch(s);
+    expect(onScreen()).toBe("New chat");
+    await quit();
+    // Not the chat from before the launch: the launch's New chat pane.
+    const again = await launch(s, undefined, { reopenLast: "switch" });
+    expect(onScreen()).toBe("New chat");
+
+    await openFromList(again.user, "Nightly backup");
+    await quit();
+    await launch(s, undefined, { reopenLast: "switch" });
+    expect(onScreen()).toBe("Nightly backup");
   });
 });
 
@@ -140,21 +160,21 @@ describe("across a restart", () => {
     expect(onScreen()).toBe("New chat");
   });
 
-  it("starts on the New chat pane with the setting off, and still keeps the chat for when it's back on", async () => {
+  it("starts on the New chat pane with the setting off; turned back on, the next launch opens the chat on screen at close", async () => {
     const s = server();
     const first = await launch(s);
     await openFromList(first.user, "NAS disks");
     setUIPrefs({ reopenLastChat: false });
     await quit();
 
-    await launch(s);
+    const second = await launch(s);
     expect(onScreen()).toBe("New chat");
-    expect(storedLastOpen()).toEqual({ default: "nas" });
+    await openFromList(second.user, "Nightly backup");
     await quit();
 
     setUIPrefs({ reopenLastChat: true });
     await launch(s);
-    expect(onScreen()).toBe("NAS disks");
+    expect(onScreen()).toBe("Nightly backup");
   });
 
   it("doesn't reopen anything when signing in again in the same run", async () => {
@@ -162,7 +182,7 @@ describe("across a restart", () => {
     const first = await launch(s);
     await openFromList(first.user, "NAS disks");
     await quit();
-    await launch(s, undefined, { reopenLast: false });
+    await launch(s, undefined, { reopenLast: null });
     expect(onScreen()).toBe("New chat");
   });
 
