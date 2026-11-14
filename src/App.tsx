@@ -81,6 +81,7 @@ import { AttentionClock, ClearedStore, PINS_KEY, PinStore, SNOOZE_KEY, STOP_WAIT
 import { IDLE_COMPACT_CHECK_MS, IdleCompactor, idleCompactionNote } from "./hermes/idleCompact";
 import { runFilter } from "./hermes/chatFilter";
 import { SettingsScreen, type PersonaWiring } from "./ui/Settings";
+import type { ProfilesWiring } from "./ui/ProfileSettings";
 import { LeavePersona, type LeaveWhat } from "./ui/LeavePersona";
 import { LeaveArtifacts } from "./ui/ArtifactEditor";
 import { ASK_DEADLINE_MS, ArtifactStore, artifactIo, isDirty } from "./hermes/artifacts";
@@ -101,7 +102,8 @@ import { CAPABILITIES, guideUrl, type CapabilityId } from "./hermes/capabilities
 import { useCapabilities } from "./ui/Diagnostics";
 import { Automations } from "./ui/Automations";
 import { tauriLocalTerminal, tauriTerminal } from "./ui/tauriTerminal";
-import { terminalTarget, terminalTargetGuessed, terminalTargetKey, type TerminalKind } from "./hermes/terminal";
+import { useShells } from "./ui/useShells";
+import { MAX_FOLDER_SHELLS, terminalTarget, terminalTargetGuessed, terminalTargetKey, type TerminalKind } from "./hermes/terminal";
 import { REPO_PATH_KEY, REPO_RECENT_KEY, REPO_TARGET_KEY, readRecent, remember, repoTarget } from "./hermes/repo";
 import { RepositoryScreen } from "./ui/Repository";
 import { startInWorktree, worktreeChats, type WorktreeChat, type WorktreeStart } from "./hermes/worktrees";
@@ -123,6 +125,7 @@ import { ScreenTab } from "./ui/Screen";
 import { LinksProvider, useOpenPreview } from "./ui/previewContext";
 import { tauriLocalFiles, tauriServerPages, tauriWebPages, type LocalFiles, type ServerPages, type WebPages } from "./ui/tauriPreview";
 import type { PreviewTarget } from "./hermes/preview";
+import { pathOpener } from "./hermes/paths";
 import type { Route } from "./hermes/pipe";
 import { tauriTray, type TrayWiring } from "./hermes/tauriTray";
 import { usePageHidden, useWindowHidden } from "./ui/windowState";
@@ -1291,8 +1294,9 @@ export function Main({
   /** Automations (webhook routes, ADR 0108) cover the chat too. */
   const [automationsOpen, setAutomationsOpen] = useState(false);
   // The side panel's Terminal (ADR 0022, ADR 0039): which shell is shown, kept in the prefs so it opens on the one picked
-  // last (the Hermes server's until then, ADR 0051), and which are running, for the rail's dot.
-  const termKind = useSyncExternalStore(subscribeUIPrefs, getUIPrefs).terminalKind;
+  // last (the Hermes server's until then, ADR 0051), the folder shells a reply's paths opened (ADR 0167), and which are
+  // running, for the rail's dot.
+  const terminalShells = useShells();
   // The list holds the profile's archived chats only while its Archived section is shown (ADR 0063); a profile switch
   // starts without them, so they are listed again then.
   const archivedShown = useSyncExternalStore(subscribeUIPrefs, getUIPrefs).chatSectionsShown.includes("archived");
@@ -1461,6 +1465,22 @@ export function Main({
       openPanel("preview");
     },
     [openPanel],
+  );
+  // A path in a reply (ADR 0167): a file opens in the Preview, a folder in a folder shell on the Hermes server. One
+  // opener for every pane, so the newest click wins whichever pane it was in.
+  const openShellIn = terminalShells.openIn;
+  const openPath = useMemo(
+    () =>
+      pathOpener({
+        kindOf: (path) => hermes.pathKind(path),
+        preview: openPreview,
+        shell: (folder) => {
+          if (openShellIn("server", folder)) openPanel("terminal");
+          else setToast({ text: `The Terminal holds ${MAX_FOLDER_SHELLS} folder shells. Close one to open another.`, at: Date.now() });
+        },
+        say: (text) => setToast({ text, at: Date.now() }),
+      }),
+    [hermes, openPreview, openPanel, openShellIn],
   );
   const mainRef = useRef<HTMLElement>(null);
   const mainWidth = useWidth(mainRef);
@@ -2996,8 +3016,63 @@ export function Main({
     };
   });
 
+  // Settings → Profiles (ADR 0156), and the Bots view's New bot, which is its New profile form (ADR 0164).
+  const profilesWiring: Omit<ProfilesWiring, "showTab"> = {
+    api: hermes.manageProfiles,
+    clone: hermes.profileClone,
+    capabilities: hermes.capabilities,
+    inUse: profile,
+    connected: status === "connected",
+    unread: (name) => others.byName[name]?.unread,
+    catalog: () => hermes.modelSettings.providers(),
+    busy: (name) => {
+      if (name === profile) {
+        const running = chats.find((c) => c.running);
+        if (running) return { kind: "reply", title: running.title };
+        const queues = hermes.getSnapshot().queues;
+        return Object.values(queues).some((q) => !q.paused && q.items.length) ? { kind: "queue" } : undefined;
+      }
+      const working = live?.sessions.find((s) => s.profile === name && s.status === "working");
+      return working ? { kind: "reply", title: working.title } : undefined;
+    },
+    lostMessages: (name) => hermes.heldMessagesIn(name),
+    jobCount: (name) => hermes.cron.list(name).then((jobs) => jobs.length, () => undefined),
+    leaving: leavingNote(profile, chats, words.profiles.leaving),
+    switchTo: switchFromProfiles,
+    local: {
+      pending: () => renamePending(connection),
+      note: (from, to) => noteRename(connection, from, to),
+      clear: () => clearRename(connection),
+      renamed: async (from, to) => {
+        // This run's chat on screen moves with the profile, as this computer's data does.
+        const fromPref = prefScope(connection, from);
+        if (shown?.has(fromPref)) {
+          shown.set(prefScope(connection, to), shown.get(fromPref) ?? null);
+          shown.delete(fromPref);
+        }
+        try {
+          await renameProfileLocally(connection, from, to, profileStores());
+        } finally {
+          // The inbox's dismissals were rewritten under the new name: it reads them again.
+          acks.reload();
+          // The profile in use keeps its chats on screen under its new name, as a switch would show them.
+          if (hermes.profile === from) void hermes.switchProfile(to);
+        }
+      },
+      deleted: async (name) => {
+        try {
+          await forgetProfileLocally(connection, name, profileStores());
+        } finally {
+          acks.reload();
+          await syncScreenshotOutbox().catch(() => {});
+        }
+      },
+    },
+    copyText: (text) => (navigator.clipboard?.writeText ? navigator.clipboard.writeText(text) : Promise.reject(new Error("No clipboard"))),
+  };
+
   return (
-    <LinksProvider preview={openPreview} web={webPages} onToast={(text) => setToast({ text, at: Date.now() })}>
+    <LinksProvider preview={openPreview} path={openPath} web={webPages} onToast={(text) => setToast({ text, at: Date.now() })}>
     <div className="app" inert={covered || restarting}>
       <Rail
         status={status}
@@ -3234,6 +3309,7 @@ export function Main({
           onNewChat={(b) => openBot(b, "new")}
           onRefresh={() => void hermes.checkOtherProfiles()}
           onClose={() => setBotsOpen(false)}
+          profiles={profilesWiring}
         />
       )}
       {inboxOpen && (
@@ -3503,59 +3579,7 @@ export function Main({
             guard={guard}
             listProfiles={listProfiles}
             defaultName={defaultProfileName}
-            profilesTab={{
-              api: hermes.manageProfiles,
-              clone: hermes.profileClone,
-              capabilities: hermes.capabilities,
-              inUse: profile,
-              connected: status === "connected",
-              unread: (name) => others.byName[name]?.unread,
-              catalog: () => hermes.modelSettings.providers(),
-              busy: (name) => {
-                if (name === profile) {
-                  const running = chats.find((c) => c.running);
-                  if (running) return { kind: "reply", title: running.title };
-                  const queues = hermes.getSnapshot().queues;
-                  return Object.values(queues).some((q) => !q.paused && q.items.length) ? { kind: "queue" } : undefined;
-                }
-                const working = live?.sessions.find((s) => s.profile === name && s.status === "working");
-                return working ? { kind: "reply", title: working.title } : undefined;
-              },
-              lostMessages: (name) => hermes.heldMessagesIn(name),
-              jobCount: (name) => hermes.cron.list(name).then((jobs) => jobs.length, () => undefined),
-              leaving: leavingNote(profile, chats, words.profiles.leaving),
-              switchTo: switchFromProfiles,
-              local: {
-                pending: () => renamePending(connection),
-                note: (from, to) => noteRename(connection, from, to),
-                clear: () => clearRename(connection),
-                renamed: async (from, to) => {
-                  // This run's chat on screen moves with the profile, as this computer's data does.
-                  const fromPref = prefScope(connection, from);
-                  if (shown?.has(fromPref)) {
-                    shown.set(prefScope(connection, to), shown.get(fromPref) ?? null);
-                    shown.delete(fromPref);
-                  }
-                  try {
-                    await renameProfileLocally(connection, from, to, profileStores());
-                  } finally {
-                    // The inbox's dismissals were rewritten under the new name: it reads them again.
-                    acks.reload();
-                    // The profile in use keeps its chats on screen under its new name, as a switch would show them.
-                    if (hermes.profile === from) void hermes.switchProfile(to);
-                  }
-                },
-                deleted: async (name) => {
-                  try {
-                    await forgetProfileLocally(connection, name, profileStores());
-                  } finally {
-                    acks.reload();
-                    await syncScreenshotOutbox().catch(() => {});
-                  }
-                },
-              },
-              copyText: (text) => (navigator.clipboard?.writeText ? navigator.clipboard.writeText(text) : Promise.reject(new Error("No clipboard"))),
-            }}
+            profilesTab={profilesWiring}
           />
         ) : usageOpen ? (
           <UsageAnalytics
@@ -3659,8 +3683,10 @@ export function Main({
                       }}
                       local={{ api: tauriLocalTerminal }}
                       shown={shown}
-                      kind={termKind}
-                      onKind={(k) => setUIPrefs({ terminalKind: k })}
+                      shells={terminalShells.shells}
+                      onShow={terminalShells.show}
+                      onClose={terminalShells.close}
+                      onLocal={(id) => terminalShells.move(id, "local")}
                       onRunning={setTermRunning}
                     />
                   </Suspense>

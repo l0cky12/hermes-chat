@@ -24,12 +24,40 @@ impl<'a> Target<'a> {
     }
 }
 
+/// A folder on the server a terminal's shell starts in (ADR 0167): `/…` or `~/…`, at most 4096 bytes, with no `'`,
+/// `\`, `!` or control character. The path is model output, so it reaches the server's login shell only inside single
+/// quotes, and these are the characters that mean something there to some shell: `'` ends the quotes, fish reads `\'`
+/// and `\\` inside them, and csh expands `!` and ends a word at a newline inside them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Folder<'a>(&'a str);
+
+impl<'a> Folder<'a> {
+    pub fn parse(raw: &'a str) -> Option<Self> {
+        let full = raw.starts_with('/') || raw.starts_with("~/");
+        let literal = !raw.chars().any(|c| matches!(c, '\'' | '\\' | '!') || c.is_control());
+        (full && literal && raw.len() <= 4096).then_some(Folder(raw))
+    }
+
+    /// What the server's login shell runs: `cd` into the folder, then the owner's login shell in its place. `~/` stays
+    /// outside the quotes, so the shell reads it as the home folder. A `cd` that fails prints why, and the login
+    /// shell still starts, in the home folder.
+    pub fn command(self) -> String {
+        let folder = match self.0.strip_prefix("~/") {
+            Some("") => "~/".to_owned(),
+            Some(under_home) => format!("~/'{under_home}'"),
+            None => format!("'{}'", self.0),
+        };
+        format!("cd {folder}; exec \"$SHELL\" -l")
+    }
+}
+
 /// What an ssh is for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind<'a> {
     /// The owner's own shell in a terminal (ADR 0022). ssh can ask for a password, a passphrase or an unknown host key,
     /// and the owner answers. Host keys and agent, X11 and port forwarding are the owner's config's, as from any terminal.
-    Terminal,
+    /// `folder`: where the shell starts, in place of the home folder.
+    Terminal { folder: Option<Folder<'a>> },
     /// `remote` run in the background (ADR 0110), forwarding nothing.
     Command { remote: &'a [&'a str] },
     /// One forward from `local` on this computer to `far_end` (`host:port`) as the server sees it, and no command, in
@@ -79,12 +107,12 @@ const EVERY: &[&str] = &["-o", "ControlMaster=no", "-o", "ControlPath=none", "-o
 /// needs one fails rather than waiting, and nothing of this computer's (the agent, the X display) is forwarded to the
 /// server.
 pub fn args(target: Target, kind: Kind, connect_timeout: Option<Duration>) -> Vec<OsString> {
-    let background = kind != Kind::Terminal;
+    let background = !matches!(kind, Kind::Terminal { .. });
     let mut args: Vec<OsString> = Vec::new();
     let mut push = |a: &[&str]| args.extend(a.iter().map(OsString::from));
     match kind {
         // `-t`: a login shell in a terminal even if the owner's config sets a RemoteCommand.
-        Kind::Terminal => push(&["-t"]),
+        Kind::Terminal { .. } => push(&["-t"]),
         Kind::Command { .. } => push(&["-T"]),
         // `-W` is `-N -T` already.
         Kind::Forward { local: Local::Socket(_), .. } => push(&["-N", "-T"]),
@@ -105,7 +133,9 @@ pub fn args(target: Target, kind: Kind, connect_timeout: Option<Duration>) -> Ve
         push(&["-o", "ForwardAgent=no", "-o", "ForwardX11=no"]);
     }
     match kind {
-        Kind::Terminal => {}
+        Kind::Terminal { folder: None } => {}
+        // ssh refuses a command after the target while the owner's config sets a RemoteCommand of its own.
+        Kind::Terminal { folder: Some(_) } => push(&["-o", "RemoteCommand=none"]),
         // A LocalForward in the owner's config would clash with the sign-in tunnel, and isn't needed here.
         Kind::Command { .. } => push(&["-o", "ClearAllForwardings=yes"]),
         Kind::Forward { local, far_end, host_keys, on_failure } => {
@@ -127,8 +157,10 @@ pub fn args(target: Target, kind: Kind, connect_timeout: Option<Duration>) -> Ve
         }
     }
     push(&["--", target.as_str()]);
-    if let Kind::Command { remote } = kind {
-        push(remote);
+    match kind {
+        Kind::Command { remote } => push(remote),
+        Kind::Terminal { folder: Some(folder) } => push(&[&folder.command()]),
+        Kind::Terminal { folder: None } | Kind::Forward { .. } => {}
     }
     args
 }
@@ -137,8 +169,9 @@ pub fn args(target: Target, kind: Kind, connect_timeout: Option<Duration>) -> Ve
 mod tests {
     use super::*;
 
-    const KINDS: [Kind; 7] = [
-        Kind::Terminal,
+    const KINDS: [Kind; 8] = [
+        Kind::Terminal { folder: None },
+        Kind::Terminal { folder: Some(Folder("/srv/app")) },
         Kind::Command { remote: &["ss", "-ltnpH"] },
         Kind::Command { remote: &[] },
         Kind::Forward {
@@ -184,7 +217,7 @@ mod tests {
             for o in ["ControlMaster=no", "ControlPath=none", "PermitLocalCommand=no", "ServerAliveInterval=15"] {
                 assert!(options.contains(&o), "{kind:?} got -o {o}: {args:?}");
             }
-            if kind != Kind::Terminal {
+            if !matches!(kind, Kind::Terminal { .. }) {
                 for o in ["BatchMode=yes", "ForwardAgent=no", "ForwardX11=no"] {
                     assert!(options.contains(&o), "{kind:?} got -o {o}: {args:?}");
                 }
@@ -218,10 +251,41 @@ mod tests {
 
     #[test]
     fn the_terminal_can_ask_the_owner_and_keeps_the_owners_host_keys() {
-        let args = strings(args(Target::parse(" liam@hermes ").unwrap(), Kind::Terminal, None));
+        let args = strings(args(Target::parse(" liam@hermes ").unwrap(), Kind::Terminal { folder: None }, None));
         assert_eq!(args[0], "-t");
         assert!(!options(&args).iter().any(|o| o.starts_with("BatchMode") || o.starts_with("StrictHostKeyChecking")), "{args:?}");
+        assert!(!options(&args).iter().any(|o| o.starts_with("RemoteCommand")), "the owner's RemoteCommand still runs: {args:?}");
         assert_eq!(args[args.len() - 2..], ["--", "liam@hermes"]);
+    }
+
+    #[test]
+    fn refuses_a_folder_a_shell_could_read_as_more_than_one_word() {
+        let long = format!("/{}", "a".repeat(4096));
+        for bad in ["", "src/ui", "~", "~liam/x", "./x", "/it's", "/a\\b", "/wow!", "/a\nb", "/a\x1bb", "/a\0b", "/a\u{85}b", "~/it's", long.as_str()] {
+            assert_eq!(Folder::parse(bad), None, "{bad:?}");
+        }
+        for good in ["/", "~/", "/srv/app", "~/notes/2026", "/a b/$(touch pwned)/`id`;x&&y|z*?", "/caf\u{e9}/\u{65e5}\u{672c}"] {
+            assert!(Folder::parse(good).is_some(), "{good:?}");
+        }
+    }
+
+    #[test]
+    fn a_folder_reaches_the_login_shell_as_one_quoted_word() {
+        let command = |folder| Folder::parse(folder).unwrap().command();
+        assert_eq!(command("/srv/my app"), r#"cd '/srv/my app'; exec "$SHELL" -l"#);
+        assert_eq!(command("/a/$(touch pwned);`id`"), r#"cd '/a/$(touch pwned);`id`'; exec "$SHELL" -l"#);
+        assert_eq!(command("~/notes/a b"), r#"cd ~/'notes/a b'; exec "$SHELL" -l"#);
+        assert_eq!(command("~/"), r#"cd ~/; exec "$SHELL" -l"#);
+    }
+
+    #[test]
+    fn a_terminal_in_a_folder_runs_one_command_after_the_target_whatever_the_owners_config_runs() {
+        let folder = Folder::parse("/srv/my app").unwrap();
+        let args = strings(args(Target::parse("liam@hermes").unwrap(), Kind::Terminal { folder: Some(folder) }, None));
+        assert_eq!(args[0], "-t");
+        assert!(options(&args).contains(&"RemoteCommand=none"), "{args:?}");
+        assert!(!options(&args).iter().any(|o| o.starts_with("BatchMode")), "{args:?}");
+        assert_eq!(args[args.len() - 3..], ["--", "liam@hermes", r#"cd '/srv/my app'; exec "$SHELL" -l"#]);
     }
 
     #[test]

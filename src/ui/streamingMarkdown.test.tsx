@@ -2,9 +2,11 @@
 // A reply streaming in through Markdown (#224): each delta must redo only what it changed, and the finished reply must
 // come out as it always has.
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Markdown } from "./Markdown";
+import { LinksProvider, PathsIn } from "./previewContext";
 import { splitBlocks, type Blocks } from "./markdownBlocks";
 import { rehypePlugins, remarkPlugins } from "./markdownPipeline";
 import { unified } from "unified";
@@ -64,8 +66,10 @@ const REPLIES: Record<string, string> = {
 /** Replies with math, which highlighting alone leaves as code, and Markdown typesets. */
 const hasMath = (name: string) => name.includes("math");
 
-const whole = (text: string, query = "") => {
-  const { container, unmount } = render(<Markdown text={text} query={query} />);
+type Around = (props: { children: ReactNode }) => ReactNode;
+
+const whole = (text: string, query = "", wrapper?: Around) => {
+  const { container, unmount } = render(<Markdown text={text} query={query} />, { wrapper });
   const html = container.innerHTML;
   unmount();
   return html;
@@ -73,10 +77,10 @@ const whole = (text: string, query = "") => {
 
 /**
  * `text` streamed in `step` characters at a time, then finished; the HTML each time, and the last, once the languages
- * guessed after a delta are in.
+ * guessed after a delta are in. `wrapper`: what the reply renders inside.
  */
-async function streamed(text: string, step: number, query = "") {
-  const { container, rerender, unmount } = render(<Markdown text="" query={query} streaming />);
+async function streamed(text: string, step: number, query = "", wrapper?: Around) {
+  const { container, rerender, unmount } = render(<Markdown text="" query={query} streaming />, { wrapper });
   const seen: string[] = [];
   for (let i = step; i < text.length + step; i += step) {
     rerender(<Markdown text={text.slice(0, i)} query={query} streaming />);
@@ -181,6 +185,22 @@ describe("A streamed reply, once finished", () => {
     const text = REPLIES["lists, loose and tight"] + "\n\n" + REPLIES.table + "\n\n" + REPLIES.links + "\n\n" + REPLIES["inline math"];
     const { seen } = await streamed(text, 5);
     seen.forEach((html, i) => expect(html, `after ${(i + 1) * 5} characters`).toBe(whole(text.slice(0, (i + 1) * 5))));
+  });
+
+  it("links the paths the one-piece render links, at every delta and once finished (ADR 0167)", { timeout: 30_000 }, async () => {
+    const inAChat: Around = ({ children }) => (
+      <LinksProvider preview={vi.fn()} path={async () => {}} web={{ openInBrowser: vi.fn() }} onToast={vi.fn()}>
+        <PathsIn folder="/srv/app">{children}</PathsIn>
+      </LinksProvider>
+    );
+    const prose =
+      "Edited src/ui/Markdown.tsx:12 and `~/notes/`, see [the config](/etc/hosts) and/or `package.json`.\n\n- docs/adr/ holds `cat /etc/hosts.conf`\n- **./run.sh** starts it\n\n| file | why |\n| - | - |\n| /usr/bin/env | finds it |";
+    const text = prose + "\n\n" + fence("sh", "ls /usr/bin/env") + "\n\nDone in src/a.ts.";
+    const linked = (html: string) => html.match(/<a class="path-link"[^>]*>.*?<\/a>/g) ?? [];
+    expect(linked(whole(text, "", inAChat))).toHaveLength(9);
+    for (const query of ["", "s"]) expect((await streamed(text, 7, query, inAChat)).html, `query "${query}"`).toBe(whole(text, query, inAChat));
+    const { seen } = await streamed(prose, 5, "", inAChat);
+    seen.forEach((html, i) => expect(html, `after ${(i + 1) * 5} characters`).toBe(whole(prose.slice(0, (i + 1) * 5), "", inAChat)));
   });
 });
 

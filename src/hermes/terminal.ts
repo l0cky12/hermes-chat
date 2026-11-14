@@ -1,4 +1,5 @@
 import { errorText } from "./values";
+import type { ServerPath } from "./paths";
 // A terminal on the server: the owner's own `ssh` run in a pseudo-terminal by Rust (src-tauri/src/terminal.rs,
 // ADR 0022). This is the session's lifecycle, apart from the screen that draws it (src/ui/Terminal.tsx).
 
@@ -8,13 +9,64 @@ export type TerminalKind = "server" | "local";
 /** What the terminal sends back: bytes ssh printed, then, once, how it ended. */
 export type TerminalEvent = { kind: "output"; data: Uint8Array } | { kind: "exit"; code: number | null };
 
-/** Rust's terminal commands. `open` resolves to the terminal's id; its events may start before it resolves. */
+/**
+ * Rust's terminal commands. `open` resolves to the terminal's id; its events may start before it resolves. `folder`:
+ * the folder its shell starts in, in place of the home folder (ADR 0167). `write` carries only what the owner typed.
+ */
 export type TerminalApi = {
-  open(target: string, cols: number, rows: number, onEvent: (e: TerminalEvent) => void): Promise<number>;
+  open(target: string, cols: number, rows: number, onEvent: (e: TerminalEvent) => void, folder?: string): Promise<number>;
   write(id: number, data: string): Promise<void>;
   resize(id: number, cols: number, rows: number): Promise<void>;
   close(id: number): void;
 };
+
+/**
+ * One of the Terminal tab's shells. `server` and `local` are the two it always has. A folder shell's id names its
+ * computer and its folder, so opening the same folder again finds the shell already there (ADR 0167).
+ */
+export type ShellId = TerminalKind | `in:${TerminalKind}:${string}`;
+
+/** A shell started in `folder`. `asked`: how often it has been asked for, so one that ended starts again when it is asked for again. */
+export type FolderShell = { id: ShellId; kind: TerminalKind; folder: ServerPath; asked: number };
+
+/** The Terminal tab's shells: the one on screen, and the folder shells in the order they were opened. */
+export type Shells = { shown: ShellId; folders: FolderShell[] };
+
+/** Each folder shell is an ssh of its own until it is closed, so the tab holds only this many. */
+export const MAX_FOLDER_SHELLS = 8;
+
+const isBase = (id: ShellId): id is TerminalKind => id === "server" || id === "local";
+
+/** The tab as it opens: on `kind`'s shell, with no folder shells. */
+export const shellsAt = (kind: TerminalKind): Shells => ({ shown: kind, folders: [] });
+
+/** Puts shell `id` on screen. One the tab doesn't hold changes nothing. */
+export const showShell = (s: Shells, id: ShellId): Shells => (isBase(id) || s.folders.some((f) => f.id === id) ? { ...s, shown: id } : s);
+
+/**
+ * Shows the shell in `folder` on `kind`, adding it if the tab has none there. Nothing running is ever closed to make
+ * room: with `MAX_FOLDER_SHELLS` open already, a new one is "full".
+ */
+export function openShellIn(s: Shells, kind: TerminalKind, folder: ServerPath): Shells | "full" {
+  const id: ShellId = `in:${kind}:${folder}`;
+  if (s.folders.some((f) => f.id === id)) return { shown: id, folders: s.folders.map((f) => (f.id === id ? { ...f, asked: f.asked + 1 } : f)) };
+  if (s.folders.length >= MAX_FOLDER_SHELLS) return "full";
+  return { shown: id, folders: [...s.folders, { id, kind, folder, asked: 1 }] };
+}
+
+/** Drops folder shell `id`, and shows its computer's own shell if it was on screen. The two base shells can't be closed. */
+export function closeShell(s: Shells, id: ShellId): Shells {
+  const closed = s.folders.find((f) => f.id === id);
+  if (!closed) return s;
+  return { shown: s.shown === id ? closed.kind : s.shown, folders: s.folders.filter((f) => f !== closed) };
+}
+
+/** Folder shell `id` on `kind` instead: closed where it was, and opened in the same folder there. */
+export function moveShell(s: Shells, id: ShellId, kind: TerminalKind): Shells {
+  const from = s.folders.find((f) => f.id === id);
+  const moved = from && openShellIn(closeShell(s, id), kind, from.folder);
+  return moved && moved !== "full" ? moved : s;
+}
 
 export type TerminalState =
   | { kind: "idle" }
@@ -86,7 +138,7 @@ export function endedText(s: Extract<TerminalState, { kind: "ended" }>, kind: Te
 
 /**
  * One terminal at a time. `output` gets every byte ssh prints; `onState` hears each change. Starting again keeps
- * what was printed before, so the screen keeps its scrollback.
+ * what was printed before, so the screen keeps its scrollback. `folder`: where its shell starts, each time it starts.
  */
 export class TerminalSession {
   state: TerminalState = { kind: "idle" };
@@ -102,6 +154,7 @@ export class TerminalSession {
     private api: TerminalApi,
     private output: (data: Uint8Array) => void,
     private onState: (s: TerminalState) => void,
+    private folder?: string,
   ) {}
 
   private set(s: TerminalState) {
@@ -135,7 +188,7 @@ export class TerminalSession {
       }
     };
     try {
-      const id = await this.api.open(target, cols, rows, onEvent);
+      const id = await this.api.open(target, cols, rows, onEvent, this.folder);
       if (run !== this.run || this.state.kind === "ended") {
         // Ended before `open` answered: it has nothing left to keep.
         this.api.close(id);

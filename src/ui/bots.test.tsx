@@ -8,7 +8,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import { memoryCache } from "../hermes/memoryCache";
-import { BOT_CHAT_TITLE, BotModeUnsupportedError } from "../hermes/bots";
+import { BOT_CHAT_TITLE, BotModeUnsupportedError, rosterOf, type Bot } from "../hermes/bots";
 import { getUIPrefs } from "../hermes/uiPrefs";
 import { Bots, BOTS_REFRESH_MS } from "./Bots";
 import { connect, type Hermes } from "../hermes/transport";
@@ -166,6 +166,136 @@ describe("The Bots view", () => {
     await waitFor(() => expect(screen.getByText(/A Bot Chat is one continuous conversation, so \/new compacts it/)).toBeTruthy());
     expect(server.requests.filter((r) => r.method === "session.compress")).toHaveLength(1);
     expect(screen.queryByText("What should Hermes work on?")).toBeNull();
+  });
+});
+
+describe("New bot in the Bots view", () => {
+  const form = () => screen.getByRole("dialog", { name: "New bot" });
+
+  it("makes a profile through New profile's form and shows the new bot's row, focused, without starting its Bot Chat", async () => {
+    const { server, user } = await launch();
+    await openBots(user);
+    await user.click(screen.getByRole("button", { name: "New bot" }));
+    await user.type(within(form()).getByLabelText("Name"), "ada");
+    await user.type(within(form()).getByLabelText("Description (optional)"), "Reads papers");
+    await user.click(within(form()).getByRole("button", { name: /Create bot/ }));
+    await waitFor(() => expect(botRows()).toHaveLength(3));
+    expect(screen.queryByRole("dialog", { name: "New bot" })).toBeNull();
+    expect(server.restRequests.filter((r) => r.method !== "GET").map((r) => [`${r.method} ${r.path}`, r.body])).toEqual([["POST /api/profiles", { name: "ada", description: "Reads papers" }]]);
+    const ada = botRows().find((r) => r.querySelector(".bots-name")?.textContent === "Ada")!;
+    expect(within(ada).getByText("Reads papers")).toBeTruthy();
+    expect(within(ada).getByText("No Bot Chat yet. Open it to start one.")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(ada));
+    expect(within(bots()).getByRole("status").textContent).toBe("Created ada. Open its row to start its Bot Chat.");
+    expect(server.requests.filter((r) => r.method === "session.create" || r.method === "prompt.submit")).toEqual([]);
+  });
+
+  it("clears a search that would hide the new bot, so its row is shown and focused", async () => {
+    const { user } = await launch();
+    await openBots(user);
+    await user.type(screen.getByLabelText("Search bots"), "scribe");
+    await user.click(screen.getByRole("button", { name: "New bot" }));
+    await user.type(within(form()).getByLabelText("Name"), "ada");
+    await user.click(within(form()).getByRole("button", { name: /Create bot/ }));
+    await waitFor(() => expect(botRows()).toHaveLength(3));
+    expect(screen.getByLabelText("Search bots")).toHaveProperty("value", "");
+    const ada = botRows().find((r) => r.querySelector(".bots-name")?.textContent === "Ada")!;
+    await waitFor(() => expect(document.activeElement).toBe(ada));
+  });
+
+  it("refuses a name another bot's profile has, before asking Hermes", async () => {
+    const { server, user } = await launch();
+    await openBots(user);
+    await user.click(screen.getByRole("button", { name: "New bot" }));
+    await user.type(within(form()).getByLabelText("Name"), "scribe");
+    expect(within(form()).getByText("There's already a profile named scribe. Pick another name.")).toBeTruthy();
+    expect(within(form()).getByRole("button", { name: /Create bot/ })).toHaveProperty("disabled", true);
+    expect(server.restRequests.filter((r) => r.method !== "GET")).toEqual([]);
+  });
+
+  /** The Bots view with its first roster read still pending: `arrive` gives it `roster` and answers the read. */
+  async function pending() {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const server = new FakeHermes();
+    const hermes = await connect(server.openPipe, undefined, memoryCache());
+    running.push(hermes);
+    let answer = () => {};
+    const view = (last?: { roster: Bot[]; at: number }) => (
+      <Bots
+        server="hermes"
+        profile="default"
+        connected
+        last={last}
+        pictures={{}}
+        load={() => new Promise<void>((done) => (answer = done))}
+        activity={() => undefined}
+        onOpen={() => {}}
+        onNewChat={() => {}}
+        onRefresh={() => {}}
+        onClose={onClose}
+        profiles={{
+          api: hermes.manageProfiles,
+          inUse: "default",
+          connected: true,
+          unread: () => undefined,
+          catalog: async () => [],
+          busy: () => undefined,
+          lostMessages: () => 0,
+          jobCount: async () => undefined,
+          switchTo: async () => false,
+          local: { pending: () => undefined, note: () => {}, clear: () => {}, renamed: async () => {}, deleted: async () => {} },
+          copyText: async () => {},
+        }}
+      />
+    );
+    const { rerender } = render(view());
+    expect(screen.getByText("Reading the bots…")).toBeTruthy();
+    const arrive = (roster: Bot[]) =>
+      act(async () => {
+        rerender(view({ roster, at: Date.now() }));
+        answer();
+      });
+    return { user, onClose, server, arrive };
+  }
+
+  it("keeps focus in the form when the roster arrives after it opened", async () => {
+    const { user, onClose, arrive } = await pending();
+    await user.click(screen.getByRole("button", { name: "New bot" }));
+    const name = within(form()).getByLabelText("Name");
+    await user.type(name, "ada");
+    await arrive(rosterOf({ profiles: [{ name: "default", canonical_session: null }] }));
+    expect(botRows()).toHaveLength(1);
+    expect(document.activeElement).toBe(name);
+    await user.keyboard("{Escape}");
+    expect(within(form()).getByText("The changes you made here aren't saved.")).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("waits for the roster before creating, so a taken name never reaches Hermes", async () => {
+    const { user, server, arrive } = await pending();
+    await user.click(screen.getByRole("button", { name: "New bot" }));
+    await user.type(within(form()).getByLabelText("Name"), "scribe");
+    const create = within(form()).getByRole("button", { name: /Create bot/ });
+    expect(create).toHaveProperty("disabled", true);
+    expect(within(form()).getByRole("status").textContent).toBe("Wait for the list of profiles, so the name can be checked against it.");
+    await user.click(create);
+    await user.keyboard("{Enter}");
+    expect(server.restRequests.filter((r) => r.method !== "GET")).toEqual([]);
+    await arrive(rosterOf({ profiles: [{ name: "default", canonical_session: null }, { name: "scribe", canonical_session: null }] }));
+    expect(within(form()).getByText("There's already a profile named scribe. Pick another name.")).toBeTruthy();
+    expect(create).toHaveProperty("disabled", true);
+    expect(server.restRequests.filter((r) => r.method !== "GET")).toEqual([]);
+  });
+
+  it("closes only the form on Escape, with focus back on New bot", async () => {
+    const { user } = await launch();
+    await openBots(user);
+    await user.click(screen.getByRole("button", { name: "New bot" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "New bot" })).toBeNull();
+    expect(bots()).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "New bot" }));
   });
 });
 

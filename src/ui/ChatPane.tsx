@@ -41,7 +41,7 @@ import { ConversationPanel, StartConversationButton, conversationAway, startBloc
 import type { ConversationState, VoiceConversation } from "./conversation";
 import type { VoiceSetup } from "../hermes/pipe";
 import { ChatUsageButton, ReplyUsageLine } from "./Usage";
-import { useLinkMenu, useOpenPreview } from "./previewContext";
+import { PathsIn, useLinkMenu, useOpenPreview, usePathsIn } from "./previewContext";
 import { ShowInChatContext, type ShowInChat } from "./showInChat";
 import { linkTarget, previewName, toolTargets, withoutBidi } from "../hermes/preview";
 import { type CommandHost, useSlashCommands } from "./SlashCommands";
@@ -177,8 +177,6 @@ export type JumpTarget =
   | { turn: number; callId?: undefined; rowId?: undefined; at: number };
 /** The tool call being gone to, for the tool rows and groups that hold it to open themselves. */
 const JumpContext = createContext<JumpTarget | undefined>(undefined);
-/** The chat whose transcript this is: a file its tool calls name is in that chat's sandbox (ADR 0170). */
-const ToolSessionContext = createContext<string | undefined>(undefined);
 
 const STATUS_NOTE: Record<ConnectionStatus, string | undefined> = {
   connected: undefined,
@@ -963,7 +961,7 @@ export function ChatPane({
         }}
       >
         <JumpContext.Provider value={jumpTo}>
-        <ToolSessionContext.Provider value={chat.id}>
+        <PathsIn folder={chat.folder} session={chat.id}>
         <div className="transcript-inner">
           {chat.source !== "app" && (
             <div className="imported-note">
@@ -1047,7 +1045,7 @@ export function ChatPane({
             </div>
           )}
         </div>
-        </ToolSessionContext.Provider>
+        </PathsIn>
         </JumpContext.Provider>
       </div>
 
@@ -1495,7 +1493,8 @@ function ToolRow({ t }: { t: ToolItem }) {
 function ToolPreviews({ t }: { t: ToolItem }) {
   const open = useOpenPreview();
   const menu = useLinkMenu();
-  const session = useContext(ToolSessionContext);
+  // A file the tool call names is in the sandbox of the chat whose transcript this is (ADR 0170).
+  const session = usePathsIn()?.session;
   if (!open) return null;
   const targets = toolTargets(t, location.origin).map((x) => (x.kind === "server" && session ? { ...x, session } : x));
   const output = t.status !== "running" && t.result ? t.result : undefined;

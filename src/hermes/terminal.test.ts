@@ -1,10 +1,27 @@
 // The terminal session's lifecycle against a fake of Rust's terminal commands: output goes to the screen, typing
 // and resizing reach ssh only while it runs, and every way it can end is reported once, the owner's end as theirs.
 import { describe, expect, it } from "vitest";
-import { TerminalSession, endedText, sshTargetFromUrl, terminalTarget, terminalTargetGuessed, type TerminalApi, type TerminalEvent, type TerminalState } from "./terminal";
+import {
+  MAX_FOLDER_SHELLS,
+  TerminalSession,
+  closeShell,
+  endedText,
+  moveShell,
+  openShellIn,
+  shellsAt,
+  showShell,
+  sshTargetFromUrl,
+  terminalTarget,
+  terminalTargetGuessed,
+  type Shells,
+  type TerminalApi,
+  type TerminalEvent,
+  type TerminalState,
+} from "./terminal";
+import { resolvePath, type ServerPath } from "./paths";
 
 class FakeTerminals implements TerminalApi {
-  opened: { target: string; cols: number; rows: number; emit: (e: TerminalEvent) => void }[] = [];
+  opened: { target: string; cols: number; rows: number; emit: (e: TerminalEvent) => void; folder?: string }[] = [];
   written: [number, string][] = [];
   resized: [number, number, number][] = [];
   closed: number[] = [];
@@ -14,9 +31,9 @@ class FakeTerminals implements TerminalApi {
   /** Holds `open`'s answer until `answer()`. */
   hold = false;
   private pending: (() => void)[] = [];
-  open(target: string, cols: number, rows: number, emit: (e: TerminalEvent) => void) {
+  open(target: string, cols: number, rows: number, emit: (e: TerminalEvent) => void, folder?: string) {
     if (this.refuse) return Promise.reject(new Error(this.refuse));
-    this.opened.push({ target, cols, rows, emit });
+    this.opened.push({ target, cols, rows, emit, folder });
     const id = this.opened.length;
     if (!this.hold) return Promise.resolve(id);
     return new Promise<number>((done) => this.pending.push(() => done(id)));
@@ -189,6 +206,83 @@ describe("terminal target", () => {
     expect(terminalTargetGuessed({ mode: "url", sshTarget: "", url: "http://hermes:9119" }, "liam@hermes")).toBe(false);
     expect(terminalTargetGuessed({ mode: "url", sshTarget: "", url: "http://localhost:9119" }, null)).toBe(false);
     expect(terminalTargetGuessed({ mode: "ssh", sshTarget: "liam@hermes" }, null)).toBe(false);
+  });
+});
+
+describe("a terminal in a folder (ADR 0167)", () => {
+  it("starts in its folder each time it starts, and a terminal with none starts where ssh puts it", async () => {
+    const api = new FakeTerminals();
+    const inFolder = new TerminalSession(api, () => {}, () => {}, "/srv/app/docs");
+    await inFolder.start("liam@hermes", 80, 24);
+    api.opened[0].emit({ kind: "exit", code: 0 });
+    await inFolder.start("liam@hermes", 80, 24);
+    expect(api.opened.map((o) => o.folder)).toEqual(["/srv/app/docs", "/srv/app/docs"]);
+    const plain = setup();
+    await plain.s.start("liam@hermes", 80, 24);
+    expect(plain.api.opened[0].folder).toBeUndefined();
+  });
+});
+
+describe("the Terminal tab's shells (ADR 0167)", () => {
+  const at = (folder: string) => resolvePath(folder, undefined) as ServerPath;
+  const opened = (s: Shells, folder: string, kind: "server" | "local" = "server") => {
+    const next = openShellIn(s, kind, at(folder));
+    if (next === "full") throw new Error("full");
+    return next;
+  };
+  const ids = (s: Shells) => s.folders.map((f) => f.id);
+
+  it("open on one computer's shell, with no folder shells", () => {
+    expect(shellsAt("local")).toEqual({ shown: "local", folders: [] });
+  });
+
+  it("add a shell for a folder and show it, in the order folders were opened", () => {
+    const s = opened(opened(shellsAt("server"), "/srv/app"), "~/notes");
+    expect(ids(s)).toEqual(["in:server:/srv/app", "in:server:~/notes"]);
+    expect(s.shown).toBe("in:server:~/notes");
+  });
+
+  it("show the shell a folder already has when it is opened again, and count the asking", () => {
+    const first = opened(opened(shellsAt("server"), "/srv/app"), "~/notes");
+    const again = opened(first, "/srv/app");
+    expect(ids(again)).toEqual(ids(first));
+    expect(again.shown).toBe("in:server:/srv/app");
+    expect(again.folders.map((f) => f.asked)).toEqual([2, 1]);
+  });
+
+  it("keep the same folder on the server and on this computer as two shells", () => {
+    expect(ids(opened(opened(shellsAt("server"), "/srv/app"), "/srv/app", "local"))).toEqual(["in:server:/srv/app", "in:local:/srv/app"]);
+  });
+
+  it("are full at eight folder shells, and still show one of the eight again", () => {
+    let s = shellsAt("server");
+    for (let i = 0; i < MAX_FOLDER_SHELLS; i++) s = opened(s, `/srv/${i}`);
+    expect(openShellIn(s, "server", at("/srv/one-more"))).toBe("full");
+    expect(opened(s, "/srv/3").shown).toBe("in:server:/srv/3");
+  });
+
+  it("show one of their shells, and ignore one they don't hold", () => {
+    const s = opened(shellsAt("server"), "/srv/app");
+    expect(showShell(s, "local").shown).toBe("local");
+    expect(showShell(showShell(s, "local"), "in:server:/srv/app").shown).toBe("in:server:/srv/app");
+    expect(showShell(s, "in:server:/gone")).toBe(s);
+  });
+
+  it("close a folder shell, showing its computer's own shell if it was on screen", () => {
+    const s = opened(opened(shellsAt("local"), "/srv/app"), "~/notes");
+    expect(closeShell(s, "in:server:~/notes")).toEqual({ shown: "server", folders: [s.folders[0]] });
+    expect(closeShell(s, "in:server:/srv/app")).toEqual({ shown: "in:server:~/notes", folders: [s.folders[1]] });
+  });
+
+  it("never close the server's own shell or this computer's", () => {
+    const s = opened(shellsAt("server"), "/srv/app");
+    expect(closeShell(s, "server")).toBe(s);
+    expect(closeShell(s, "local")).toBe(s);
+  });
+
+  it("move a folder shell to the other computer, in the same folder", () => {
+    const moved = moveShell(opened(shellsAt("server"), "/srv/app"), "in:server:/srv/app", "local");
+    expect(moved).toEqual({ shown: "in:local:/srv/app", folders: [{ id: "in:local:/srv/app", kind: "local", folder: "/srv/app", asked: 1 }] });
   });
 });
 

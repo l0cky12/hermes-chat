@@ -238,6 +238,7 @@ export const es: Catalogue = {
       displayName: "Nombre visible",
       displayHint: "El perfil integrado de Hermes conserva el id default; esto solo cambia el nombre que se muestra.",
       displayEmpty: "Ponle un nombre, o cancela para dejar el que tiene.",
+      namesUnread: "Espera a la lista de perfiles, para comprobar el nombre con ella.",
       displayLong: (max) => `Hasta ${max} caracteres.`,
       gatewayWarn: "Renombrarlo detiene la pasarela en marcha de este perfil hasta 10 segundos. Los canales de mensajería se vuelven a conectar después.",
       description: "Descripción",
