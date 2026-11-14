@@ -1423,7 +1423,7 @@ export function SettingsScreen({
           </div>
           <div className="settings-side-scroll">{tree}</div>
         </aside>
-        {sheet && <div className="settings-scrim" onClick={() => setSheet(false)} />}
+        {sheet && <div className="settings-scrim" aria-hidden="true" onClick={() => setSheet(false)} />}
         <div className="settings-main" ref={mainRef}>
           <div className="settings-inner">
             {searching ? (
