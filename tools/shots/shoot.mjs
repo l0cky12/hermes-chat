@@ -259,6 +259,28 @@ Object.assign(scenes, {
   "settings-narrow-sheet": { query: "?profiles=1", ...narrow, steps: [openSettings, click(".settings-crumb"), tab("Model"), click(".settings-crumb")] },
   "settings-narrow-search": { query: "?profiles=1", ...narrow, steps: [openSettings, click(".settings-bar-search"), typeSearch("reasoning effort")] },
 });
+// Accessibility and type (improvement report, workstream A), all at 1280 × 800: the transcript's timestamps, the list's
+// section labels and the composer's key hints; icons at the smallest and largest interface size; the still forms of
+// reconnecting and recording with motion turned off; the sign-in screen with its password field focused and an error;
+// and the narrow Settings sheet over its scrim (narrow only exists under 900 px wide).
+const desk = { width: 1280, height: 800 };
+const focusComposer = `document.querySelector("textarea[data-composer]").focus()`;
+// Stored times on the backup chat's messages, a minute apart from a fixed moment, so each message shows its timestamp.
+const stamped = `window.shots.server.transcripts.backup.forEach((m, i) => (m.timestamp = Date.UTC(2026, 10, 12, 9, 14 + i) / 1000))`;
+const openBackup = [stamped, click("button", "Nightly backup")];
+const reconnecting = `(() => { const s = window.shots.server; s.refuse = "Couldn't reach liam@hermes"; s.drop(); })()`;
+const signIn = { page: "signin.html", ready: "!!document.querySelector('.first-run input[type=password]')" };
+Object.assign(scenes, {
+  "a11y-chat": { query: "", ...desk, steps: [...openBackup, focusComposer] },
+  "a11y-chat-light": { query: "?mode=light", ...desk, steps: [...openBackup, focusComposer] },
+  "a11y-icons-12": { query: "?size=12", ...desk, steps: [...openBackup, focusComposer] },
+  "a11y-icons-20": { query: "?size=20", ...desk, steps: [...openBackup, focusComposer] },
+  "a11y-reconnecting-still": { query: "", ...desk, reduceMotion: true, steps: [...openBackup, reconnecting] },
+  "a11y-recording-still": { query: "", ...desk, reduceMotion: true, steps: [...openBackup, click("button[aria-label='Dictate']")] },
+  "a11y-signin": { ...signIn, query: "", ...desk, steps: [`document.querySelector(".first-run input[type=password]").focus()`] },
+  "a11y-signin-light": { ...signIn, query: "?mode=light", ...desk, steps: [`document.querySelector(".first-run input[type=password]").focus()`] },
+  "a11y-settings-sheet": { query: "?profiles=1", width: 760, height: 800, steps: [openSettings, click(".settings-crumb"), tab("Model"), click(".settings-crumb")] },
+});
 const wanted = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(scenes);
 
 function chrome() {
@@ -273,7 +295,12 @@ await build({ configFile });
 const server = await preview({ configFile, preview: { port: 0, host: "127.0.0.1" } });
 const url = server.resolvedUrls.local[0];
 const profile = mkdtempSync(join(tmpdir(), "shots-chrome-"));
-const proc = spawn(chrome(), ["--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--hide-scrollbars", "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+// A fake microphone, so Dictation records.
+const proc = spawn(
+  chrome(),
+  ["--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--hide-scrollbars", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "about:blank"],
+  { stdio: ["ignore", "ignore", "pipe"] },
+);
 const port = await new Promise((resolve, reject) => {
   let err = "";
   proc.stderr.on("data", (d) => {
@@ -308,8 +335,9 @@ try {
     };
     await send("Runtime.enable");
     await send("Emulation.setDeviceMetricsOverride", { width: scene.width ?? 1440, height: scene.height ?? 900, deviceScaleFactor: 1, mobile: false });
-    await send("Page.navigate", { url: url + scene.query });
-    for (let i = 0; !(await evaluate("!!document.querySelector('.sidebar, nav, aside') && document.body.innerText.includes('Nightly backup')")); i++) {
+    if (scene.reduceMotion) await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+    await send("Page.navigate", { url: url + (scene.page ?? "") + scene.query });
+    for (let i = 0; !(await evaluate(scene.ready ?? "!!document.querySelector('.sidebar, nav, aside') && document.body.innerText.includes('Nightly backup')")); i++) {
       if (i > 100) throw new Error(`${name}: app never showed. ${logs.join("\n")}`);
       await sleep(100);
     }

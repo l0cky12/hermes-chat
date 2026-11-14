@@ -125,3 +125,16 @@ describe("A failed sign-in on the sign-in screen (#550)", () => {
     expect(alert.textContent).toContain(message);
   });
 });
+
+describe("An empty sign-in", () => {
+  it("never leaves the form: Enter with the password or the username empty sends nothing", async () => {
+    const onSignIn = vi.fn(async () => {});
+    render(<SignIn connection={connection} initial={{ ...blank, password: "" }} onSignIn={onSignIn} />);
+    expect(screen.getByRole("button", { name: "Connect" })).toHaveProperty("disabled", true);
+    const password = screen.getByLabelText(/^Dashboard password/);
+    await userEvent.type(password, "{Enter}");
+    await userEvent.clear(screen.getByLabelText("Dashboard username"));
+    await userEvent.type(password, "hunter2{Enter}");
+    expect(onSignIn).not.toHaveBeenCalled();
+  });
+});

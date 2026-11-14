@@ -2,20 +2,20 @@
 import { describe, expect, it } from "vitest";
 // Vitest empties a CSS import, ?raw included.
 import { readFileSync } from "node:fs";
-import { BUILTIN_THEMES, contrastRatio, freeName, parseTheme, readThemeJson, resolveMode, themeJson, themeVars } from "./themes";
+import { BUILTIN_THEMES, contrastRatio, freeName, mix, parseTheme, readThemeJson, resolveMode, themeJson, themeVars } from "./themes";
 
 const newId = () => "custom-new";
 const hermes = BUILTIN_THEMES[0];
 
 describe("Theme colors", () => {
-  it("are the stylesheet's original colors for Hermes in dark at the default contrast", () => {
+  it("are the stylesheet's original colors for Hermes in dark at the default contrast, muted and faint text lifted to AA", () => {
     expect(themeVars(hermes.dark, "dark")).toMatchObject({
       "--bg": "#1b1c20",
       "--sidebar": "#18191d",
       "--raised": "#222328",
       "--text": "#d6d7dc",
-      "--muted": "#86878b",
-      "--faint": "#5a5b5f",
+      "--muted": "#9a9ba0",
+      "--faint": "#9a9ba0",
       "--accent": "#d08b6e",
       "--code-bg": "#16161a",
       "--text-strong": "#e8e9ec",
@@ -40,11 +40,77 @@ describe("Theme colors", () => {
       const at = (c: number) => themeVars(hermes[mode], mode, c);
       const ratio = (c: number, key: string) => contrastRatio(at(c)[key], at(c)["--bg"]);
       for (const key of ["--text", "--muted", "--faint"]) {
-        expect(ratio(0, key)).toBeLessThan(ratio(50, key));
-        expect(ratio(50, key)).toBeLessThan(ratio(100, key));
+        expect(ratio(0, key)).toBeLessThanOrEqual(ratio(50, key));
+        expect(ratio(0, key)).toBeLessThan(ratio(100, key));
       }
-      expect(ratio(0, "--muted")).toBeGreaterThan(2.8);
+      expect(ratio(0, "--text")).toBeLessThan(ratio(50, "--text"));
+      expect(ratio(50, "--text")).toBeLessThan(ratio(100, "--text"));
     }
+  });
+
+  // What text sits on: the page, the list panel, cards and their two raised steps, code blocks, and the selected chat
+  // in the list (the strongest hover tint over the list panel).
+  const surfaces = (v: Record<string, string>) => {
+    const [r, g, b, a] = v["--hover-2"].match(/[\d.]+/g)!.map(Number);
+    const tint = `#${[r, g, b].map((n) => n.toString(16).padStart(2, "0")).join("")}`;
+    return {
+      ...Object.fromEntries(["--bg", "--sidebar", "--raised", "--raised-2", "--raised-3", "--code-bg"].map((key) => [key, v[key]])),
+      "selected chat row": mix(v["--sidebar"], tint, a),
+    };
+  };
+  const readableEverywhere = (contrast: number) => {
+    for (const theme of BUILTIN_THEMES)
+      for (const mode of ["light", "dark"] as const) {
+        const v = themeVars(theme[mode], mode, contrast);
+        for (const key of ["--faint", "--muted"])
+          for (const [on, surface] of Object.entries(surfaces(v)))
+            expect(contrastRatio(v[key], surface), `${theme.name} ${mode} ${key} on ${on} at contrast ${contrast}`).toBeGreaterThanOrEqual(4.5);
+      }
+  };
+
+  it("keep faint and muted text at AA on every surface at the lowest contrast", () => readableEverywhere(0));
+  it("keep faint and muted text at AA on every surface at the highest contrast", () => readableEverywhere(100));
+  it("keep faint and muted text at AA on every surface at every contrast setting", () => {
+    for (let c = 0; c <= 100; c++) readableEverywhere(c);
+  });
+
+  it("keep faint and muted text at AA for a custom palette whose own text is too faint", () => {
+    const dim = { background: "#000000", surface: "#000000", text: "#555555", accent: "#d08b6e" };
+    const light = { background: "#ffffff", surface: "#ffffff", text: "#aaaaaa", accent: "#d08b6e" };
+    for (const [palette, mode] of [[dim, "dark"], [light, "light"]] as const)
+      for (const c of [0, 50, 100]) {
+        const v = themeVars(palette, mode, c);
+        for (const key of ["--faint", "--muted"])
+          for (const [on, surface] of Object.entries(surfaces(v)))
+            expect(contrastRatio(v[key], surface), `${mode} ${key} on ${on} at contrast ${c}`).toBeGreaterThanOrEqual(4.5);
+      }
+  });
+
+  it("go toward black for a dark-mode palette on a mid grey, where black stands out more than white", () => {
+    // Dark mode darkens code blocks to #6d6d6d, where black reaches 4.06:1 and nothing reaches AA on both it and #888.
+    const grey = { background: "#888888", surface: "#888888", text: "#999999", accent: "#d08b6e" };
+    for (const c of [0, 50, 100]) {
+      const v = themeVars(grey, "dark", c);
+      for (const key of ["--bg", "--sidebar", "--raised", "--raised-2", "--raised-3"])
+        expect(contrastRatio(v["--faint"], v[key]), `${key} at contrast ${c}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("go toward white for a dark-mode palette on a grey where only white reaches AA on every surface", () => {
+    const grey = { background: "#767676", surface: "#767676", text: "#777777", accent: "#d08b6e" };
+    const v = themeVars(grey, "dark", 50);
+    for (const key of ["--faint", "--muted"])
+      for (const [on, surface] of Object.entries(surfaces(v)))
+        expect(contrastRatio(v[key], surface), `${key} on ${on}`).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("never draw muted text fainter than faint text", () => {
+    for (const theme of BUILTIN_THEMES)
+      for (const mode of ["light", "dark"] as const)
+        for (const c of [0, 25, 50, 75, 100]) {
+          const v = themeVars(theme[mode], mode, c);
+          expect(contrastRatio(v["--muted"], v["--bg"])).toBeGreaterThanOrEqual(contrastRatio(v["--faint"], v["--bg"]));
+        }
   });
 
   it("color shortcut hints and section labels with muted text, which the checks above keep readable", () => {

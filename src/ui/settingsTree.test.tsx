@@ -197,6 +197,18 @@ describe("Settings → General sections", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "General › Connection" }));
   });
 
+  it("closes the narrow sheet on a click outside it, behind a scrim that assistive tech never sees", async () => {
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q === "(max-width: 900px)", media: q, addEventListener() {}, removeEventListener() {} }));
+    const { user } = await shown();
+    await user.click(screen.getByRole("button", { name: "General › Connection" }));
+    expect(screen.getAllByRole("dialog").map((d) => d.getAttribute("aria-label"))).toEqual(["Settings"]);
+    const scrim = document.querySelector(".settings-scrim")!;
+    expect(scrim.getAttribute("aria-hidden")).toBe("true");
+    await user.click(scrim);
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+    expect(document.querySelector(".settings-scrim")).toBeNull();
+  });
+
   it("moves the focus through the narrow sheet's tabs with the arrows, and picks only on Enter or a click", async () => {
     vi.stubGlobal("matchMedia", (q: string) => ({ matches: q === "(max-width: 900px)", media: q, addEventListener() {}, removeEventListener() {} }));
     const s = new FakeHermes();
