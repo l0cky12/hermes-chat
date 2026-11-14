@@ -8,7 +8,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
 import { memoryCache } from "../hermes/memoryCache";
-import { BOT_CHAT_TITLE, BotModeUnsupportedError } from "../hermes/bots";
+import { BOT_CHAT_TITLE, BotModeUnsupportedError, rosterOf, type Bot } from "../hermes/bots";
 import { getUIPrefs } from "../hermes/uiPrefs";
 import { Bots, BOTS_REFRESH_MS } from "./Bots";
 import { connect, type Hermes } from "../hermes/transport";
@@ -184,6 +184,57 @@ describe("New bot in the Bots view", () => {
     expect(within(form()).getByText("There's already a profile named scribe. Pick another name.")).toBeTruthy();
     expect(within(form()).getByRole("button", { name: /Create bot/ })).toHaveProperty("disabled", true);
     expect(server.restRequests.filter((r) => r.method !== "GET")).toEqual([]);
+  });
+
+  it("keeps focus in the form when the roster arrives after it opened", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const hermes = await connect(new FakeHermes().openPipe, undefined, memoryCache());
+    running.push(hermes);
+    let answer = () => {};
+    const view = (last?: { roster: Bot[]; at: number }) => (
+      <Bots
+        server="hermes"
+        profile="default"
+        connected
+        last={last}
+        pictures={{}}
+        load={() => new Promise<void>((done) => (answer = done))}
+        activity={() => undefined}
+        onOpen={() => {}}
+        onNewChat={() => {}}
+        onRefresh={() => {}}
+        onClose={onClose}
+        profiles={{
+          api: hermes.manageProfiles,
+          inUse: "default",
+          connected: true,
+          unread: () => undefined,
+          catalog: async () => [],
+          busy: () => undefined,
+          lostMessages: () => 0,
+          jobCount: async () => undefined,
+          switchTo: async () => false,
+          local: { pending: () => undefined, note: () => {}, clear: () => {}, renamed: async () => {}, deleted: async () => {} },
+          copyText: async () => {},
+        }}
+      />
+    );
+    const { rerender } = render(view());
+    expect(screen.getByText("Reading the bots…")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "New bot" }));
+    const name = within(form()).getByLabelText("Name");
+    await user.type(name, "ada");
+    const roster = rosterOf({ profiles: [{ name: "default", canonical_session: null }] });
+    await act(async () => {
+      rerender(view({ roster, at: Date.now() }));
+      answer();
+    });
+    expect(botRows()).toHaveLength(1);
+    expect(document.activeElement).toBe(name);
+    await user.keyboard("{Escape}");
+    expect(within(form()).getByText("The changes you made here aren't saved.")).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("closes only the form on Escape, with focus back on New bot", async () => {

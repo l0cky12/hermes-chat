@@ -165,6 +165,8 @@ export function Bots({
             aria-label="New bot"
             disabled={!!newWhy}
             onClick={() => {
+              // Focus is the form's now: a roster that arrives later doesn't move it to the first bot.
+              first.current = false;
               setMade(undefined);
               setMaking(true);
             }}
