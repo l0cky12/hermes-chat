@@ -2,7 +2,7 @@
 // The whole App, with "Reopen last chat on launch" off as it is by default (ADR 0162): launch starts on the New chat
 // pane, and the main screen showing again later in the run keeps the chat the owner had open. The Rust side is two
 // FakeHermes servers behind `invoke`, one per dashboard URL, and an in-memory keyring keyed by connection.
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes, row } from "../hermes/fakeHermes";
@@ -85,7 +85,6 @@ beforeAll(() => {
 });
 afterEach(cleanup);
 
-const composer = () => screen.getAllByRole("textbox").find((e) => e.closest(".composer")) as HTMLTextAreaElement;
 const openRail = async () => userEvent.click(await screen.findByRole("button", { name: /Switch connection/ }));
 /** The title of the chat on screen: "New chat" for the New chat pane. */
 const onScreen = () => document.querySelector(".chat-title span")?.textContent;
