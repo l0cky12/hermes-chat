@@ -10,8 +10,9 @@
 // 2. What the app's own traffic shows: every dashboard GET and JSON-RPC request the screens make is observed, so a
 //    route that answered, or one that is missing, settles that capability without asking again.
 // 3. A check, only for what neither of those settled: one request per capability that only reads, with a time limit.
-//    Nothing is ever written to find out. A capability with no read to check it by stays unknown until its screen
-//    checks it.
+//    Two capabilities have no read to check them by, so Diagnostics sends each one named request shaped like a write,
+//    which changes nothing, while it is open (`WriteCheck`, ADR 0169). Nothing else is written to find out, and nothing
+//    at all on connect.
 //
 // Every answer is one of four states. `supported`: Hermes answered the route or method. `unsupported`: Hermes has no
 // such route or method (its own 404 or a 405, or JSON-RPC "method not found"). `unknown`: Hermes answered in a way that
@@ -76,6 +77,18 @@ type Probe =
   | { kind: "rest"; path: (profile: string) => string; maxBytes?: number; shape: (body: unknown) => boolean; lacks?: (body: unknown) => string | undefined }
   | { kind: "rpc"; method: string; params: (profile: string) => Record<string, unknown>; shape: (result: unknown) => boolean; lacks?: (result: unknown) => string | undefined };
 
+/**
+ * A check for a capability no read can settle: one request shaped like a write, for something that can't exist, so
+ * Hermes refuses it before changing anything (ADR 0169). Only Diagnostics sends it, while it is open. `read`: what
+ * Hermes's answer, or its failure, says of the capability.
+ */
+type WriteCheck = {
+  send: (io: CapabilityIO, profile: string) => Promise<unknown>;
+  /** A read sent alongside, for what the write's answer alone can't tell; undefined when it fails. */
+  context?: (io: CapabilityIO, profile: string) => Promise<unknown>;
+  read: (outcome: { answer: unknown } | { failure: Failure }, context: unknown) => { state: CapabilityState; why: string };
+};
+
 export type CapabilitySpec = {
   id: CapabilityId;
   /** Its name in the app. */
@@ -90,10 +103,14 @@ export type CapabilitySpec = {
   anchor: string;
   /** How it is checked when nothing else has settled it. None for one learnt only from what Hermes says or a screen checks. */
   probe?: Probe;
+  /** How Diagnostics checks it while open, when no read can (ADR 0169). */
+  writeCheck?: WriteCheck;
   /** Dashboard routes, as the relay names them (`api/…`, no query). A GET's answer settles the capability. */
   routes?: RegExp[];
   /** JSON-RPC methods whose answers settle it. */
   methods?: string[];
+  /** Which of those answers show it works, when an answer can come back without proving that. Any answer otherwise. */
+  settles?: (answer: unknown) => boolean;
   /** Dashboard routes whose `POST`, `PUT`, `PATCH` or `DELETE` is refused here while the capability is unsupported. */
   writeRoutes?: RegExp[];
   /** JSON-RPC methods that change something, refused here while the capability is unsupported. */
@@ -149,8 +166,34 @@ export const CAPABILITIES: readonly CapabilitySpec[] = [
     needs: "approval.respond on /api/ws.",
     without: "Approvals are answered in reply to Hermes's request. Another Hermes app with the chat open keeps showing the card until Hermes next lists the chat as not waiting.",
     anchor: "answering-approvals",
-    notChecked: "Diagnostics can't check this by reading. Known once this app answers an Approval.",
+    notChecked: "Checked when Diagnostics opens, or once this app answers an Approval.",
+    // `approval.respond` at Hermes `f0d94882` (`tui_gateway/methods_prompt.py`): a session id no live session has fails
+    // "session not found" (4001) before anything is settled, unless the request id is one an Approval waits under,
+    // which a made-up id never is. A Hermes without the method answers "method not found". With turn isolation the
+    // method is there but doesn't reach a waiting Approval (`tui_gateway/compute_host_bridge.py`), so the profile's
+    // `dashboard.turn_isolation` decides.
+    writeCheck: {
+      send: (io) => io.rpc("approval.respond", { session_id: PROBE_NAME, request_id: PROBE_NAME, choice: "deny" }),
+      context: (io, profile) => io.get(`api/config?${new URLSearchParams({ profile })}`, 2 * 1024 * 1024).then(turnIsolationOf),
+      read: (o, isolation) => {
+        const has = "answer" in o ? isObj(o.answer) && o.answer.resolved === 0 : o.failure.rpcCode === SESSION_NOT_FOUND;
+        if (!has) return "answer" in o ? { state: "unknown", why: "Hermes answered the check in a way this app doesn't expect." } : stateOfFailure(o.failure);
+        if (isolation === true)
+          return {
+            state: "unsupported",
+            why: "Hermes has approval.respond, but runs each turn in a process of its own (dashboard.turn_isolation), where approval.respond doesn't reach a waiting Approval. This app answers in reply to Hermes's request instead.",
+          };
+        if (isolation === false)
+          return { state: "supported", why: "Hermes has approval.respond, found nothing waiting for an Approval that can't exist, and doesn't run turns in a process of their own (turn isolation)." };
+        return {
+          state: "unknown",
+          why: "Hermes has approval.respond, but this app couldn't read whether Hermes runs each turn in a process of its own (dashboard.turn_isolation), where approval.respond doesn't reach a waiting Approval.",
+        };
+      },
+    },
     methods: ["approval.respond"],
+    // An answer that settled nothing (`resolved: 0`) is what turn isolation gives a real Approval too.
+    settles: (answer) => isObj(answer) && answer.resolved !== undefined && answer.resolved !== 0,
     writeMethods: /^approval\.respond$/,
   },
   {
@@ -216,9 +259,20 @@ export const CAPABILITIES: readonly CapabilitySpec[] = [
     needs: "PUT /api/tools/toolsets/{name}.",
     without: "Settings → Toolsets shows each toolset's state without switches.",
     anchor: "toolsets",
-    notChecked: "Diagnostics can't check this by reading. Settings → Toolsets checks it when it opens (ADR 0021).",
-    // A switch only: the write check Settings → Toolsets sends goes to a name no toolset has (`PROBE_NAME`), and is
-    // let through so it can find the route again.
+    notChecked: "Checked when Diagnostics or Settings → Toolsets opens (ADR 0021).",
+    // The check Settings → Toolsets sends too: a `PUT` for a name no toolset has, with an `enabled` that isn't true or
+    // false. FastAPI refuses the body (422) before `toggle_toolset` runs (`hermes_cli/web_routers/tools.py` at
+    // `f0d94882`), and a Hermes that took it would refuse the unknown name (400) before reading the config.
+    writeCheck: {
+      send: (io, profile) => io.put(`api/tools/toolsets/${PROBE_NAME}?${new URLSearchParams({ profile })}`, { enabled: "probe" }),
+      read: (o) => {
+        if ("answer" in o) return { state: "unknown", why: "Hermes took the write check, which it should refuse, so this app won't say the switches work." };
+        if (o.failure.status === 422 || o.failure.status === 400) return { state: "supported", why: "Hermes refused the write check before changing anything, as it does when it has the route." };
+        return stateOfFailure(o.failure);
+      },
+    },
+    // A switch only: the write check goes to a name no toolset has (`PROBE_NAME`), and is let through so it can find
+    // the route again.
     writeRoutes: [new RegExp(`^api\\/tools\\/toolsets\\/(?!${PROBE_NAME}$)[^/]+$`)],
   },
   {
@@ -303,9 +357,10 @@ export const CAPABILITIES: readonly CapabilitySpec[] = [
   {
     id: "outputs",
     label: "Outputs",
-    usedBy: "The Outputs screen",
+    // The Outputs screen is gone (ADR 0170). The id stays: extensions name capabilities in `needs` (ADR 0126).
+    usedBy: "Extensions that list outputs in their needs",
     needs: "GET /api/fs/list, and GET /api/sessions/{id}/messages with tool rows.",
-    without: "The Outputs screen explains what is missing, and reads nothing.",
+    without: "An extension that needs it shows what is missing instead of running.",
     anchor: "outputs",
     probe: { kind: "rest", path: (profile) => `api/fs/list?${new URLSearchParams({ path: "/", profile })}`, maxBytes: 512 * 1024, shape: isObj },
     routes: [/^api\/fs\/list$/],
@@ -402,6 +457,19 @@ export function failureOf(e: unknown): Failure {
 
 /** JSON-RPC "method not found": the server has no such method. */
 const NO_SUCH_METHOD = -32601;
+/** Hermes's "session not found": the method is there, and no live session has that id. */
+const SESSION_NOT_FOUND = 4001;
+
+/**
+ * Whether a `GET /api/config` answer turns on `dashboard.turn_isolation`, read as Hermes reads it (`is_truthy_value`):
+ * undefined when the answer isn't a config. A config that doesn't name it is from a Hermes without turn isolation.
+ */
+function turnIsolationOf(text: string): boolean | undefined {
+  const config: unknown = JSON.parse(text);
+  if (!isObj(config)) return undefined;
+  const v = isObj(config.dashboard) ? config.dashboard.turn_isolation : undefined;
+  return typeof v === "string" ? ["1", "true", "yes", "on"].includes(v.trim().toLowerCase()) : !!v;
+}
 /** JSON-RPC "invalid params", and Hermes's own code for params its contract refuses: the method is there, in another shape. */
 const BAD_PARAMS = new Set([-32602, 4000]);
 
@@ -536,6 +604,8 @@ export function approvalsFailed(e: unknown): Pick<Capability, "state" | "why"> {
 export type CapabilityIO = {
   get(pathAndQuery: string, maxBytes?: number): Promise<string>;
   rpc(method: string, params: Record<string, unknown>): Promise<unknown>;
+  /** A dashboard `PUT`, for a write check only (`WriteCheck`). */
+  put(pathAndQuery: string, body: unknown): Promise<string>;
 };
 
 /** Per request, so one slow route can't hold up the rest. The checks run side by side. */
@@ -581,7 +651,8 @@ function valid(spec: CapabilitySpec, key: string, answer: unknown): boolean {
       return false;
     }
   }
-  return spec.probe && probeKey(spec) === key ? spec.probe.shape(value) : value !== undefined;
+  if (spec.probe && probeKey(spec) === key) return spec.probe.shape(value);
+  return spec.settles ? spec.settles(value) : value !== undefined;
 }
 
 /** A write refused here because the connected Hermes lacks what it needs. Nothing was sent. */
@@ -733,12 +804,23 @@ export class CapabilityStore {
     this.set({ checking: false, stale: true });
   }
 
-  /** Checks again now, from diagnostics: the facts, then every capability with a check. */
+  /** Checks again now, from diagnostics: the facts, then every capability with a check, its write checks too. */
   refresh(): Promise<void> {
     const scope = this.scope;
     if (!scope || !this.current(scope)) return Promise.resolve();
     clearTimeout(this.due);
     return this.check(scope, true);
+  }
+
+  /**
+   * Diagnostics opened: sends the write checks (ADR 0169) of the capabilities this connection hasn't settled. Nothing
+   * else sends them.
+   */
+  checkWrites(): Promise<void> {
+    const scope = this.scope;
+    if (!scope || !this.current(scope)) return Promise.resolve();
+    const due = CAPABILITIES.filter((c) => c.writeCheck && !(settled(this.snap.caps[c.id]) && (this.snap.caps[c.id].checkedAt ?? 0) >= this.connectedAt));
+    return Promise.all(due.map((c) => this.writeCheck(c, scope))).then(() => {});
   }
 
   /**
@@ -864,7 +946,7 @@ export class CapabilityStore {
       this.lackingActions.clear();
       this.set({ caps: { ...fresh(), ...Object.fromEntries(kept.map((c) => [c.id, c])) } });
     }
-    // Check again asks each screen to find out afresh what diagnostics can't check by reading (toolset switches).
+    // Check again finds out afresh what no read checks: by its write check (ADR 0169), or by its own screen.
     if (force) {
       // A change found missing is let through again, so its own screen can find it there after an update.
       this.forgetLacking();
@@ -880,7 +962,7 @@ export class CapabilityStore {
     const known = (c: Capability) =>
       settled(c) && ((c.checkedAt ?? 0) >= this.connectedAt || (sameBuild && c.checkedAt !== undefined && this.now() - c.checkedAt < RECHECK_AFTER_MS));
     const due = CAPABILITIES.filter((c) => c.probe && (force || !known(this.snap.caps[c.id])));
-    await Promise.all(due.map((c) => this.probe(c, scope, run)));
+    await Promise.all([...due.map((c) => this.probe(c, scope, run)), ...(force ? CAPABILITIES.filter((c) => c.writeCheck).map((c) => this.writeCheck(c, scope, run)) : [])]);
     if (!this.current(scope, run)) return;
     this.checkedFor = key;
     this.set({ checking: false, checkedAt: this.now() });
@@ -940,6 +1022,30 @@ export class CapabilityStore {
     }
     // A screen's own answer that came in meanwhile is newer, and stands.
     if (this.current(scope, run) && this.revs.get(spec.id) === rev) this.found(spec.id, probeKey(spec), result);
+  }
+
+  /**
+   * Sends a capability's write check. It starts from unknown, so a write refused here while it was unsupported is
+   * sent, and what it finds covers the whole capability, as a screen's own check does (`report`).
+   */
+  private async writeCheck(spec: CapabilitySpec, scope: Scope, run?: number) {
+    const check = spec.writeCheck!;
+    this.missing.delete(spec.id);
+    this.setCapRaw(spec.id, fresh()[spec.id]);
+    const rev = this.revs.get(spec.id);
+    let found: { state: CapabilityState; why: string };
+    const context = check.context ? within(check.context(this.io, scope.profile), this.timeoutMs).catch(() => undefined) : undefined;
+    let outcome: { answer: unknown } | { failure: Failure };
+    try {
+      outcome = { answer: await within(check.send(this.io, scope.profile), this.timeoutMs) };
+    } catch (e) {
+      outcome = { failure: failureOf(e) };
+    }
+    found = check.read(outcome, await context);
+    if (this.current(scope, run) && this.revs.get(spec.id) === rev) {
+      this.missing.delete(spec.id);
+      this.setCap(spec.id, { source: "probed", ...found });
+    }
   }
 }
 

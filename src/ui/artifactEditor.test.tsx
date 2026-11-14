@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// The artifact editor in the running app (ADR 0029): an Output opened to edit in the preview pane beside the chat,
-// against a fake Hermes whose agent fs routes, write-text and `llm.oneshot` answer as the deployed `bf0203a` does.
+// The artifact editor in the running app (ADR 0029, ADR 0170): a Server file shown in the preview pane, opened to edit
+// beside the chat with the Preview's Edit, against a fake Hermes whose agent fs routes, write-text and `llm.oneshot` answer as the deployed `bf0203a` does.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -59,21 +59,26 @@ async function launch(s = server(), onSignOut = async () => {}) {
   await act(async () => void (await hermes.idle()));
   const user = userEvent.setup();
   await user.click(screen.getByText("Launch planning"));
-  await user.click(screen.getByRole("button", { name: "Outputs" }));
-  await screen.findByRole("heading", { name: "Outputs" });
-  await waitFor(() => expect(document.querySelector(".out-table tbody tr")).not.toBeNull());
   return { server: s, hermes, user };
 }
 
 const editor = () => screen.findByRole("textbox", { name: "Text of plan.md" }) as Promise<HTMLTextAreaElement>;
-const row0 = () => document.querySelector(".out-table tbody tr") as HTMLElement;
+const pane = () => screen.getByRole("region", { name: "Preview" });
+
+/** Opens plan.md in the Preview from the tool call that wrote it, then Edit in the Preview's toolbar. */
+async function editPlan(user: ReturnType<typeof userEvent.setup>) {
+  const tool = (await screen.findAllByRole("button", { name: /^write_file/ }))[0];
+  if (tool.getAttribute("aria-expanded") === "false") await user.click(tool);
+  await user.click(screen.getByRole("button", { name: "plan.md" }));
+  await user.click(await within(pane()).findByRole("button", { name: "Edit" }));
+}
 
 describe("The artifact editor", () => {
-  it("opens an Output beside Outputs, keeps the draft off the server, and saves it after a review", async () => {
+  it("opens a Server file from the Preview beside the chat, keeps the draft off the server, and saves it after a review", async () => {
     const { server, user } = await launch();
-    await user.click(within(row0()).getByRole("button", { name: "Edit plan.md" }));
+    await editPlan(user);
     const text = await editor();
-    expect(screen.getByRole("heading", { name: "Outputs" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: /^write_file/ }).length).toBeGreaterThan(0);
     expect(text.value).toBe(PLAN);
     expect(document.querySelector(".artifact-id")!.textContent).toMatch(/Editing plan\.md.*As on the server.*Based on version [0-9a-f]{8}.*where the profile's tools run.*UTF-8, LF/);
     await user.clear(text);
@@ -85,15 +90,53 @@ describe("The artifact editor", () => {
     expect(changes.textContent).toMatch(/added.*removed/);
     await user.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText(/Saved\. Hermes has your edit, read back from the server\./);
-    // Saved naming the chat whose tools wrote it, as it was read (ADR 0062).
+    // Saved naming the chat whose tool call named it, as the Preview read it (ADR 0062, ADR 0170).
     expect(server.fsWrites).toEqual([{ profile: "default", path: "/srv/out/plan.md", text: "# Launch plan\n\nShip it.\n", session: "plan" }]);
     expect(document.querySelector(".artifact-id .badge")!.textContent).toMatch(/^Saved /);
+  });
+
+  it("reads, keeps and saves a file in the sandbox of the chat whose tool call named it", async () => {
+    const s = new FakeHermes();
+    s.sessions = [row("plan", 1, { pinned: true, title: "Launch planning" }), row("ops", 2, { pinned: true, title: "Ops review" })];
+    s.transcripts.plan = [{ role: "user", text: "Write the report", row_id: 1, timestamp: 1_790_000_000 }, ...call("w1", "/workspace/report.md", 2)];
+    s.transcripts.ops = [{ role: "user", text: "Write the report", row_id: 1, timestamp: 1_790_000_000 }, ...call("w2", "/workspace/report.md", 2)];
+    // Each chat's `/workspace` is a folder of its own; the profile's is a third.
+    s.sandbox = { profile: "/srv/box/profile", chats: { plan: "/srv/box/plan", ops: "/srv/box/ops" } };
+    s.serverFiles["/srv/box/profile/report.md"] = "Profile report\n";
+    s.serverFiles["/srv/box/plan/report.md"] = "Plan report\n";
+    s.serverFiles["/srv/box/ops/report.md"] = "Ops report\n";
+    const { server, user } = await launch(s);
+    const report = () => screen.findByRole("textbox", { name: "Text of report.md" }) as Promise<HTMLTextAreaElement>;
+    const editReport = async () => {
+      const tool = (await screen.findAllByRole("button", { name: /^write_file/ }))[0];
+      if (tool.getAttribute("aria-expanded") === "false") await user.click(tool);
+      await user.click(screen.getByRole("button", { name: "report.md" }));
+      await user.click(await within(pane()).findByRole("button", { name: "Edit" }));
+    };
+    await editReport();
+    expect((await report()).value).toBe("Plan report\n");
+    await user.type(await report(), "plan draft");
+    // The other chat's file of the same path is its own, with no draft from the first.
+    await user.click(screen.getByText("Ops review"));
+    await editReport();
+    await waitFor(async () => expect((await report()).value).toBe("Ops report\n"));
+    await user.type(await report(), "ops draft");
+    await user.click(screen.getByRole("button", { name: "Review changes…" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText(/Saved\. Hermes has your edit, read back from the server\./);
+    expect(server.fsWrites).toEqual([{ profile: "default", path: "/workspace/report.md", text: "Ops report\nops draft", session: "ops" }]);
+    expect(server.serverFiles["/srv/box/plan/report.md"]).toBe("Plan report\n");
+    expect(server.serverFiles["/srv/box/profile/report.md"]).toBe("Profile report\n");
+    // The first chat's draft is still there.
+    await user.click(screen.getByText("Launch planning"));
+    await editReport();
+    await waitFor(async () => expect((await report()).value).toBe("Plan report\nplan draft"));
   });
 
   it("shows Hermes's proposed edit against the exact text it was made for, and applies it only when asked", async () => {
     const { server, user } = await launch();
     server.oneshotAnswer = "We ship it.";
-    await user.click(within(row0()).getByRole("button", { name: "Edit plan.md" }));
+    await editPlan(user);
     const text = await editor();
     const start = PLAN.indexOf("We will");
     const end = PLAN.indexOf("\n\n<img");
@@ -128,7 +171,7 @@ describe("The artifact editor", () => {
 
   it("shows the conflict when Hermes rewrote the file meanwhile, writes nothing, and merges", async () => {
     const { server, user } = await launch();
-    await user.click(within(row0()).getByRole("button", { name: "Edit plan.md" }));
+    await editPlan(user);
     const text = await editor();
     await user.click(text);
     text.setSelectionRange(0, 0);
@@ -147,7 +190,7 @@ describe("The artifact editor", () => {
 
   it("renders the Markdown preview of the draft without raw HTML", async () => {
     const { user } = await launch();
-    await user.click(within(row0()).getByRole("button", { name: "Edit plan.md" }));
+    await editPlan(user);
     await editor();
     await user.click(screen.getByRole("button", { name: "Preview" }));
     const doc = document.querySelector(".artifact-doc")!;
@@ -156,20 +199,19 @@ describe("The artifact editor", () => {
     expect(doc.querySelector("script, iframe")).toBeNull();
   });
 
-  it("keeps the draft when the pane closes or another chat opens, marks it in Outputs, and restores it", async () => {
+  it("keeps the draft when the pane closes, and Edit on the same file restores it", async () => {
     const { user } = await launch();
-    await user.click(within(row0()).getByRole("button", { name: "Edit plan.md" }));
+    await editPlan(user);
     await user.type(await editor(), "!!");
-    await user.click(screen.getByRole("button", { name: "Close the side panel" }));
+    await user.click(document.querySelector<HTMLElement>(".panel-close")!);
     expect(screen.queryByRole("textbox", { name: "Text of plan.md" })).toBeNull();
-    expect(within(row0()).getByText("Unsaved edit")).toBeTruthy();
-    await user.click(within(row0()).getByRole("button", { name: "Edit plan.md" }));
+    await editPlan(user);
     expect((await editor()).value).toBe(PLAN + "!!");
   });
 
   it("asks before Cancel drops an edit, and keeps it on Keep editing", async () => {
     const { user } = await launch();
-    await user.click(within(row0()).getByRole("button", { name: "Edit plan.md" }));
+    await editPlan(user);
     await user.type(await editor(), "!!");
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     const ask = screen.getByRole("alertdialog", { name: "Discard your changes to plan.md?" });
@@ -178,12 +220,13 @@ describe("The artifact editor", () => {
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     await user.click(screen.getByRole("button", { name: "Discard changes" }));
     expect(screen.queryByRole("textbox", { name: "Text of plan.md" })).toBeNull();
-    expect(within(row0()).queryByText("Unsaved edit")).toBeNull();
+    await editPlan(user);
+    expect((await editor()).value).toBe(PLAN);
   });
 
   it("undoes and redoes with the keyboard", async () => {
     const { user } = await launch();
-    await user.click(within(row0()).getByRole("button", { name: "Edit plan.md" }));
+    await editPlan(user);
     const text = await editor();
     await user.type(text, "one");
     await user.keyboard("{Control>}z{/Control}");
@@ -195,7 +238,7 @@ describe("The artifact editor", () => {
   it("takes webview Undo (from its menu) as the editor's own, after a proposal replaced the text box too", async () => {
     const { server, user } = await launch();
     server.oneshotAnswer = "SHORT.";
-    await user.click(within(row0()).getByRole("button", { name: "Edit plan.md" }));
+    await editPlan(user);
     await user.type(await editor(), "x");
     await user.click(screen.getByRole("button", { name: "Ask Hermes to edit" }));
     await user.type(screen.getByRole("textbox", { name: "What should Hermes change in the whole file?" }), "Shorten{enter}");
@@ -210,16 +253,11 @@ describe("The artifact editor", () => {
 
   it("opens an unsaved edit again even once its file is gone from the server", async () => {
     const { server, user } = await launch();
-    await user.click(within(row0()).getByRole("button", { name: "Edit plan.md" }));
+    await editPlan(user);
     await user.type(await editor(), "!!");
-    await user.click(screen.getByRole("button", { name: "Close the side panel" }));
+    await user.click(document.querySelector<HTMLElement>(".panel-close")!);
     delete server.serverFiles["/srv/out/plan.md"];
-    await user.click(screen.getByRole("button", { name: /Refresh/ }));
-    await waitFor(() => expect(row0().querySelector(".out-avail")?.textContent).toMatch(/^Missing/));
-    const edit = within(row0()).getByRole("button", { name: "Edit plan.md" }) as HTMLButtonElement;
-    expect(edit.disabled).toBe(false);
-    expect(edit.title).toBe("Go back to your unsaved edit");
-    await user.click(edit);
+    await editPlan(user);
     expect((await editor()).value).toBe(PLAN + "!!");
   });
 
@@ -246,9 +284,7 @@ describe("The artifact editor", () => {
     await act(async () => void (await hermes.idle()));
     const user = userEvent.setup();
     await user.click(screen.getByText("Launch planning"));
-    await user.click(screen.getByRole("button", { name: "Outputs" }));
-    await waitFor(() => expect(document.querySelector(".out-table tbody tr")).not.toBeNull());
-    await user.click(within(row0()).getByRole("button", { name: "Edit plan.md" }));
+    await editPlan(user);
     await user.type(await editor(), "!!");
     await user.click(screen.getByRole("button", { name: /Settings/ }));
     await user.click(screen.getByRole("tab", { name: /Persona/ }));
@@ -267,9 +303,9 @@ describe("The artifact editor", () => {
   it("asks before signing out would drop an unsaved edit", async () => {
     const signOut = vi.fn(async () => {});
     const { user } = await launch(server(), signOut);
-    await user.click(within(row0()).getByRole("button", { name: "Edit plan.md" }));
+    await editPlan(user);
     await user.type(await editor(), "!!");
-    await user.click(screen.getByRole("button", { name: "Close the side panel" }));
+    await user.click(document.querySelector<HTMLElement>(".panel-close")!);
     await user.click(await screen.findByRole("button", { name: "Settings" }));
     await user.click(screen.getByRole("button", { name: /Sign out/ }));
     const ask = await screen.findByRole("alertdialog", { name: "Sign out and discard your edit?" });

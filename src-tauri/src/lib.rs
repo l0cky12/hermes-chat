@@ -34,6 +34,8 @@ pub mod saved_password;
 pub mod screenshot;
 pub mod server_page;
 pub mod snapshot;
+#[cfg(target_os = "linux")]
+mod spell_check;
 mod ssh_guard;
 pub mod summon;
 pub mod terminal;
@@ -1903,14 +1905,18 @@ pub fn run(screenshot: bool, link: Option<String>) {
             if let Some(window) = app.get_webview_window("main") {
                 touch_keyboard::start(window);
             }
-            // WebKitGTK leaves `navigator.mediaDevices` out unless media capture is turned on. WebView2 has it, and asks
-            // `permission` for the microphone.
+            // WebKitGTK leaves `navigator.mediaDevices` out unless media capture is turned on, and checks no spelling
+            // until told to. WebView2 has both, and asks `permission` for the microphone.
             #[cfg(target_os = "linux")]
             if let Some(window) = app.get_webview_window("main") {
                 window.with_webview(|webview| {
                     use webkit2gtk::{SettingsExt, WebViewExt};
-                    if let Some(settings) = webview.inner().settings() {
+                    let view = webview.inner();
+                    if let Some(settings) = view.settings() {
                         settings.set_enable_media_stream(true);
+                    }
+                    if let Some(context) = view.context() {
+                        spell_check::start(&context);
                     }
                 })?;
             }

@@ -1,7 +1,8 @@
 // Connection diagnostics against a REAL Hermes dashboard: skipped unless HERMES_LIVE_DASHBOARD is set. It signs in with
 // the dashboard's basic provider, opens /api/ws, and runs the same CapabilityStore the app does, with failures worded as
-// the Rust relay words them. Every check only reads, so any dashboard will do; it prints the redacted report. Run it
-// against a throwaway dashboard, for example:
+// the Rust relay words them. Every check reads, but for the two write checks Check again sends for what can't exist (a
+// toolset no toolset is, an Approval no session has, ADR 0169), so any dashboard will do; it prints the redacted
+// report. Run it against a throwaway dashboard, for example:
 //
 //   HERMES_LIVE_DASHBOARD=http://127.0.0.1:9361/ HERMES_LIVE_USER=fixture HERMES_LIVE_PASSWORD=… \
 //   npx vitest run src/hermes/capabilities.live.test.ts
@@ -64,12 +65,19 @@ async function signedIn() {
       return text;
     },
     rpc,
+    put: async (path, body) => {
+      sent.push(`PUT ${path.split("?")[0]}`);
+      const res = await send("PUT", path, body);
+      const text = await res.text();
+      if (!res.ok) throw new RestError(res.status, text.slice(0, 300));
+      return text;
+    },
   };
   return { io, ready: await ready, rpc, sent, close: () => ws.close() };
 }
 
 describe.skipIf(!BASE)("diagnostics against a real dashboard", () => {
-  it("reads what the server is and checks every feature, only by reading", async () => {
+  it("reads what the server is and checks every feature, by reading and the two write checks", async () => {
     const live = await signedIn();
     const store = new CapabilityStore(live.io, () => 1, Date.now, 15_000, 0);
     store.connected(1, "default", live.ready, live.rpc("client.capabilities", { server_requests: true }));
@@ -80,8 +88,11 @@ describe.skipIf(!BASE)("diagnostics against a real dashboard", () => {
     expect(snap.checking).toBe(false);
     expect(snap.facts.protocol).toBe("legacy");
     expect(snap.facts.version ?? snap.facts.build ?? snap.facts.commit).toBeTruthy();
-    // Only reads went out: GETs, and the JSON-RPC methods the contract names as reads.
-    expect(live.sent.every((s) => s.startsWith("GET ") || /^RPC (client\.capabilities|gateway\.capabilities|projects\.list|commands\.catalog|session\.active_list|learning\.detail)$/.test(s))).toBe(true);
+    // Only reads went out, and the two write checks: GETs, the JSON-RPC methods the contract names as reads, a PUT for
+    // the toolset no toolset is, and approval.respond for an Approval no session has.
+    const reads = /^RPC (client\.capabilities|gateway\.capabilities|projects\.list|commands\.catalog|session\.active_list|learning\.detail|profiles\.list|subagent\.roster)$/;
+    const writeChecks = new Set(["PUT api/tools/toolsets/__hermes_chat_probe__", "RPC approval.respond"]);
+    expect(live.sent.filter((s) => !s.startsWith("GET ") && !reads.test(s) && !writeChecks.has(s))).toEqual([]);
     for (const c of CAPABILITIES) expect(["supported", "unsupported", "unknown", "unreachable"]).toContain(snap.caps[c.id].state);
     for (const pair of (process.env.HERMES_LIVE_EXPECT ?? "").split(",").filter(Boolean)) {
       const [id, state] = pair.split("=");

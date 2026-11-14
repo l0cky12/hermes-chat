@@ -674,16 +674,16 @@ function CreateDialog({
               </label>
             </fieldset>
             <label htmlFor={`${id}-branch`}>{mode === "new" ? "New branch name" : "Branch to check out"}</label>
-            <input id={`${id}-branch`} className="mono" autoFocus value={branch} placeholder={mode === "new" ? "feature/login" : "release"} onChange={(e) => edit(setBranch)(e.target.value)} />
+            <input spellCheck={false} id={`${id}-branch`} className="mono" autoFocus value={branch} placeholder={mode === "new" ? "feature/login" : "release"} onChange={(e) => edit(setBranch)(e.target.value)} />
             {mode === "new" && (
               <>
                 <label htmlFor={`${id}-base`}>Base: the commit it starts from</label>
-                <input id={`${id}-base`} className="mono" value={base} placeholder="main, origin/main, a tag or a commit" onChange={(e) => edit(setBase)(e.target.value)} />
+                <input spellCheck={false} id={`${id}-base`} className="mono" value={base} placeholder="main, origin/main, a tag or a commit" onChange={(e) => edit(setBase)(e.target.value)} />
                 <span className="field-hint">A branch, tag or commit already in the repository. Nothing is fetched.</span>
               </>
             )}
             <label htmlFor={`${id}-path`}>Folder on the server</label>
-            <input id={`${id}-path`} className="mono" value={path} placeholder="Beside the repository, named after the branch" onChange={(e) => edit(setPath)(e.target.value)} />
+            <input spellCheck={false} id={`${id}-path`} className="mono" value={path} placeholder="Beside the repository, named after the branch" onChange={(e) => edit(setPath)(e.target.value)} />
             <label className="wt-check">
               <input type="checkbox" checked={setup} onChange={(e) => edit(setSetup)(e.target.checked)} /> Run setup once after it's made (the files .worktreeinclude names)
             </label>

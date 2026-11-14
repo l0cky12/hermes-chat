@@ -207,6 +207,7 @@ function ModelPopover({
       <div className="model-search">
         <Search size={14} />
         <input
+          spellCheck={false}
           ref={search}
           autoFocus
           placeholder="Search models"

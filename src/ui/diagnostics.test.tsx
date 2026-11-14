@@ -41,6 +41,7 @@ function scriptedStore(answers: Record<string, unknown>) {
   const io: CapabilityIO = {
     get: (p) => answer(`GET ${p.split("?")[0]}`).then((v) => JSON.stringify(v)),
     rpc: (m) => answer(`RPC ${m}`),
+    put: (p) => answer(`PUT ${p.split("?")[0]}`).then((v) => JSON.stringify(v)),
   };
   return new CapabilityStore(io, () => 1, Date.now, 500, 0);
 }
@@ -409,6 +410,27 @@ describe("in the app", () => {
     expect(screen.getByRole("tab", { name: /Diagnostics/, selected: true })).toBeTruthy();
     expect(within(row$("Persona")).getByText("Not supported")).toBeTruthy();
     expect(within(row$("Scheduled jobs")).getByText("Supported")).toBeTruthy();
+  });
+
+  it.each([
+    ["has them", (_: FakeHermes) => {}, "Supported", "Supported"],
+    ["lacks them", (s: FakeHermes) => ((s.toolsetRoutes = "read-only"), (s.approvalRespond = false)), "Not supported", "Not supported"],
+    // approval.respond is there, but doesn't reach an Approval waiting in a compute-host child.
+    ["runs turns in a process of their own", (s: FakeHermes) => (s.turnIsolation = true), "Supported", "Not supported"],
+  ])("settles Toolset switches and Answering Approvals when Diagnostics opens, on a Hermes that %s (#571, #572)", { timeout: 15_000 }, async (_, setUp, switches, answers) => {
+    const s = new FakeHermes();
+    setUp(s);
+    const { hermes, user } = await launch(s);
+    await act(() => settledChecks(hermes));
+    // Nothing settles them before Diagnostics opens: the connection's check only reads.
+    expect([hermes.capabilities.get("toolsetSwitches").state, hermes.capabilities.get("approvalAnswers").state]).toEqual(["unknown", "unknown"]);
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await user.click(screen.getByRole("tab", { name: /Diagnostics/ }));
+    await waitFor(() => expect(within(row$("Toolset switches")).getByText(switches)).toBeTruthy());
+    await waitFor(() => expect(within(row$("Answering Approvals")).getByText(answers)).toBeTruthy());
+    expect(within(row$("Toolset switches")).queryByText(/not checked yet/)).toBeNull();
+    expect(s.toolsetWrites).toEqual([]);
+    expect(s.approvalAnswers).toEqual([]);
   });
 
   it("reaches Diagnostics from the Connection section and the tabs by keyboard", { timeout: 15_000 }, async () => {

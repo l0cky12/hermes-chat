@@ -24,6 +24,8 @@ const PathContext = createContext<OpenPath | undefined>(undefined);
 const PathsInContext = createContext<{ folder?: string; session?: string } | undefined>(undefined);
 
 export const useOpenPreview = () => useContext(PreviewContext);
+/** The folder and chat `PathsIn` gives the text under it. Undefined outside one. */
+export const usePathsIn = () => useContext(PathsInContext);
 
 /** An `onContextMenu` that opens the link menu for `link` instead of WebKit's own. Undefined with no provider. */
 export const useLinkMenu = () => {

@@ -9,10 +9,12 @@ import { followEditKeys } from "./ui/editKeys";
 import { followWindowFocus, followWindowVisibility } from "./ui/windowState";
 import { followTouchKeyboard } from "./ui/touchKeyboard";
 import { refuseStrayFileDrops } from "./ui/ChatPane";
+import { dropRetiredData } from "./hermes/profileLocalData";
 import "./styles.css";
 
 // Console warnings and errors, uncaught errors and unhandled rejections, for Logs → This app (ADR 0033).
 captureAppDiagnostics();
+dropRetiredData();
 
 /** The drafts saved for an update's restart couldn't all be put back, so the app doesn't open over them. */
 function RecoveryFailed({ reason }: { reason: string }) {

@@ -26,7 +26,7 @@ import { useModal } from "./modal";
 import { FileEditor } from "./FileEditor";
 import { EDIT_MAX_BYTES } from "../hermes/textEdit";
 import { errorText, formatBytes } from "../hermes/values";
-import { shownName, shownPath } from "../hermes/outputs";
+import { shownName, shownPath } from "../hermes/serverPaths";
 
 /** A file's preview, from the click until its contents are read. `ask`: its type is unknown, and it may be text. */
 export type Preview =
@@ -271,7 +271,7 @@ export function FileBrowser({
             setGoTo("");
           }}
         >
-          <input aria-label="Go to a folder on the server" placeholder="Go to /path or ~/path" value={goTo} disabled={!connected} onChange={(e) => setGoTo(e.target.value)} />
+          <input spellCheck={false} aria-label="Go to a folder on the server" placeholder="Go to /path or ~/path" value={goTo} disabled={!connected} onChange={(e) => setGoTo(e.target.value)} />
         </form>
       </div>
 
@@ -330,7 +330,7 @@ export function FileBrowser({
         <div className="files-list" ref={listRef} aria-busy={loading} data-stale={!connected || undefined}>
           {listing && (
             <div className="files-tools">
-              <input aria-label="Filter this folder" placeholder="Filter by name" value={filter} onChange={(e) => setFilter(e.target.value)} />
+              <input spellCheck={false} aria-label="Filter this folder" placeholder="Filter by name" value={filter} onChange={(e) => setFilter(e.target.value)} />
               <label className="files-hidden">
                 <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} /> Hidden files
                 {hiddenCount > 0 && !showHidden && <span className="count">{hiddenCount}</span>}

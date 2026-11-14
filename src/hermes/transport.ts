@@ -52,12 +52,12 @@ import { MemoryProvidersApi } from "./memoryProviders";
 import { SkillsApi } from "./skills";
 import { CapabilityStore, CapabilityUnsupportedError, RouteMissingError, failureOf, isNoRoute, sharesChats, specOf, type CapabilityId, type ServerFacts } from "./capabilities";
 import { BOT_CHAT_TITLE, BotChats, BotModeUnsupportedError, isBotChat, isBotChatTitle, rosterOf, type Bot } from "./bots";
-import { RestError, conflictOf, sessionNotFound, statusOf, type OpenPipe, type Pipe, type PipeEvent, type RestMethod, type Route, type Speech, type Transcript, type VoiceSetup } from "./pipe";
+import { conflictOf, sessionNotFound, statusOf, type OpenPipe, type Pipe, type PipeEvent, type RestMethod, type Route, type Speech, type Transcript, type VoiceSetup } from "./pipe";
 import { projectContextFiles, type ChatContext, type ProjectContextFiles } from "./projectContextFiles";
 import { withContext } from "./projectContext";
 import { typedText } from "./branch";
 import { SUMMARY_INSTRUCTIONS, SUMMARY_MAX_TOKENS, cleanSummary, referenceBlock, storedReferences, summaryInput } from "./chatReferences";
-import { RemoteFilesError, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, previewSupport, remoteFiles, type EditIo, type RemoteFiles } from "./remoteFiles";
+import { previewSupport, remoteFiles, type EditIo, type RemoteFiles } from "./remoteFiles";
 import { isUnsecure } from "./unsecure";
 import { signInRefused } from "./account";
 import { AccountsApi } from "./accounts";
@@ -67,7 +67,7 @@ import { hostFileView, readServerFile, type FileView } from "./preview";
 import type { PathKind, ServerPath } from "./paths";
 import type { DisplayLease, DisplayObserve, DisplayStatus, ScreenApi } from "./screen";
 import { agentFsEditIo } from "./artifacts";
-import { splitPath, type OutputsIo, type StoredRow as StoredOutputRow } from "./outputs";
+import { splitPath } from "./serverPaths";
 import type { UsageIo } from "./usageAnalytics";
 import { compactResultOf, compactionsOf, readingOf, type CompactResult, type CompactionHistory, type CompactionRow, type ContextReading } from "./contextInspect";
 import { chatUsageOf, countersOf, newerChatUsage, newerListedUsage, replyUsage, ZERO_COUNTERS, type ReplyUsage, type UsageCounters } from "./usage";
@@ -1222,13 +1222,19 @@ export class Hermes {
 
   /**
    * What this Hermes server can do, for Connection diagnostics and the screens that depend on it (capabilities.ts,
-   * ADR 0044). Its checks only read, through the connection in use, and it is kept in memory for this sign-in only. A
-   * write whose capability Hermes lacks is refused here, before it is sent.
+   * ADR 0044). Its checks read, through the connection in use, but for Diagnostics' two write checks, which change
+   * nothing (ADR 0169), and it is kept in memory for this sign-in only. A write whose capability Hermes lacks is
+   * refused here, before it is sent.
    */
   readonly capabilities = new CapabilityStore(
     {
       get: (pathAndQuery, maxBytes) => this.restGet(pathAndQuery, maxBytes, false),
       rpc: (method, params) => this.request(method, params, undefined, false),
+      put: (pathAndQuery, body) => {
+        const pipe = this.pipe;
+        if (!pipe || this.snapshot.status !== "connected") return Promise.reject(new Error("Not connected to Hermes."));
+        return pipe.request("PUT", pathAndQuery, JSON.stringify(body));
+      },
     },
     () => this.generation,
   );
@@ -5040,48 +5046,6 @@ export class Hermes {
   }
 
   /**
-   * How Outputs reads Hermes for `profile` (outputs.ts): a chat's stored rows through dashboard REST, each page refused
-   * past its size limit, and a folder's listing through `GET /api/fs/list`, where the profile's tools run. Every
-   * request names the profile, so a run for a profile left behind still reads only that profile.
-   */
-  outputsIo(profile: string): OutputsIo {
-    return {
-      rows: async (chatId, offset, limit, maxBytes) => {
-        const query = new URLSearchParams({ profile, order: "latest", limit: String(limit), offset: String(offset), inline_images: "false" });
-        const body = await this.restGet(`${sessionPath(chatId)}/messages?${query}`, maxBytes);
-        const res = JSON.parse(body) as { messages?: unknown };
-        // UTF-8 bytes, as Rust counted them against the limit.
-        return { rows: Array.isArray(res.messages) ? (res.messages as StoredOutputRow[]) : [], bytes: new TextEncoder().encode(body).byteLength };
-      },
-      listDir: async (path, host) => {
-        // The dashboard's own machine, through the managed files routes Server files lists with (ADR 0012).
-        if (host)
-          return this.files.list(path).then(
-            (l) => ({ entries: l.entries.map((e) => ({ name: e.name, isDirectory: e.kind === "dir" })) }),
-            (e: unknown) => {
-              const status = e instanceof RemoteFilesError ? e.status : undefined;
-              const message = errorText(e);
-              if (status === 404 && /isn't on the server/.test(message)) return { entries: [], error: "ENOENT" };
-              if (status === 400 && /not a folder/.test(message)) return { entries: [], error: "ENOTDIR" };
-              if (status === 403) return { entries: [], error: "EACCES" };
-              throw new Error(message);
-            },
-          );
-        return this.fsList(path, profile);
-      },
-      // Read as Preview reads it, naming the chat (ADR 0062). `read-text` reads at most 512 KB of the file.
-      confirm: async (path, session) => {
-        try {
-          await this.restGet(`api/fs/read-text?${new URLSearchParams({ path, profile, session_id: session })}`, LIST_MAX_BYTES);
-          return { state: "available" };
-        } catch (e) {
-          return outputFound(e);
-        }
-      },
-    };
-  }
-
-  /**
    * The last `lines` lines of one of `profile`'s Hermes log files (`GET /api/logs`, logs.ts, ADR 0033), as Hermes
    * answers it: `{file, lines}`. Only while connected; refused past `LIST_MAX_BYTES`.
    */
@@ -5419,24 +5383,8 @@ function timeLimit<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([p, late]).finally(() => clearTimeout(timer));
 }
 
-/** The most a folder listing for Outputs may be: a folder of tens of thousands of entries. */
+/** The most a log read (`readLog`) may answer. */
 const LIST_MAX_BYTES = 8 * 1024 * 1024;
-
-/**
- * What a failed `read-text` naming an Output's chat says about the file (outputs.ts `OutputsIo.confirm`, ADR 0062), or
- * undefined when Hermes no longer has the chat. A file too large to preview, or one Hermes is using, is there.
- */
-export function outputFound(e: unknown): { state: "missing" | "folder" | "forbidden" | "available" | "unknown"; why?: string } | undefined {
-  if (sessionNotFound(e)) return undefined;
-  if (!(e instanceof RestError)) return { state: "unknown", why: errorText(e) };
-  const { status, detail } = e;
-  if (status === 404 && detail.startsWith(SANDBOX_NOT_FOUND_PREFIX)) return { state: "missing", why: SANDBOX_MISSING };
-  if (status === 404 && detail === "File not found") return { state: "missing", why: "It isn't at this path where its chat's tools ran: it was deleted, moved or renamed." };
-  if (status === 400 && detail === "Path points to a directory") return { state: "folder" };
-  if (status === 403) return { state: "forbidden", why: "The server refused to read it." };
-  if (status === 413 || status === 409) return { state: "available" };
-  return { state: "unknown", why: `The server couldn't read it (${status}): ${detail}` };
-}
 
 const sessionPath = (chatId: string) => `api/sessions/${encodeURIComponent(chatId)}`;
 

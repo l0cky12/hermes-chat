@@ -17,7 +17,8 @@ optdepends=('openssh: sign in through an SSH tunnel'
             'grim: take screenshots on Hyprland and Sway'
             'xdg-desktop-portal: take screenshots on GNOME and KDE Plasma'
             'desktop-file-utils: let other apps open hermes-chat:// chat links'
-            'libayatana-appindicator: show the tray icon and use Close to tray')
+            'libayatana-appindicator: show the tray icon and use Close to tray'
+            'hunspell-en_us: underline misspelled words as you write (or another language'"'"'s hunspell dictionary)')
 provides=("$_pkgname")
 conflicts=("$_pkgname")
 # The -debug package makepkg splits off comes out empty for this build, so skip it.

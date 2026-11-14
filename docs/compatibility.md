@@ -10,7 +10,7 @@ The app learns what a server supports in three ways, in this order:
 
 1. **What Hermes says about itself.** `GET /api/health` gives the version and commit. `GET /api/status` gives the release date and the sign-in providers. The `gateway.ready` frame gives the protocol. `client.capabilities` lists the requests Hermes may send, such as Approvals, and `gateway.capabilities` lists feature flags.
 2. **What the app's own requests show.** When a screen reads a route and Hermes answers, that feature is supported. When Hermes answers that it has no such route or method, it is not supported.
-3. **A check.** For anything still not known about 2 seconds after the connection opens, the app sends one request that only reads. It never changes anything on the server to find out. Each check has an 8-second time limit.
+3. **A check.** For anything still not known about 2 seconds after the connection opens, the app sends one request that only reads. Each check has an 8-second time limit. Two features have no read to check them by: Toolset switches and Answering Approvals. While Settings → Diagnostics is open, it sends each one request shaped like a change, for something that can't exist, which Hermes refuses before changing anything (ADR 0169). Nothing else is sent to find out, and the app sends neither check on connect.
 
 A version number alone doesn't prove that a route exists, so each feature is checked on its own. A Hermes installed from a git checkout may report its version as `unknown`; diagnostics then shows its build and commit.
 
@@ -66,7 +66,7 @@ When no other client answers, the reply keeps running until Hermes stops waiting
 
 ## Answering Approvals
 
-Needs `approval.respond` on `/api/ws`. Hermes `bf0203a` and every Hermes that sends `approval` requests (from `ebe8cda8ea`) has it. An answer sent that way settles the Approval in Hermes's queue, and Hermes then withdraws the card from every other app that has the chat open (`request.cancel`). A plain reply to Hermes's request settles it for this app alone, so another app keeps showing the card. Answering is a change, so diagnostics can't check it by reading. The capability is unknown until this app answers an Approval. A Hermes that answers "method not found" gets the plain reply, then and from then on. Another app's card then stays up until Hermes next lists the chat as not waiting (`session.active_list`), and this app closes its own cards the same way when an older app answers in a plain reply. It does that, and reads an `approval.respond` that settled nothing as answered elsewhere, only for a card that Hermes acknowledged as waiting in its own queue (`approval.received`). With turn isolation (`dashboard.turn_isolation`), the request waits in a child process that neither method sees. Hermes then acknowledges nothing, so the card stays up until Hermes withdraws it or the turn ends, and the answer also goes as a plain reply, which Hermes passes on to the child.
+Needs `approval.respond` on `/api/ws`. Hermes `bf0203a` and every Hermes that sends `approval` requests (from `ebe8cda8ea`) has it. An answer sent that way settles the Approval in Hermes's queue, and Hermes then withdraws the card from every other app that has the chat open (`request.cancel`). A plain reply to Hermes's request settles it for this app alone, so another app keeps showing the card. No read checks it. While Settings → Diagnostics is open, it sends `approval.respond` with `__hermes_chat_probe__` as the session and request id and `deny` as the choice. At `f0d94882` (`tui_gateway/methods_prompt.py`), Hermes looks the session id up, then looks for a live session waiting on that request id or stored under that session id, finds none, and answers "session not found" (4001) before settling anything; it logs one warning line. That answer means Hermes has the method. A Hermes without it answers "method not found". Alongside, the check reads the profile's `GET /api/config` for `dashboard.turn_isolation`. With turn isolation on (below), `approval.respond` doesn't reach a waiting Approval, so the row says Not supported and the app answers in a plain reply. With it off, or not named in the config, the row says Supported. When the config can't be read, the row says Unknown and why (ADR 0169). A Hermes that answers "method not found" gets the plain reply, then and from then on. Another app's card then stays up until Hermes next lists the chat as not waiting (`session.active_list`), and this app closes its own cards the same way when an older app answers in a plain reply. It does that, and reads an `approval.respond` that settled nothing as answered elsewhere, only for a card that Hermes acknowledged as waiting in its own queue (`approval.received`). With turn isolation (`dashboard.turn_isolation`), the request waits in a child process that neither method sees. Hermes then acknowledges nothing, so the card stays up until Hermes withdraws it or the turn ends, and the answer also goes as a plain reply, which Hermes passes on to the child.
 
 ## Several live connections
 
@@ -99,7 +99,7 @@ Needs the `learning.*` methods on `/api/ws` and `GET /api/profiles/active`. Chec
 
 Needs `GET /api/tools/toolsets`. Without it, Settings → Toolsets shows a note instead of the list.
 
-The switches also need `PUT /api/tools/toolsets/{name}`. Diagnostics doesn't send that check itself. Settings → Toolsets sends it when it opens, as a request Hermes refuses before the route runs (ADR 0021), and diagnostics shows the result. Without the route, Settings → Toolsets shows each toolset's state without switches.
+The switches also need `PUT /api/tools/toolsets/{name}`. Settings → Toolsets and Settings → Diagnostics each check it when they open, with a `PUT` for `__hermes_chat_probe__`, a name no toolset has, and `enabled: "probe"`, which isn't true or false. Hermes refuses the body (422) before the route runs, so no toolset changes (`toggle_toolset` in `hermes_cli/web_routers/tools.py` at `f0d94882`; ADR 0021, ADR 0169). Without the route, Settings → Toolsets shows each toolset's state without switches.
 
 ## Persona
 
@@ -149,7 +149,7 @@ Needs the webhook routes under `/api/webhooks`. Checked with `GET /api/webhooks`
 
 ## Outputs
 
-Needs `GET /api/fs/list`, and `GET /api/sessions/{id}/messages` with tool rows. Checked with `GET /api/fs/list`. Without `fs/list`, the Outputs screen shows a note instead of the list.
+Needs `GET /api/fs/list`, and `GET /api/sessions/{id}/messages` with tool rows. Checked with `GET /api/fs/list`. The Outputs screen is gone (ADR 0170). The capability stays because extensions can name `outputs` in `needs` (ADR 0126): without `fs/list`, such an extension shows what is missing instead of running.
 
 ## Sign-in methods
 
@@ -181,6 +181,6 @@ The automated tests use a fake Hermes that can answer as either of those, or lea
 
 - A check proves that a route answers. It doesn't prove that every field the app reads is there. A screen still checks what it reads, and says when an answer has an unexpected shape.
 - A route that a gateway or proxy in front of the dashboard blocks can look missing (a `404`) or unreachable (a `5xx`). Check the gateway if a feature your Hermes should have shows as not supported.
-- Toolset switches can't be checked by reading, so they stay unknown until Settings → Toolsets opens.
+- Toolset switches and Answering Approvals can't be checked by reading. They stay unknown until Settings → Diagnostics or, for the switches, Settings → Toolsets opens. Answering Approvals shows Not supported on a Hermes with turn isolation, where `approval.respond` doesn't reach the waiting Approval, and Unknown when the profile's config can't be read to tell.
 - Memory can be edited only for the profile the dashboard runs as. That limit isn't a missing feature, so diagnostics doesn't show it; Settings → Memory explains it.
 - The canonical protocol can't be shown in diagnostics, because the app doesn't connect to it.

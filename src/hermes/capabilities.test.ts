@@ -81,6 +81,7 @@ function scripted(answers: Record<string, unknown>) {
   const io: CapabilityIO = {
     get: (pathAndQuery) => answer(`GET ${pathAndQuery.split("?")[0]}`).then((v) => (typeof v === "string" ? v : JSON.stringify(v))),
     rpc: (method) => answer(`RPC ${method}`),
+    put: (pathAndQuery) => answer(`PUT ${pathAndQuery.split("?")[0]}`).then((v) => JSON.stringify(v)),
   };
   return { io, calls, answers };
 }
@@ -448,6 +449,15 @@ describe("what the app's own requests show", () => {
     expect(t.caps.get("toolsets").state).toBe("supported");
   });
 
+  it("counts an Approval answer as support only when it settled something", () => {
+    const t = store(NEW);
+    t.caps.connected(1, "default", {}, Promise.resolve({}));
+    t.caps.observe(1, { method: "approval.respond" }, undefined, { resolved: 0 });
+    expect(t.caps.get("approvalAnswers").state).toBe("unknown");
+    t.caps.observe(1, { method: "approval.respond" }, undefined, { resolved: 1 });
+    expect(t.caps.get("approvalAnswers").state).toBe("supported");
+  });
+
   it("keeps a screen's newer answer when a check that started earlier answers late, either way", async () => {
     for (const late of [() => Promise.reject(answered(502, "Bad Gateway")), () => Promise.resolve({ path: "/", entries: [] })]) {
       const held: ((v: Promise<unknown>) => void)[] = [];
@@ -644,14 +654,43 @@ describe("checking again", () => {
     expect(t.caps.get("automations").state).toBe("supported");
   });
 
-  it("forgets on Check again what only a screen can check, so it checks it afresh", async () => {
-    const t = store(NEW);
+  it("checks again on Check again what only a write check or a screen can settle", async () => {
+    const t = store({ ...NEW, "PUT api/tools/toolsets/__hermes_chat_probe__": answered(422, "bool_parsing") });
     await connectAndCheck(t);
+    expect(t.calls.filter((c) => c.startsWith("PUT ") || c === "RPC approval.respond")).toEqual([]);
     t.caps.report(1, "toolsetSwitches", "unsupported", "no route");
     expect(t.caps.refuses({ rest: "PUT", path: "api/tools/toolsets/web" })).toBe("toolsetSwitches");
     await t.caps.refresh();
-    expect(t.caps.get("toolsetSwitches").state).toBe("unknown");
+    expect(t.caps.get("toolsetSwitches")).toMatchObject({ state: "supported", source: "probed" });
+    expect(t.caps.refuses({ rest: "PUT", path: "api/tools/toolsets/web" })).toBeUndefined();
+    // Only a chat opened on the connection settles subagents, so Check again forgets what it showed.
+    expect(t.caps.get("subagents").state).toBe("unknown");
     expect(t.caps.get("chat").state).toBe("supported");
+  });
+
+  it("reads each write check's answer: supported, missing, or what it can't tell", async () => {
+    const isolation = (on: unknown) => ({ "GET api/config": { model: "m", dashboard: { turn_isolation: on, compute_host_respawn_max: 3 } } });
+    const cases: [Record<string, unknown>, string, string][] = [
+      [{ "PUT api/tools/toolsets/__hermes_chat_probe__": answered(422, "bool_parsing"), "RPC approval.respond": new RpcError(4001, "session not found"), ...isolation(false) }, "supported", "supported"],
+      [{ "PUT api/tools/toolsets/__hermes_chat_probe__": answered(400, "Unknown toolset"), "RPC approval.respond": { resolved: 0 }, ...isolation(false) }, "supported", "supported"],
+      // A config from before turn isolation names no `dashboard.turn_isolation`.
+      [{ "RPC approval.respond": new RpcError(4001, "session not found"), "GET api/config": { model: "m" } }, "unsupported", "supported"],
+      // Turn isolation: approval.respond is there but doesn't reach a waiting Approval.
+      [{ "RPC approval.respond": new RpcError(4001, "session not found"), ...isolation(true) }, "unsupported", "unsupported"],
+      [{ "RPC approval.respond": { resolved: 0 }, ...isolation(" On ") }, "unsupported", "unsupported"],
+      // The config can't be read, so whether the answer reaches the Approval isn't known.
+      [{ "RPC approval.respond": new RpcError(4001, "session not found") }, "unsupported", "unknown"],
+      [{ "RPC approval.respond": new RpcError(4001, "session not found"), "GET api/config": "<html>" }, "unsupported", "unknown"],
+      [{ "PUT api/tools/toolsets/__hermes_chat_probe__": noRoute(), "RPC approval.respond": noMethod("approval.respond") }, "unsupported", "unsupported"],
+      [{ "PUT api/tools/toolsets/__hermes_chat_probe__": { ok: true }, "RPC approval.respond": { resolved: 1 } }, "unknown", "unknown"],
+      [{ "PUT api/tools/toolsets/__hermes_chat_probe__": answered(503, "busy"), "RPC approval.respond": new RpcError(5004, "boom") }, "unreachable", "unreachable"],
+    ];
+    for (const [i, [answers, switches, approvals]] of cases.entries()) {
+      const t = store({ ...NEW, ...answers });
+      await connectAndCheck(t);
+      await t.caps.checkWrites();
+      expect([t.caps.get("toolsetSwitches").state, t.caps.get("approvalAnswers").state], `case ${i}`).toEqual([switches, approvals]);
+    }
   });
 
   it("checks everything when asked, from diagnostics", async () => {

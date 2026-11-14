@@ -13,6 +13,7 @@ import {
   Laptop,
   LockOpen,
   MoreHorizontal,
+  Pencil,
   RotateCw,
   Server,
   Wrench,
@@ -56,7 +57,7 @@ import {
 } from "./tauriPreview";
 import { usePlacement } from "./pagePlacement";
 import { canGoBack, canGoForward, type HistoryStep, type PreviewHistory } from "./previewHistory";
-import type { ArtifactStore } from "../hermes/artifacts";
+import type { ArtifactRef, ArtifactStore } from "../hermes/artifacts";
 import { ArtifactEditor } from "./ArtifactEditor";
 import { errorText, formatBytes } from "../hermes/values";
 import { ExtensionView } from "./ExtensionView";
@@ -99,6 +100,7 @@ export function PreviewPane({
   web,
   serverPages,
   artifacts,
+  artifactScope,
   connected = true,
   desk,
 }: {
@@ -112,6 +114,11 @@ export function PreviewPane({
   serverPages: ServerPages;
   /** Where an artifact's draft lives (artifacts.ts): editing it in the pane, and away from it, share one store. */
   artifacts?: ArtifactStore;
+  /**
+   * The connection and profile a Server file is edited in, as an artifact (ADR 0029, ADR 0170), and the chat on screen,
+   * whose model "Ask Hermes to edit" borrows. None offers no Edit.
+   */
+  artifactScope?: Pick<ArtifactRef, "scope" | "profile" | "chatId">;
   connected?: boolean;
   /** Where annotations are staged (the composer on screen), and who hears that the page moved. */
   desk?: AnnotationDesk & { pageMoved(): void };
@@ -197,6 +204,18 @@ export function PreviewPane({
             onClick={annotate.start}
           >
             <Crosshair size={15} />
+          </button>
+        )}
+        {here?.kind === "server" && artifacts && artifactScope && (
+          <button
+            className="icon-btn"
+            title="Edit beside the chat"
+            aria-label="Edit"
+            onClick={() =>
+              open({ kind: "artifact", ref: { ...artifactScope, path: here.path, host: !!here.host, ...(here.session && { session: here.session }) } })
+            }
+          >
+            <Pencil size={15} />
           </button>
         )}
         <MoreMenu address={here && addressOf(here)} framed={!web.native} picking={picking} onCopy={copy} onPick={() => void pick()} />

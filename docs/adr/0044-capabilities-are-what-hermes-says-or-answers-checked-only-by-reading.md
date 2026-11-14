@@ -1,5 +1,7 @@
 # Capabilities are what Hermes says or answers, checked only by reading
 
+> **Amended by [ADR 0169](0169-diagnostics-checks-toolset-switches-and-approval-answers-with-writes-that-change-nothing.md)** (#571, #572). "Nothing is written to find out" holds for the connection's own check. While Diagnostics is open, it also sends Toolset switches' and Answering Approvals' write checks, each for something that can't exist, which Hermes refuses before changing anything. The rest of this ADR stands.
+
 Hermes Chat works with more than one Hermes version, and each screen used to find out on its own, after it opened, whether the server had what it needed (#87). Nothing in the app said what the connected server is or what it supports, and new features (#73, #70, #72, #66) had no shared way to ask. Settings → Diagnostics now shows both, and the transport and every dependent screen read one typed contract: `src/hermes/capabilities.ts`.
 
 ## Decisions

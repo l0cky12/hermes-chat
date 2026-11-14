@@ -3,7 +3,7 @@
 // rail's foot. Right-clicking a chat opens its menu (ChatMenu.tsx).
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileOutput, Hourglass, LockOpen, PanelLeftClose, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
+import { BarChart3, Bot as BotIcon, Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleAlert, Copy, Hourglass, LockOpen, PanelLeftClose, Pin, Search, Settings, SquarePen, Trash2, Webhook, FolderGit2 } from "lucide-react";
 import { waitingLabel, type Handoff } from "../hermes/dispatched";
 import type { Chat, CheckTimes, ConnectionStatus, OtherProfile, OtherProfiles } from "../hermes/model";
 import { SOURCE_LABEL, isWaiting } from "../hermes/model";
@@ -42,8 +42,6 @@ export function Rail({
   botsNeedYou = false,
   onOffice,
   officeOpen = false,
-  onOutputs,
-  outputsOpen = false,
   onSettings,
   settingsOpen = false,
   onJobs,
@@ -75,9 +73,6 @@ export function Rail({
   /** Opens or closes the agent office (Office.tsx, ADR 0077); none while Settings turns it off. */
   onOffice?: () => void;
   officeOpen?: boolean;
-  /** Opens Outputs, the files Hermes's tools wrote (Outputs.tsx). */
-  onOutputs?: () => void;
-  outputsOpen?: boolean;
   onSettings: () => void;
   settingsOpen?: boolean;
   /** Opens Scheduled jobs: Hermes's jobs for the profile, which it runs on the server. */
@@ -114,11 +109,6 @@ export function Rail({
   const connLabel = [STATUS_LABEL[status], connNote].filter(Boolean).join(" · ");
   const { shown, bind, hide, tipProps, descriptions } = useRailTip();
   const server = [
-    onOutputs && (
-      <button key="outputs" className={`icon-btn ${outputsOpen ? "on" : ""}`} aria-label="Outputs" aria-pressed={outputsOpen} onClick={onOutputs} {...bind("outputs", { label: "Outputs", note: "Files Hermes made" })}>
-        <FileOutput size={18} />
-      </button>
-    ),
     onRepo && (
       <button key="repo" className={`icon-btn ${repoOpen ? "on" : ""}`} aria-label="Repository" aria-pressed={repoOpen} onClick={onRepo} {...bind("repo", { label: "Repository", note: "Git changes on the server" })}>
         <FolderGit2 size={18} />

@@ -6,6 +6,7 @@ import { BranchUnconfirmed } from "../hermes/transport";
 import { modelLabel, type ReplayKind, type ReplayPreview, type Variant } from "../hermes/replay";
 import { Spinner } from "./bits";
 import { useModal } from "./modal";
+import { useSpellCheck } from "./SpellCheckSettings";
 import { errorText, plural } from "../hermes/values";
 
 /** Under a message of the owner's: opens Edit. `blocked`: why it can't be used now, shown on hover. */
@@ -79,6 +80,7 @@ export function ReplayDialog({
   done: (chatId: string, warnings: string[]) => void;
   onClose: () => void;
 }) {
+  const spellCheck = useSpellCheck();
   const [state, setState] = useState<State>({ phase: "loading" });
   const [words, setWords] = useState<string>();
   const [missingOk, setMissingOk] = useState(false);
@@ -183,6 +185,7 @@ export function ReplayDialog({
                   id={textId}
                   className="branch-name replay-text"
                   autoFocus
+                  spellCheck={spellCheck}
                   rows={Math.min(10, Math.max(3, (words ?? "").split("\n").length + 1))}
                   value={words ?? ""}
                   disabled={busy}

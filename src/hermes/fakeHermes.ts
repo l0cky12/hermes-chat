@@ -1512,6 +1512,7 @@ export class FakeHermes {
       agent: { ...this.modelConfig.agent },
       delegation: { ...this.modelConfig.delegation },
       terminal: { backend: this.terminalBackend[query.get("profile") || "default"] ?? "local" },
+      dashboard: { turn_isolation: this.turnIsolation },
       ...(this.cron.zoneSetting(query.get("profile") || "default") && { timezone: this.cron.zoneSetting(query.get("profile") || "default") }),
       // The raw map, as `include_defaults=false` reads it: what Rust's MCP edit starts from (fakeMcp.ts).
       ...(this.mcp.servers[query.get("profile") || "default"] && { mcp_servers: this.mcp.servers[query.get("profile") || "default"] }),

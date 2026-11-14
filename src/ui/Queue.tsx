@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type DragEvent } from "react";
 import { GripVertical, ListOrdered, Paperclip, Pause, Pencil, Play, Trash2 } from "lucide-react";
 import { type Attachment, type Chat, type ChatQueue, type ConnectionStatus, type Queued, isOutgoing, isWaiting } from "../hermes/model";
 import { composing, slotAt } from "./bits";
+import { useSpellCheck } from "./SpellCheckSettings";
 
 /** What the queue panel does, for a chat that has started. `add` returns why a message couldn't be queued. */
 export type QueueApi = {
@@ -178,6 +179,7 @@ function QueueRow({
   onRemove: () => void;
   onDrag: (on: boolean) => void;
 }) {
+  const spellCheck = useSpellCheck();
   const [editing, setEditing] = useState<string>();
   const [gone, setGone] = useState(false);
   const rowRef = useRef<HTMLLIElement>(null);
@@ -239,6 +241,7 @@ function QueueRow({
             className="queue-edit"
             aria-label={`Edit queued message ${index + 1}`}
             autoFocus
+            spellCheck={spellCheck}
             rows={Math.min(6, editing.split("\n").length + 1)}
             value={editing}
             onChange={(e) => setEditing(e.target.value)}

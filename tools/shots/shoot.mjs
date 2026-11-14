@@ -259,6 +259,62 @@ Object.assign(scenes, {
   "settings-narrow-sheet": { query: "?profiles=1", ...narrow, steps: [openSettings, click(".settings-crumb"), tab("Model"), click(".settings-crumb")] },
   "settings-narrow-search": { query: "?profiles=1", ...narrow, steps: [openSettings, click(".settings-bar-search"), typeSearch("reasoning effort")] },
 });
+// Workstream B of the improvement report, at 1280 × 800: the rail, Diagnostics' two write-checked rows, and Skills rows
+// with long descriptions and a name line full of badges.
+const wsb = { width: 1280, height: 800 };
+const longSkills = `(() => {
+  const s = window.shots.server.skills;
+  const md = (name, description) => "---\\nname: " + name + "\\ndescription: " + description + "\\n---\\n\\nThe " + name + " skill's instructions.\\n";
+  s.add("default", { dir: "/home/liam/.hermes/skills/ops/zfs-scrub-and-snapshot-review", source: "hub", category: "home-lab-operations-storage-backups-and-snapshot-retention-weekly" },
+    md("zfs-scrub-and-snapshot-review", "Run a scrub on every pool, read the result, then list the snapshots older than the retention policy and say which ones are safe to destroy before anything is deleted, with the space each would free."));
+  s.platformDisabled.default = { tui: ["notes", "zfs-scrub-and-snapshot-review"] };
+  s.add("default", { dir: "/home/liam/.hermes/skills/code-review", source: "bundled" },
+    md("code-review", "Review a diff for correctness first, then for tests that prove the change, then for names and structure; quote the line, say what breaks, and suggest the smallest fix that keeps the behaviour the author meant. Check error paths, concurrency and anything that writes, and say plainly when a change is fine as it is."));
+})()`;
+Object.assign(scenes, {
+  "wsb-rail": { query: "", ...wsb, steps: [] },
+  "wsb-diagnostics": { query: "", ...wsb, steps: [openSettings, tab("Diagnostics"), `new Promise((r) => setTimeout(r, 3000))`, scrollTo("#capability-approvalAnswers")] },
+  // A Hermes with turn isolation, where approval.respond doesn't reach a waiting Approval.
+  "wsb-diagnostics-turn-isolation": {
+    query: "",
+    ...wsb,
+    steps: [`window.shots.server.turnIsolation = true`, openSettings, tab("Diagnostics"), `new Promise((r) => setTimeout(r, 3000))`, scrollTo("#capability-approvalAnswers")],
+  },
+  "wsb-skills": { query: "", ...wsb, steps: [longSkills, openSettings, tab("Skills")] },
+  "wsb-skills-focus": {
+    query: "",
+    ...wsb,
+    steps: [longSkills, openSettings, tab("Skills"), `document.getElementById("skill-code-review-edit").focus()`, { press: "Tab" }, `document.getElementById("skill-code-review-edit").scrollIntoView({ block: "center" })`],
+  },
+  // A server file a tool call wrote, opened in the Preview from the tool call's chip: the toolbar's Edit (ADR 0170).
+  "wsb-preview-edit": {
+    query: "",
+    ...wsb,
+    steps: [
+      `(() => {
+        const s = window.shots.server, path = "/home/liam/notes/backup-runbook.md";
+        const args = { path }, t = 1_790_000_000;
+        s.serverFiles[path] = "# Backup runbook\\n\\nThe nightly restic job runs at 02:30 from restic-backup.timer.\\n\\n## When it fails\\n\\n1. Check that no other restic process is running.\\n2. Clear a stale lock with restic unlock.\\n3. Re-run the backup by hand and confirm a new snapshot.\\n";
+        s.transcripts.backup = [...s.transcripts.backup,
+          { role: "user", text: "Write that down as a runbook in my notes." },
+          { role: "assistant", text: "", tool_calls: [{ id: "w1", type: "function", function: { name: "write_file", arguments: JSON.stringify(args) } }] },
+          { role: "tool", name: "write_file", tool_call_id: "w1", args, context: path, result: JSON.stringify({ bytes_written: 260, dirs_created: false, resolved_path: path, files_modified: [path] }) },
+          { role: "assistant", text: "Saved the runbook to \`/home/liam/notes/backup-runbook.md\`." }];
+      })()`,
+      click("button", "Nightly backup"),
+      click(".tool-line", "write_file"),
+      click(".preview-chip", "backup-runbook.md"),
+      `new Promise((r) => setTimeout(r, 1500))`,
+      unfocus,
+    ],
+  },
+  // Pass 2: Settings → General → Chats, where Check spelling is (#578).
+  "wsb-settings-chats": {
+    query: "",
+    ...wsb,
+    steps: [openSettings, sub("Chats"), unfocus, `[...document.querySelectorAll("section")].find((s) => s.textContent.startsWith("Sending while Hermes replies")).scrollIntoView({ block: "start" })`],
+  },
+});
 const wanted = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(scenes);
 
 function chrome() {

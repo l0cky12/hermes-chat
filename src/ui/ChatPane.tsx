@@ -41,7 +41,7 @@ import { ConversationPanel, StartConversationButton, conversationAway, startBloc
 import type { ConversationState, VoiceConversation } from "./conversation";
 import type { VoiceSetup } from "../hermes/pipe";
 import { ChatUsageButton, ReplyUsageLine } from "./Usage";
-import { PathsIn, useLinkMenu, useOpenPreview } from "./previewContext";
+import { PathsIn, useLinkMenu, useOpenPreview, usePathsIn } from "./previewContext";
 import { ShowInChatContext, type ShowInChat } from "./showInChat";
 import { linkTarget, previewName, toolTargets, withoutBidi } from "../hermes/preview";
 import { type CommandHost, useSlashCommands } from "./SlashCommands";
@@ -49,6 +49,7 @@ import { BranchButton } from "./Branch";
 import { useWindowHidden } from "./windowState";
 import { EditButton, RegenerateButton, VariantNav } from "./Replay";
 import { CopyButton, replyMarkdown } from "./CopyMessage";
+import { useSpellCheck } from "./SpellCheckSettings";
 import { turnsOf, type ReplayKind, type Variant } from "../hermes/replay";
 import type { FollowUp } from "../hermes/uiPrefs";
 import { sttRoute } from "../hermes/sttRoute";
@@ -450,7 +451,7 @@ export function ChatPane({
   chat: Chat;
   notLoaded?: boolean;
   findTarget?: FindTarget;
-  /** Scroll to this tool call and open it, once the history holding it has loaded (Outputs, "Go to the message"). */
+  /** Scroll to this tool call and open it, once the history holding it has loaded. */
   jumpTo?: JumpTarget;
   /** The history loaded without the tool call `jumpTo` names. */
   onJumpMissed?: () => void;
@@ -1492,8 +1493,10 @@ function ToolRow({ t }: { t: ToolItem }) {
 function ToolPreviews({ t }: { t: ToolItem }) {
   const open = useOpenPreview();
   const menu = useLinkMenu();
+  // A file the tool call names is in the sandbox of the chat whose transcript this is (ADR 0170).
+  const session = usePathsIn()?.session;
   if (!open) return null;
-  const targets = toolTargets(t, location.origin);
+  const targets = toolTargets(t, location.origin).map((x) => (x.kind === "server" && session ? { ...x, session } : x));
   const output = t.status !== "running" && t.result ? t.result : undefined;
   if (!targets.length && !output) return null;
   return (
@@ -1636,6 +1639,7 @@ function Composer({
   const keys = useBindings();
   // The chat's staged attachments, kept by the desk under its Draft key so they outlive this composer (ADR 0145).
   const attachments = useSyncExternalStore(screenshots.subscribe, () => screenshots.stagedIn(draftKey));
+  const spellCheck = useSpellCheck();
   const annotations = useSyncExternalStore(screenshots.subscribe, screenshots.annotationLabels);
   const refs = useSyncExternalStore(references?.desk.subscribe ?? noDesk, () => references?.desk.in(draftKey) ?? NO_REFERENCES);
   const focused = useRef(autoFocus);
@@ -2082,6 +2086,7 @@ function Composer({
           rows={1}
           autoFocus={autoFocus}
           placeholder="Message Hermes"
+          spellCheck={spellCheck}
           value={text}
           {...slash.inputProps}
           onChange={(e) => onText(e.target.value, inputKind(e.nativeEvent))}

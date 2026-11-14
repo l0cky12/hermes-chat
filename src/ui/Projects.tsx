@@ -13,6 +13,7 @@ import { pick, typeNewLine } from "./keybindings";
 import { ModelControls } from "./ModelPicker";
 import { errorText } from "../hermes/values";
 import { InstructionsAI, type InstructionsWriter } from "./InstructionsAI";
+import { useSpellCheck } from "./SpellCheckSettings";
 
 const baseName = (path: string) => path.split("/").filter(Boolean).pop() ?? path;
 const chatsText = (n: number) => `${n} ${n === 1 ? "chat" : "chats"}`;
@@ -332,6 +333,7 @@ export function ProjectScreen({
   /** The Context card (ProjectContext.tsx). */
   context: ReactNode;
 }) {
+  const spellCheck = useSpellCheck();
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(project.name);
   const [busy, setBusy] = useState<string>();
@@ -665,6 +667,7 @@ export function ProjectScreen({
                 aria-label={`Message to start a new chat in ${project.name}`}
                 placeholder={`Start a new chat in ${project.name}`}
                 rows={3}
+                spellCheck={spellCheck}
                 value={draft}
                 onChange={(e) => onDraft(e.target.value)}
                 onKeyDown={(e) => {
