@@ -1931,7 +1931,7 @@ export function Main({
     setDesk(d);
     return () => d.dispose();
   }, []);
-  // The chats each unsent message references (ADR 0163), summarized by the connection on screen.
+  // The chats each unsent message references (ADR 0165), summarized by the connection on screen.
   const hermesNow = useRef(hermes);
   hermesNow.current = hermes;
   const [referenceDesk] = useState(

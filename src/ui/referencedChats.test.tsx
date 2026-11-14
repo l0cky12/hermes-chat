@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Referenced chats in the running app against a fake Hermes (ADR 0163): "@" in the composer picks another chat, Hermes
+// Referenced chats in the running app against a fake Hermes (ADR 0165): "@" in the composer picks another chat, Hermes
 // summarizes it with llm.oneshot, and the summary goes with the message as attached context, shown as a chip on the
 // message and read back from the stored message after a reload.
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";

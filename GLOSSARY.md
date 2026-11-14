@@ -208,7 +208,7 @@ A local file the owner sends with a message: an image Hermes looks at, or any ot
 _Avoid_: upload, file (when the attachment is meant)
 
 **Referenced chat**:
-Another of the owner's chats in the same profile, picked with "@" in the composer so a message can build on it. Hermes summarizes it with the profile's Text generation model, and the summary goes with that one message as attached context the model reads and the bubble doesn't show. Edit and Regenerate send it again. The message shows which chats it referenced. A reference is kept only while the app runs until its message is sent; a message waits for every summary, and can't be queued or steered (ADR 0163).
+Another of the owner's chats in the same profile, picked with "@" in the composer so a message can build on it. Hermes summarizes it with the profile's Text generation model, and the summary goes with that one message as attached context the model reads and the bubble doesn't show. Edit and Regenerate send it again. The message shows which chats it referenced. A reference is kept only while the app runs until its message is sent; a message waits for every summary, and can't be queued or steered (ADR 0165).
 _Avoid_: chat reference or `ChatRef` (a chat named by connection, profile and id), mention, link, attachment
 
 **Screenshot**:

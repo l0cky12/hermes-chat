@@ -1,4 +1,4 @@
-// The chats an unsent message references (chatReferences.ts, ADR 0163), as chips above the composer's text: each one
+// The chats an unsent message references (chatReferences.ts, ADR 0165), as chips above the composer's text: each one
 // summarizing, ready, or failed with why. A ready chip opens the summary that will be sent.
 import { useState } from "react";
 import { CircleAlert, Link2, X } from "lucide-react";

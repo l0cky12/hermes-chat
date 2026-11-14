@@ -36,7 +36,7 @@ export type BranchLink = { parentId: string; parentTitle: string; point: BranchP
  * `model`: what the branch ran on once it was made, as Hermes reported it. `pending`: set until the message has gone
  * into the branch, the words to send and `spineKey` of the rows the branch keeps once its copy of the original message
  * is taken back; `through` is `spineKey` of the rows through the original message, which must be the branch's rows
- * before that message is taken back; `references`, the Referenced chats the original message carried (ADR 0163). Those
+ * before that message is taken back; `references`, the Referenced chats the original message carried (ADR 0165). Those
  * words are kept on this computer only until they go, as a Draft is.
  */
 export type BranchVariant = {

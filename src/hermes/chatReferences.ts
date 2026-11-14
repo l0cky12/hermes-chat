@@ -1,4 +1,4 @@
-// Referenced chats (ADR 0163): another of the owner's chats, condensed by Hermes into a short summary that goes with a
+// Referenced chats (ADR 0165): another of the owner's chats, condensed by Hermes into a short summary that goes with a
 // message as attached context. What the summarizing `llm.oneshot` call is told and given, the block a summary is sent
 // as, and the composer's references while they are summarized. Nothing here is kept between launches.
 import { spineOf, typedText, type StoredBranchRow } from "./branch";

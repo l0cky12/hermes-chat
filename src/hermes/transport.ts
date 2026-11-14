@@ -2958,7 +2958,7 @@ export class Hermes {
   /**
    * Sends a message as `send` does, and also says which item in the chat it is, so a Voice conversation can follow the
    * reply to that message and no other (ADR 0111). `itemId` is missing only when the chat isn't in the list.
-   * `references`: Referenced chats, whose summaries go after the typed words as attached context (ADR 0163).
+   * `references`: Referenced chats, whose summaries go after the typed words as attached context (ADR 0165).
    */
   sendTracked(chatId: string, text: string, attachments: Attachment[] = [], skill?: SkillCall, references: SentReference[] = []): Promise<{ delivery: Delivery; itemId?: string }> {
     // Refused as it starts, in the background (ADR 0125). A send the owner started on the target goes on after a switch.
@@ -3422,7 +3422,7 @@ export class Hermes {
   }
 
   /**
-   * A short summary of another chat of this profile, for a message that references it (ADR 0163). The chat's stored
+   * A short summary of another chat of this profile, for a message that references it (ADR 0165). The chat's stored
    * messages are read with dashboard REST; the summary comes from legacy `llm.oneshot` on the profile's Text generation
    * model, which adds nothing to either chat. Rejects if the chat has no messages or Hermes gives no summary; with a
    * `TitleModelUnavailable` if Hermes has no credentials for that model's provider.
