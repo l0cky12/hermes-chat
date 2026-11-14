@@ -52,7 +52,7 @@ const matchExtensions = (q: string, offered: readonly OfferedCommand[]) => [
 ];
 
 /** A row of the menu: one of the app's commands, a skill, an extension's command, or a chat to reference. */
-type Row = { kind: "command"; def: CommandDef } | { kind: "skill"; skill: SkillCommand } | { kind: "extension"; cmd: OfferedCommand } | { kind: "chat"; chat: ReferableChat };
+type Row = { kind: "command"; def: CommandDef } | { kind: "skill"; skill: SkillCommand } | { kind: "extension"; cmd: OfferedCommand } | { kind: "reference"; chat: ReferableChat };
 
 type Note = { title?: string; text: string; error?: boolean };
 
@@ -116,7 +116,7 @@ export function useSlashCommands(host: CommandHost | undefined, text: string, on
       : dollar
         ? matchSkills(dollar.query, skills).map((skill): Row => ({ kind: "skill", skill }))
         : at
-          ? matchChats(at.query, host!.references!.chats).map((chat): Row => ({ kind: "chat", chat }))
+          ? matchChats(at.query, host!.references!.chats).map((chat): Row => ({ kind: "reference", chat }))
           : [];
   const open = query !== undefined || rows.length > 0;
   const matches = rows;
@@ -148,7 +148,7 @@ export function useSlashCommands(host: CommandHost | undefined, text: string, on
     let to: number | undefined;
     if (row.kind === "command") next = completion(row.def);
     else if (row.kind === "extension") next = `/${row.cmd.name} `;
-    else if (row.kind === "chat") {
+    else if (row.kind === "reference") {
       // The "@title" typed so far goes; the chat goes with the message as a chip above the text instead.
       next = `${text.slice(0, at!.start)}${text.slice(before.length)}`;
       to = at!.start;
@@ -320,7 +320,7 @@ export function useSlashCommands(host: CommandHost | undefined, text: string, on
                 const newExtension = row.kind === "extension" && (prev?.kind !== "extension" || prev.cmd.id !== row.cmd.id);
                 return (
                   <div
-                    key={row.kind === "command" ? `c-${row.def.name}` : row.kind === "skill" ? `s-${row.skill.key}` : row.kind === "chat" ? `h-${row.chat.id}` : `e-${row.cmd.name}`}
+                    key={row.kind === "command" ? `c-${row.def.name}` : row.kind === "skill" ? `s-${row.skill.key}` : row.kind === "reference" ? `h-${row.chat.id}` : `e-${row.cmd.name}`}
                     role="presentation"
                   >
                     {i === firstSkill && !dollar && (
@@ -351,7 +351,7 @@ export function useSlashCommands(host: CommandHost | undefined, text: string, on
                           <span className="cmd-desc">{row.def.description}</span>
                           {why && <span className="cmd-why">{why}</span>}
                         </>
-                      ) : row.kind === "chat" ? (
+                      ) : row.kind === "reference" ? (
                         <>
                           <Link2 size={13} aria-hidden />
                           <span className="cmd-desc">{row.chat.title}</span>

@@ -1193,7 +1193,7 @@ const BlockView = memo(
           {block.references && (
             <div className="msg-files">
               {block.references.map((title, i) => (
-                <span key={i} className="chip" title="A summary of this chat went with the message">
+                <span key={i} className="chip ref-chip" title="A summary of this chat went with the message">
                   <Link2 size={12} aria-hidden />
                   <span className="chip-name">Referenced: {title}</span>
                 </span>
