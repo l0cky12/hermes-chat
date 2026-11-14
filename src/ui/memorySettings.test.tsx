@@ -462,6 +462,26 @@ describe("Settings → Memory", () => {
     expect(s.memory.default.memory).toEqual(["Agent changed D", "Agent changed B"]);
   });
 
+  it("discarding one kept edit by keyboard leaves focus off the next one's Discard", async () => {
+    const { s, user } = await shown();
+    await user.click(entry(SHORT));
+    await user.clear(editor());
+    await user.type(editor(), "Edit A");
+    s.memory.default.memory[1] = "Agent changed B";
+    await user.click(button("Save"));
+    await screen.findByRole("textbox", { name: "Your kept edit" });
+    await user.click(entry(FALCON));
+    await user.clear(editor());
+    await user.type(editor(), "Edit C");
+    s.memory.default.memory[0] = "Agent changed D";
+    await user.click(button("Save"));
+    await screen.findByRole("textbox", { name: "Your kept edit 2" });
+    button("Discard your kept edit 1").focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Your kept edit" }).value).toBe("Edit C");
+    expect(document.activeElement).not.toBe(button("Discard your kept edit"));
+  });
+
   it("holds the open entry and file still while a save is under way", async () => {
     const s = server();
     let release!: () => void;
