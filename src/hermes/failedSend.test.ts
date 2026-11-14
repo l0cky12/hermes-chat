@@ -452,6 +452,22 @@ describe("The outbox on this computer", () => {
     expect(kept()).toMatchObject([{ text: TEXT }]);
   });
 
+  it("a failed message keeps its Referenced chats across a restart, and Retry sends the same summaries", async () => {
+    const { server, hermes, chat, relaunch, submits } = await ready();
+    const deploy = { chatId: "c2", title: "Deploy pipeline", summary: "Deploys run on push." };
+    server.rejectPrompt = { code: 4009, message: "session busy" };
+    await hermes().sendTracked("c1", TEXT, [], undefined, [deploy]);
+    expect(chat().items.at(-1)).toMatchObject({ text: TEXT, references: ["Deploy pipeline"], outgoing: { state: "failed", references: [deploy] } });
+
+    server.rejectPrompt = undefined;
+    const after = await relaunch();
+    await after.open("c1");
+    const failed = chat().items.at(-1)!;
+    expect(failed).toMatchObject({ references: ["Deploy pipeline"], outgoing: { references: [deploy] } });
+    expect(await after.retry("c1", failed.id)).toEqual({ delivery: "accepted" });
+    expect(String(submits().at(-1)!.params.text)).toMatch(/^Rotate the nginx logs,\n {2}then restart it ✓\n\n--- Attached Context ---\n\n\[Referenced chat: Deploy pipeline\]\n[\s\S]*Deploys run on push\.$/);
+  });
+
   it("a failed message storage refused is kept in memory across a profile switch and back", async () => {
     const { server, hermes, chat } = await ready();
     server.otherProfiles = { work: [] };
