@@ -259,6 +259,24 @@ Object.assign(scenes, {
   "settings-narrow-sheet": { query: "?profiles=1", ...narrow, steps: [openSettings, click(".settings-crumb"), tab("Model"), click(".settings-crumb")] },
   "settings-narrow-search": { query: "?profiles=1", ...narrow, steps: [openSettings, click(".settings-bar-search"), typeSearch("reasoning effort")] },
 });
+// Workstream B of the improvement report, at 1280 × 800: the rail, Diagnostics' two write-checked rows, and Skills rows
+// with long descriptions and a name line full of badges.
+const wsb = { width: 1280, height: 800 };
+const longSkills = `(() => {
+  const s = window.shots.server.skills;
+  const md = (name, description) => "---\\nname: " + name + "\\ndescription: " + description + "\\n---\\n\\nThe " + name + " skill's instructions.\\n";
+  s.add("default", { dir: "/home/liam/.hermes/skills/ops/zfs-scrub-and-snapshot-review", source: "hub", category: "home-lab-operations-storage-backups-and-snapshot-retention-weekly" },
+    md("zfs-scrub-and-snapshot-review", "Run a scrub on every pool, read the result, then list the snapshots older than the retention policy and say which ones are safe to destroy before anything is deleted, with the space each would free."));
+  s.platformDisabled.default = { tui: ["notes", "zfs-scrub-and-snapshot-review"] };
+  s.add("default", { dir: "/home/liam/.hermes/skills/code-review", source: "bundled" },
+    md("code-review", "Review a diff for correctness first, then for tests that prove the change, then for names and structure; quote the line, say what breaks, and suggest the smallest fix that keeps the behaviour the author meant."));
+})()`;
+Object.assign(scenes, {
+  "wsb-rail": { query: "", ...wsb, steps: [] },
+  "wsb-diagnostics": { query: "", ...wsb, steps: [openSettings, tab("Diagnostics"), `new Promise((r) => setTimeout(r, 3000))`, scrollTo("#capability-approvalAnswers")] },
+  "wsb-skills": { query: "", ...wsb, steps: [longSkills, openSettings, tab("Skills")] },
+  "wsb-skills-focus": { query: "", ...wsb, steps: [longSkills, openSettings, tab("Skills"), `document.getElementById("skill-zfs-scrub-and-snapshot-review-edit").focus()`, { press: "Tab" }] },
+});
 const wanted = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(scenes);
 
 function chrome() {
