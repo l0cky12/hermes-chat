@@ -26,7 +26,7 @@ import { useModal } from "./modal";
 import { FileEditor } from "./FileEditor";
 import { EDIT_MAX_BYTES } from "../hermes/textEdit";
 import { errorText, formatBytes } from "../hermes/values";
-import { shownName, shownPath } from "../hermes/outputs";
+import { shownName, shownPath } from "../hermes/serverPaths";
 
 /** A file's preview, from the click until its contents are read. `ask`: its type is unknown, and it may be text. */
 export type Preview =

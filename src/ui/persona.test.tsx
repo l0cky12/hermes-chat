@@ -522,8 +522,8 @@ describe("leaving an unsaved persona edit", () => {
     await user.keyboard("{Escape}");
     expect((await editor()).value).toBe("# Mine\n");
 
-    // The Outputs button on the rail asks too.
-    await user.click(screen.getByRole("button", { name: "Outputs" }));
+    // The Usage button on the rail asks too.
+    await user.click(screen.getByRole("button", { name: "Usage" }));
     await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Keep editing" }));
     expect((await editor()).value).toBe("# Mine\n");
 

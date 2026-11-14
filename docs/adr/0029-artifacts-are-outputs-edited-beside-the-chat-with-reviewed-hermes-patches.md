@@ -1,5 +1,7 @@
 # Artifacts are Outputs edited beside the chat, with Hermes's edits reviewed as patches
 
+> **Partly superseded by [ADR 0164](0164-the-outputs-screen-is-removed-and-artifacts-open-from-the-preview.md)** (#570). An Artifact opens from Edit in the Preview's toolbar on a Server file, not from Outputs, and there is no "Unsaved edit" mark in a list: Edit on the same file brings the draft back. The rest of this ADR stands.
+
 Issue #80 asks to work on a generated document beside the chat and to ask Hermes for targeted edits without the whole file being replaced by accident. An Output (ADR 0016) that is a text file can now be opened to edit in the preview pane beside the chat. That open file is an **Artifact**. This first stage covers Markdown and plain text, code included, since it's plain text too. Rich editors (spreadsheets, slides, collaborative editing) need designs of their own.
 
 ## Decisions

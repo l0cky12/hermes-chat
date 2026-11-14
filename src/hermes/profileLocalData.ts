@@ -17,7 +17,6 @@ import { type ScopeSource, connectionScope, inScope, isPrefOf, prefScope, scopeP
 import { DRAFT_PREFIX, type Drafts } from "./drafts";
 import { IMPORTS_KEY } from "./importTranscripts";
 import { INBOX_PREFIX } from "./inbox";
-import { OUTPUTS_KEY } from "./outputs";
 import { PERSONA_PREFIX, type PersonaStore } from "./personaStore";
 import { CONTEXT_LEDGER_KEY } from "./projectContextFiles";
 import { type DefaultsDoc, moveScopeKeys } from "./projectDefaults";
@@ -51,10 +50,12 @@ export const CONNECTION_KEYS: readonly { prefix: string; kind: "name" | "names" 
 /** A rename made on the server whose move on this computer hasn't finished, by connection (`renamePending`). */
 export const RENAMES_KEY = "hermes-chat.profile-renames";
 
+/** Where the Outputs screen kept its index, every connection and profile in one document, until ADR 0164 removed it. */
+const RETIRED_OUTPUTS_KEY = "hermes-chat.outputs";
+
 /** Documents `{scopes: {[scope]: …}}` with a scope for each connection and profile. */
 export const SCOPED_DOCS: readonly string[] = [
   PROJECTS_KEY,
-  OUTPUTS_KEY,
   SNOOZE_KEY,
   CLEARED_KEY,
   PINS_KEY,
@@ -83,7 +84,17 @@ export const NOT_PER_PROFILE: Record<string, string> = {
   "hermes-chat.extensions": "Which extensions are installed and what they were granted, the same for every connection and profile",
   "hermes-ui-prefs": "Display preferences: its per-profile parts are moved by `movePrefs`",
   [RENAMES_KEY]: "Renames waiting to move this computer's data, per connection",
+  [RETIRED_OUTPUTS_KEY]: "The Outputs screen's index, from before the screen was removed: deleted at launch (`dropRetiredData`)",
 };
+
+/** Deletes what this computer kept for a screen that is gone, so it isn't kept forever: the Outputs index (ADR 0164). */
+export function dropRetiredData(storage: Pick<Storage, "removeItem"> = localStorage) {
+  try {
+    storage.removeItem(RETIRED_OUTPUTS_KEY);
+  } catch {
+    // Storage that can't be written now is tried again at the next launch.
+  }
+}
 
 /** Where a scope goes: undefined keeps it, null drops it, a string moves it there. */
 export type ScopeMove = (scope: string) => string | null | undefined;
@@ -286,7 +297,7 @@ async function walkAll(c: ScopeSource, walk: Walk, { storage = localStorage as S
 /**
  * Moves everything this computer keeps for profile `from` of connection `c` to profile `to`: drafts, queued and
  * Failed messages, the chat list and Saved copies, branches, persona edits and versions, project membership and
- * defaults, tags and Saved filters, pins, snoozes, inbox dismissals, Outputs, imports, worktree chats, which profile
+ * defaults, tags and Saved filters, pins, snoozes, inbox dismissals, imports, worktree chats, which profile
  * was shown, and the chat to reopen and the model pick. Run only after Hermes renamed it. Another connection's
  * profile of the same name is left alone.
  */

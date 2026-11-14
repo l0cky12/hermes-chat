@@ -1807,7 +1807,7 @@ impl Dashboard {
             _ => return Err(unexpected(resp, &self.hidden()).await),
         }
         read_body(resp, max_bytes, ANSWER_IDLE_LIMIT).await.map_err(|e| match e {
-            // These answers are files, and Outputs tells one over its limit by `FileTooLarge`'s text.
+            // These answers are files: one over its limit is `FileTooLarge`, whose text says how big it is.
             TransportError::AnswerTooLarge { size, max } => TransportError::FileTooLarge { size, max },
             e => e,
         })
@@ -3105,9 +3105,8 @@ fn is_session_list(path: &str) -> bool {
     segs.next() == Some("api") && segs.next() == Some("sessions") && segs.next().is_none()
 }
 
-/// The most read of one relayed answer: the most Outputs reads of one chat in all (src/hermes/outputs.ts
-/// `CHAT_MAX_BYTES`). The biggest the webview asks of `get_limited` is about 13.4 MiB, a 10 MiB image preview as
-/// base64 JSON (src/hermes/remoteFiles.ts).
+/// The most read of one relayed answer, set for the removed Outputs screen's reads of one chat (ADR 0164). The biggest
+/// the webview asks of `get_limited` is about 13.4 MiB, a 10 MiB image preview as base64 JSON (src/hermes/remoteFiles.ts).
 const RELAY_MAX_BYTES: u64 = 64 * MIB;
 
 /// `n` bytes as an error names a limit: in whole MB, or whole KB under one MB.
@@ -3925,8 +3924,8 @@ mod tests {
         }
     }
 
-    /// The webview's limit for a big answer is held to the relay's 64 MiB, the most Outputs reads of one chat in all
-    /// (src/hermes/outputs.ts `CHAT_MAX_BYTES`): an answer announcing more is refused before any of it is read.
+    /// The webview's limit for a big answer is held to the relay's 64 MiB: an answer announcing more is refused before
+    /// any of it is read.
     #[tokio::test]
     async fn a_limited_get_past_any_size_is_held_to_the_relay_limit() {
         let relay_max: u64 = 64 * 1024 * 1024;

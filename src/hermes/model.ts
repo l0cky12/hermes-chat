@@ -63,7 +63,7 @@ export type Item =
   | {
       kind: "tool";
       id: string;
-      /** The tool call's id (`tool_call_id`), the same live and in stored history; Outputs go to the call by it. */
+      /** The tool call's id (`tool_call_id`), the same live and in stored history. */
       callId?: string;
       name: string;
       args?: Record<string, unknown>;

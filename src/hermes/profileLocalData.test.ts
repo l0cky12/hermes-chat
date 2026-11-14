@@ -16,6 +16,7 @@ import {
   PROFILE_KEYS,
   SCOPED_DOCS,
   clearRename,
+  dropRetiredData,
   forgetProfileLocally,
   noteRename,
   renameProfileLocally,
@@ -236,5 +237,16 @@ describe("forgetting a deleted profile on this computer", () => {
     expect(keysNow().filter((k) => k.includes(JSON.stringify(["connection", "c1"]).slice(0, -1)))).toEqual([]);
     for (const d of SCOPED_DOCS) expect(Object.keys(JSON.parse(localStorage.getItem(d)!).scopes)).toEqual([connectionScope(other, "work")]);
     expect(renamePending(home)).toBeUndefined();
+  });
+});
+
+describe("what a removed screen kept", () => {
+  it("deletes the Outputs index an older version kept, and nothing else", () => {
+    localStorage.setItem("hermes-chat.outputs", JSON.stringify({ v: 2, scopes: { x: { chats: {}, added: [], usedAt: 1 } } }));
+    localStorage.setItem("hermes-chat.projects", "{}");
+    dropRetiredData();
+    expect(Object.keys(localStorage)).toEqual(["hermes-chat.projects"]);
+    dropRetiredData();
+    expect(Object.keys(localStorage)).toEqual(["hermes-chat.projects"]);
   });
 });

@@ -129,9 +129,9 @@ describe("The inbox", () => {
     // Clicks inside it keep it open.
     await user.click(filter(/^Completed/));
     expect(inbox()).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Outputs" }));
+    await user.click(screen.getByRole("button", { name: "Usage" }));
     expect(screen.queryByRole("dialog", { name: /Inbox/ })).toBeNull();
-    expect(screen.getByRole("button", { name: "Outputs" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Usage" }).getAttribute("aria-pressed")).toBe("true");
 
     openInbox();
     expect(inbox()).toBeTruthy();

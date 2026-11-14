@@ -22,10 +22,10 @@ export type PreviewTarget =
   | { kind: "web"; url: string; on?: PageOn; fallback?: string }
   /**
    * `host`: on the dashboard's own machine, read through the managed files routes (ADR 0012), not where tools run.
-   * `session`: the chat whose sandbox the path is in, an Output's (outputs.ts `sessionOf`, ADR 0062).
+   * `session`: the chat whose sandbox the path is in (ADR 0062).
    */
   | { kind: "server"; path: string; host?: boolean; session?: string }
-  /** An Output open to edit (artifacts.ts, ADR 0029): read and saved on the machine `ref` names. */
+  /** A Server file open to edit (artifacts.ts, ADR 0029): read and saved on the machine `ref` names. */
   | { kind: "artifact"; ref: ArtifactRef }
   | { kind: "local"; path: string; name: string }
   | { kind: "tool"; name: string; text: string }

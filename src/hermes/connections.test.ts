@@ -7,7 +7,6 @@ import { inboxScope } from "./inbox";
 import { PersonaStore, personaKey } from "./personaStore";
 import { defaultsDoc, storageDefaultsFile } from "./projectDefaults";
 import { PROJECTS_KEY, projectScope } from "./projectLinks";
-import { OUTPUTS_KEY } from "./outputs";
 import { unsaved, sending, restartHold } from "./unsaved";
 import { snapshotDrafts } from "./updates";
 import { localChatCache, outboxAttachmentPaths } from "./chatCache";
@@ -244,7 +243,6 @@ describe("Removing a connection's local data", () => {
       localStorage.setItem(terminalTargetKey(c), `me@${c.id}`);
     }
     localStorage.setItem(PROJECTS_KEY, JSON.stringify({ v: 1, scopes: { [projectScope(one, "default")]: { chats: {} }, [projectScope(two, "default")]: { chats: {} } } }));
-    localStorage.setItem(OUTPUTS_KEY, JSON.stringify({ v: 2, scopes: { [projectScope(one, "default")]: {}, [projectScope(two, "default")]: {} } }));
     setUIPrefs({ lastOpenChat: { [prefScope(one, "default")]: "c1", [prefScope(two, "default")]: "c2" }, modelPicker: { provider: "p", model: "m", profile: prefScope(one, "default") } });
     const defaults = defaultsDoc(storageDefaultsFile(() => localStorage));
     await defaults.save(projectScope(one, "default"), "p1", 0, { instructions: "one" });
@@ -261,7 +259,6 @@ describe("Removing a connection's local data", () => {
     expect(localChatCache(one).loadQueues("default")).toEqual({});
     expect(localChatCache(one).lastProfile()).toBeUndefined();
     expect(Object.keys(JSON.parse(localStorage.getItem(PROJECTS_KEY)!).scopes)).toEqual([projectScope(two, "default")]);
-    expect(Object.keys(JSON.parse(localStorage.getItem(OUTPUTS_KEY)!).scopes)).toEqual([projectScope(two, "default")]);
     expect(getUIPrefs().lastOpenChat).toEqual({ [prefScope(two, "default")]: "c2" });
     expect(getUIPrefs().modelPicker).toBeNull();
     expect(persona.draft(personaKey(one, "default"))).toBeUndefined();

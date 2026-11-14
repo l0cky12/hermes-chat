@@ -81,14 +81,12 @@ import { runFilter } from "./hermes/chatFilter";
 import { SettingsScreen, type PersonaWiring } from "./ui/Settings";
 import { LeavePersona, type LeaveWhat } from "./ui/LeavePersona";
 import { LeaveArtifacts } from "./ui/ArtifactEditor";
-import { ArtifactStore, artifactIo, artifactKey, isDirty } from "./hermes/artifacts";
+import { ArtifactStore, artifactIo, isDirty } from "./hermes/artifacts";
 import { LeaveMemoryEdit, useCloseGuard } from "./ui/LeaveMemoryEdit";
 import { tauriCloseGuard, type CloseGuard } from "./ui/tauriWindow";
 import { FileBrowser } from "./ui/FileBrowser";
-import { OutputsScreen, type OutputsScope } from "./ui/Outputs";
 import { UsageAnalytics } from "./ui/UsageAnalytics";
 import { note, type RemoteLog } from "./hermes/logs";
-import { OutputsIndex, outputsIn, sessionOf, splitPath, type Output } from "./hermes/outputs";
 import { STATUS_LABEL, composing, routeLabel } from "./ui/bits";
 import { editStep, isTextField } from "./ui/editKeys";
 import { ProjectScreen, ProjectSwitcher, type ProjectUnread } from "./ui/Projects";
@@ -1306,12 +1304,8 @@ export function Main({
   const [repoOpen, setRepoOpen] = useState(false);
   /** Where the Repository screen opens when a chat's worktree label opened it: that worktree's Worktrees view. */
   const [repoAt, setRepoAt] = useState<{ target: string; path: string; view: "worktrees"; n: number }>();
-  // The side panel's Files: the folder open last stays for this sign-in. `filesKey` opens it at `filesPath` again.
+  // The side panel's Files: the folder open last stays for this sign-in.
   const [filesPath, setFilesPath] = useState<string>();
-  const [filesKey, setFilesKey] = useState(0);
-  // Outputs covers the chat panes too, but not the preview pane, where its files open.
-  const [outputsOpen, setOutputsOpen] = useState(false);
-  const [outputsScope, setOutputsScope] = useState<OutputsScope>("chat");
   // Usage analytics covers the chat panes too (ADR 0026). It reads Hermes afresh each time it opens.
   const [usageOpen, setUsageOpen] = useState(false);
   const usageIo = useMemo(() => hermes.usageIo(), [hermes]);
@@ -1610,7 +1604,6 @@ export function Main({
     setProjectOpen(false);
     setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
     setRepoOpen(false);
-    setOutputsOpen(false);
     setUsageOpen(false);
     setShowTextGeneration(undefined);
     setShowMemory(undefined);
@@ -1650,34 +1643,6 @@ export function Main({
   };
   const projectNames = (chatId: string) => listable.filter((p) => proj.chats[p.id]?.includes(chatId)).map((p) => p.name);
 
-  // Outputs: one index for each connection and profile, like projects (outputs.ts, ADR 0016). Leaving a profile, or
-  // signing out, stops its run and drops whatever it reads afterwards.
-  const outputsIndex = useMemo(() => new OutputsIndex(hermes.outputsIo(profile), localStorage, scope), [hermes, scope, profile]);
-  useEffect(() => {
-    outputsIndex.resume();
-    return () => outputsIndex.cancel();
-  }, [outputsIndex]);
-  const outSnap = useSyncExternalStore(outputsIndex.subscribe, outputsIndex.getSnapshot);
-  const outputsChatId = active.chatId && chats.some((c) => c.id === active.chatId) ? active.chatId : null;
-  // A scope that has nothing to show (no chat open, no project picked) gives way to the next wider one.
-  const shownOutputsScope: OutputsScope =
-    outputsScope === "chat" && !outputsChatId ? (shownProject ? "project" : "profile") : outputsScope === "project" && !shownProject ? "profile" : outputsScope;
-  const outputsChats = shownOutputsScope === "chat" ? chats.filter((c) => c.id === outputsChatId) : shownOutputsScope === "project" ? listed : chats;
-  const outputsChatKey = outputsChats.map((c) => c.id).join("\n");
-  const scopedOutputs = (snap: typeof outSnap): Output[] => {
-    const ids = new Set(outputsChats.map((c) => c.id));
-    // Every chat in the profile also takes in the files added without a chat; a chat deleted since isn't listed.
-    return shownOutputsScope === "profile" ? outputsIn(snap).filter((o) => o.chatId === undefined || ids.has(o.chatId)) : outputsIn(snap, ids);
-  };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- recompute when the index or the chats in scope change; `scopedOutputs` is a new function each render and would recompute every render
-  const shownOutputs = useMemo(() => scopedOutputs(outSnap), [outSnap, outputsChatKey, shownOutputsScope]);
-  const outputsRefs = () => outputsChats.map((c) => ({ id: c.id, updatedAt: c.updatedAt }));
-  // Reads the chats that changed, then checks where every file shown is now, so a file deleted since (a chat's own
-  // `rm`, a scratch folder pruned) shows Missing before Edit or Preview is tried (#223, ADR 0064). A chat opened on its
-  // own reads again the Outputs dropped to stay within the limit.
-  const refreshOutputs = () => outputsIndex.refresh(outputsRefs(), shownOutputsScope === "chat", scopedOutputs);
-  // The profile's list, once read from Hermes, is every chat it has: the records of the others go, whether or not
-  // Outputs is open. A chat deleted, or no longer listed, keeps no record (outputs.ts `keepOnly`).
   const listedFromHermes = hermes.hasListed();
   // Clears from the Inbox were kept on this computer until clearing a chat settled it (ADR 0090). Once Hermes has
   // listed the profile's chats, the clears that still hold, the chats the old Unsettled section showed, are settled
@@ -1690,19 +1655,6 @@ export function Main({
     clearedStore.dropAll();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- settle once, when Hermes has listed and clears are held; adding `chats`, `snoozes` or `pins` would run it again on each change to them
   }, [listedFromHermes, status, cleared, clearedStore]);
-  const allChatsKey = chats.map((c) => c.id).join("\n");
-  useEffect(() => {
-    if (listedFromHermes) outputsIndex.keepOnly(new Set(chats.map((c) => c.id)));
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the chat ids (`allChatsKey`); adding `chats` would prune the index on every streamed word
-  }, [outputsIndex, listedFromHermes, allChatsKey]);
-  // Opening Outputs, or picking another scope, reads the chats in it that changed since they were last read. A chat
-  // changing while it is open (a reply streaming) waits for Refresh, so a reply doesn't set off a read per word.
-  // Then it checks where every file shown is (refreshOutputs).
-  useEffect(() => {
-    if (!outputsOpen || status !== "connected") return;
-    void refreshOutputs();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- read when Outputs opens or its scope changes; `refreshOutputs` is a new function each render and would read again on every streamed word
-  }, [outputsOpen, status, outputsIndex, shownOutputsScope, outputsChatKey]);
   const where = routeLabel(route) ?? addressLabel(connection);
   const inbox = inboxEntries({ profile, chats, connected: status === "connected", others, live, seen, handoffs: handoffMap });
   const inboxShown = inbox.entries.filter((e) => !acks.isDismissed(e, dismissed));
@@ -1792,7 +1744,6 @@ export function Main({
       setProjectOpen(false);
       setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
       setRepoOpen(false);
-      setOutputsOpen(false);
       setUsageOpen(false);
       if (remember) rememberChat(id);
     };
@@ -1807,7 +1758,6 @@ export function Main({
     guard(() => {
       setProjectOpen(false);
       setSettingsOpen(false);
-      setOutputsOpen(false);
       setUsageOpen(false);
       setRepoOpen(false);
       setAutomationsOpen(false);
@@ -1846,7 +1796,6 @@ export function Main({
       setProjectOpen(false);
       setSettingsOpen(false);
       setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-      setOutputsOpen(false);
       setUsageOpen(false);
       setRepoAt((was) => ({ ...at, n: (was?.n ?? 0) + 1 }));
       setRepoOpen(true);
@@ -1864,7 +1813,6 @@ export function Main({
     setProjectOpen(false);
     setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
     setRepoOpen(false);
-    setOutputsOpen(false);
     setUsageOpen(false);
   });
 
@@ -1885,7 +1833,6 @@ export function Main({
     setProjectOpen(false);
     setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
     setRepoOpen(false);
-    setOutputsOpen(false);
     setUsageOpen(false);
     rememberChat(chatId);
   });
@@ -1938,7 +1885,6 @@ export function Main({
       setProjectOpen(false);
       setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
       setRepoOpen(false);
-      setOutputsOpen(false);
       setUsageOpen(false);
       setSearchOpen(false);
       if (!previewFits) setPanelHidden(true);
@@ -2822,7 +2768,7 @@ export function Main({
           return;
         case "focusLeft":
         case "focusRight":
-          if (!split || settingsOpen || jobsOpen || automationsOpen || outputsOpen || repoOpen) return;
+          if (!split || settingsOpen || jobsOpen || automationsOpen || repoOpen) return;
           e.preventDefault();
           focusPane(panes[command === "focusLeft" ? 0 : 1].key);
           return;
@@ -2838,11 +2784,9 @@ export function Main({
   const paneMax = mainWidth ? mainWidth - CHAT_MIN_WIDTH : 1200;
   const paneWidth = Math.min(Math.max(dragWidth ?? previewWidth ?? PREVIEW_DEFAULT_WIDTH, PANE_MIN_WIDTH), Math.max(PANE_MIN_WIDTH, paneMax));
   // Settings covers the chat, and the side panel with it; so do the project screen, Scheduled jobs, Automations, Usage
-  // and the Repository screen. Outputs covers the chat panes but keeps the side panel beside it, since its files
-  // open there.
-  const screenCovering = settingsOpen || projectScreenOpen || jobsOpen || automationsOpen || usageOpen || repoOpen || officeVisible;
-  const covering = screenCovering || outputsOpen;
-  const previewShown = panelOpen && !screenCovering && (previewFits || !panelHidden);
+  // and the Repository screen.
+  const covering = settingsOpen || projectScreenOpen || jobsOpen || automationsOpen || usageOpen || repoOpen || officeVisible;
+  const previewShown = panelOpen && !covering && (previewFits || !panelHidden);
   const previewCovers = previewShown && !previewFits;
 
   // `hermes-chat --show`, `--toggle` or a second launch brought the window forward: the cursor goes back in the selected pane's
@@ -2974,7 +2918,6 @@ export function Main({
                   setProjectOpen(false);
                   setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
                   setRepoOpen(false);
-                  setOutputsOpen(false);
                   setUsageOpen(false);
                   setShowTextGeneration(undefined);
                   setShowDiagnostics(undefined);
@@ -3039,17 +2982,6 @@ export function Main({
         onToggleList={() => setListOpen((o) => !o)}
         onNew={() => newChat()}
         onSearch={() => openSearch()}
-        onOutputs={() =>
-          guard(() => {
-            setSettingsOpen(false);
-            setProjectOpen(false);
-            setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-            setRepoOpen(false);
-            setUsageOpen(false);
-            setOutputsOpen((o) => !o);
-          })
-        }
-        outputsOpen={outputsOpen && !settingsOpen && !projectScreenOpen}
         // Hidden for a Hermes without Bot Mode, once the view that found out has closed.
         onBots={
           caps.caps.botMode.state === "unsupported" && !botsOpen
@@ -3084,7 +3016,6 @@ export function Main({
           guard(() => {
             setProjectOpen(false);
             setSettingsOpen(false);
-            setOutputsOpen(false);
             setUsageOpen(false);
             setRepoOpen(false);
             setAutomationsOpen(false);
@@ -3097,7 +3028,6 @@ export function Main({
           guard(() => {
             setProjectOpen(false);
             setSettingsOpen(false);
-            setOutputsOpen(false);
             setUsageOpen(false);
             setRepoOpen(false);
             setJobsOpen(false);
@@ -3111,7 +3041,6 @@ export function Main({
             setProjectOpen(false);
             setSettingsOpen(false);
             setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
-            setOutputsOpen(false);
             setUsageOpen(false);
             setRepoAt(undefined);
             setRepoOpen((o) => !o);
@@ -3124,7 +3053,6 @@ export function Main({
             setSettingsOpen(false);
             setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
             setRepoOpen(false);
-            setOutputsOpen(false);
             setUsageOpen((o) => !o);
           })
         }
@@ -3187,7 +3115,6 @@ export function Main({
                     setSettingsOpen(false);
                     setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
                     setRepoOpen(false);
-                    setOutputsOpen(false);
                     setUsageOpen(false);
                     setProjectOpen(true);
                   });
@@ -3197,7 +3124,6 @@ export function Main({
                     setSettingsOpen(false);
                     setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
                     setRepoOpen(false);
-                    setOutputsOpen(false);
                     setUsageOpen(false);
                     setProjectOpen(true);
                     void projects.readDefaults();
@@ -3259,7 +3185,6 @@ export function Main({
             setProjectOpen(false);
             setJobsOpen(false); setAutomationsOpen(false); setOfficeOpen(false);
             setRepoOpen(false);
-            setOutputsOpen(false);
             setUsageOpen(false);
             // One destination at a time: an earlier Memory shortcut mustn't switch Settings away from this one.
             setShowMemory(undefined);
@@ -3633,59 +3558,6 @@ export function Main({
               focusPane(active.key);
             }}
           />
-        ) : outputsOpen ? (
-          <CapabilityGate
-            store={hermes.capabilities}
-            id="outputs"
-            openGuide={openGuide}
-            onDiagnostics={openDiagnostics}
-            onClose={() => {
-              flushSync(() => setOutputsOpen(false));
-              focusPane(active.key);
-            }}
-          >
-          <OutputsScreen
-            snapshot={outSnap}
-            outputs={shownOutputs}
-            scope={shownOutputsScope}
-            scopes={{ chat: outputsChatId ? chats.find((c) => c.id === outputsChatId)?.title : undefined, project: shownProject?.name, profile }}
-            unindexed={outSnap.indexing ? 0 : outputsChats.filter((c) => !outSnap.chats[c.id]).length}
-            partialChats={outputsChats.filter((c) => outSnap.chats[c.id]?.partial).length}
-            chatTitle={(id) => chats.find((c) => c.id === id)?.title}
-            status={status}
-            canAdd={shownOutputsScope !== "project"}
-            onScope={setOutputsScope}
-            onRefresh={refreshOutputs}
-            onIndexMore={() => void outputsIndex.index(outputsRefs())}
-            onAdd={(path) => outputsIndex.add(path, shownOutputsScope === "chat" ? (outputsChatId ?? undefined) : undefined)}
-            onRemove={(key) => outputsIndex.remove(key)}
-            onRecheck={(o) => void outputsIndex.check([o])}
-            // Preview, Edit and the check all read the file the same way: where the tools run (or `host`), naming its chat.
-            onPreview={(o) => openPreview({ kind: "server", path: o.path, ...(o.host && { host: true }), ...(sessionOf(o) && { session: sessionOf(o) }) })}
-            onEdit={(o) =>
-              openPreview({ kind: "artifact", ref: { scope, profile, path: o.path, host: !!o.host, ...(o.chatId && { chatId: o.chatId }), ...(sessionOf(o) && { session: sessionOf(o) }) } })
-            }
-            unsavedEdit={(o) => isDirty(artSnap.get(artifactKey({ scope, host: !!o.host, path: o.path, session: sessionOf(o) })))}
-            onJump={(o) => {
-              if (!o.chatId || !o.callId) return;
-              if (!chats.some((c) => c.id === o.chatId)) {
-                setToast({ text: "That chat isn't in the chat list now.", at: Date.now() });
-                return;
-              }
-              openChat(o.chatId);
-              patchPane(active.key, { jump: { callId: o.callId, at: Date.now() } });
-            }}
-            onShowFolder={(o) => {
-              setFilesPath(splitPath(o.path).dir);
-              setFilesKey((k) => k + 1);
-              openPanel("files");
-            }}
-            onClose={() => {
-              flushSync(() => setOutputsOpen(false));
-              focusPane(active.key);
-            }}
-          />
-          </CapabilityGate>
         ) : repoOpen ? (
           <RepositoryScreen
             key={repoAt ? `at-${repoAt.n}` : "repo"}
@@ -3754,6 +3626,7 @@ export function Main({
                     web={previewWeb}
                     serverPages={previewServerPages}
                     artifacts={artifacts}
+                    artifactScope={{ scope, profile, ...(active.chatId && { chatId: active.chatId }) }}
                     connected={status === "connected"}
                     desk={desk}
                   />
@@ -3778,7 +3651,7 @@ export function Main({
                 // On a server without the managed-files routes, a note takes the browser's place (ADR 0044).
                 files: () => (
                   <CapabilityGate store={hermes.capabilities} id="serverFiles" openGuide={openGuide} onDiagnostics={openDiagnostics}>
-                    <FileBrowser key={filesKey} files={hermes.files} status={status} route={route} path={filesPath} onPath={setFilesPath} />
+                    <FileBrowser files={hermes.files} status={status} route={route} path={filesPath} onPath={setFilesPath} />
                   </CapabilityGate>
                 ),
                 // A profile's screen is its own; switching profile starts the tab again.
@@ -4009,7 +3882,7 @@ function ChatView({
   chat: Chat;
   started: boolean;
   picked?: { found: Found; at: number };
-  /** A tool call to go to, from Outputs. */
+  /** What to go to in the chat (ChatPane `JumpTarget`). */
   jump?: JumpTarget;
   /** The card or message an Inbox entry is about, which Main scrolls to and focuses once the chat shows it. */
   focusItem?: { itemId?: string; approval: boolean };

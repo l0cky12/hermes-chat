@@ -441,7 +441,7 @@ export function ChatPane({
   chat: Chat;
   notLoaded?: boolean;
   findTarget?: FindTarget;
-  /** Scroll to this tool call and open it, once the history holding it has loaded (Outputs, "Go to the message"). */
+  /** Scroll to this tool call and open it, once the history holding it has loaded. */
   jumpTo?: JumpTarget;
   /** The history loaded without the tool call `jumpTo` names. */
   onJumpMissed?: () => void;

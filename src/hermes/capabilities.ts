@@ -303,9 +303,10 @@ export const CAPABILITIES: readonly CapabilitySpec[] = [
   {
     id: "outputs",
     label: "Outputs",
-    usedBy: "The Outputs screen",
+    // The Outputs screen is gone (ADR 0164). The id stays: extensions name capabilities in `needs` (ADR 0126).
+    usedBy: "Extensions that list outputs in their needs",
     needs: "GET /api/fs/list, and GET /api/sessions/{id}/messages with tool rows.",
-    without: "The Outputs screen explains what is missing, and reads nothing.",
+    without: "An extension that needs it shows what is missing instead of running.",
     anchor: "outputs",
     probe: { kind: "rest", path: (profile) => `api/fs/list?${new URLSearchParams({ path: "/", profile })}`, maxBytes: 512 * 1024, shape: isObj },
     routes: [/^api\/fs\/list$/],

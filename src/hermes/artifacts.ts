@@ -1,8 +1,8 @@
-// Artifacts: Outputs opened to edit beside the chat (GLOSSARY.md "Artifact", ADR 0029). An artifact is one file on
-// one machine: a `host` Output is on the dashboard's own machine and is read and saved through the managed-files
-// routes, exactly as Server files edits a file (ADR 0024); any other Output is where its profile's tools run, read with
-// `GET /api/fs/read-data-url` and saved with `POST /api/fs/write-text`, the routes that follow the profile's SSH
-// workspace. Either way a save checks the revision first and reads the file back after (remoteFiles.ts
+// Artifacts: Server files opened to edit beside the chat, from the Preview (GLOSSARY.md "Artifact", ADR 0029, ADR 0164).
+// An artifact is one file on one machine: a `host` file is on the dashboard's own machine and is read and saved through
+// the managed-files routes, exactly as Server files edits a file (ADR 0024); any other is where its profile's tools
+// run, read with `GET /api/fs/read-data-url` and saved with `POST /api/fs/write-text`, the routes that follow the
+// profile's SSH workspace. Either way a save checks the revision first and reads the file back after (remoteFiles.ts
 // `textEditing`). "Ask Hermes to edit" goes to legacy `llm.oneshot`, which has no tools and can't touch the file: its
 // answer is a proposal the owner reviews and applies to the editor, never to the file.
 //
@@ -47,9 +47,9 @@ import { emptyHistory, record, redo, undo, type History } from "./editHistory";
 
 /**
  * Which file an artifact is. `scope`: the connection and profile it was opened in (projects.ts `projectScope`), so
- * two sign-ins or profiles never share one. `host`: on the dashboard's own machine. `chatId`: the chat whose tool made
- * it, whose model "Ask Hermes" borrows while the chat is live in this app. `session`: the chat whose sandbox the path
- * is in (outputs.ts `sessionOf`, ADR 0062): every read and save names it, so Hermes looks in that chat's own
+ * two sign-ins or profiles never share one. `host`: on the dashboard's own machine. `chatId`: the chat on screen
+ * when it was opened, whose model "Ask Hermes" borrows while the chat is live in this app. `session`: the chat whose
+ * sandbox the path is in (ADR 0062): every read and save names it, so Hermes looks in that chat's own
  * `/workspace`, and the same path from two chats is two files.
  */
 export type ArtifactRef = { scope: string; profile: string; path: string; host: boolean; chatId?: string; session?: string };
