@@ -30,6 +30,7 @@ import type { ProjectLinks, ScopeLinks } from "./projectLinks";
 import { unscope } from "./templates";
 import { getUIPrefs, setUIPrefs } from "./uiPrefs";
 import { errorText, isObj } from "./values";
+import type { AppMethod } from "./canonicalVerbs";
 
 /** One of a project's folders: a path on the server. `primary`: the folder Hermes names the project's main one. */
 export type ProjectFolder = { path: string; primary: boolean };
@@ -42,7 +43,7 @@ export type Worktree = { path: string; branch?: string; main: boolean; detached:
 
 /** How the projects calls reach Hermes: a legacy JSON-RPC request, and a dashboard REST read. */
 export type ProjectsIO = {
-  rpc(method: string, params: Record<string, unknown>): Promise<unknown>;
+  rpc(method: AppMethod, params: Record<string, unknown>): Promise<unknown>;
   get(pathAndQuery: string): Promise<unknown>;
 };
 
@@ -162,7 +163,7 @@ function folderProblem(path: string, error: string): string {
 
 /** The projects calls over `io` (the dashboard's `/api/ws` and REST, see the research doc "Projects"). */
 export function projectsApi(io: ProjectsIO): ProjectsApi {
-  const call = async (method: string, params: Record<string, unknown>) => {
+  const call = async (method: AppMethod, params: Record<string, unknown>) => {
     try {
       return await io.rpc(method, params);
     } catch (e) {

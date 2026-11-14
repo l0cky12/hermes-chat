@@ -4,6 +4,7 @@
 // ordinary message.
 import { catalogSkills } from "./skillCommands";
 import { isObj } from "./values";
+import type { AppMethod } from "./canonicalVerbs";
 
 /**
  * `local`: an action of this app, which may write to Hermes through the same calls its buttons use. `server`: a command
@@ -76,7 +77,7 @@ export function matchCommands(query: string): CommandDef[] {
 export const completion = (def: CommandDef) => `/${def.name}${def.args ? " " : ""}`;
 
 /** How a request to Hermes goes: a JSON-RPC call on `/api/ws`. */
-export type Rpc = (method: string, params: Record<string, unknown>) => Promise<unknown>;
+export type Rpc = (method: AppMethod, params: Record<string, unknown>) => Promise<unknown>;
 
 /** What a server command came back with: text to show, or a message Hermes wants sent as the chat's next turn. */
 export type CommandResult = { kind: "output"; text: string } | { kind: "send"; message: string; notice?: string };

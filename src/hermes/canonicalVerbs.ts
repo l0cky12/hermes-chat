@@ -30,8 +30,73 @@ export type CanonicalAnswer = "ok" | { code: number; message: string; fields?: s
  */
 export type CanonicalRoute = "authority" | "fallback" | "refused" | "socket" | "none";
 
+/** Every JSON-RPC method the app sends on `/api/ws`. `Hermes.request` takes only these, so a new method won't compile until
+ * it is named here, and `sessionProtocol.test.ts` fails until it has a row in `APP_VERBS`. */
+export const APP_METHODS = [
+  "approval.received",
+  "approval.respond",
+  "clarify.lock",
+  "client.capabilities",
+  "command.dispatch",
+  "commands.catalog",
+  "config.get",
+  "config.set",
+  "display.lease.acquire",
+  "display.lease.release",
+  "display.observe",
+  "display.start",
+  "display.status",
+  "file.attach",
+  "gateway.capabilities",
+  "gateway.ping",
+  "image.attach_bytes",
+  "image.detach",
+  "learning.delete",
+  "learning.detail",
+  "learning.edit",
+  "learning.frames",
+  "llm.oneshot",
+  "model.options",
+  "profiles.get_asset",
+  "profiles.list",
+  "projects.add_folder",
+  "projects.create",
+  "projects.delete",
+  "projects.list",
+  "projects.membership.apply",
+  "projects.membership.list",
+  "projects.remove_folder",
+  "projects.update",
+  "prompt.btw",
+  "prompt.submit",
+  "request.answer",
+  "session.active_list",
+  "session.branch",
+  "session.close",
+  "session.compress",
+  "session.context_breakdown",
+  "session.create",
+  "session.cwd.set",
+  "session.events.since",
+  "session.interrupt",
+  "session.list",
+  "session.resume",
+  "session.status",
+  "session.title",
+  "session.undo",
+  "slash.exec",
+  "subagent.interrupt",
+  "subagent.list",
+  "subagent.roster",
+  "subagent.steer",
+  "subagent.tail",
+  "tools.show",
+] as const;
+
+export type AppMethod = (typeof APP_METHODS)[number];
+
 export type AppVerb = {
-  method: string;
+  method: AppMethod;
   /** Which of the app's uses of the method this is, for one it sends in more than one shape. */
   shape?: string;
   /** The params the app sends, as its call site builds them. */
@@ -45,8 +110,8 @@ export type AppVerb = {
   unprobed?: string;
 };
 
-const NO_METHOD = (method: string): CanonicalAnswer => ({ code: -32601, message: `unknown method: ${method} — not available on this Hermes backend` });
-const moved = (method: string, params: AppVerb["params"], canonical: string): AppVerb => ({ method, params, route: "refused", answer: NO_METHOD(method), canonical });
+const NO_METHOD = (method: AppMethod): CanonicalAnswer => ({ code: -32601, message: `unknown method: ${method} — not available on this Hermes backend` });
+const moved = (method: AppMethod, params: AppVerb["params"], canonical: string): AppVerb => ({ method, params, route: "refused", answer: NO_METHOD(method), canonical });
 const DESKTOP = "starts or drives the profile's Bot Desktop";
 const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 

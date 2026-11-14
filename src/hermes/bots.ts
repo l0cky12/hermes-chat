@@ -1,4 +1,5 @@
 import { errorText, isObj } from "./values";
+import type { AppMethod } from "./canonicalVerbs";
 // Hermes's Bot Mode (ADR 0066, research doc "Bot Mode"). Each bot is a Hermes profile with a persistent identity, and
 // each has one Bot Chat: the profile's session titled exactly "Bot Chat". That title is the chat's only identity. It is
 // looked up by title on every open (`session.list {title, include_hidden: true}`), never by a session id kept here,
@@ -150,7 +151,7 @@ export function isBotChatOnScreen(bot: Pick<Bot, "botChat"> | undefined, chatId:
 export type BotChatOpen = { registryId: string; openId: string; created: boolean };
 
 /** One JSON-RPC request on the connection, as the transport sends it. */
-export type BotRpc = (method: string, params: Record<string, unknown>) => Promise<unknown>;
+export type BotRpc = (method: AppMethod, params: Record<string, unknown>) => Promise<unknown>;
 
 /**
  * Finds and creates Bot Chats over JSON-RPC. `source`: the `source` this app stamps on sessions it starts. No session
