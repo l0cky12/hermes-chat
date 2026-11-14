@@ -712,43 +712,138 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 .subagent-state.live { background: var(--accent-soft); color: var(--accent); }
 .subagent-state.ok { color: var(--ok); }
 .subagent-state.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
-.subagent-view { overflow-y: auto; min-height: 0; padding: 8px 12px 10px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
-.subagent-back { align-self: flex-start; height: 24px; padding: 0 8px; font-size: calc(12rem / 14); }
-.subagent-title { margin: 0; font-size: calc(13.5rem / 14); font-weight: 600; overflow-wrap: anywhere; }
+/* One subagent (SubagentView): a fixed header, its result, tabs over the one part that scrolls, and Steer at the foot. */
+.subagent-view { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; border-top: 1px solid var(--line); }
+
+.subagent-top { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px 8px; flex: none; }
+.subagent-back { flex: none; width: 26px; height: 26px; margin-top: -3px; }
+.subagent-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.subagent-title {
+  margin: 0; font-size: calc(14rem / 14); font-weight: 600; line-height: 1.35; color: var(--text-strong); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
 .subagent-title:focus { outline: none; }
-.subagent-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.subagent-facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; }
-.subagent-facts dt { color: var(--faint); }
-.subagent-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-.subagent-why { margin: 0; color: var(--faint); }
-.subagent-summary p, .subagent-activity ol { margin: 2px 0 0; }
-.subagent-summary p { white-space: pre-wrap; overflow-wrap: anywhere; }
-.subagent-activity ol { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.subagent-activity li { display: flex; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
-.subagent-at { flex: none; color: var(--faint); font-variant-numeric: tabular-nums; }
-.subagent-preview { color: var(--muted); }
-.subagent-output-head { display: flex; align-items: center; gap: 6px; }
-.subagent-output-head .icon-btn { width: 24px; height: 24px; }
+.subagent-title:focus-visible { -webkit-line-clamp: unset; }
+.subagent-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.subagent-line { display: flex; align-items: flex-start; gap: 6px; min-width: 0; color: var(--muted); font-size: calc(12rem / 14); line-height: 19px; }
+/* Each part's dot sits in the gap before it; the clip hides the dot of a part that starts a line. */
+.subagent-parts { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; margin-left: -14px; clip-path: inset(0 0 0 14px); }
+.subagent-part { display: inline-flex; align-items: center; min-width: 0; max-width: calc(100% - 14px); white-space: nowrap; margin-left: 14px; position: relative; }
+.subagent-part::before { content: "·"; position: absolute; left: -10px; color: var(--faint); }
+.subagent-num { font-variant-numeric: tabular-nums; }
+/* Started by another subagent: its name takes what is left of the line, down to a few words, before wrapping. */
+.subagent-part:has(> .subagent-by) { flex: 1 1 10em; }
+.subagent-by { display: inline-flex; gap: 4px; min-width: 0; max-width: 100%; white-space: nowrap; }
+.subagent-parent { flex: 0 1 auto; display: flex; color: var(--text-2); text-decoration-color: var(--line-3); text-underline-offset: 2px; min-width: 0; max-width: 22em; }
+.subagent-parent > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-pill.partial { background: none; border: 1px solid var(--line-3); color: var(--muted); font-weight: 400; }
+.subagent-pill {
+  display: inline-flex; align-items: center; gap: 5px; height: 19px; padding: 0 7px; border-radius: 10px; flex: none;
+  font-size: calc(12rem / 14); font-weight: 500; background: var(--raised-3); color: var(--text-2);
+}
+.subagent-pill.live { background: var(--accent-soft); color: var(--accent); }
+.subagent-pill.ok { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+.subagent-pill.bad { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
+/* Still, not pulsing: an endless animation keeps a core busy while a reply runs (#406). */
+.subagent-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); flex: none; }
+.subagent-sibs { display: flex; align-items: center; flex: none; margin-top: -3px; color: var(--muted); font-size: calc(12rem / 14); }
+.subagent-sibs .icon-btn, .subagent-info { width: 24px; height: 24px; flex: none; }
+.subagent-info { margin-top: -3px; color: var(--muted); }
+.subagent-about { margin: -2px 12px 8px 46px; padding: 7px 10px; border-radius: 8px; background: var(--raised-2); color: var(--muted); font-size: calc(12rem / 14); display: flex; flex-direction: column; gap: 4px; flex: none; }
+.subagent-about .mono { color: var(--text-2); overflow-wrap: anywhere; }
+.subagent-about .icon-btn { vertical-align: middle; }
+.subagent-why { margin: 0; color: var(--muted); }
+.subagent-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.subagent-note { padding: 0 12px 6px; }
+.subagent-result { margin: 0 12px 8px; padding: 8px 10px; border-radius: 9px; background: var(--raised-2); }
+.subagent-result.ok { background: color-mix(in srgb, var(--ok) 8%, transparent); }
+.subagent-result.bad { background: color-mix(in srgb, var(--bad) 9%, transparent); }
+.subagent-result b { display: flex; align-items: center; gap: 6px; font-size: calc(12rem / 14); color: var(--text-2); }
+.subagent-result.ok b { color: var(--ok); }
+.subagent-result.bad b { color: var(--bad); }
+.subagent-result p { margin: 4px 0 0; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.subagent-result.clamped p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+/* A short window keeps two lines, so some of what it did shows under them. */
+@media (max-height: 820px) { .subagent-result.clamped p { -webkit-line-clamp: 2; } }
+.subagent-more { margin-top: 2px; color: var(--muted); font-size: calc(12rem / 14); }
+.subagent-tabs { display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 1; background: var(--raised); }
+.subagent-tab { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.subagent-tab:hover { color: var(--text); }
+.subagent-tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--text-2); }
+.subagent-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px 6px 0 0; }
+.subagent-section { margin: 0; padding: 2px 12px 6px; font-size: inherit; font-weight: 500; color: var(--text-2); border-bottom: 1px solid var(--line); }
+.subagent-count {
+  display: inline-grid; place-items: center; min-width: 17px; height: 16px; padding: 0 4px; border-radius: 8px;
+  background: var(--raised-2); color: var(--muted); font-size: calc(12rem / 14); font-weight: 500; font-variant-numeric: tabular-nums;
+}
+.subagent-panel { padding: 6px 12px 8px; }
+.subagent-panel > .subagents-tree { margin: 0 -6px; }
+.subagent-partial-note { display: flex; align-items: center; gap: 6px; padding-bottom: 4px; }
+.subagent-acts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.subagent-act { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 3px 6px; margin: 0 -6px; border-radius: 6px; color: var(--muted); }
+.subagent-act:has(> button.subagent-act-call):hover { background: var(--hover); }
+/* A command can be selected to copy, even on a line that is a button. */
+.subagent-act-call { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; text-align: left; color: inherit; font: inherit; user-select: text; -webkit-user-select: text; }
+button.subagent-act-call { cursor: pointer; }
+.subagent-act-call:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+.subagent-act .tool-name { color: var(--text); }
+.subagent-act.whole { background: var(--hover-2); }
+.subagent-act.whole .tool-preview { white-space: pre-wrap; overflow-wrap: anywhere; }
+button.subagent-act-call:hover .tool-preview { color: var(--text-2); }
+.subagent-act .tool-preview { color: var(--muted); }
+.subagent-act.newest { background: var(--accent-soft); }
+.subagent-act.newest .tool-preview { color: var(--text-2); }
+.subagent-act-icon { flex: none; width: 14px; height: 18px; display: grid; place-items: center; color: var(--faint); }
+.subagent-act-call, .subagent-act-text, .subagent-at { line-height: 18px; }
+.subagent-act.end.ok, .subagent-act.end.ok .subagent-act-icon { color: var(--ok); }
+.subagent-act.end.bad, .subagent-act.end.bad .subagent-act-icon { color: var(--bad); }
+.subagent-act.end.dim, .subagent-act.end.dim .subagent-act-icon { color: var(--text-2); }
+.subagent-act-text { flex: 1; min-width: 0; }
+.subagent-at { flex: none; margin-left: auto; color: var(--muted); font-size: calc(12rem / 14); font-variant-numeric: tabular-nums; }
+.subagent-output { display: flex; flex-direction: column; gap: 4px; }
+.subagent-output-head { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: calc(12rem / 14); }
+.subagent-output-head .icon-btn { width: 24px; height: 24px; margin-left: auto; }
 .subagent-tail {
-  margin: 2px 0 0; max-height: 14em; overflow: auto; padding: 6px 8px; border-radius: 6px; background: var(--code-bg); font-family: var(--mono);
-  font-size: calc(var(--mono-size) - 1px); white-space: pre-wrap; overflow-wrap: anywhere;
+  margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--code-bg); font-family: var(--mono);
+  font-size: calc(var(--mono-size) - 1px); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2);
 }
-.subagent-controls { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
-.subagent-controls label { overflow-wrap: anywhere; }
-.subagent-controls textarea {
-  width: 100%; resize: vertical; background: var(--bg, transparent); border: 1px solid var(--line-3); border-radius: 6px; padding: 4px 6px;
-  font: inherit; color: var(--text); outline: none;
+/* The foot is one height whatever it holds, so nothing moves when a subagent ends or Stop asks first. */
+.subagent-controls { flex: none; min-height: 53px; border-top: 1px solid var(--line); padding: 8px 12px 9px; display: flex; flex-direction: column; justify-content: center; gap: 6px; }
+.subagent-steer { display: flex; align-items: center; gap: 6px; }
+.subagent-steer[hidden] { display: none; }
+.subagent-steer-box {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; padding: 3px 4px 3px 8px; border-radius: 10px;
+  border: 1px solid var(--line-3); background: var(--bg);
 }
-.subagent-controls textarea:focus-visible { border-color: var(--accent); }
-.subagent-hint { color: var(--faint); font-size: calc(12rem / 14); }
-.subagent-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.subagent-actions .btn { height: 26px; padding: 0 10px; font-size: calc(12rem / 14); }
-.subagent-confirm { padding: 8px; border-radius: 8px; background: color-mix(in srgb, var(--bad) 8%, transparent); display: flex; flex-direction: column; gap: 6px; }
-.subagent-confirm p { margin: 0; overflow-wrap: anywhere; }
-.subagent-said { margin: 0; }
+.subagent-steer-box:focus-within { border-color: color-mix(in srgb, var(--accent) 70%, var(--line-3)); }
+.subagent-steer-tag {
+  display: inline-flex; align-items: center; gap: 4px; flex: none; padding-right: 7px; margin-right: 2px; border-right: 1px solid var(--line-2);
+  color: var(--text-2); font-weight: 600; font-size: calc(12rem / 14);
+}
+.subagent-steer-box textarea {
+  flex: 1; min-width: 0; resize: none; border: 0; outline: none; background: transparent; color: var(--text); font: inherit; padding: 4px 0; line-height: 1.4;
+  max-height: 6.5em;
+}
+.subagent-steer-box textarea::placeholder { color: var(--muted); }
+.subagent-send { flex: none; width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; background: var(--text); color: var(--on-text); }
+.subagent-send:disabled { opacity: 0.3; cursor: default; }
+.subagent-stop { flex: none; height: 34px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; font-size: calc(12.5rem / 14); }
+.subagent-stop:hover:not(:disabled), .subagent-stop:focus-visible { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+.subagent-hint { margin: -2px 0 0; color: var(--muted); font-size: calc(12rem / 14); }
+.subagent-hint[hidden] { display: none; }
+.subagent-confirm {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 6px 8px 6px 10px; border-radius: 9px;
+  background: color-mix(in srgb, var(--bad) 9%, transparent);
+}
+.subagent-confirm p { flex: 1 1 260px; margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
+.subagent-confirm .subagent-id { white-space: nowrap; }
+.subagent-confirm .btn { height: 30px; padding: 0 12px; }
+.subagent-said { margin: 0; color: var(--muted); font-size: calc(12rem / 14); }
 .subagent-said.ok { color: var(--ok); }
 .subagent-said.bad { color: var(--bad); }
-.subagent-foot { margin: 0; color: var(--faint); font-size: calc(12rem / 14); }
+.subagent-said:focus { outline: none; }
+.subagent-ended { flex: none; display: flex; align-items: center; gap: 6px; margin: 0; padding: 8px 12px 9px; border-top: 1px solid var(--line); color: var(--muted); font-size: calc(12rem / 14); }
+.subagent-ended svg { flex: none; }
 
 /* A side question in the transcript (SideQuestions.tsx, ADR 0086): the owner's question and Hermes's answer, each
    with a dashed accent border and a tint, so neither reads as part of the conversation. */
