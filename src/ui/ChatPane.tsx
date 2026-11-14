@@ -8,6 +8,7 @@ import { decodeString } from "micromark-util-decode-string";
 import type { ApprovalChoice, AttachCheck, Attachment, Chat, ChatQueue, ConnectionStatus, Item, OutgoingItem, QuestionAnswer, SentReference, SideQuestion, Source } from "../hermes/model";
 import { SOURCE_LABEL, isOutgoing, isWaiting } from "../hermes/model";
 import type { SkillCall } from "../hermes/skillCommands";
+import { STEER, typedCommand } from "../hermes/commands";
 import type { ScreenshotDesk } from "../hermes/screenshots";
 import type { Reference, ReferenceDesk } from "../hermes/chatReferences";
 import { ReferenceChips } from "./ReferenceChips";
@@ -67,6 +68,7 @@ export type FollowUpHost = {
 
 /** Why a message with files can't steer: `/steer` carries only words. */
 const FILES_CANT_STEER = "A steer carries only words, so a message with files goes after the reply.";
+const REFERENCES_CANT_STEER = "A message that references a chat can't steer the reply. Send it once the reply ends.";
 const NO_REFERENCES: readonly Reference[] = [];
 
 /** Where a composer keeps the chats its message references, and the way to the fix for a failed summary. */
@@ -1922,6 +1924,7 @@ function Composer({
   };
   /** `other`: Ctrl+Enter, which does the other of queue and steer while a reply runs. */
   const send = (other = false) => {
+    if (refs.length && typedCommand(text.trim())?.def === STEER) return setRefused([REFERENCES_CANT_STEER]);
     if (slash.run()) return;
     if (!sendable || steering) return;
     if (compare?.refuse) return setRefused([compare.refuse]);
@@ -1950,7 +1953,7 @@ function Composer({
     // A message that would steer and can't is queued, saying why: the chat's reason once, files every time.
     let fellBack: string | undefined;
     if (canFollow && (followUp.mode === "steer") !== other) {
-      if (refs.length) return setRefused(["A message that references a chat can't steer the reply. Send it once the reply ends."]);
+      if (refs.length) return setRefused([REFERENCES_CANT_STEER]);
       if (!steerWhy) return void steer(text.trim());
       if (steerWhy === FILES_CANT_STEER) fellBack = `Your message is queued, not steered. ${steerWhy}`;
       else if (!toldWhy.has(steerWhy)) {

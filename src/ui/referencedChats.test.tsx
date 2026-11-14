@@ -122,6 +122,18 @@ describe("Referencing a chat", () => {
     expect(sent(fake)[0]).toContain("[Referenced chat: Deploy pipeline]");
   });
 
+  it("refuses /steer while a chat is referenced, so the summary isn't left for a later message", async () => {
+    const fake = server();
+    const { user } = await launch(fake, /Nightly backup/);
+    await user.click(composer());
+    await user.keyboard("@dep{Enter}");
+    await waitFor(() => expect(chip("summary ready")).toBeTruthy());
+    await user.keyboard("/steer follow that plan{Enter}");
+    expect(await screen.findByText("A message that references a chat can't steer the reply. Send it once the reply ends.")).toBeTruthy();
+    expect(fake.requests.filter((r) => r.method === "prompt.submit" || r.method.includes("steer"))).toEqual([]);
+    expect(chip("summary ready")).toBeTruthy();
+  });
+
   it("says why a summary failed, with the way to the Text generation model, and Retry makes it", async () => {
     const fake = server();
     fake.oneshotFailure = "Provider 'openrouter' is set in config.yaml but no API key was found";

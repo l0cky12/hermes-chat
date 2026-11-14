@@ -7,7 +7,7 @@
 // The spine (`_visible_branch_history`): the parent's user and assistant rows that have text, in order, hidden ones
 // included. Tool rows aren't in it, and an assistant row keeps its text and reasoning but not its tool calls. Probed
 // live on 2026-11-03 against a throwaway HERMES_HOME (docs/research/hermes-gateway-api.md, "Branching").
-import { isWaiting, type Chat, type Item } from "./model";
+import { isWaiting, type Chat, type Item, type SentReference } from "./model";
 import type { ModelPick } from "./models";
 
 /** A stored row of dashboard REST `GET /api/sessions/{id}/messages`, as far as branching reads it. */
@@ -36,14 +36,15 @@ export type BranchLink = { parentId: string; parentTitle: string; point: BranchP
  * `model`: what the branch ran on once it was made, as Hermes reported it. `pending`: set until the message has gone
  * into the branch, the words to send and `spineKey` of the rows the branch keeps once its copy of the original message
  * is taken back; `through` is `spineKey` of the rows through the original message, which must be the branch's rows
- * before that message is taken back. Those words are kept on this computer only until they go, as a Draft is.
+ * before that message is taken back; `references`, the Referenced chats the original message carried (ADR 0163). Those
+ * words are kept on this computer only until they go, as a Draft is.
  */
 export type BranchVariant = {
   kind: "edit" | "regenerate";
   rootId: string;
   turn: number;
   model?: ModelPick;
-  pending?: { text: string; prefix: string; through: string };
+  pending?: { text: string; prefix: string; through: string; references?: SentReference[] };
 };
 
 /**

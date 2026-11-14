@@ -56,7 +56,7 @@ import { RestError, conflictOf, sessionNotFound, statusOf, type OpenPipe, type P
 import { projectContextFiles, type ChatContext, type ProjectContextFiles } from "./projectContextFiles";
 import { withContext } from "./projectContext";
 import { typedText } from "./branch";
-import { SUMMARY_INSTRUCTIONS, SUMMARY_MAX_TOKENS, cleanSummary, referenceBlock, referencedTitles, summaryInput } from "./chatReferences";
+import { SUMMARY_INSTRUCTIONS, SUMMARY_MAX_TOKENS, cleanSummary, referenceBlock, storedReferences, summaryInput } from "./chatReferences";
 import { RemoteFilesError, SANDBOX_MISSING, SANDBOX_NOT_FOUND_PREFIX, previewSupport, remoteFiles, type EditIo, type RemoteFiles } from "./remoteFiles";
 import { isUnsecure } from "./unsecure";
 import { signInRefused } from "./account";
@@ -2578,13 +2578,19 @@ export class Hermes {
     const { spine } = await this.branchBoundary(chat.id, preview.branch.itemId, profile);
     if (spineKey(spine) !== preview.spine) throw new Error(REPLAY_CHANGED);
     const count = preview.branch.count;
+    const references = storedReferences(preview.stored);
     // What the branch must hold before and after its copy is taken back, without model-switch markers: switching the
     // branch to the chat's model as it's made changes those (`withoutMarkers`).
     const variant: BranchVariant = {
       kind: preview.kind,
       rootId: preview.rootId,
       turn: preview.turn,
-      pending: { text, prefix: spineKey(withoutMarkers(spine.slice(0, count - 1))), through: spineKey(withoutMarkers(spine.slice(0, count))) },
+      pending: {
+        text,
+        prefix: spineKey(withoutMarkers(spine.slice(0, count - 1))),
+        through: spineKey(withoutMarkers(spine.slice(0, count))),
+        ...(references.length && { references }),
+      },
     };
     // Started on the target: the steps after it finish even if the target changes meanwhile.
     const made = await this.branchNow(preview.branch, undefined, variant, preview.spine);
@@ -2706,7 +2712,7 @@ export class Hermes {
     // From here the message is the outbox's: a failed send shows in the branch with Retry, as any message does.
     this.setVariant(profile, chatId, ({ pending: _, ...v }) => v);
     // Not `send`: once the owner started this on the target, it finishes even if the target changed meanwhile.
-    const { delivery: sent } = await this.deliver(chatId, pending.text, []);
+    const { delivery: sent } = await this.deliver(chatId, pending.text, [], undefined, undefined, pending.references);
     return sent.delivery === "unsent" ? ["The message didn't go to the branch. It's in the branch, marked Not sent, with Retry."] : [];
   }
 
@@ -5611,7 +5617,7 @@ function historyItems(messages: TranscriptMessage[]): Item[] {
     const at = storedAt(m.timestamp);
     const rowId = Number.isSafeInteger(m.row_id) ? (m.row_id as number) : undefined;
     if (m.role === "user") {
-      const references = referencedTitles(m.text);
+      const references = storedReferences(m.text).map((r) => r.title);
       return [{ kind: "user", id, text: typedText(m.text), ...(references.length && { references }), ...(at && { at }), ...(rowId !== undefined && { rowId }), ...(m.display_kind === "steer" && { steer: true }) }];
     }
     if (m.role === "assistant") return [...thought, { kind: "assistant", id, text: m.text, ...(at && { at }), ...(rowId !== undefined && { rowId }) }];

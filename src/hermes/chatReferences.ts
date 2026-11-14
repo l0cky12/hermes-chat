@@ -66,11 +66,18 @@ const oneLine = (title: string) => title.replace(/\s+/g, " ").trim();
 /** One referenced chat as it is sent after the message's typed words, with what Hermes would expand defused. */
 export const referenceBlock = (r: SentReference) => neutralize(`[Referenced chat: ${oneLine(r.title)}]\n${PREAMBLE}\n\n${r.summary.trim()}`);
 
-/** The titles of the chats a stored message referenced, read from what follows its typed words. */
-export function referencedTitles(text: string): string[] {
+/**
+ * The chats a stored message referenced, read back from what follows its typed words: each title and the summary sent,
+ * so Edit and Regenerate send them again. A header counts only with the preamble line after it.
+ */
+export function storedReferences(text: string): SentReference[] {
   const attached = text.slice(typedText(text).length);
-  const head = new RegExp(`^\\[Referenced chat: (.+)\\]\\n${PREAMBLE.replace(/[.;]/g, "\\$&")}$`, "gm");
-  return [...attached.matchAll(head)].map((m) => m[1].replace(/@⁠/g, "@"));
+  const head = new RegExp(`^\\[Referenced chat: (.+)\\]\\n${PREAMBLE.replace(/[.;]/g, "\\$&")}\\n`, "gm");
+  const found = [...attached.matchAll(head)];
+  return found.map((m, i) => ({
+    title: m[1].replace(/@\u2060/g, "@"),
+    summary: attached.slice(m.index + m[0].length, found[i + 1]?.index).trim(),
+  }));
 }
 
 /** The "@" menu's query while a chat is being picked: `before` ends in "@" and the start of a title, the "@" at the start or after a space. */
@@ -135,9 +142,9 @@ export class ReferenceDesk {
     return ready;
   }
 
-  /** References of a message that didn't go, back on its Draft after any added meanwhile. */
+  /** References of a message that didn't go, back on its Draft after any added meanwhile. One read back from a stored message names no chat, so it can't come back. */
   putBack(key: string, refs: readonly SentReference[]) {
-    const fresh = refs.filter((r) => !this.in(key).some((k) => k.chatId === r.chatId));
+    const fresh = refs.flatMap(({ chatId, title, summary }) => (chatId && !this.in(key).some((k) => k.chatId === chatId) ? [{ chatId, title, summary }] : []));
     if (fresh.length) this.set(key, [...this.in(key), ...fresh.map((r): Reference => ({ ...r, state: "ready" }))]);
   }
 

@@ -20,8 +20,11 @@ export const SOURCE_LABEL: Record<Source, string> = {
 /** A local file the owner is sending with a message: an image Hermes looks at, or any other file. */
 export type Attachment = { path: string; name: string; size: number; kind: "image" | "file" };
 
-/** A Referenced chat as it goes with a message: the chat, its title then, and the summary sent (chatReferences.ts). */
-export type SentReference = { chatId: string; title: string; summary: string };
+/**
+ * A Referenced chat as it goes with a message: the chat, its title then, and the summary sent (chatReferences.ts).
+ * `chatId` is missing for one read back from a stored message, which Edit and Regenerate send again.
+ */
+export type SentReference = { chatId?: string; title: string; summary: string };
 
 /** Local files checked for attaching: the ones Hermes takes, and why each of the others can't go. */
 export type AttachCheck = { attachments: Attachment[]; refused: string[] };

@@ -222,8 +222,10 @@ const isAttachment = (a: unknown): a is Attachment => {
 
 const isSentReference = (r: unknown): r is SentReference => {
   const s = r as SentReference | null;
-  return typeof s?.chatId === "string" && typeof s.title === "string" && typeof s.summary === "string";
+  return (s?.chatId === undefined || typeof s.chatId === "string") && typeof s?.title === "string" && typeof s.summary === "string";
 };
+
+const keptReference = ({ chatId, title, summary }: SentReference): SentReference => ({ ...(chatId !== undefined && { chatId }), title, summary });
 
 /** A kept outbox row, rebuilt from its fields, or undefined if it isn't one. */
 function toOutgoing(v: unknown): OutgoingItem | undefined {
@@ -240,7 +242,7 @@ function toOutgoing(v: unknown): OutgoingItem | undefined {
     ...(attachments.length && { attachments }),
     ...(typeof sent?.prompt === "string" && { sent: { prompt: sent.prompt, ...(num(sent.after) !== undefined && { after: num(sent.after) }) } }),
     ...(skill && typeof skill.name === "string" && skill.name && typeof skill.arg === "string" && { skill: { name: skill.name, arg: skill.arg } }),
-    ...(references.length && { references: references.map(({ chatId, title, summary }) => ({ chatId, title, summary })) }),
+    ...(references.length && { references: references.map(keptReference) }),
   };
   return { ...item, outgoing };
 }
@@ -274,7 +276,12 @@ export function toBranches(v: unknown): BranchStore {
     const pending = q.pending as Record<string, unknown> | null | undefined;
     const kept =
       pending && typeof pending.text === "string" && optionalText(pending.prefix) && optionalText(pending.through)
-        ? { text: pending.text, prefix: optionalText(pending.prefix)!, through: optionalText(pending.through)! }
+        ? {
+            text: pending.text,
+            prefix: optionalText(pending.prefix)!,
+            through: optionalText(pending.through)!,
+            ...(Array.isArray(pending.references) && pending.references.some(isSentReference) && { references: pending.references.filter(isSentReference).map(keptReference) }),
+          }
         : undefined;
     return { kind: q.kind, rootId: optionalText(q.rootId)!, turn: q.turn as number, ...(model && { model }), ...(kept && { pending: kept }) };
   };
