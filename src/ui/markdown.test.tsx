@@ -196,7 +196,7 @@ describe("A path in a reply (ADR 0163)", () => {
 
   it("doesn't link the part of a path that Markdown's emphasis cut short, while a path beside a line break still links", () => {
     const { container, words } = reply(
-      "Edited src/__init__.py, src/**bold**/x.py and src/**foo/bar.txt**/other.py,\nthen /srv/app/main.py\nand **/srv/app/x.ts**, `docs/a.md`.",
+      "Edited src/__init__.py, src/**bold**/x.py, src/**foo/bar.txt**/other.py and .**github/workflows/ci.yml**,\nthen /srv/app/main.py\nand **/srv/app/x.ts**, `docs/a.md`.",
     );
     expect(container.querySelector("strong")?.textContent).toBe("init");
     expect(words()).toEqual(["/srv/app/main.py", "/srv/app/x.ts", "docs/a.md"]);

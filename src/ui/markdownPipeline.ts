@@ -61,7 +61,7 @@ const rehypePaths = () => (tree: HastNode) => {
   const runsOn = (n: HastNode | undefined, side: "before" | "after") => {
     if (n?.type === "element") return n.tagName !== "br";
     const v = n?.type === "text" ? (n.value ?? "") : "";
-    return side === "before" ? /[\p{L}\p{N}_~/-]$/u.test(v) : /^(?:[\p{L}\p{N}_~/-]|\.[\p{L}\p{N}])/u.test(v);
+    return side === "before" ? /[\p{L}\p{N}_~/.-]$/u.test(v) : /^(?:[\p{L}\p{N}_~/-]|\.[\p{L}\p{N}])/u.test(v);
   };
   /** `before`, `after`: the element's own text runs on into what is beside the element. */
   const walk = (node: HastNode, before = false, after = false) => {
