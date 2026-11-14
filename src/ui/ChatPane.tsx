@@ -41,7 +41,7 @@ import { ConversationPanel, StartConversationButton, conversationAway, startBloc
 import type { ConversationState, VoiceConversation } from "./conversation";
 import type { VoiceSetup } from "../hermes/pipe";
 import { ChatUsageButton, ReplyUsageLine } from "./Usage";
-import { useLinkMenu, useOpenPreview } from "./previewContext";
+import { PathsIn, useLinkMenu, useOpenPreview } from "./previewContext";
 import { ShowInChatContext, type ShowInChat } from "./showInChat";
 import { linkTarget, previewName, toolTargets, withoutBidi } from "../hermes/preview";
 import { type CommandHost, useSlashCommands } from "./SlashCommands";
@@ -960,6 +960,7 @@ export function ChatPane({
         }}
       >
         <JumpContext.Provider value={jumpTo}>
+        <PathsIn folder={chat.folder} session={chat.id}>
         <div className="transcript-inner">
           {chat.source !== "app" && (
             <div className="imported-note">
@@ -1043,6 +1044,7 @@ export function ChatPane({
             </div>
           )}
         </div>
+        </PathsIn>
         </JumpContext.Provider>
       </div>
 

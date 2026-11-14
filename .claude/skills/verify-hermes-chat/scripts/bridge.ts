@@ -44,6 +44,8 @@
 // HV_BAD_HISTORY=1 adds `badtool`, "Broken tool row", to `default`: its stored history has a tool row whose `context`
 // is a number and one whose `name` is an object, each between two messages, as a misbehaving server might send.
 // HV_LIST=<n> adds n Active, read chats to `default`, one an hour apart, so its Inbox is longer than the list panel.
+// HV_DISK=<folder> copies a real folder on this computer, at its own full path, into the server's disk the preview reads
+// and lists (`GET /api/fs/read-text`, `GET /api/fs/list`), so a reply's paths name files a real ssh shell also finds.
 // HV_DELAY_MS=<ms> holds each /api/ answer that long, as a distant server's round trip would.
 // HV_FAIL_PATCH=<id>,<id> answers 503 to every edit (PATCH) of those sessions, as a server that fails a write does.
 // HV_MEMORY_URL=<url> is the address `default`'s Honcho gives for its documentation and its API key's "Get one" link.
@@ -53,7 +55,8 @@
 // the app's answers to what the stand-in asked it.
 // The same JSON is rewritten to <state-file> after every change, so it survives the bridge being stopped.
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { FakeHermes, row } from "../../../../src/hermes/fakeHermes";
@@ -101,6 +104,16 @@ if (process.env.HV_BAD_HISTORY === "1") {
   server.storeMessage("badtool", { role: "tool", name: { tool: "terminal" } as never, context: "du -sh /srv/backup" });
   server.storeMessage("badtool", { role: "assistant", text: "The backup folder holds 14 snapshots, 212 GiB in all." });
 }
+
+const disk = (dir: string) => {
+  server.serverDirs.add(dir);
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, e.name);
+    if (e.isDirectory()) disk(path);
+    else if (e.isFile()) server.serverFiles[path] = readFileSync(path, "utf8");
+  }
+};
+if (process.env.HV_DISK) disk(process.env.HV_DISK.replace(/\/+$/, ""));
 
 const benchTurns = Number(process.env.HV_TURNS ?? 0);
 if (benchTurns > 0)

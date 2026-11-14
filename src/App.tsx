@@ -102,7 +102,8 @@ import { CAPABILITIES, guideUrl, type CapabilityId } from "./hermes/capabilities
 import { useCapabilities } from "./ui/Diagnostics";
 import { Automations } from "./ui/Automations";
 import { tauriLocalTerminal, tauriTerminal } from "./ui/tauriTerminal";
-import { terminalTarget, terminalTargetGuessed, terminalTargetKey, type TerminalKind } from "./hermes/terminal";
+import { useShells } from "./ui/useShells";
+import { MAX_FOLDER_SHELLS, terminalTarget, terminalTargetGuessed, terminalTargetKey, type TerminalKind } from "./hermes/terminal";
 import { REPO_PATH_KEY, REPO_RECENT_KEY, REPO_TARGET_KEY, readRecent, remember, repoTarget } from "./hermes/repo";
 import { RepositoryScreen } from "./ui/Repository";
 import { startInWorktree, worktreeChats, type WorktreeChat, type WorktreeStart } from "./hermes/worktrees";
@@ -124,6 +125,7 @@ import { ScreenTab } from "./ui/Screen";
 import { LinksProvider, useOpenPreview } from "./ui/previewContext";
 import { tauriLocalFiles, tauriServerPages, tauriWebPages, type LocalFiles, type ServerPages, type WebPages } from "./ui/tauriPreview";
 import type { PreviewTarget } from "./hermes/preview";
+import { pathOpener } from "./hermes/paths";
 import type { Route } from "./hermes/pipe";
 import { tauriTray, type TrayWiring } from "./hermes/tauriTray";
 import { usePageHidden, useWindowHidden } from "./ui/windowState";
@@ -1292,8 +1294,9 @@ export function Main({
   /** Automations (webhook routes, ADR 0108) cover the chat too. */
   const [automationsOpen, setAutomationsOpen] = useState(false);
   // The side panel's Terminal (ADR 0022, ADR 0039): which shell is shown, kept in the prefs so it opens on the one picked
-  // last (the Hermes server's until then, ADR 0051), and which are running, for the rail's dot.
-  const termKind = useSyncExternalStore(subscribeUIPrefs, getUIPrefs).terminalKind;
+  // last (the Hermes server's until then, ADR 0051), the folder shells a reply's paths opened (ADR 0167), and which are
+  // running, for the rail's dot.
+  const terminalShells = useShells();
   // The list holds the profile's archived chats only while its Archived section is shown (ADR 0063); a profile switch
   // starts without them, so they are listed again then.
   const archivedShown = useSyncExternalStore(subscribeUIPrefs, getUIPrefs).chatSectionsShown.includes("archived");
@@ -1466,6 +1469,22 @@ export function Main({
       openPanel("preview");
     },
     [openPanel],
+  );
+  // A path in a reply (ADR 0167): a file opens in the Preview, a folder in a folder shell on the Hermes server. One
+  // opener for every pane, so the newest click wins whichever pane it was in.
+  const openShellIn = terminalShells.openIn;
+  const openPath = useMemo(
+    () =>
+      pathOpener({
+        kindOf: (path) => hermes.pathKind(path),
+        preview: openPreview,
+        shell: (folder) => {
+          if (openShellIn("server", folder)) openPanel("terminal");
+          else setToast({ text: `The Terminal holds ${MAX_FOLDER_SHELLS} folder shells. Close one to open another.`, at: Date.now() });
+        },
+        say: (text) => setToast({ text, at: Date.now() }),
+      }),
+    [hermes, openPreview, openPanel, openShellIn],
   );
   const mainRef = useRef<HTMLElement>(null);
   const mainWidth = useWidth(mainRef);
@@ -3053,7 +3072,7 @@ export function Main({
   });
 
   return (
-    <LinksProvider preview={openPreview} web={webPages} onToast={(text) => setToast({ text, at: Date.now() })}>
+    <LinksProvider preview={openPreview} path={openPath} web={webPages} onToast={(text) => setToast({ text, at: Date.now() })}>
     <div className="app" inert={covered || restarting}>
       <Rail
         status={status}
@@ -3784,8 +3803,10 @@ export function Main({
                       }}
                       local={{ api: tauriLocalTerminal }}
                       shown={shown}
-                      kind={termKind}
-                      onKind={(k) => setUIPrefs({ terminalKind: k })}
+                      shells={terminalShells.shells}
+                      onShow={terminalShells.show}
+                      onClose={terminalShells.close}
+                      onLocal={(id) => terminalShells.move(id, "local")}
                       onRunning={setTermRunning}
                     />
                   </Suspense>

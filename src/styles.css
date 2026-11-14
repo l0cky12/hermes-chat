@@ -456,6 +456,12 @@ mark.hit.current { background: var(--warn); color: #1a1205; box-shadow: 0 0 0 2p
 .msg.assistant :not(pre) > code {
   background: var(--raised-2); padding: 1.5px 5px; border-radius: 5px; font-size: 0.86em; color: var(--code-inline);
 }
+/* A path in a reply (previewContext.tsx `PathLink`, ADR 0167): the words' own colour, so a reply full of paths doesn't
+   turn link blue, with a dotted line under it for what a click opens. */
+.path-link { color: inherit; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; cursor: pointer; border-radius: 3px; }
+.path-link:hover { text-decoration: underline solid currentColor; }
+.path-link:focus-visible { outline: 2px solid var(--line-3); outline-offset: 1px; }
+.path-link[aria-busy="true"] { cursor: progress; }
 .msg.assistant table { border-collapse: collapse; margin: 0.4em 0 0.9em; font-size: calc(13.5rem / 14); }
 .msg.assistant th, .msg.assistant td { border-bottom: 1px solid var(--line-2); padding: 6px 14px 6px 0; text-align: left; }
 .msg.assistant th { color: var(--muted); font-weight: 500; }
@@ -3512,8 +3518,17 @@ label.memory-pick { cursor: pointer; }
 /* Terminal in the panel */
 .terminal-tab { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .terminal-tab[hidden] { display: none; }
-.terminal-kinds { margin: 10px 12px 0; align-self: flex-start; flex: none; }
+.terminal-shells { margin: 10px 12px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: none; }
+.terminal-kinds { flex: none; }
 .terminal-kinds button { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; }
+/* A folder shell (ADR 0167): a chip beside the two computers, with its own close button. */
+.terminal-folder { display: inline-flex; align-items: center; max-width: 220px; min-width: 0; background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
+.terminal-folder button { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 6px; font-size: calc(12rem / 14); color: var(--muted); min-width: 0; }
+.terminal-folder button > svg, .terminal-folder button > .dot { flex: none; }
+.terminal-folder button > span:not(.dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-folder button[aria-pressed="true"] { background: var(--raised-3); color: var(--text); }
+.terminal-folder .terminal-folder-close { flex: none; padding: 3px 4px; }
+.terminal-folder .terminal-folder-close:hover { color: var(--text); }
 .side-panel .terminal-title { margin: 8px 12px 6px; min-height: 28px; gap: 8px; }
 .terminal-where { font-size: calc(12rem / 14); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .side-panel .terminal-connect { padding: 0 12px 10px; }

@@ -1,12 +1,15 @@
 // The side panel's Terminal (ADR 0022, ADR 0039, ADR 0051): a shell on the Hermes server through the owner's own ssh,
 // and a shell on this computer, each in a terminal of its own. It opens on the one picked last, the server's until then. Both stay alive while the owner is in another tab or the panel is
-// hidden. Ending a session, or its shell exiting, keeps what was printed, with a way to start again.
+// hidden. Ending a session, or its shell exiting, keeps what was printed, with a way to start again. A folder a reply
+// named gets a shell of its own beside them, started in that folder (a folder shell, ADR 0167).
 import { useEffect, useRef, useState } from "react";
-import { Laptop, Play, Plug, Server, X } from "lucide-react";
+import { Folder, Laptop, Play, Plug, Server, X } from "lucide-react";
 import { Terminal as XTerm, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { TerminalSession, endedText, type TerminalApi, type TerminalKind, type TerminalState } from "../hermes/terminal";
+import { TerminalSession, endedText, type ShellId, type Shells, type TerminalApi, type TerminalKind, type TerminalState } from "../hermes/terminal";
+import type { ServerPath } from "../hermes/paths";
+import { withoutBidi } from "../hermes/preview";
 import { Spinner } from "./bits";
 
 /** The terminal's colours and font, from the app's theme (appearance.ts sets these on the root). */
@@ -31,7 +34,8 @@ function look(): { theme: ITheme; fontFamily: string; fontSize: number } {
 
 /**
  * One terminal. `server`: ssh to `initialTarget`, or to one the owner types. `local`: the owner's own login shell on
- * this computer, which Rust picks; `initialTarget` only labels it.
+ * this computer, which Rust picks; `initialTarget` only labels it. `folder`: the folder its shell starts in, each time
+ * it starts.
  */
 export function TerminalScreen({
   kind = "server",
@@ -39,6 +43,8 @@ export function TerminalScreen({
   initialTarget,
   guessed = false,
   shown,
+  folder,
+  again,
   onTarget,
   onRunning,
   onOther,
@@ -51,6 +57,9 @@ export function TerminalScreen({
   guessed?: boolean;
   /** False while the owner is elsewhere: the session keeps running out of sight. */
   shown: boolean;
+  folder?: ServerPath;
+  /** Changes each time the owner asks for this shell again: one that has ended then starts again. */
+  again?: number;
   /** A target the owner typed and connected to, to use next time. */
   onTarget?: (target: string) => void;
   /** Whether the shell is running, for the rail and the panel's tabs. */
@@ -68,6 +77,8 @@ export function TerminalScreen({
   const [target, setTarget] = useState(initialTarget);
   const onRunningRef = useRef(onRunning);
   onRunningRef.current = onRunning;
+  // A `ServerPath` holds no control character, so the folder is only words to xterm too.
+  const inFolder = folder === undefined ? "" : `, in ${withoutBidi(folder)}`;
 
   const connect = (to: string) => {
     const t = term.current;
@@ -76,7 +87,7 @@ export function TerminalScreen({
     fit.current?.fit();
     if (s.state.kind !== "idle") t.write("\r\n");
     // The cursor shows only while a session runs.
-    t.write(`\x1b[?25h\x1b[2m── ${kind === "local" ? "this computer" : `ssh ${to.trim()}`} ──\x1b[0m\r\n`);
+    t.write(`\x1b[?25h\x1b[2m── ${kind === "local" ? "this computer" : `ssh ${to.trim()}`}${inFolder} ──\x1b[0m\r\n`);
     void s.start(to, t.cols, t.rows);
     t.focus();
   };
@@ -96,6 +107,7 @@ export function TerminalScreen({
         setState(st);
         onRunningRef.current?.(st.kind === "connecting" || st.kind === "open");
       },
+      folder,
     );
     session.current = s;
     const typed = t.onData((d) => s.input(d));
@@ -146,9 +158,21 @@ export function TerminalScreen({
       onRunningRef.current?.(false);
       t.dispose();
     };
-    // Made once for the life of the screen; `connect` and `initialTarget` are read at mount.
+    // Made once for the life of the screen; `connect`, `initialTarget` and `folder` are read at mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api]);
+
+  // Asked for again: a shell still running is only shown, and one that ended or couldn't start starts again.
+  const asked = useRef(again);
+  useEffect(() => {
+    if (asked.current === again) return;
+    asked.current = again;
+    if (session.current?.running) return;
+    if (kind === "local") connect("this computer");
+    else if (session.current?.state.kind !== "idle") connect(target);
+    // Only `again` starts it; `connect` and `target` are read as they are then.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [again]);
 
   // Shown again: fit to the space it has now, and take the keys. With no target yet, the field to set one takes them.
   useEffect(() => {
@@ -167,7 +191,7 @@ export function TerminalScreen({
     if (!(guessed && target.trim() === initialTarget.trim())) onTarget?.(target.trim());
     connect(target);
   };
-  const what = kind === "local" ? "A shell on this computer" : "A shell on the Hermes server";
+  const what = `${kind === "local" ? "A shell on this computer" : "A shell on the Hermes server"}${inFolder}`;
   // No SSH target from the sign-in or its web address (ADR 0055), and none typed for this connection yet: say so, rather than a bare field.
   const noTarget = kind === "server" && state.kind === "idle" && !initialTarget.trim();
   // The guess from the web address didn't get in, and nothing else has been tried: say where it came from.
@@ -176,7 +200,12 @@ export function TerminalScreen({
   return (
     <div className="terminal-screen" ref={screenRef} hidden={!shown} data-kind={kind}>
       <div className="terminal-title">
-        {state.kind !== "idle" && <span className="mono muted terminal-where">{kind === "local" ? "your login shell" : `ssh ${state.target}`}</span>}
+        {state.kind !== "idle" && (
+          <span className="mono muted terminal-where" title={folder === undefined ? undefined : withoutBidi(folder)}>
+            {kind === "local" ? "your login shell" : `ssh ${state.target}`}
+            {inFolder}
+          </span>
+        )}
         <span className={`terminal-status ${state.kind}`} role="status" aria-label={`${what}: ${statusWord(state)}`}>
           {state.kind === "connecting" ? (
             <>
@@ -257,7 +286,7 @@ export function TerminalScreen({
           </form>
         ))}
       <div className="terminal-body">
-        <div className="terminal-host" ref={host} aria-label={kind === "local" ? "Terminal on this computer" : "Terminal on the server"} />
+        <div className="terminal-host" ref={host} aria-label={`${kind === "local" ? "Terminal on this computer" : "Terminal on the server"}${inFolder}`} />
       </div>
       <p className="terminal-foot faint">Ctrl+Shift+C copies the selection and Ctrl+Shift+V pastes. The session keeps running in other tabs.</p>
     </div>
@@ -269,47 +298,82 @@ function statusWord(s: TerminalState) {
 }
 
 /**
- * The Terminal tab: the Hermes server's shell and this computer's, one shown at a time, switched at the top. `kind` is
- * the one picked last, which the app keeps (uiPrefs `terminalKind`); the server's until the owner picks. Each is made
- * the first time it is picked and kept from then on, so its session runs on while the other is shown.
+ * The Terminal tab: the Hermes server's shell and this computer's, then a shell for each folder opened from a reply
+ * (ADR 0167), one shown at a time, switched at the top. `shells` says which there are and which is shown
+ * (useShells.ts). The server's and this computer's are each made the first time they are shown, and a folder shell
+ * when it is opened; each is kept from then on, so its session runs on while another is shown. Closing a folder shell
+ * ends it.
  */
 export function TerminalTab({
   server,
   local,
   shown,
-  kind,
-  onKind,
+  shells,
+  onShow,
+  onClose,
+  onLocal,
   onRunning,
 }: {
   server: { api: TerminalApi; initialTarget: string; guessed?: boolean; onTarget: (target: string) => void };
   local: { api: TerminalApi };
   shown: boolean;
-  kind: TerminalKind;
-  onKind: (k: TerminalKind) => void;
-  /** Which shells are running, for the rail's dot. */
+  shells: Shells;
+  onShow: (id: ShellId) => void;
+  onClose: (id: ShellId) => void;
+  /** Start folder shell `id` on this computer instead: offered when the server has no SSH target. */
+  onLocal: (id: ShellId) => void;
+  /** Which computers have a shell running, for the rail's dot. */
   onRunning?: (running: Record<TerminalKind, boolean>) => void;
 }) {
-  const [made, setMade] = useState<Record<TerminalKind, boolean>>({ server: kind === "server", local: kind === "local" });
-  const [running, setRunning] = useState<Record<TerminalKind, boolean>>({ server: false, local: false });
+  const at = shells.shown;
+  const [made, setMade] = useState<Record<TerminalKind, boolean>>({ server: at === "server", local: at === "local" });
+  const [running, setRunning] = useState<Partial<Record<ShellId, boolean>>>({});
   const onRunningRef = useRef(onRunning);
   onRunningRef.current = onRunning;
   useEffect(() => {
-    if (!made[kind]) setMade((m) => ({ ...m, [kind]: true }));
-  }, [kind, made]);
-  useEffect(() => onRunningRef.current?.(running), [running]);
-  const ran = (k: TerminalKind) => (on: boolean) => setRunning((r) => (r[k] === on ? r : { ...r, [k]: on }));
+    if ((at === "server" || at === "local") && !made[at]) setMade((m) => ({ ...m, [at]: true }));
+  }, [at, made]);
+  useEffect(() => {
+    const on = (kind: TerminalKind) => !!running[kind] || shells.folders.some((f) => f.kind === kind && running[f.id]);
+    onRunningRef.current?.({ server: on("server"), local: on("local") });
+  }, [running, shells.folders]);
+  const ran = (id: ShellId) => (on: boolean) => setRunning((r) => (!!r[id] === on ? r : { ...r, [id]: on }));
+  const dot = (id: ShellId) => running[id] && <span className="dot run-dot" role="img" aria-label="(running)" />;
   return (
     <div className="terminal-tab" hidden={!shown}>
-      <div className="segmented terminal-kinds" role="group" aria-label="Which computer">
-        <button aria-pressed={kind === "server"} onClick={() => onKind("server")} title="A shell on the Hermes server, through your ssh">
-          <Server size={13} /> Hermes server {running.server && <span className="dot run-dot" role="img" aria-label="(running)" />}
-        </button>
-        <button aria-pressed={kind === "local"} onClick={() => onKind("local")} title="A shell on this computer">
-          <Laptop size={13} /> This computer {running.local && <span className="dot run-dot" role="img" aria-label="(running)" />}
-        </button>
+      <div className="terminal-shells">
+        <div className="segmented terminal-kinds" role="group" aria-label="Which computer">
+          <button aria-pressed={at === "server"} onClick={() => onShow("server")} title="A shell on the Hermes server, through your ssh">
+            <Server size={13} /> Hermes server {dot("server")}
+          </button>
+          <button aria-pressed={at === "local"} onClick={() => onShow("local")} title="A shell on this computer">
+            <Laptop size={13} /> This computer {dot("local")}
+          </button>
+        </div>
+        {shells.folders.map((f) => {
+          const path = withoutBidi(f.folder);
+          const name = path.split("/").filter(Boolean).pop() ?? path;
+          return (
+            <span className="terminal-folder" key={f.id} role="group" aria-label={`Shell in ${path}`}>
+              <button aria-pressed={at === f.id} onClick={() => onShow(f.id)} title={`${path}\nA shell started in this folder ${f.kind === "local" ? "on this computer" : "on the Hermes server"}`}>
+                <Folder size={13} /> <span>{name}</span> {dot(f.id)}
+              </button>
+              <button className="terminal-folder-close" aria-label={`Close the shell in ${name}`} title="Ends this shell and closes it" onClick={() => onClose(f.id)}>
+                <X size={12} />
+              </button>
+            </span>
+          );
+        })}
       </div>
-      {made.server && <TerminalScreen kind="server" api={server.api} initialTarget={server.initialTarget} guessed={server.guessed} onTarget={server.onTarget} shown={shown && kind === "server"} onRunning={ran("server")} onOther={() => onKind("local")} />}
-      {made.local && <TerminalScreen kind="local" api={local.api} initialTarget="" shown={shown && kind === "local"} onRunning={ran("local")} />}
+      {made.server && <TerminalScreen kind="server" api={server.api} initialTarget={server.initialTarget} guessed={server.guessed} onTarget={server.onTarget} shown={shown && at === "server"} onRunning={ran("server")} onOther={() => onShow("local")} />}
+      {made.local && <TerminalScreen kind="local" api={local.api} initialTarget="" shown={shown && at === "local"} onRunning={ran("local")} />}
+      {shells.folders.map((f) =>
+        f.kind === "server" ? (
+          <TerminalScreen key={f.id} kind="server" api={server.api} initialTarget={server.initialTarget} guessed={server.guessed} onTarget={server.onTarget} folder={f.folder} again={f.asked} shown={shown && at === f.id} onRunning={ran(f.id)} onOther={() => onLocal(f.id)} />
+        ) : (
+          <TerminalScreen key={f.id} kind="local" api={local.api} initialTarget="" folder={f.folder} again={f.asked} shown={shown && at === f.id} onRunning={ran(f.id)} />
+        ),
+      )}
     </div>
   );
 }

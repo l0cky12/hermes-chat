@@ -11,6 +11,7 @@ import type { Element, ElementContent, Root } from "hast";
 import type { VFile } from "vfile";
 import { escapeRe } from "./bits";
 import { remarkMath } from "./markdownMath";
+import { findPaths, hrefPath, type PathMention } from "../hermes/paths";
 
 type HastNode = { type: string; value?: string; tagName?: string; properties?: Record<string, unknown>; children?: HastNode[] };
 
@@ -45,6 +46,55 @@ function rehypeFind(query: string) {
     walk(tree);
   };
 }
+
+/**
+ * Rehype plugin (ADR 0167): wraps each path in running text and in a code span in `<a data-path>`, with `data-folder`
+ * when it is written as a folder, and makes a link whose address is a path into the same element. The `<a>` has no
+ * `href`: a path is never an address the window could follow, and react-markdown's URL policy has nothing of it to
+ * read. Code blocks, math and the words of a link are left as they are.
+ */
+const rehypePaths = () => (tree: HastNode) => {
+  const data = (m: PathMention) => ({ dataPath: m.written, ...(m.folder && { dataFolder: true }) });
+  // A word that runs on into what is beside it is only part of a path: `src/__init__.py` is `src/`, then `init` in
+  // bold, then `.py`, and `src/` alone would open the wrong place. Text runs on when the character facing the word
+  // could continue a path; an element other than a line break always does.
+  const runsOn = (n: HastNode | undefined, side: "before" | "after") => {
+    if (n?.type === "element") return n.tagName !== "br";
+    const v = n?.type === "text" ? (n.value ?? "") : "";
+    return side === "before" ? /[\p{L}\p{N}_~/.-]$/u.test(v) : /^(?:[\p{L}\p{N}_~/-]|\.[\p{L}\p{N}])/u.test(v);
+  };
+  /** `before`, `after`: the element's own text runs on into what is beside the element. */
+  const walk = (node: HastNode, before = false, after = false) => {
+    if (!node.children) return;
+    const where = node.tagName === "code" ? "code" : "prose";
+    const siblings = node.children;
+    const glued = (i: number, side: "before" | "after") =>
+      side === "before" ? (i === 0 ? before : runsOn(siblings[i - 1], side)) : i === siblings.length - 1 ? after : runsOn(siblings[i + 1], side);
+    node.children = siblings.flatMap((child, i): HastNode[] => {
+      if (child.type === "text" && child.value) {
+        const text = child.value;
+        const spans = findPaths(text, where).filter((s) => !(s.start === 0 && glued(i, "before")) && !(s.end === text.length && glued(i, "after")));
+        if (!spans.length) return [child];
+        const out: HastNode[] = [];
+        let at = 0;
+        for (const s of spans) {
+          if (s.start > at) out.push({ type: "text", value: text.slice(at, s.start) });
+          out.push({ type: "element", tagName: "a", properties: data(s.mention), children: [{ type: "text", value: text.slice(s.start, s.end) }] });
+          at = s.end;
+        }
+        if (at < text.length) out.push({ type: "text", value: text.slice(at) });
+        return out;
+      }
+      if (child.tagName === "a") {
+        const { href, ...rest } = child.properties ?? {};
+        const mention = typeof href === "string" ? hrefPath(href) : undefined;
+        if (mention) child.properties = { ...rest, ...data(mention) };
+      } else if (child.tagName !== "pre" && !classes(child).some((c) => c.startsWith("katex") || c === "language-math")) walk(child, glued(i, "before"), glued(i, "after"));
+      return [child];
+    });
+  };
+  walk(tree);
+};
 
 /** A cache, least recently used first out once the weights of what it holds pass `limit`. */
 function lru<V>(limit: number) {
@@ -207,12 +257,13 @@ function rehypeCode(source?: string, guessed?: () => void) {
 
 export const remarkPlugins = [remarkGfm, remarkMath, remarkBreaks];
 
-const highlightOnly = [rehypeCode()];
+const highlightOnly = [rehypeCode(), rehypePaths];
 
 /**
  * The rehype plugins for Markdown marking `query`. `growingIn`: the Markdown, when it is the end of a reply still
  * streaming in. `guessed`: when given, a language guess waits until after this render, and `guessed` is called once it
- * is made, to render again.
+ * is made, to render again. Paths are linked after code is highlighted and before find marks go in, so a mark lands
+ * inside a path's link as it does inside any element.
  */
 export const rehypePlugins = (query: string, growingIn?: string, guessed?: () => void) =>
-  query || growingIn !== undefined || guessed ? [rehypeCode(growingIn, guessed), ...(query ? [rehypeFind(query)] : [])] : highlightOnly;
+  query || growingIn !== undefined || guessed ? [rehypeCode(growingIn, guessed), rehypePaths, ...(query ? [rehypeFind(query)] : [])] : highlightOnly;

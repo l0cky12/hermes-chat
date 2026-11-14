@@ -224,6 +224,11 @@ export type Chat = {
    * Unknown until the chat is started or resumed on this connection, or for a server that doesn't say.
    */
   model?: ModelPick;
+  /**
+   * The folder it works in on the server, as Hermes last said (its session `cwd`). A relative path in its replies is
+   * relative to this (ADR 0167). Unknown for a chat Hermes has named no folder for.
+   */
+  folder?: string;
   /** What Hermes reports about the chat's session on this connection; gone when the connection drops. */
   live?: SessionLive;
   /**

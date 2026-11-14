@@ -222,6 +222,7 @@ describe("Local chat list cache", () => {
       settled: false,
       updatedAt: expect.any(Number),
       unread: false,
+      folder: server.hermesHome,
       items: [],
     });
   });
