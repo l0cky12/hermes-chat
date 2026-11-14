@@ -1055,6 +1055,15 @@ div.route-result { display: flex; flex-direction: column; gap: 6px; }
 .chip-size { color: var(--faint); font-size: calc(11.5rem / 14); }
 .chip button { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; color: var(--muted); }
 .chip button:hover { background: var(--line-2); color: var(--text); }
+.chip .ref-chip-main { display: inline-flex; align-items: center; gap: 6px; width: auto; height: auto; min-width: 0; color: inherit; }
+.chip .ref-chip-main:hover { background: none; }
+.ref-chip.summarizing .ref-chip-main, .ref-chip.failed .ref-chip-main { cursor: default; }
+.ref-warn { color: var(--warn); }
+.ref-failed .link-btn { font-size: inherit; margin-left: 6px; }
+.ref-summary {
+  margin-bottom: 8px; padding: 8px 10px; border-radius: 8px; background: var(--raised-2); color: var(--text-2);
+  font-size: calc(12.5rem / 14); line-height: 1.5; white-space: pre-wrap; max-height: 200px; overflow-y: auto;
+}
 .attach-note { font-size: calc(12rem / 14); color: var(--muted); padding: 0 6px 8px; }
 .offline-note { font-size: calc(12rem / 14); color: var(--muted); padding: 0 6px 8px; }
 .composer-hint { font-size: calc(12rem / 14); color: var(--warn); padding: 0 6px 8px; }
