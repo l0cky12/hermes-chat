@@ -9,8 +9,9 @@ export default defineConfig({
   test: {
     include: ["e2e/features/**/*.e2e.tsx"],
     testTimeout: 30_000,
-    // A failing test's screenshot goes under it, in failure-screenshots/.
-    attachmentsDir: "e2e/out/screenshots",
+    // A failing test's screenshot goes in failure-screenshots/ here. Vitest also copies it here under a hash, so this
+    // isn't e2e/out/screenshots, which holds only the screenshots the tests name.
+    attachmentsDir: "e2e/out/attachments",
     browser: { enabled: true, headless: true, provider: playwright(), instances: [{ browser: "chromium" }], viewport: { width: 1440, height: 900 } },
   },
 });

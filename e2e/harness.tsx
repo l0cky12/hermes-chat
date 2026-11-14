@@ -99,6 +99,7 @@ export async function boot(opts: BootOptions = {}) {
     password_delete: (args) => void rust.keyring.delete(slot("password", args)),
     headers_delete: (args) => void rust.keyring.delete(slot("headers", args)),
     token_saved: () => null,
+    token_delete: () => undefined,
     chat_link_take: () => null,
     connection_attempts_read: () => ({ attempts: [], unreadable: 0 }),
     connection_attempts_put: () => undefined,
@@ -111,6 +112,9 @@ export async function boot(opts: BootOptions = {}) {
     window_hidden: () => false,
     "plugin:window|is_focused": () => true,
     touch_keyboard_covered: () => 0,
+    // No file in the app's data folder yet (src-tauri defaults_file.rs).
+    project_defaults_read: () => null,
+    tags_read: () => null,
     ...opts.commands,
   };
 

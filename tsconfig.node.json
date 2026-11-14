@@ -15,5 +15,5 @@
     "skipLibCheck": true,
     "isolatedModules": true
   },
-  "include": ["bench/**/*.mjs", "tools/shots/*.mjs", "scripts/release/*.mjs", ".claude/skills/verify-hermes-chat/scripts/*.mjs"]
+  "include": ["bench/**/*.mjs", "tools/shots/*.mjs", "scripts/release/*.mjs", "scripts/e2e.mjs", ".claude/skills/verify-hermes-chat/scripts/*.mjs"]
 }
