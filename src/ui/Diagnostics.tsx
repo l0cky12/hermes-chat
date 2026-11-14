@@ -123,6 +123,10 @@ export function DiagnosticsSettings({
   }, [focus]);
   // "Copied" stays only until the next change, so it never describes an older report.
   useEffect(() => setCopied(undefined), [snap]);
+  // What no read can check is checked while this is open, by a request that changes nothing (ADR 0165).
+  useEffect(() => {
+    if (connected) void store.checkWrites();
+  }, [store, connected, profile]);
 
   const copy = () => {
     const text = reportText(snap, { app: "Hermes Chat", server, signIn, headers, unsecure, profile });
@@ -195,8 +199,9 @@ export function DiagnosticsSettings({
         }
         more={
           <p>
-            Checks only read: nothing is changed on the server to find out. Results are kept in memory for this sign-in, never on disk. The report holds no
-            password, cookie, ticket or header value.
+            Checks only read, but for two that send a change for something that can't exist, which Hermes refuses before changing anything: a switch
+            for a toolset no toolset is named, and an answer to an Approval no chat has. Those two go only while this page is open. Results are kept in
+            memory for this sign-in, never on disk. The report holds no password, cookie, ticket or header value.
           </p>
         }
         action={

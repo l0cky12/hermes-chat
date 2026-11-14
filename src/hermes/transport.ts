@@ -1220,13 +1220,19 @@ export class Hermes {
 
   /**
    * What this Hermes server can do, for Connection diagnostics and the screens that depend on it (capabilities.ts,
-   * ADR 0044). Its checks only read, through the connection in use, and it is kept in memory for this sign-in only. A
-   * write whose capability Hermes lacks is refused here, before it is sent.
+   * ADR 0044). Its checks read, through the connection in use, but for Diagnostics' two write checks, which change
+   * nothing (ADR 0165), and it is kept in memory for this sign-in only. A write whose capability Hermes lacks is
+   * refused here, before it is sent.
    */
   readonly capabilities = new CapabilityStore(
     {
       get: (pathAndQuery, maxBytes) => this.restGet(pathAndQuery, maxBytes, false),
       rpc: (method, params) => this.request(method, params, undefined, false),
+      put: (pathAndQuery, body) => {
+        const pipe = this.pipe;
+        if (!pipe || this.snapshot.status !== "connected") return Promise.reject(new Error("Not connected to Hermes."));
+        return pipe.request("PUT", pathAndQuery, JSON.stringify(body));
+      },
     },
     () => this.generation,
   );

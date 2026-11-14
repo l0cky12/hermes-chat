@@ -130,12 +130,12 @@ describe("capabilities over the transport", () => {
     expect(writesSent(server).slice(before)).toEqual([]);
   });
 
-  it("learns about the toolset switches only from Settings → Toolsets' own check", { timeout: 10_000 }, async () => {
+  it("sends no write check on connect, and learns the toolset switches from Settings → Toolsets' own check", { timeout: 10_000 }, async () => {
     const server = new FakeHermes();
     server.toolsetRoutes = "read-only";
     const hermes = await signedIn(server);
     await checked(hermes);
-    // Diagnostics can't check it by reading, and sends no PUT itself.
+    // No read checks it, and the connection's check sends no PUT: only Diagnostics, while open, sends its write check.
     expect(hermes.capabilities.get("toolsetSwitches").state).toBe("unknown");
     expect(writesSent(server).filter((r) => r.path.startsWith("/api/tools"))).toEqual([]);
     expect(await hermes.toolsets.writeSupport("default")).toMatchObject({ ok: false });
@@ -240,5 +240,79 @@ describe("capabilities over the transport", () => {
     await checked(hermes);
     expect(hermes.capabilities.getSnapshot().facts.version).toBe("0.17.0");
     expect(hermes.capabilities.get("serverFiles").state).toBe("supported");
+  });
+});
+
+describe("Diagnostics' write checks (ADR 0165)", () => {
+  /** Signed in, with a reply running in a chat whose Approval waits: the check must leave it waiting. */
+  async function waiting(server: FakeHermes) {
+    const hermes = await signedIn(server);
+    await checked(hermes);
+    const chat = await hermes.newChat();
+    await hermes.send(chat, "Clean up the logs");
+    const runtime = server.runtimeIdOf(chat)!;
+    server.event(runtime, "message.start");
+    const { id } = server.askApproval(runtime);
+    await hermes.idle();
+    return { hermes, id: id! };
+  }
+
+  it("settles both on a Hermes that has them, and changes no toolset and answers no Approval", { timeout: 10_000 }, async () => {
+    const server = new FakeHermes();
+    const { hermes, id } = await waiting(server);
+    const writesBefore = writesSent(server).length;
+    await hermes.capabilities.checkWrites();
+    expect(hermes.capabilities.get("toolsetSwitches")).toMatchObject({ state: "supported", source: "probed" });
+    expect(hermes.capabilities.get("approvalAnswers")).toMatchObject({ state: "supported", source: "probed" });
+    expect(hermes.capabilities.get("approvalAnswers").why).toMatch(/can't tell whether Hermes runs each turn in a process of its own/);
+    // The one PUT names the toolset no toolset is, and FastAPI refused its body: no toolset changed.
+    expect(writesSent(server).slice(writesBefore).map((r) => [r.method, r.path])).toEqual([["PUT", "/api/tools/toolsets/__hermes_chat_probe__"]]);
+    expect(server.toolsetWrites).toEqual([]);
+    // approval.respond named a session and request no Approval has: the waiting one is still waiting.
+    expect(rpcSent(server, "approval.respond").map((r) => r.params)).toEqual([{ session_id: "__hermes_chat_probe__", request_id: "__hermes_chat_probe__", choice: "deny" }]);
+    expect(server.approvalAnswers).toEqual([]);
+    expect(server.openRequests.has(id)).toBe(true);
+  });
+
+  it("finds both missing on a Hermes without the switch route or approval.respond", { timeout: 10_000 }, async () => {
+    const server = new FakeHermes();
+    server.toolsetRoutes = "read-only";
+    server.approvalRespond = false;
+    const { hermes, id } = await waiting(server);
+    await hermes.capabilities.checkWrites();
+    expect(hermes.capabilities.get("toolsetSwitches")).toMatchObject({ state: "unsupported", source: "probed" });
+    expect(hermes.capabilities.get("approvalAnswers")).toMatchObject({ state: "unsupported", source: "probed", why: "Hermes has no such method." });
+    expect(server.toolsetWrites).toEqual([]);
+    expect(server.openRequests.has(id)).toBe(true);
+  });
+
+  it("says it can't tell the compute-host bridge apart, where approval.respond doesn't reach the Approval", { timeout: 10_000 }, async () => {
+    const server = new FakeHermes();
+    server.turnIsolation = true;
+    const { hermes, id } = await waiting(server);
+    await hermes.capabilities.checkWrites();
+    const cap = hermes.capabilities.get("approvalAnswers");
+    expect(cap.state).toBe("supported");
+    expect(cap.why).toMatch(/turn isolation\). There approval.respond doesn't reach the Approval/);
+    expect(server.openRequests.has(id)).toBe(true);
+  });
+
+  it("sends them again only on Check again once settled, and finds a route Hermes gained", { timeout: 10_000 }, async () => {
+    const server = new FakeHermes();
+    server.toolsetRoutes = "read-only";
+    const hermes = await signedIn(server);
+    await checked(hermes);
+    await hermes.capabilities.checkWrites();
+    expect(hermes.capabilities.get("toolsetSwitches").state).toBe("unsupported");
+    const sent = () => writesSent(server).filter((r) => r.path.endsWith("__hermes_chat_probe__")).length;
+    const before = sent();
+    // Opening Diagnostics again sends nothing for what this connection settled.
+    await hermes.capabilities.checkWrites();
+    expect(sent()).toBe(before);
+    server.toolsetRoutes = "all";
+    await hermes.capabilities.refresh();
+    expect(sent()).toBe(before + 1);
+    expect(hermes.capabilities.get("toolsetSwitches").state).toBe("supported");
+    expect(server.toolsetWrites).toEqual([]);
   });
 });
