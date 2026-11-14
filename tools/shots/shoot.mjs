@@ -66,6 +66,62 @@ const capture = `(async () => {
   } });
   s.event(rt, "message.complete", { text: "The router runs firmware 4.2.1.", status: "complete" });
 })()`;
+// Subagents (ADR 0072): a reply in "NAS disk usage" that started three, one of which started one of its own, with tool
+// calls heard, one finished and one failed; the running one's output and roster row are on the server.
+const subagents = `(async () => {
+  const { hermes: h, server: s } = window.shots;
+  await h.send("nas", "Find out why the tank pool lost 400 GB overnight");
+  const rt = s.runtimeIdOf("nas");
+  const base = { delegation_id: "dlg-1", task_count: 3, model: "claude-sonnet-5-5" };
+  // The app stamps each event with the time it heard it: the clock is set back so they read as 95 seconds of work.
+  const real = Date.now.bind(Date);
+  const t0 = real() - 95e3;
+  let at = 0;
+  Date.now = () => (at === null ? real() : t0 + at * 1000);
+  const ev = (type, p, when) => { if (when !== undefined) at = when; s.event(rt, type, { ...base, ...p }); };
+  s.event(rt, "message.start");
+  ev("subagent.start", { subagent_id: "sa-snap", goal: "List the snapshots on tank taken in the last 48 hours and their sizes", task_index: 0, depth: 0 });
+  ev("subagent.start", { subagent_id: "sa-logs", goal: "Read the syslog and the zed log for anything that wrote to tank overnight", task_index: 1, depth: 0 });
+  ev("subagent.start", { subagent_id: "sa-docker", goal: "Check which Docker volumes on tank grew since yesterday", task_index: 2, depth: 0 });
+  const tools = [
+    ["terminal", "zfs list -t snapshot -o name,used,creation -s creation tank"],
+    ["terminal", "zfs get -H -o value usedbysnapshots tank"],
+    ["read_file", "/etc/sanoid/sanoid.conf"],
+    ["terminal", "zfs list -t snapshot -o name,used tank/media | tail -20"],
+    ["search_files", "autosnap_ in /var/log/sanoid.log"],
+    ["terminal", "zfs diff tank/media@autosnap_2026-11-12_00:00:01_daily tank/media"],
+  ];
+  const toolAt = [3, 9, 14, 31, 47, 62];
+  tools.forEach(([tool_name, tool_preview], i) => ev("subagent.tool", { subagent_id: "sa-snap", task_index: 0, depth: 0, tool_name, tool_preview, tool_count: i + 1 }, toolAt[i]));
+  at = 64;
+  ev("subagent.start", { subagent_id: "sa-snap-diff", parent_id: "sa-snap", goal: "Sum the files zfs diff lists under tank/media by top-level folder", task_index: 0, task_count: 1, depth: 1, delegation_id: "dlg-2" });
+  ev("subagent.tool", { subagent_id: "sa-snap-diff", parent_id: "sa-snap", task_index: 0, depth: 1, tool_name: "execute_code", tool_preview: "group 18,204 paths by first component", tool_count: 1 }, 70);
+  // One the first started and the owner stopped, heard of only part way through: no start event.
+  const media = { subagent_id: "sa-media", parent_id: "sa-snap", goal: "Walk tank/media/incoming and list every file over 10 GB with its owner and mtime", task_index: 0, task_count: 1, depth: 1, delegation_id: "dlg-3" };
+  ev("subagent.tool", { ...media, tool_name: "terminal", tool_preview: "find /tank/media/incoming -size +10G -printf '%u %TY-%Tm-%Td %s %p\\\\n' | sort -k4 -n -r | awk '{ printf \\"%s %s %.1f GB %s\\\\n\\", $1, $2, $3 / 1e9, $4 }'", tool_count: 2 }, 40);
+  ev("subagent.tool", { ...media, tool_name: "terminal", tool_preview: "du -sh /tank/media/incoming/*", tool_count: 3 }, 58);
+  ev("subagent.complete", { ...media, status: "interrupted", duration_seconds: 52,
+    summary: "Found three files over 10 GB in /tank/media/incoming, all owned by qbittorrent and written between 02:10 and 03:40 last night (Arcane.S02.2160p.mkv 162 GB, Dune.Part.Two.2160p.mkv 118 GB, Foundation.S03.2160p.mkv 96 GB). It had not yet checked whether any of them are also held by the 11-12 daily snapshot on tank/media, which would explain why deleting them doesn't give the space back." }, 72);
+  ev("subagent.tool", { subagent_id: "sa-logs", task_index: 1, depth: 0, tool_name: "terminal", tool_preview: "journalctl --since yesterday -u zfs-zed", tool_count: 1 }, 4);
+  ev("subagent.tool", { subagent_id: "sa-logs", task_index: 1, depth: 0, tool_name: "read_file", tool_preview: "/var/log/syslog", tool_count: 2 }, 19);
+  at = 41.2;
+  ev("subagent.complete", { subagent_id: "sa-logs", task_index: 1, depth: 0, status: "completed", duration_seconds: 41.2,
+    summary: "Nothing unusual in the zed log. Syslog shows qBittorrent finished three downloads into /tank/media/incoming between 02:10 and 03:40, about 380 GB in all." });
+  ev("subagent.tool", { subagent_id: "sa-docker", task_index: 2, depth: 0, tool_name: "terminal", tool_preview: "docker system df -v", tool_count: 1 }, 2);
+  at = 4.4;
+  ev("subagent.complete", { subagent_id: "sa-docker", task_index: 2, depth: 0, status: "error", duration_seconds: 3.4,
+    summary: "permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock" });
+  at = null;
+  const row = (id, more) => ({ subagent_id: id, owner: rt, status: "running", accepting_steer: true, started_at: Date.now() / 1000 - 95, ...base, ...more });
+  s.subagents.nas = [
+    row("sa-snap", { goal: "List the snapshots on tank taken in the last 48 hours and their sizes", depth: 0, tool_count: 6, last_tool: "terminal",
+      tail: "Snapshots in the last 48 h (used):\\n  tank/media@autosnap_2026-11-12_00:00:01_daily   212G\\n  tank/media@autosnap_2026-11-13_00:00:02_daily   9.4G\\n  tank/home@autosnap_2026-11-13_00:00:02_daily    1.1G\\n\\nusedbysnapshots on tank: 231G. The 11-12 daily on tank/media holds most of it.\\nRunning zfs diff against it to see what changed…" }),
+    row("sa-snap-diff", { parent_id: "sa-snap", goal: "Sum the files zfs diff lists under tank/media by top-level folder", depth: 1, tool_count: 1, delegation_id: "dlg-2" }),
+  ];
+})()`;
+const openSubagents = click(".subagents-head", "Subagents");
+// A click from a script leaves the focus ring a mouse click wouldn't: the shot shows what the owner sees.
+const unfocus = "document.activeElement.blur()";
 const scenes = {
   "sidebar-sections": { query: "", steps: [sections, click(".section-toggle", "Snoozed"), click(".section-toggle", "Settled")] },
   "sidebar-sections-light": { query: "?mode=light", steps: [sections, click(".section-toggle", "Snoozed"), click(".section-toggle", "Settled")] },
@@ -129,6 +185,51 @@ const scenes = {
     query: "",
     steps: [click("button", "NAS disk usage"), capture, click(".tool-line", "computer_use"), `document.querySelectorAll(".tool.open pre")[1].scrollTop = 150`],
   },
+  "subagents-list": { query: "", ...hd, steps: [click("button", "NAS disk usage"), subagents, openSubagents] },
+  "subagent-details": { query: "", ...hd, steps: [click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "List the snapshots"), unfocus] },
+  "subagent-details-failed": { query: "", ...hd, steps: [click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "Docker volumes"), unfocus] },
+  "subagent-details-light": { query: "?mode=light", ...hd, steps: [click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "List the snapshots"), unfocus] },
+  "subagent-details-small": { query: "", width: 1100, height: 760, steps: [click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "List the snapshots"), unfocus] },
+  "subagent-details-output": { query: "", ...hd, steps: [click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "List the snapshots"), click("[role=tab]", "Output"), unfocus] },
+  "subagent-details-output-small": { query: "", width: 1100, height: 760, steps: [click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "List the snapshots"), click("[role=tab]", "Output"), unfocus] },
+  "subagent-details-kids": { query: "", ...hd, steps: [click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "List the snapshots"), click("[role=tab]", "Subagents"), unfocus] },
+  // The tab strip from the keyboard: focus on the selected tab, moved with the arrow keys.
+  "subagent-details-tabkeys": { query: "", ...hd, steps: [click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "List the snapshots"), `document.querySelector(".subagent-tab[aria-selected=true]").focus()`, { press: "ArrowRight" }] },
+  // A tool line the drawer cuts short, opened in full.
+  "subagent-details-whole": { query: "", width: 1100, height: 760, steps: [click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "Walk tank/media"), click(".subagent-act-call", "find /tank"), unfocus] },
+  // Stepped from the running one to the failed one with ›: the drawer keeps the taller height, so › stays put.
+  "subagent-details-step": { query: "", ...hd, steps: [click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "List the snapshots"), click("button[aria-label='Next subagent']"), click("button[aria-label='Next subagent']"), unfocus] },
+  // The drawer doesn't shrink back when a tab changes inside it: Activity, then Output, then the shorter Subagents tab.
+  "subagent-details-hold": {
+    query: "",
+    ...hd,
+    steps: [
+      click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "List the snapshots"),
+      `window.__h = document.querySelector(".subagents").offsetHeight`, click("[role=tab]", "Output"),
+      `window.__h = Math.max(window.__h, document.querySelector(".subagents").offsetHeight)`, click("[role=tab]", "Subagents"),
+      `if (document.querySelector(".subagents").offsetHeight < window.__h) throw new Error("the drawer shrank from " + window.__h + " to " + document.querySelector(".subagents").offsetHeight)`,
+      unfocus,
+    ],
+  },
+  // Opened and closed again: the line is still a button (closing it mustn't drop the focus on it).
+  "subagent-details-whole-closed": {
+    query: "",
+    width: 1100,
+    height: 760,
+    steps: [
+      click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "Walk tank/media"), click(".subagent-act-call", "find /tank"),
+      click(".subagent-act-call", "find /tank"),
+      `(() => { const b = [...document.querySelectorAll(".subagent-act-call")].find((e) => e.textContent.includes("find /tank"));
+         if (b.disabled || b.getAttribute("aria-expanded") !== "false") throw new Error("closed line: disabled " + b.disabled + ", expanded " + b.getAttribute("aria-expanded")); })()`,
+      unfocus,
+    ],
+  },
+  "subagent-details-confirm": { query: "", ...hd, steps: [click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "List the snapshots"), click(".subagent-stop", "Stop")] },
+  "subagent-details-confirm-small": { query: "", width: 1100, height: 760, steps: [click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "List the snapshots"), click(".subagent-stop", "Stop")] },
+  "subagent-details-done": { query: "", ...hd, steps: [click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "Read the syslog"), unfocus] },
+  "subagent-details-stopped": { query: "", ...hd, steps: [click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "Walk tank/media"), unfocus] },
+  "subagent-details-stopped-small": { query: "", width: 1100, height: 760, steps: [click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "Walk tank/media"), unfocus] },
+  "subagent-details-failed-small": { query: "", width: 1100, height: 760, steps: [click("button", "NAS disk usage"), subagents, openSubagents, click(".subagent-row", "Docker volumes"), unfocus] },
   "automation-history-light": { query: "?mode=light", height: 1400, steps: [click("button[aria-label='Automations']"), click("button", "triage-issues"), scrollTo(".delivery-list")] },
 };
 // Every Settings tab at 1920 × 1080 (#568): `settings-tab-<id>`, for a redesign's before and after.
@@ -213,8 +314,14 @@ try {
       await sleep(100);
     }
     await sleep(400);
+    // A headless page has no focus of its own, so a real key press would go nowhere.
+    if (scene.steps.some((step) => typeof step === "object")) await send("Emulation.setFocusEmulationEnabled", { enabled: true });
     for (const step of scene.steps) {
-      await evaluate(step);
+      // `{ press }`: a real key press from the browser, which `:focus-visible` and the app's key handlers both see.
+      if (typeof step === "object") {
+        const [code, keyCode] = { Tab: ["Tab", 9], ArrowRight: ["ArrowRight", 39], ArrowLeft: ["ArrowLeft", 37], Escape: ["Escape", 27] }[step.press];
+        for (const type of ["rawKeyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, key: step.press, code, windowsVirtualKeyCode: keyCode });
+      } else await evaluate(step);
       await sleep(500);
     }
     const { result } = await send("Page.captureScreenshot", { format: "png" });
