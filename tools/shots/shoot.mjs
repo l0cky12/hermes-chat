@@ -269,13 +269,17 @@ const longSkills = `(() => {
     md("zfs-scrub-and-snapshot-review", "Run a scrub on every pool, read the result, then list the snapshots older than the retention policy and say which ones are safe to destroy before anything is deleted, with the space each would free."));
   s.platformDisabled.default = { tui: ["notes", "zfs-scrub-and-snapshot-review"] };
   s.add("default", { dir: "/home/liam/.hermes/skills/code-review", source: "bundled" },
-    md("code-review", "Review a diff for correctness first, then for tests that prove the change, then for names and structure; quote the line, say what breaks, and suggest the smallest fix that keeps the behaviour the author meant."));
+    md("code-review", "Review a diff for correctness first, then for tests that prove the change, then for names and structure; quote the line, say what breaks, and suggest the smallest fix that keeps the behaviour the author meant. Check error paths, concurrency and anything that writes, and say plainly when a change is fine as it is."));
 })()`;
 Object.assign(scenes, {
   "wsb-rail": { query: "", ...wsb, steps: [] },
   "wsb-diagnostics": { query: "", ...wsb, steps: [openSettings, tab("Diagnostics"), `new Promise((r) => setTimeout(r, 3000))`, scrollTo("#capability-approvalAnswers")] },
   "wsb-skills": { query: "", ...wsb, steps: [longSkills, openSettings, tab("Skills")] },
-  "wsb-skills-focus": { query: "", ...wsb, steps: [longSkills, openSettings, tab("Skills"), `document.getElementById("skill-zfs-scrub-and-snapshot-review-edit").focus()`, { press: "Tab" }] },
+  "wsb-skills-focus": {
+    query: "",
+    ...wsb,
+    steps: [longSkills, openSettings, tab("Skills"), `document.getElementById("skill-code-review-edit").focus()`, { press: "Tab" }, `document.getElementById("skill-code-review-edit").scrollIntoView({ block: "center" })`],
+  },
 });
 const wanted = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(scenes);
 
