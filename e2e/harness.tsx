@@ -1,37 +1,33 @@
-// The whole app, as the window starts it, with a fake Rust side in front of FakeHermes (ADR 0163).
 import { afterEach, beforeEach, expect, type TestContext } from "vitest";
 import { page, server as vitest } from "vitest/browser";
 import { FakeHermes } from "../src/hermes/fakeHermes";
 import type { Pipe, PipeEvent } from "../src/hermes/pipe";
 
-/** One Rust command as the webview invokes it. */
 type Command = (args: Record<string, any>) => unknown;
 export type Commands = Record<string, Command>;
 
 export type BootOptions = {
-  /** Seeds the server before the app launches. */
   seed?: (server: FakeHermes) => void;
-  /** False: no password is in the keyring, so launch shows the sign-in screen. */
   signedIn?: boolean;
-  /** The dashboard password the server takes. */
-  password?: string;
-  /** Replace or add commands of the fake Rust side. */
+  dashboardPassword?: string;
   commands?: Commands;
 };
 
 export type Rust = {
-  /** Every command the app invoked, in order, with its arguments. */
   calls: { cmd: string; args: Record<string, any> }[];
-  /** Commands nothing here answers; each got `undefined`. */
   unhandled: Set<string>;
   keyring: Map<string, string>;
+};
+
+const PASSWORD_ONLY_DASHBOARD = {
+  status: { version: "0.22.6", auth_required: true, auth_providers: ["basic"] },
+  methods: { methods: [{ method: "password", provider: "basic", label: "Password" }] },
 };
 
 export const SIGN_IN = { mode: "url", sshTarget: "", url: "https://hermes.example.net", username: "owner" } as const;
 
 declare global {
   interface Window {
-    /** What the app frame's `invoke` calls (e2e/ipc.ts). */
     e2eInvoke?: (cmd: string, args: unknown) => Promise<unknown>;
   }
 }
@@ -51,22 +47,17 @@ afterEach(() => {
 
 const routeOf = (target: Record<string, any>) => (target.kind === "url" ? { kind: "url", url: target.url, addresses: [] } : { kind: "ssh", target: target.target });
 
-/**
- * Starts the app in a frame of its own, from `src/main.tsx` as the window does, against a fresh FakeHermes. `app`
- * finds what is on its screen.
- */
 export async function boot(opts: BootOptions = {}) {
   const ctx = test!;
   const server = new FakeHermes();
   opts.seed?.(server);
-  const password = opts.password ?? "hunter2";
+  const password = opts.dashboardPassword ?? "hunter2";
   const pipes = new Map<string, Pipe>();
   const rust: Rust = { calls: [], unhandled: new Set(), keyring: new Map() };
   const slot = (kind: string, args: Record<string, any>) => `${kind}:${args.connection ?? "legacy"}`;
-  const pipe = (args: Record<string, any>) => {
+  const heldPipe = (args: Record<string, any>) => {
     const held = pipes.get(args.attempt);
-    // src-tauri live.rs: a command for an attempt no longer held.
-    if (!held) throw "The connection is closed.";
+    if (!held) throw "The chat connection is closed.";
     return held;
   };
 
@@ -77,17 +68,16 @@ export async function boot(opts: BootOptions = {}) {
       pipes.set(args.attempt, await server.openPipe((e) => channel.onmessage(e), args.profile));
       return routeOf(args.target);
     },
-    // A dashboard that offers password sign-in only, as src-tauri `hermes_reach` reads it.
     hermes_reach: (args) => ({
       route: routeOf(args.target),
-      status: JSON.stringify({ version: "0.22.6", auth_required: true, auth_providers: ["basic"] }),
-      methods: args.methods ? { methods: [{ method: "password", provider: "basic", label: "Password" }] } : undefined,
+      status: JSON.stringify(PASSWORD_ONLY_DASHBOARD.status),
+      methods: args.methods ? PASSWORD_ONLY_DASHBOARD.methods : undefined,
     }),
-    hermes_send: (args) => pipe(args).send(args.frame),
-    hermes_request: (args) => pipe(args).request(args.method, args.path, args.body),
-    hermes_get_limited: (args) => pipe(args).getLimited(args.path, args.maxBytes),
-    hermes_voice_setup: (args) => pipe(args).voiceSetup(args.profile),
-    hermes_toolset_guards: (args) => pipe(args).toolsetGuards(args.profile),
+    hermes_send: (args) => heldPipe(args).send(args.frame),
+    hermes_request: (args) => heldPipe(args).request(args.method, args.path, args.body),
+    hermes_get_limited: (args) => heldPipe(args).getLimited(args.path, args.maxBytes),
+    hermes_voice_setup: (args) => heldPipe(args).voiceSetup(args.profile),
+    hermes_toolset_guards: (args) => heldPipe(args).toolsetGuards(args.profile),
     hermes_disconnect: async (args) => {
       await pipes.get(args.attempt)?.close();
       pipes.delete(args.attempt);
@@ -112,7 +102,6 @@ export async function boot(opts: BootOptions = {}) {
     window_hidden: () => false,
     "plugin:window|is_focused": () => true,
     touch_keyboard_covered: () => 0,
-    // No file in the app's data folder yet (src-tauri defaults_file.rs).
     project_defaults_read: () => null,
     tags_read: () => null,
     ...opts.commands,
@@ -125,7 +114,7 @@ export async function boot(opts: BootOptions = {}) {
     if (handler) return handler(a);
     if (!rust.unhandled.has(cmd)) {
       rust.unhandled.add(cmd);
-      // The summary lists these. One invoked after the test ended can't be recorded on it.
+      // A command invoked after the test ended can't be recorded on it.
       if (test === ctx) ctx.annotate(cmd, "unhandled-command").catch(() => {});
     }
     return undefined;
@@ -139,7 +128,6 @@ export async function boot(opts: BootOptions = {}) {
   return { server, rust, app: page.frameLocator(page.getByTitle("Hermes Chat")) };
 }
 
-/** Saves a screenshot as `e2e/out/screenshots/<feature>/<test>--<name>.png` and lists it in the summary. */
 export async function shot(name: string) {
   const ctx = test!;
   const feature = ctx.task.file.name.replace(/^.*\//, "").replace(/\.e2e\.tsx$/, "");
@@ -150,8 +138,7 @@ export async function shot(name: string) {
   return relative;
 }
 
-/** Waits until Hermes got `text` as a prompt, and returns the runtime session it was sent in. */
-export async function submitted(server: FakeHermes, text: string): Promise<string> {
+export async function sessionOfPrompt(server: FakeHermes, text: string): Promise<string> {
   await expect.poll(() => server.last("prompt.submit")?.params.text, { message: "the prompt Hermes got" }).toBe(text);
   return String(server.last("prompt.submit")!.params.session_id);
 }

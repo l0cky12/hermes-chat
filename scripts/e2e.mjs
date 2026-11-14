@@ -1,11 +1,3 @@
-// Runs the end-to-end suite in headless Chromium against FakeHermes (ADR 0163, docs/e2e.md), prints one line per test,
-// and writes e2e/out/summary.json. Exit code: 0 all passed, 1 a test failed or none ran, 2 a bad argument.
-//
-//   npm run e2e                              every feature
-//   npm run e2e -- --feature approvals       one feature (repeat it, or give a comma list, for more)
-//   npm run e2e -- -t "denies"               tests whose name matches
-//   npm run e2e -- --list                    the feature names
-
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +15,8 @@ const help = `Usage: npm run e2e -- [--feature <name>]... [-t <pattern>] [--list
   --grep, -t <pattern>  Run only the tests whose name matches the pattern.
   --list                Print the feature names.
   --help, -h            Print this.
+
+Exit code: 0 every test passed, 1 a test failed or none ran, 2 a bad argument.
 
 Features: ${features.join(", ")}`;
 

@@ -33,7 +33,6 @@ jobs:
       - name: Every version file says the same version
         run: node scripts/release/version.mjs check
 
-  # The end-to-end suite (docs/e2e.md, ADR 0163): the app in headless Chromium against FakeHermes.
   e2e:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

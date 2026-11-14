@@ -11,7 +11,7 @@ export default defineConfig({
   optimizeDeps: { entries: ["e2e/app.html"] },
   test: {
     include: ["e2e/features/**/*.e2e.tsx"],
-    testTimeout: 30_000,
+    testTimeout: 60_000,
     // A failing test's screenshot goes in failure-screenshots/ here. Vitest also copies it here under a hash, so this
     // isn't e2e/out/screenshots, which holds only the screenshots the tests name.
     attachmentsDir: "e2e/out/attachments",

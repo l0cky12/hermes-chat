@@ -81,7 +81,7 @@ Each run deletes `e2e/out/` first.
 
 ## How it works
 
-- `e2e/harness.tsx` has `boot()`, `shot()` and `submitted()`. `boot()` makes a `FakeHermes`, seeds it, and starts the app in an iframe of its own from `src/main.tsx`, as the window does. Each test gets a new frame, so the app's modules and the state they keep start fresh.
+- `e2e/harness.tsx` has `boot()`, `shot()` and `sessionOfPrompt()`. `boot()` makes a `FakeHermes`, seeds it, and starts the app in an iframe of its own from `src/main.tsx`, as the window does. Each test gets a new frame, so the app's modules and the state they keep start fresh.
 - `e2e/ipc.ts` runs in that frame before the app. It sends every `invoke` to the test's fake Rust side.
 - The fake Rust side is a table of command handlers in `boot()`. The pipe commands (`hermes_connect`, `hermes_send`, `hermes_request`, …) go to the `FakeHermes` pipe that `hermes_connect` opened for that `attempt`. The keyring is a `Map`. The commands the app calls at launch get their empty value, as Rust gives them on a fresh install. A command not in the table returns `undefined` and is listed in the summary.
 - `boot({ signedIn: false })` leaves the keyring empty, so launch shows the sign-in screen. The default has the password saved, so launch signs in.
@@ -91,7 +91,7 @@ Each run deletes `e2e/out/` first.
 1. Copy the spec closest to yours in `e2e/features/` to `<feature>.e2e.tsx`.
 2. Seed the server in `boot({ seed: (s) => … })`. `FakeHermes` (`src/hermes/fakeHermes.ts`) has `sessions`, `transcripts`, `approvalModes` and many more fields. `tools/shots/main.tsx` shows a realistic seed.
 3. Drive the app as a person would. Find elements with `app.getByRole`, `app.getByLabelText`, `app.getByText` or `app.getByPlaceholder`, and act with `.click()`, `.fill()` and `userEvent.keyboard()` from `vitest/browser`. Wait on what the screen or the server shows, with `expect.element(…)` and `expect.poll(…)`, never on a timer.
-4. To play Hermes's side of a turn, send events: `server.event(session, "message.start")`, `"message.delta"` with `{ text }`, then `"message.complete"`. `submitted(server, text)` waits for the prompt and returns its session. Requests to the app have helpers such as `server.askApproval(session)`.
+4. To play Hermes's side of a turn, send events: `server.event(session, "message.start")`, `"message.delta"` with `{ text }`, then `"message.complete"`. `sessionOfPrompt(server, text)` waits for the prompt and returns its session. Requests to the app have helpers such as `server.askApproval(session)`.
 5. Assert the server side too: `server.requests` (JSON-RPC), `server.restRequests` (REST), `server.approvalAnswers`, and the other records `FakeHermes` keeps. A test that only checks the screen can pass while nothing reaches Hermes.
 6. Call `shot("name")` at the state the test is about.
 7. Run `npm run e2e -- --feature <feature>`. If `Commands no handler answered` lists a command your feature needs, add it to the table in `boot()` with what Rust returns, or pass it for one test in `boot({ commands: { … } })`.

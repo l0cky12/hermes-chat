@@ -3,7 +3,7 @@ import { row } from "../../src/hermes/fakeHermes";
 import { boot, shot } from "../harness";
 
 it("signs in: a wrong password is refused, the right one opens the chats", async () => {
-  const { app, rust } = await boot({ signedIn: false, password: "hunter2", seed: (s) => (s.sessions = [row("deploy", 1, { pinned: true, title: "Deploy the blog" })]) });
+  const { app, rust } = await boot({ signedIn: false, dashboardPassword: "hunter2", seed: (s) => (s.sessions = [row("deploy", 1, { pinned: true, title: "Deploy the blog" })]) });
 
   const password = app.getByLabelText(/^Dashboard password/);
   await expect.element(app.getByRole("heading", { name: "Connect to hermes.example.net" })).toBeVisible();

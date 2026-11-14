@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { userEvent } from "vitest/browser";
-import { boot, shot, submitted } from "../harness";
+import { boot, shot, sessionOfPrompt } from "../harness";
 
 it("sends a message with Enter and shows the reply Hermes streams", async () => {
   const { app, server } = await boot();
@@ -8,7 +8,7 @@ it("sends a message with Enter and shows the reply Hermes streams", async () => 
   await composer.fill("Why is the blog down?");
   await userEvent.keyboard("{Enter}");
 
-  const session = await submitted(server, "Why is the blog down?");
+  const session = await sessionOfPrompt(server, "Why is the blog down?");
   await expect.element(app.getByText("Why is the blog down?").first()).toBeVisible();
   await expect.element(composer, { message: "the composer empties once sent" }).toHaveValue("");
 
