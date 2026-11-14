@@ -146,6 +146,38 @@ describe("Acting on a notification about a waiting card (ADR 0171)", () => {
     expect(server.approvalAnswers.map((a) => a.choice)).toEqual(["once"]);
   });
 
+  it("denies nothing once the owner switched to another profile, and says it wasn't denied, with a click that opens the card", async () => {
+    const offered: { n: { title: string; body: string }; actions?: NoticeActions }[] = [];
+    const { server, hermes, id, runtime, chat } = await replying({ notify: async (n, actions) => void offered.push({ n, actions }) });
+    const opened: NoticeCard[] = [];
+    hermes.onNoticeOpen((card) => opened.push(card));
+    const { id: card } = server.askApproval(runtime);
+    await hermes.idle();
+    const title = chat().title;
+    await hermes.switchProfile("work");
+    await hermes.idle();
+    offered[0]!.actions!.deny!();
+    await hermes.idle();
+    expect(server.approvalAnswers).toEqual([]);
+    expect(offered.map((o) => o.n)).toEqual([NOTICES.approval, NOTICES.notDenied]);
+    expect(Object.keys(offered[1]!.actions!)).toEqual(["open"]);
+    offered[1]!.actions!.open();
+    expect(opened).toEqual([{ profile: "default", chatId: id, title, itemId: card }]);
+  });
+
+  it("says an Approval approved in the chat meanwhile wasn't denied", async () => {
+    const offered: { title: string; body: string }[] = [];
+    const notices: NoticeActions[] = [];
+    const { server, hermes, id, runtime } = await replying({ notify: async (n, actions) => void (offered.push(n), actions && notices.push(actions)) });
+    const { id: card } = server.askApproval(runtime);
+    await hermes.idle();
+    await hermes.answerApproval(id, card!, "once");
+    notices[0]!.deny!();
+    await hermes.idle();
+    expect(server.approvalAnswers.map((a) => a.choice)).toEqual(["once"]);
+    expect(offered).toEqual([NOTICES.approval, NOTICES.notDenied]);
+  });
+
   it("offers a question's card to open, with no Deny, and a finished reply nothing", async () => {
     const { server, hermes, runtime, offered } = await offering();
     server.askSudo(runtime);
