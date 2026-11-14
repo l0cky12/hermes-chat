@@ -75,9 +75,18 @@ function reachPath(path, why) {
   return inside.length > 0;
 }
 
+/** `s` with its %XX escapes decoded, or `s` itself when they don't decode. */
+function decoded(s) {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
 function scanText(file) {
   const text = readFileSync(resolve(root, file), "utf8");
-  for (const token of text.match(/[\w.~/+-]+/g) ?? []) {
+  for (const token of (text.match(/[\w.~/+%-]+/g) ?? []).map(decoded)) {
     const at = token.indexOf(SHOTS);
     if (at >= 0 && (at === 0 || token[at - 1] === "/") && reachPath(token.slice(at), file)) continue;
     const relative = posix.join(posix.dirname(file), token).replace(/\/$/, "");
@@ -100,7 +109,7 @@ for (const f of shots) if (f.startsWith(PROTECTED)) reach(f, "always kept");
 for (const f of tracked) if (!f.startsWith(SHOTS) && !BINARY.test(f)) scanText(f);
 if (!args.includes("--offline"))
   for (const { number, text } of githubTexts())
-    for (const [, ref, path] of text.matchAll(REPO_LINK)) if (!/^[0-9a-f]{7,40}$/.test(ref)) reachPath(path, `GitHub #${number} (${ref})`);
+    for (const [, ref, path] of text.matchAll(REPO_LINK)) if (!/^[0-9a-f]{7,40}$/.test(ref)) reachPath(decoded(path), `GitHub #${number} (${ref})`);
 while (queue.length) {
   const file = /** @type {string} */ (queue.pop());
   if (file.endsWith(".md")) reachPath(posix.dirname(file), `${file} (its folder)`);

@@ -79,3 +79,18 @@ it("keeps an image a PR links through a branch name, not one pinned to a commit"
   expect(out).toContain("docs/screenshots/a/branch.png\n    <- GitHub #7 (feat/x-1)");
   expect(out).toMatch(/unreferenced images:\n {2}docs\/screenshots\/a\/pinned\.png/);
 });
+
+it("decodes a percent-encoded name, in a tracked file and in a PR's branch-name link", () => {
+  const root = checkout({
+    "README.md": "![s](docs/screenshots/a/chat%2Dshot.png)",
+    "docs/screenshots/a/chat-shot.png": "png",
+    "docs/screenshots/b/two words.png": "png",
+    "docs/screenshots/b/stale.png": "png",
+  });
+  const prs = join(root, "prs.json");
+  writeFileSync(prs, JSON.stringify([{ number: 9, body: "![t](https://github.com/l0cky12/hermes-chat/blob/main/docs/screenshots/b/two%20words.png?raw=true)", comments: [] }]));
+  const out = run(root, "--github", prs, "--all");
+  expect(out).toContain("docs/screenshots/a/chat-shot.png\n    <- README.md");
+  expect(out).toContain("docs/screenshots/b/two words.png\n    <- GitHub #9 (main)");
+  expect(out).toMatch(/unreferenced images:\n {2}docs\/screenshots\/b\/stale\.png\n*$/);
+});
