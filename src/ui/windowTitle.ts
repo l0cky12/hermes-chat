@@ -5,8 +5,8 @@ import { useEffect } from "react";
 const APP_NAME = "Hermes Chat";
 
 /**
- * `(<unread>) <chat> - Hermes Chat`. No count while nothing is unread, and the app's name alone while no chat is open
- * (the New chat pane).
+ * `(<unread>) <chat> - Hermes Chat`, with no count while nothing is unread. With no chat open (the New chat pane) the
+ * chat's name is left out: `(<unread>) Hermes Chat`, the count counting every chat.
  */
 export function windowTitle(chat: string | undefined, unread: number): string {
   const name = chat?.trim() ? `${chat.trim()} - ${APP_NAME}` : APP_NAME;

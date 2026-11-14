@@ -26,7 +26,7 @@ afterEach(async () => {
 });
 
 describe("the window title", () => {
-  it("names the chat after the unread count, leaves out a count of none, and is the app's name with no chat open", () => {
+  it("names the chat after the unread count, leaves out a count of none, and with no chat open keeps the count before the app's name", () => {
     expect(windowTitle("Nightly backup", 2)).toBe("(2) Nightly backup - Hermes Chat");
     expect(windowTitle("Nightly backup", 0)).toBe("Nightly backup - Hermes Chat");
     expect(windowTitle(undefined, 3)).toBe("(3) Hermes Chat");
