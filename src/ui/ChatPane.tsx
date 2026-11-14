@@ -1959,7 +1959,7 @@ function Composer({
       }
     }
     if (queueing && onQueue) {
-      if (refs.length) return setRefused(["A message that references a chat can't be queued. Send it once the reply ends."]);
+      if (refs.length) return setRefused(["A message that references a chat can't be queued. Send it while connected, with no reply running and nothing queued."]);
       const why = onQueue(text.trim(), [...attachments]);
       if (why) return setRefused([why]);
     } else {
