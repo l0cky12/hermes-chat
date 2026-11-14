@@ -136,9 +136,9 @@ def self_check():
         return False
 
     for host in ("127.0.0.1", "0.0.0.0", "192.168.1.5", "10.0.0.2", "localhost", "hermes.lan", "::1", "127.1", ""):
-        expect(exits(lambda: bind_address(host)), f"refuses to bind {host!r}")
+        expect(exits(lambda host=host: bind_address(host)), f"refuses to bind {host!r}")
     for host in ("127.0.0.2", "127.0.0.52", "127.255.255.254"):
-        expect(not exits(lambda: bind_address(host)), f"binds {host!r}")
+        expect(not exits(lambda host=host: bind_address(host)), f"binds {host!r}")
 
     expect(exits(lambda: refuse_inside(USER_HOME / ".hermes", "a home")), f"refuses the owner's Hermes home {REAL_HERMES}")
     expect(exits(lambda: refuse_inside(USER_HOME / ".hermes" / "profiles" / "x", "a home")), "refuses a folder inside it")
@@ -169,9 +169,9 @@ def self_check():
         probe = f"import runpy, sys; g = runpy.run_path({__file__!r}, run_name='tripwire'); g['tripwire'](g['Path'](sys.argv[1]).resolve()); "
         for target, what in ((stand_in / "auth.json", "a file in it"), (back_door / "auth.json", "a file through a symlink to it"), (stand_in, "a listing of it")):
             action = f"import os; os.listdir({str(target)!r})" if target == stand_in else f"open({str(target)!r}).read()"
-            ran = subprocess.run([sys.executable, "-I", "-c", probe + action, str(stand_in)], capture_output=True, text=True)
+            ran = subprocess.run([sys.executable, "-I", "-c", probe + action, str(stand_in)], check=False, capture_output=True, text=True)
             expect(ran.returncode == 70, f"stops the process on reading {what} (exit {ran.returncode})")
-        ran = subprocess.run([sys.executable, "-I", "-c", probe + f"open({str(Path(scratch) / 'elsewhere')!r}, 'w').write('x')", str(stand_in)], capture_output=True, text=True)
+        ran = subprocess.run([sys.executable, "-I", "-c", probe + f"open({str(Path(scratch) / 'elsewhere')!r}, 'w').write('x')", str(stand_in)], check=False, capture_output=True, text=True)
         expect(ran.returncode == 0, f"lets it write outside (exit {ran.returncode})")
 
         # A runs folder that is a symlink into the stand-in: refused before anything is made there.
