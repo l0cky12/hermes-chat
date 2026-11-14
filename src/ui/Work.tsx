@@ -58,6 +58,8 @@ export function Work({ api, connected, onClose, pollMs = 10_000 }: { api: WorkAp
   now.current = { loading, saving, pending, workflow, prompt: !!ask || !!draft };
   // Set in the drag handlers themselves: a read landing mid-drag would replace the dragged card's element.
   const draggingNow = useRef<BoardTask>(undefined);
+  /** The task sheet is saving an edit or a comment. */
+  const sheetWriting = useRef(false);
   const live = useRef(true);
   const seq = useRef(0);
   const apiRef = useRef(api);
@@ -70,7 +72,12 @@ export function Work({ api, connected, onClose, pollMs = 10_000 }: { api: WorkAp
     setLoading(true);
     setError(undefined);
     try {
-      const [b, wf] = await Promise.all([apiRef.current.loadBoard(), now.current.workflow ?? apiRef.current.loadWorkflow()]);
+      // Both go out at once, but the board's failure is the one shown: its 404 says the plugin is missing.
+      const reading = apiRef.current.loadBoard();
+      const flow = Promise.resolve(now.current.workflow ?? apiRef.current.loadWorkflow());
+      flow.catch(() => {});
+      const b = await reading;
+      const wf = await flow;
       if (!live.current || mine !== seq.current || draggingNow.current) return;
       setBoard(b);
       setWorkflow(wf);
@@ -96,7 +103,7 @@ export function Work({ api, connected, onClose, pollMs = 10_000 }: { api: WorkAp
     if (!connected) return;
     const every = setInterval(() => {
       const n = now.current;
-      if (!n.loading && !n.saving && !n.prompt && !draggingNow.current) void loadRef.current();
+      if (!n.loading && !n.saving && !n.prompt && !draggingNow.current && !sheetWriting.current) void loadRef.current();
     }, pollMs);
     return () => clearInterval(every);
   }, [connected, pollMs]);
@@ -313,7 +320,11 @@ export function Work({ api, connected, onClose, pollMs = 10_000 }: { api: WorkAp
           onRefresh={() => void load(true)}
           onSaved={() => void load()}
           onMove={(to) => requestMove(open, to)}
-          onClose={() => setOpenId(undefined)}
+          onWriting={(w) => (sheetWriting.current = w)}
+          onClose={() => {
+            sheetWriting.current = false;
+            setOpenId(undefined);
+          }}
         />
       )}
       {ask && <MovePrompt ask={ask} busy={locked} error={moveErr} onSubmit={(text) => void move(ask.task, ask.to, text)} onClose={() => setAsk(undefined)} />}
@@ -335,6 +346,10 @@ function Dialog({ wide, onClose, children }: { wide?: boolean; onClose: () => vo
   const box = useRef<HTMLDivElement>(null);
   const keys = useModal(box);
   const titleId = useId();
+  // A dialog without a field to focus (the task sheet) takes focus itself, so Escape and Tab reach it.
+  useEffect(() => {
+    if (!box.current?.contains(document.activeElement)) box.current?.focus();
+  }, []);
   return (
     <div className="leave-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
@@ -343,6 +358,7 @@ function Dialog({ wide, onClose, children }: { wide?: boolean; onClose: () => vo
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        tabIndex={-1}
         onKeyDown={(e) => {
           keys(e);
           if (e.key === "Escape") {
@@ -480,6 +496,7 @@ function TaskSheet({
   onRefresh,
   onSaved,
   onMove,
+  onWriting,
   onClose,
 }: {
   task: BoardTask;
@@ -492,6 +509,8 @@ function TaskSheet({
   onRefresh: () => void;
   onSaved: () => void;
   onMove: (to: string) => void;
+  /** Whether an edit or a comment is on its way, so the board isn't read under it. */
+  onWriting: (writing: boolean) => void;
   onClose: () => void;
 }) {
   // The board's values for the task, by value: every board read hands over a new object. A read of the task taken
@@ -547,6 +566,7 @@ function TaskSheet({
 
   const write = async (send: () => Promise<unknown>, done: () => void, maybeSaved?: (why: string) => void) => {
     setWorking(true);
+    onWriting(true);
     setWriteErr(undefined);
     try {
       await send();
@@ -559,6 +579,7 @@ function TaskSheet({
       else maybeSaved(errorText(e));
       if (!refused(e)) setRev((r) => r + 1);
     } finally {
+      onWriting(false);
       if (live.current) setWorking(false);
     }
   };

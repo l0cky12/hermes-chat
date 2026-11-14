@@ -5,8 +5,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FakeHermes } from "../hermes/fakeHermes";
+import { NoKanbanPlugin, type Board } from "../hermes/kanban";
+import { RestError } from "../hermes/pipe";
 import { connect, type Hermes } from "../hermes/transport";
 import { Main } from "../App";
+import { Work, type WorkApi } from "./Work";
 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 
@@ -141,11 +144,64 @@ describe("the Work page", () => {
     await waitFor(() => expect(within(column("ready")).getByText("Write the summary")).toBeTruthy());
   });
 
+  it("closes a task's sheet on Escape, as soon as it opens", async () => {
+    const { user } = await launch();
+    await user.click(card("Research the API"));
+    await screen.findByRole("dialog", { name: "Research the API" });
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("isn't on the rail when the dashboard has no kanban plugin", async () => {
     const s = server();
     s.kanban.missing = true;
     const hermes = await signIn(s);
     await waitFor(() => expect(hermes.capabilities.getSnapshot().caps.kanban.state).toBe("unsupported"));
     expect(screen.queryByRole("button", { name: "Work" })).toBeNull();
+  });
+});
+
+describe("the Work page on its own", () => {
+  const board: Board = { columns: [{ name: "ready", tasks: [{ id: "t_1", title: "Research", body: "", assignee: "", status: "ready", priority: 0, comments: 0 }] }], assignees: [] };
+  const workflow = { columns: [{ key: "ready", label: "Ready", dropTarget: true }], manual: {} };
+  const stub = (over: Partial<WorkApi>): WorkApi => ({
+    loadBoard: async () => board,
+    loadWorkflow: async () => workflow,
+    loadTask: async () => ({ task: board.columns[0].tasks[0], comments: [] }),
+    createTask: async () => ({}),
+    editTask: async () => undefined,
+    addComment: async () => {},
+    moveTask: async () => undefined,
+    ...over,
+  });
+
+  it("says the plugin is missing even when the workflow's 404 comes back first", async () => {
+    const api = stub({
+      loadWorkflow: () => Promise.reject(new RestError(404, `{"detail":"Not Found"}`)),
+      loadBoard: () => new Promise((_, no) => setTimeout(() => no(new NoKanbanPlugin()), 20)),
+    });
+    render(<Work api={api} connected onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByRole("note").textContent).toMatch(/no Kanban plugin/));
+  });
+
+  it("doesn't read the board while the task sheet saves an edit", async () => {
+    let reads = 0;
+    let finish = () => {};
+    const api = stub({
+      loadBoard: async () => (reads++, board),
+      editTask: () => new Promise((done) => (finish = () => done(undefined))),
+    });
+    const user = userEvent.setup();
+    render(<Work api={api} connected onClose={() => {}} pollMs={30} />);
+    await user.click(await screen.findByText("Research"));
+    const sheet = await screen.findByRole("dialog", { name: "Research" });
+    await user.click(within(sheet).getByRole("button", { name: "Edit" }));
+    await user.type(within(sheet).getByRole("textbox", { name: "Title" }), " more");
+    await user.click(within(sheet).getByRole("button", { name: "Save" }));
+    const during = reads;
+    await new Promise((r) => setTimeout(r, 150));
+    expect(reads).toBe(during);
+    await act(async () => finish());
+    await waitFor(() => expect(reads).toBeGreaterThan(during));
   });
 });

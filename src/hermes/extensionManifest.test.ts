@@ -167,6 +167,7 @@ describe("parseManifest", () => {
         "scheduledJobs",
         "automations",
         "outputs",
+        "kanban",
         "botMode",
         "subagents",
         "subagentRoster",

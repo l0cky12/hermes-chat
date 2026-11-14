@@ -4209,11 +4209,12 @@ div.export-preview.export-page { height: auto; padding: 10px 12px; background: v
 .work-spacer { flex: 1; }
 .work-inner > .job-banner, .work-inner > .job-error { margin: 0; }
 .work-board { flex: 1; min-height: 0; display: flex; gap: 12px; align-items: flex-start; overflow: auto; padding-bottom: 4px; }
-.work-column {
-  flex: 1 0 200px; max-width: 320px; max-height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 10px;
+/* `.settings section` would otherwise set its own padding and border-top on each column. */
+.settings section.work-column {
+  flex: 1 0 180px; max-width: 320px; max-height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 10px;
   border-radius: var(--radius); border: 1px solid var(--line-2); background: var(--sidebar); transition: opacity 0.12s;
 }
-.work-column.over { border-color: var(--accent); }
+.settings section.work-column.over { border-color: var(--accent); }
 .work-column.nodrop { opacity: 0.4; }
 .settings h2.work-column-head { margin: 0 2px 2px; display: flex; justify-content: space-between; font-size: calc(13rem / 14); font-weight: 600; text-transform: capitalize; color: var(--text-2); }
 .work-count { color: var(--faint); font: 500 calc(12rem / 14) var(--mono); }
@@ -4232,6 +4233,7 @@ div.export-preview.export-page { height: auto; padding: 10px 12px; background: v
 .settings p.work-empty { margin: 4px 2px; font-size: calc(12.5rem / 14); color: var(--faint); }
 .leave-overlay .leave-dialog.work-dialog { max-width: min(480px, calc(100% - 32px)); width: 100%; max-height: calc(100vh - 32px); }
 .leave-overlay .leave-dialog.work-dialog.wide { max-width: min(640px, calc(100% - 32px)); padding: 0; }
+.leave-overlay .leave-dialog.work-dialog:focus { outline: none; }
 .work-form { display: flex; flex-direction: column; gap: 10px; }
 .wide .work-form { padding: 18px 20px; }
 .work-form > input, .work-fields input, .work-fields select, .work-fields textarea, .work-add textarea, .work-sheet-foot select {
@@ -4261,5 +4263,5 @@ div.export-preview.export-page { height: auto; padding: 10px 12px; background: v
 .work-sheet-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line-2); }
 @media (max-width: 640px) {
   .work-inner { padding: 14px 16px 12px; }
-  .work-column { flex-basis: 78vw; }
+  .settings section.work-column { flex-basis: 78vw; }
 }
