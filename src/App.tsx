@@ -19,7 +19,7 @@ import { draftKey, drafts } from "./hermes/drafts";
 import { PersonaStore, personaKey } from "./hermes/personaStore";
 import { sending, unsaved, type Sending } from "./hermes/unsaved";
 import { connOf, restoreBlocked, savedBackupEnv } from "./hermes/backup";
-import { chatToReopen, forgetOpenChat, rememberOpenChat } from "./hermes/uiPrefs";
+import { chatToReopen, forgetOpenChat, rememberOpenChat, type ReopenOn } from "./hermes/uiPrefs";
 import { PROJECTS_KEY, projectLinks, projectScope } from "./hermes/projectLinks";
 import { chatContext, contextLedger, knownWindow, type ChatContexts } from "./hermes/projectContextFiles";
 import { ProjectsStore, type Project } from "./hermes/projects";
@@ -391,8 +391,9 @@ function Screens({ links }: { links: LinkInbox }) {
   // Why the keyring couldn't save the password at sign-in, shown once signed in.
   const [notSaved, setNotSaved] = useState<string>();
   const [kept, setKept] = useState<Kept>({ password: true, headers: true });
-  // Whether the main screen reopens the profile's last open chat: at launch, and on switching to a connection.
-  const [coldStart, setColdStart] = useState(true);
+  // Why the main screen is about to show, for whether it reopens the profile's last open chat (chatToReopen). null: it
+  // doesn't.
+  const [coldStart, setColdStart] = useState<ReopenOn | null>("launch");
   const [setup, setSetup] = useState<Setup>();
   const setupRef = useRef(setup);
   setupRef.current = setup;
@@ -581,7 +582,7 @@ function Screens({ links }: { links: LinkInbox }) {
         setKept({ password: true, headers: true });
         setError(undefined);
         // The connection's own last open chat, in the profile it showed last.
-        setColdStart(true);
+        setColdStart("switch");
         // A switch this one overtook, to a connection still opening, leaves no "Connecting to…" behind.
         setSwitchingTo(undefined);
         makeTarget(h, c, d);
@@ -655,8 +656,9 @@ function Screens({ links }: { links: LinkInbox }) {
         setKept(kept);
         setHeaders(headerNames(d));
         setError(undefined);
-        // The last chat open was on the connection before, or this one as it was before the change.
-        setColdStart(!before || beforeConnection?.id !== c.id);
+        // The last chat open was on the connection before, or this one as it was before the change. With none before,
+        // the app is starting: the sign-in screen showed at launch, or after signing out.
+        setColdStart(!before ? "launch" : beforeConnection?.id !== c.id ? "switch" : null);
         signedInWith.current = d;
         setConnection(c);
         makeTarget(h, c, d);
@@ -707,7 +709,7 @@ function Screens({ links }: { links: LinkInbox }) {
       }
       if (!inUse) return;
       showSignIn(undefined);
-      setColdStart(false);
+      setColdStart(null);
       if (!store.recent().length) setSetup({ mode: "first-run", initial: BLANK, target: store.draft(BLANK) });
     });
 
@@ -818,7 +820,7 @@ function Screens({ links }: { links: LinkInbox }) {
           headers={headers}
           notSaved={notSaved}
           kept={kept}
-          reopenLast={coldStart && !linkHere}
+          reopenLast={linkHere ? undefined : coldStart ?? undefined}
           covered={!!setup && !confirmingSetup}
           link={linkHere}
           linkSuperseded={badLink?.at}
@@ -851,7 +853,7 @@ function Screens({ links }: { links: LinkInbox }) {
               // Everything is read first, then shown at once: the sign-in screen keeps the details it mounts with.
               registry.remove(connection.id);
               const { initial, error } = await signOutToSignIn(hermes, connection, account);
-              setColdStart(false);
+              setColdStart(null);
               showSignIn(connection, initial, error);
             })
           }
@@ -1032,7 +1034,7 @@ export function Main({
   headers = [],
   notSaved,
   kept = { password: true, headers: true },
-  reopenLast = false,
+  reopenLast,
   covered = false,
   onSetUp,
   saved = [],
@@ -1111,8 +1113,8 @@ export function Main({
   notSaved?: string;
   /** What the keyring kept at sign-in. */
   kept?: Kept;
-  /** This is the app starting: open the profile's last open chat, if the owner wants it reopened. */
-  reopenLast?: boolean;
+  /** The app starting, or a switch to this connection: open the profile's last open chat if chatToReopen says to. */
+  reopenLast?: ReopenOn;
   /** Setup is open over the app: nothing here takes focus or keys. */
   covered?: boolean;
   /** Opens setup from Settings. */
@@ -1318,7 +1320,7 @@ export function Main({
   // The chat to reopen at launch, until Hermes's list shows it is there or gone, or the owner goes somewhere first.
   // Kept per connection and profile, so the same profile name on another server keeps its own (connections.ts).
   const pref = prefScope(connection, profile);
-  const [reopening, setReopening] = useState(() => (reopenLast ? chatToReopen(pref) : undefined));
+  const [reopening, setReopening] = useState(() => (reopenLast ? chatToReopen(pref, reopenLast) : undefined));
   // One pane, or two side by side. The chat to reopen opens at once when the list saved on this computer has it, so the
   // New chat pane doesn't show first.
   const [panes, setPanes] = useState<Pane[]>(() => {

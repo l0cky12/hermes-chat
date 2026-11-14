@@ -8,6 +8,7 @@ Since `0accfac1`, the app opened each profile's last chat at launch, and Setting
 
 - **`reopenLastChat` is off by default.** Launch shows the New chat pane. The switch stays in Settings, unchanged, for an owner who wants the old behavior.
 - **Every saved preference is moved to off once** (preferences version 5). Each write of the preferences stores every field, so a saved `reopenLastChat: true` can't tell an owner who turned it on from one who never looked. Moving everyone to off is what the owner asked for. An owner who wants it back turns it on again, and from version 5 that choice is kept.
+- **The setting is about launch only.** Switching to another saved connection still opens that connection's last chat, whatever the setting, so switching back brings the owner back to where they were. Signing in from the sign-in screen with no connection open (the screen shown at launch, or after signing out) counts as launch. `chatToReopen` takes which of the two it is (`ReopenOn`), and `App.tsx` passes it to the main screen.
 - **The chat on screen is still recorded** (`lastOpenChat`) while reopening is off, as before, so turning the switch on reopens the chat left last time, not the one from before the switch was off.
 
 ## Considered options

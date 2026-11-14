@@ -433,8 +433,14 @@ export function forgetOpenChat(profile: string, chatId: string): void {
   if (getUIPrefs().lastOpenChat[profile] === chatId) rememberOpenChat(profile, null);
 }
 
-/** The chat to reopen for `profile` at launch: its last open chat, if the owner wants it reopened. */
-export function chatToReopen(profile: string): string | undefined {
+/** Why the main screen is showing, for chatToReopen: the app starting, or a switch to another connection. */
+export type ReopenOn = "launch" | "switch";
+
+/**
+ * The chat to reopen for `profile`: its last open chat. On a switch to its connection it always reopens, so switching
+ * back brings it back; at launch only if the owner turned "Reopen last chat on launch" on (ADR 0162).
+ */
+export function chatToReopen(profile: string, on: ReopenOn): string | undefined {
   const prefs = getUIPrefs();
-  return prefs.reopenLastChat ? prefs.lastOpenChat[profile] : undefined;
+  return on === "switch" || prefs.reopenLastChat ? prefs.lastOpenChat[profile] : undefined;
 }

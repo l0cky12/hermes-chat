@@ -440,10 +440,18 @@ describe("Clear local cache", () => {
 });
 
 describe("the last open chat", () => {
-  it("isn't reopened by default, and is still kept", () => {
+  it("isn't reopened at launch by default, and is still kept", () => {
     rememberOpenChat("default", "c1");
-    expect(chatToReopen("default")).toBeUndefined();
+    expect(chatToReopen("default", "launch")).toBeUndefined();
     expect(stored().lastOpenChat).toEqual({ default: "c1" });
+  });
+
+  it("is reopened on a switch to its connection, whatever the launch setting", () => {
+    rememberOpenChat("default", "c1");
+    for (const reopenLastChat of [false, true]) {
+      setUIPrefs({ reopenLastChat });
+      expect(chatToReopen("default", "switch")).toBe("c1");
+    }
   });
 
   it("is kept for each profile apart", () => {
@@ -452,9 +460,9 @@ describe("the last open chat", () => {
     rememberOpenChat("work", "w1");
     rememberOpenChat("default", "c2");
     expect(stored().lastOpenChat).toEqual({ default: "c2", work: "w1" });
-    expect(chatToReopen("default")).toBe("c2");
-    expect(chatToReopen("work")).toBe("w1");
-    expect(chatToReopen("home")).toBeUndefined();
+    expect(chatToReopen("default", "launch")).toBe("c2");
+    expect(chatToReopen("work", "launch")).toBe("w1");
+    expect(chatToReopen("home", "launch")).toBeUndefined();
   });
 
   it("is dropped for a profile on the New chat pane, and the others stay", () => {
@@ -468,17 +476,17 @@ describe("the last open chat", () => {
     setUIPrefs({ reopenLastChat: true });
     rememberOpenChat("default", "c1");
     forgetOpenChat("default", "c0");
-    expect(chatToReopen("default")).toBe("c1");
+    expect(chatToReopen("default", "launch")).toBe("c1");
     forgetOpenChat("default", "c1");
-    expect(chatToReopen("default")).toBeUndefined();
+    expect(chatToReopen("default", "launch")).toBeUndefined();
   });
 
   it("isn't reopened with the setting off, and is still kept", () => {
     setUIPrefs({ reopenLastChat: false });
     rememberOpenChat("default", "c1");
-    expect(chatToReopen("default")).toBeUndefined();
+    expect(chatToReopen("default", "launch")).toBeUndefined();
     setUIPrefs({ reopenLastChat: true });
-    expect(chatToReopen("default")).toBe("c1");
+    expect(chatToReopen("default", "launch")).toBe("c1");
   });
 
   it("writes nothing when the chat is already the one kept", () => {
